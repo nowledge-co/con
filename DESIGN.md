@@ -35,8 +35,8 @@ An open-source, cross-platform, GPU-accelerated terminal emulator that treats AI
 │           │              │                               │
 │  ┌────────┴────────┐  ┌──┴──────────────┐               │
 │  │ con-terminal    │  │ con-agent       │               │
-│  │ (libghostty-vt  │  │ (rig + provider │               │
-│  │  FFI + PTY)     │  │  adapters)      │               │
+│  │ (vte parser     │  │ (rig 0.32,      │               │
+│  │  + PTY)         │  │  multi-provider)     │               │
 │  └─────────────────┘  └─────────────────┘               │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -51,62 +51,45 @@ kingston/
 ├── crates/
 │   ├── con/                   # main binary — GPUI app shell
 │   │   └── src/
-│   │       ├── main.rs
-│   │       ├── app.rs         # GPUI Application bootstrap
-│   │       ├── workspace.rs   # window, tabs, splits layout
-│   │       ├── terminal_view.rs  # GPUI canvas rendering of terminal grid
-│   │       ├── agent_panel.rs # side panel for AI chat / tool output
-│   │       ├── command_bar.rs # command palette + inline AI prompt
-│   │       ├── theme.rs       # theming (Ghostty config compat)
-│   │       └── keybindings.rs
+│   │       ├── main.rs         # Application bootstrap + keybindings
+│   │       ├── workspace.rs    # window, tabs, splits layout
+│   │       ├── terminal_view.rs # GPUI canvas rendering of terminal grid
+│   │       ├── agent_panel.rs  # side panel for AI chat / tool output
+│   │       ├── input_bar.rs    # smart input bar (NLP/shell/skill modes)
+│   │       ├── settings_panel.rs # provider config UI (Cmd+,)
+│   │       └── theme.rs        # Catppuccin Mocha theme
 │   │
 │   ├── con-core/              # shared logic, no UI dependency
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── terminal_manager.rs  # owns terminal instances
-│   │       ├── agent_harness.rs     # orchestrates agent ↔ terminal
-│   │       ├── session.rs           # persist/restore workspace state
-│   │       ├── config.rs            # con config + ghostty config reader
-│   │       └── notification.rs      # agent notification system (OSC hooks)
+│   │       ├── harness.rs     # orchestrates agent ↔ terminal
+│   │       ├── session.rs     # persist/restore workspace state
+│   │       └── config.rs      # con config (TOML)
 │   │
 │   ├── con-terminal/          # terminal emulation layer
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── pty.rs         # cross-platform PTY (portable-pty)
-│   │       ├── vt.rs          # libghostty-vt FFI bindings
-│   │       ├── grid.rs        # terminal grid state (wraps ghostty Screen)
-│   │       ├── input.rs       # keyboard/mouse → escape sequence encoding
-│   │       └── renderer.rs    # grid → GPUI paint commands
+│   │       ├── grid.rs        # terminal grid + VTE Perform impl
+│   │       └── input.rs       # keyboard → escape sequence encoding
 │   │
-│   ├── con-agent/             # AI agent harness
+│   ├── con-agent/             # AI agent harness (Rig 0.32)
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── provider.rs    # rig-based multi-provider LLM client
-│   │       ├── tools.rs       # agent tool definitions (shell, file, search)
+│   │       ├── provider.rs    # Multi-provider Rig Agent (13 providers)
+│   │       ├── tools.rs       # Rig Tool trait impls (shell, file, search)
 │   │       ├── context.rs     # terminal context extraction for agent
-│   │       ├── conversation.rs # conversation state + history
-│   │       └── streaming.rs   # SSE/streaming token output
+│   │       ├── conversation.rs # conversation state + Rig Message conversion
+│   │       └── skills.rs      # skill registry + AGENTS.md parser
 │   │
-│   └── con-cli/               # headless CLI + socket client
-│       └── src/
-│           ├── main.rs
-│           └── socket.rs      # IPC to running con instance
+│   └── con-cli/               # headless CLI + socket client (stub)
+│       └── src/main.rs
 │
-├── 3pp/                       # third-party sources (submodules)
-│   ├── ghostty/               # libghostty-vt source
-│   ├── gpui-ce/               # GPUI community edition
-│   ├── cmux/                  # reference implementation
-│   ├── create-gpui-app/
-│   └── awesome-gpui/
+├── postmortem/                # incident & integration postmortems
 │
-├── build/                     # build scripts
-│   ├── ghostty.rs             # build.rs helper: compile libghostty-vt
-│   └── link.rs                # platform-specific linking
-│
-└── assets/
-    ├── themes/                # built-in color schemes
-    ├── fonts/                 # bundled fallback font (e.g. JetBrains Mono)
-    └── icons/
+└── docs/
+    ├── study/                 # technology study notes
+    └── impl/                  # implementation notes
 ```
 
 ---
@@ -128,19 +111,15 @@ kingston/
 
 GPUI gives us Zed-level text rendering quality (critical for a terminal) and a proven canvas API for custom grid drawing. The `termy` project in awesome-gpui proves terminal embedding works.
 
-### 2. Terminal Core: libghostty-vt via C FFI
+### 2. Terminal Core: vte + portable-pty
 
-**Why not rewrite VT parsing from scratch:**
-- Ghostty's parser is production-grade, tested against thousands of terminal programs
-- VT100/xterm compatibility is a multi-year effort — leverage it
-- libghostty-vt exposes a clean C API specifically for embedding
-- Kitty keyboard protocol, OSC 133 (semantic prompts), hyperlinks — all included
+**Current approach (v0.1):**
+- **vte** (v0.15) — pure Rust VT100 parser, implements `Perform` trait for dispatch
+- Our `Grid` struct implements `vte::Perform` directly — handles print, CSI dispatch, SGR, OSC, ESC, alternate screen, scroll regions, cursor shapes
+- **portable-pty** — cross-platform PTY management (macOS/Linux/Windows)
+- 256-color + truecolor rendering, scrollback buffer
 
-**Integration approach:**
-- Build libghostty-vt from Zig source in `build.rs` (Zig compiles to C ABI)
-- Generate Rust bindings via `bindgen` against `ghostty/vt.h`
-- Wrap in safe Rust in `con-terminal` crate
-- Use `portable-pty` crate for cross-platform PTY management (avoids reimplementing PTY for each OS)
+**Future (post-MVP):** Evaluate migrating to libghostty-vt for production-grade VT compliance (Kitty keyboard protocol, hyperlinks, full sixel support). The vte-based approach is sufficient for the current milestone and avoids the Zig build dependency.
 
 ### 3. AI Agent Harness: Rig
 
@@ -154,12 +133,15 @@ GPUI gives us Zed-level text rendering quality (critical for a terminal) and a p
 | **AutoAgents** | Multi-agent focused, heavier weight. Good for orchestration but overkill for terminal agent. |
 | **Raw HTTP** | Maximum control but months of provider-specific work. |
 
-**Rig gives us:**
-- Unified provider interface (swap OpenAI ↔ Anthropic with config)
-- Tool definitions in Rust (type-safe, fast)
-- Streaming completion support
-- Agent loop with tool calling
-- Good enough to start; replaceable later if needed
+**Rig v0.32 gives us:**
+- `CompletionClient::agent()` builder — preamble + tools + model config in one chain
+- `Tool` trait — type-safe tool definitions with `Args` (Deserialize), `Output` (Serialize), `Error`
+- `Chat` trait — multi-turn conversation with `Vec<Message>` history
+- `PromptHook` trait — lifecycle callbacks (on_text_delta, on_tool_call, on_tool_result) for streaming UI
+- `anthropic::Client::new(api_key)` — direct Anthropic provider with model constants (`CLAUDE_4_SONNET`)
+- Agent loop with automatic tool calling (up to N turns)
+
+**Current integration:** con-agent implements 4 tools as Rig `Tool` impls (shell_exec, file_read, file_write, search), supports 13 providers (Anthropic, OpenAI, OpenAI-compatible, DeepSeek, Groq, Gemini, Ollama, OpenRouter, Mistral, Together, Cohere, Perplexity, xAI) with custom base_url for proxy endpoints, and uses `Chat::chat()` for multi-turn conversation. The harness runs on a shared tokio runtime. Provider settings are configurable via Cmd+, settings panel.
 
 **Escape hatch:** If we later need ai-sdk features, we can spawn a Bun/Node sidecar process and communicate over IPC. This is a pragmatic fallback, not a primary architecture.
 
@@ -278,13 +260,13 @@ For tools like Claude Code, Codex CLI, or OpenCode that run *inside* the termina
 ### Prerequisites
 ```bash
 # macOS
-brew install zig rustup cmake
+brew install rustup cmake
 
 # Linux
-sudo apt install zig rustup cmake libwayland-dev libxkbcommon-dev
+sudo apt install rustup cmake libwayland-dev libxkbcommon-dev
 
 # Windows
-# Install zig, rustup, cmake via winget/scoop
+# Install rustup, cmake via winget/scoop
 ```
 
 ### Build
@@ -296,10 +278,9 @@ cargo test --workspace         # test everything
 ```
 
 ### Build Pipeline
-1. `build.rs` in `con-terminal` invokes `zig build` on ghostty source to produce `libghostty_vt.a`
-2. `bindgen` generates Rust FFI bindings from `ghostty/vt.h`
-3. Cargo links everything together
-4. GPUI handles platform-specific GPU setup at runtime
+1. Cargo resolves workspace deps from crates.io (gpui-ce 0.3, rig-core 0.32)
+2. GPUI-CE compiles Metal shaders at runtime (`runtime_shaders` feature — no Xcode.app needed for dev)
+3. `cargo build` produces the `con` binary with all crates linked
 
 ---
 
@@ -316,16 +297,15 @@ scrollback-lines = 10000
 cursor-style = "block"
 
 [agent]
-provider = "anthropic"             # or "openai", "ollama", "custom"
-model = "claude-sonnet-4-20250514"
-api-key-env = "ANTHROPIC_API_KEY"  # reads from env var
-auto-context = true                # inject terminal context automatically
-notification = true                # blue ring when agent needs attention
-
-[agent.tools]
-shell = true                       # agent can execute commands
-file = true                        # agent can read/write files
-search = true                      # agent can search codebase
+provider = "anthropic"             # anthropic, openai, openai-compatible, deepseek,
+                                   # groq, gemini, ollama, openrouter, mistral,
+                                   # together, cohere, perplexity, xai
+model = "claude-sonnet-4-0"        # leave empty for provider default
+api_key_env = "ANTHROPIC_API_KEY"  # reads from env var
+base_url = ""                      # optional: custom/proxy endpoint
+max_tokens = 4096
+max_turns = 10
+auto_context = true                # inject terminal context automatically
 
 [keybindings]
 toggle-agent = "cmd+l"
@@ -350,17 +330,15 @@ split-down = "cmd+shift+d"
 
 ## Resolved Decisions
 
-### 1. Build: Zig from Cargo build.rs
+### 1. Terminal Parsing: vte (Pure Rust)
 
-**Decision:** Invoke `zig build lib-vt` from `con-terminal/build.rs`. This is the right long-term approach.
+**Decision:** Use `vte` crate (v0.15) for VT parsing instead of libghostty-vt FFI.
 
-**Why not pre-compiled artifacts:**
-- Zig cross-compiles natively — `zig build lib-vt -Dtarget=x86_64-linux-gnu` works out of the box
-- Keeps the build hermetic: one `cargo build` does everything
-- Ghostty's build.zig already has a clean `lib-vt` target that produces `libghostty_vt.a` + headers
-- Zig 0.15.2+ required (check in build.rs, fail with clear message)
-
-**CI strategy:** Cache the compiled `libghostty_vt.a` per platform in CI to avoid rebuilding on every push. Use content hash of ghostty source as cache key.
+**Rationale:**
+- Zero build complexity — no Zig toolchain, no FFI, no bindgen
+- Pure Rust `Perform` trait maps cleanly to our Grid implementation
+- Sufficient for MVP: handles all common VT100/xterm sequences
+- Future migration to libghostty-vt remains possible if we need Kitty keyboard protocol or sixel graphics
 
 ### 2. GPUI IME: Production-Ready
 

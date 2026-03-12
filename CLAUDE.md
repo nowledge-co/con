@@ -6,11 +6,11 @@ con is an open-source, cross-platform, GPU-accelerated terminal emulator with a 
 
 ## Stack
 
-- **UI**: GPUI (gpui-ce, community edition of Zed's framework)
-- **Terminal emulation**: libghostty-vt (Zig, linked via C FFI)
-- **AI agent**: Rig (Rust agent framework, multi-provider)
-- **PTY**: portable-pty crate
-- **Socket API**: Unix domain sockets, JSON-RPC (cmux-inspired)
+- **UI**: GPUI-CE v0.3.3 (community edition of Zed's framework, Apache 2.0)
+- **Terminal emulation**: vte v0.15 (pure Rust VT parser) + portable-pty
+- **AI agent**: Rig v0.32.0 (from crates.io, 13 providers, Tool trait)
+- **PTY**: portable-pty crate (cross-platform)
+- **Socket API**: planned — Unix domain sockets, JSON-RPC (cmux-inspired)
 
 ## Repository Layout
 
@@ -22,33 +22,36 @@ kingston/
 │   ├── impl/          # Implementation notes per crate/subsystem
 │   └── study/         # Research notes on 3pp dependencies
 ├── postmortem/        # Issue postmortems (YYYY-MM-DD-title.md)
-├── crates/            # Rust workspace members (TODO: scaffold)
-│   ├── con/           # Main binary (GPUI app)
-│   ├── con-core/      # Shared logic
-│   ├── con-terminal/  # Terminal emulation + PTY
-│   ├── con-agent/     # AI harness (Rig)
-│   └── con-cli/       # CLI + socket client
-├── 3pp/               # Third-party sources (gitignored, submodules)
+├── crates/
+│   ├── con/           # Main binary (GPUI app shell)
+│   ├── con-core/      # Shared logic (harness, config, session)
+│   ├── con-terminal/  # Terminal emulation (grid, pty, input encoding)
+│   ├── con-agent/     # AI harness (Rig 0.32, tools, conversation)
+│   └── con-cli/       # CLI + socket client (stub)
+├── postmortem/        # Integration & incident postmortems
 └── assets/            # Themes, fonts, icons
 ```
 
 ## Build
 
 ```bash
-# Prerequisites: zig >= 0.15.2, rust (stable), cmake
+# Prerequisites: rust (stable, edition 2024), cmake
 cargo build            # debug
 cargo build --release  # release
-cargo run -p con       # run
+cargo run -p con       # run the terminal
 cargo test --workspace # test
+
+# GPUI needs runtime_shaders feature (already set) — no Xcode.app needed for dev
 ```
 
 ## Key Conventions
 
 - **Crate boundaries matter.** con-terminal has zero UI deps. con-agent has zero terminal deps. con-core glues them.
-- **FFI safety.** All ghostty C calls wrapped in safe Rust in con-terminal. No raw pointers leak upward.
-- **Agent transparency.** When the built-in agent runs a command, it executes in a visible terminal pane. No hidden subprocesses.
-- **Socket API first.** The built-in agent is a client of con's socket API. External agents (Claude Code, plugins) use the same API.
-- **Config is TOML.** User config at `~/.config/con/config.toml`. Ghostty theme files are compatible.
+- **Real Rig integration.** Tools implement `rig::tool::Tool` trait. Agent built via `client.agent(model).tool(T).build()`. Chat via `Chat::chat()` trait.
+- **Agent transparency.** When the built-in agent runs a command, it executes visibly. No hidden subprocesses.
+- **Shared tokio runtime.** The harness owns a single multi-thread tokio runtime — no thread-per-message.
+- **Config is TOML.** User config at `~/.config/con/config.toml`.
+- **GPUI patterns.** Use `cx.spawn(async move |this, cx| { ... })` for async work. Use if/else for conditional UI (FluentBuilder::when() is not re-exported).
 
 ## Branching
 

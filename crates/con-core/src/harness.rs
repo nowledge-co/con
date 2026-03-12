@@ -1,50 +1,42 @@
-use anyhow::Result;
 use con_agent::{
-    AgentConfig, AgentProvider, Conversation, Message, Skill, SkillRegistry, TerminalContext,
+    AgentEvent, AgentProvider, Conversation, Message, SkillRegistry, TerminalContext,
 };
 use con_terminal::Grid;
 use crossbeam_channel::{Receiver, Sender};
-use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 use crate::config::Config;
 
 /// Events from the harness to the UI
 #[derive(Debug, Clone)]
 pub enum HarnessEvent {
-    /// Agent is thinking
     Thinking,
-    /// Streaming text from agent
     Token(String),
-    /// Agent step (tool call, reasoning)
     Step(con_agent::conversation::AgentStep),
-    /// Agent response complete
     ResponseComplete(Message),
-    /// Error
     Error(String),
-    /// Skills were loaded/updated
     SkillsUpdated(Vec<String>),
 }
 
 /// Classifies user input
 #[derive(Debug)]
 pub enum InputKind {
-    /// Natural language prompt → route to agent
     NaturalLanguage(String),
-    /// Shell command → execute in PTY
     ShellCommand(String),
-    /// Skill invocation (e.g. "/explain", "/fix")
     SkillInvoke(String, Option<String>),
 }
 
-/// The agent harness — orchestrates agent ↔ terminal interaction
+/// The agent harness — orchestrates agent <-> terminal interaction.
+/// Owns a single shared tokio runtime for all async agent work.
 pub struct AgentHarness {
     provider: AgentProvider,
     conversation: Conversation,
     skills: SkillRegistry,
     event_tx: Sender<HarnessEvent>,
     event_rx: Receiver<HarnessEvent>,
+    runtime: Arc<Runtime>,
 }
 
 impl AgentHarness {
@@ -53,16 +45,24 @@ impl AgentHarness {
         let skills = SkillRegistry::new();
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
 
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime for agent harness"),
+        );
+
         Self {
             provider,
             conversation: Conversation::new(),
             skills,
             event_tx,
             event_rx,
+            runtime,
         }
     }
 
-    /// Get the event receiver for the UI to consume
     pub fn events(&self) -> &Receiver<HarnessEvent> {
         &self.event_rx
     }
@@ -71,7 +71,6 @@ impl AgentHarness {
     pub fn classify_input(&self, input: &str) -> InputKind {
         let trimmed = input.trim();
 
-        // Skill invocation: starts with /
         if trimmed.starts_with('/') {
             let parts: Vec<&str> = trimmed[1..].splitn(2, ' ').collect();
             let skill_name = parts[0].to_string();
@@ -81,13 +80,10 @@ impl AgentHarness {
             }
         }
 
-        // Heuristic: if it looks like a shell command, treat it as one.
-        // Shell commands typically start with common commands or paths.
         if looks_like_command(trimmed) {
             return InputKind::ShellCommand(trimmed.to_string());
         }
 
-        // Default: natural language
         InputKind::NaturalLanguage(trimmed.to_string())
     }
 
@@ -98,17 +94,14 @@ impl AgentHarness {
             .map(|s| s.to_string())
             .or_else(|| grid.current_dir.clone());
 
-        // Check for AGENTS.md
         let agents_md = cwd.as_ref().and_then(|dir| {
             let agents_path = Path::new(dir).join("AGENTS.md");
             std::fs::read_to_string(&agents_path).ok()
         });
 
-        // Detect SSH/tmux from environment
         let is_ssh = std::env::var("SSH_CONNECTION").is_ok();
         let is_tmux = std::env::var("TMUX").is_ok();
 
-        // Git branch
         let git_branch = cwd.as_ref().and_then(|dir| {
             std::process::Command::new("git")
                 .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -132,46 +125,44 @@ impl AgentHarness {
         }
     }
 
-    /// Send a natural language message to the agent
+    /// Send a natural language message to the agent.
+    /// Spawns work on the shared tokio runtime instead of creating a new one per message.
     pub fn send_message(&mut self, content: String, context: TerminalContext) {
         let user_msg = Message::user(&content);
         self.conversation.add_message(user_msg);
 
         let harness_tx = self.event_tx.clone();
-        let provider = AgentProvider::new(AgentConfig::default()); // TODO: share config properly
+        let provider = AgentProvider::new(self.provider.config().clone());
         let conversation = self.conversation.clone();
 
-        // Spawn async task for agent interaction
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                // Bridge: AgentEvent → HarnessEvent
-                let (agent_tx, agent_rx) = crossbeam_channel::unbounded();
-                let htx = harness_tx.clone();
-                let bridge = std::thread::spawn(move || {
-                    use con_agent::provider::AgentEvent;
-                    while let Ok(event) = agent_rx.recv() {
-                        let mapped = match event {
-                            AgentEvent::Thinking => HarnessEvent::Thinking,
-                            AgentEvent::Token(t) => HarnessEvent::Token(t),
-                            AgentEvent::Step(s) => HarnessEvent::Step(s),
-                            AgentEvent::Done(m) => HarnessEvent::ResponseComplete(m),
-                            AgentEvent::Error(e) => HarnessEvent::Error(e),
-                        };
-                        if htx.send(mapped).is_err() {
-                            break;
-                        }
-                    }
-                });
+        self.runtime.spawn(async move {
+            let (agent_tx, agent_rx) = crossbeam_channel::unbounded();
 
-                match provider.send(&conversation, &context, agent_tx).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        let _ = harness_tx.send(HarnessEvent::Error(e.to_string()));
+            // Bridge AgentEvent -> HarnessEvent on a blocking task
+            let htx = harness_tx.clone();
+            let bridge = tokio::task::spawn_blocking(move || {
+                while let Ok(event) = agent_rx.recv() {
+                    let mapped = match event {
+                        AgentEvent::Thinking => HarnessEvent::Thinking,
+                        AgentEvent::Token(t) => HarnessEvent::Token(t),
+                        AgentEvent::Step(s) => HarnessEvent::Step(s),
+                        AgentEvent::Done(m) => HarnessEvent::ResponseComplete(m),
+                        AgentEvent::Error(e) => HarnessEvent::Error(e),
+                    };
+                    if htx.send(mapped).is_err() {
+                        break;
                     }
                 }
-                let _ = bridge.join();
             });
+
+            match provider.send(&conversation, &context, agent_tx).await {
+                Ok(_) => {}
+                Err(e) => {
+                    let _ = harness_tx.send(HarnessEvent::Error(e.to_string()));
+                }
+            }
+
+            let _ = bridge.await;
         });
     }
 
@@ -223,7 +214,6 @@ impl AgentHarness {
 fn looks_like_command(input: &str) -> bool {
     let first_word = input.split_whitespace().next().unwrap_or("");
 
-    // Common shell commands
     const COMMANDS: &[&str] = &[
         "ls", "cd", "pwd", "cat", "echo", "grep", "find", "mkdir", "rm", "cp", "mv", "touch",
         "chmod", "chown", "curl", "wget", "git", "docker", "npm", "yarn", "pnpm", "cargo",
@@ -238,7 +228,6 @@ fn looks_like_command(input: &str) -> bool {
         return true;
     }
 
-    // Starts with ./ or / or ~/ (path execution)
     if first_word.starts_with("./")
         || first_word.starts_with('/')
         || first_word.starts_with("~/")
@@ -246,8 +235,12 @@ fn looks_like_command(input: &str) -> bool {
         return true;
     }
 
-    // Contains pipe, redirect, or semicolon (shell operators)
-    if input.contains(" | ") || input.contains(" > ") || input.contains(" >> ") || input.contains(" && ") || input.contains(" ; ") {
+    if input.contains(" | ")
+        || input.contains(" > ")
+        || input.contains(" >> ")
+        || input.contains(" && ")
+        || input.contains(" ; ")
+    {
         return true;
     }
 

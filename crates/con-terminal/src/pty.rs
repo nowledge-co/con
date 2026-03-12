@@ -1,8 +1,7 @@
 use anyhow::Result;
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize as PtyPtySize, native_pty_system};
 use std::io::{Read, Write};
-use std::sync::Arc;
 use std::thread;
 
 #[derive(Debug, Clone, Copy)]

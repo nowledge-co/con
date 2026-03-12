@@ -1,76 +1,164 @@
-# Study: Rig — Rust AI Agent Framework
+# Study: Rig v0.32.0 — Rust AI Agent Framework
 
 ## Overview
 
 [Rig](https://rig.rs/) is the most mature Rust-native AI agent framework. MIT licensed.
+Vendored at `3pp/rig/rig/rig-core` (v0.32.0).
 
-## Why Rig
+## Core Architecture
 
-- Multi-provider: OpenAI, Anthropic, Cohere, Google, xAI, Ollama, etc.
-- Tool-use with type-safe Rust definitions
-- Streaming completions
-- Agent loop (plan → act → observe → repeat)
-- RAG support (vector stores, embeddings)
-- 24.3% CPU in benchmarks — most efficient of tested frameworks
-- Active development, good community
-
-## Core Concepts
+### Client + Provider
 
 ```rust
-// Provider client
-let client = rig::providers::anthropic::Client::from_env();
+use rig::providers::anthropic;
+use rig::client::CompletionClient;
 
-// Model
-let model = client.agent("claude-sonnet-4-20250514")
+// From API key
+let client = anthropic::Client::new("sk-ant-...").unwrap();
+
+// From environment variable
+let client = anthropic::Client::from_env(); // reads ANTHROPIC_API_KEY
+
+// Model constants
+anthropic::completion::CLAUDE_4_SONNET   // "claude-sonnet-4-0"
+anthropic::completion::CLAUDE_4_OPUS     // "claude-opus-4-0"
+anthropic::completion::CLAUDE_3_5_SONNET // "claude-3-5-sonnet-latest"
+```
+
+### Agent Builder
+
+```rust
+let agent = client
+    .agent(anthropic::completion::CLAUDE_4_SONNET)
     .preamble("You are a terminal assistant.")
     .tool(ShellExecTool)
     .tool(FileReadTool)
+    .max_tokens(4096)
+    .default_max_turns(10) // max tool call loops
     .build();
-
-// Chat
-let response = model.prompt("list files in current dir").await?;
-
-// Streaming
-let stream = model.stream_prompt("explain this error").await?;
 ```
 
-## Tool Definition Pattern
+### Chat (multi-turn)
 
 ```rust
-#[derive(Debug, Serialize, Deserialize, rig::Tool)]
-#[tool(description = "Execute a shell command in the terminal")]
-struct ShellExecTool;
+use rig::completion::Chat;
+
+let response: String = agent
+    .chat("explain this error", chat_history)
+    .await?;
+```
+
+### Prompt (single turn)
+
+```rust
+use rig::completion::Prompt;
+
+let response: String = agent
+    .prompt("list files in current dir")
+    .await?;
+```
+
+## Tool Definition (Rig 0.32 API)
+
+```rust
+use rig::tool::Tool;
+use rig::completion::ToolDefinition;
+
+pub struct ShellExecTool;
 
 impl Tool for ShellExecTool {
-    type Input = ShellExecInput;
-    type Output = String;
+    const NAME: &'static str = "shell_exec";
+    type Error = ToolError;        // must impl std::error::Error + Send + Sync
+    type Args = ShellExecArgs;     // must impl Deserialize
+    type Output = ShellExecOutput; // must impl Serialize
 
-    async fn call(&self, input: ShellExecInput) -> Result<String> {
-        // Write command to PTY, capture output
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Execute a shell command".to_string(),
+            parameters: serde_json::json!({ /* JSON schema */ }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // Execute the tool
     }
 }
 ```
 
-## Integration with con
+## PromptHook Trait (lifecycle callbacks)
 
-1. `con-agent` crate wraps Rig
-2. Tools bridge to con-core's terminal manager (via socket API or direct Rust calls)
-3. Streaming tokens render in the agent panel
-4. Provider/model configurable via `config.toml`
+```rust
+use rig::agent::PromptHook;
 
-## Provider Switching
+impl PromptHook<M> for MyHook {
+    async fn on_text_delta(&self, delta: &str, aggregated: &str) -> HookAction {
+        // Stream token to UI
+        HookAction::cont()
+    }
 
-```toml
-# config.toml
-[agent]
-provider = "anthropic"  # or "openai", "ollama"
-model = "claude-sonnet-4-20250514"
+    async fn on_tool_call(&self, name: &str, ...) -> ToolCallHookAction {
+        // Log or approve/deny tool calls
+        ToolCallHookAction::cont()
+    }
+
+    async fn on_tool_result(&self, name: &str, ...) -> HookAction {
+        // Observe tool results
+        HookAction::cont()
+    }
+}
 ```
 
-Rig handles the provider differences. Our config just maps to Rig's client constructors.
+## Message Types
 
-## Limitations
+```rust
+use rig::message::{Message, UserContent, AssistantContent, Text};
+use rig::OneOrMany;
 
-- No built-in MCP (Model Context Protocol) support — we'd add this ourselves if needed
-- No built-in conversation persistence — we implement this in con-agent
-- Streaming API may evolve — pin to specific rig version
+// User message
+Message::User {
+    content: OneOrMany::one(UserContent::Text(Text { text: "hello".into() }))
+}
+
+// Assistant message
+Message::Assistant {
+    id: None,
+    content: OneOrMany::one(AssistantContent::Text(Text { text: "hi".into() }))
+}
+```
+
+## Streaming (RawStreamingChoice)
+
+```rust
+use rig::streaming::{StreamingCompletionResponse, RawStreamingChoice};
+
+// Streaming responses yield these variants:
+RawStreamingChoice::Message(String)       // text chunk
+RawStreamingChoice::ToolCall(...)         // complete tool call
+RawStreamingChoice::ToolCallDelta { .. }  // partial tool call
+RawStreamingChoice::Reasoning { .. }      // reasoning content
+RawStreamingChoice::FinalResponse(R)      // provider response object
+```
+
+## Integration with con
+
+1. `con-agent/provider.rs` creates `anthropic::Client` from config
+2. Builds an `Agent` with our 4 tool implementations
+3. Uses `Chat::chat()` for multi-turn conversation
+4. `con-agent/conversation.rs` converts our Message types to Rig's `Vec<Message>`
+5. `con-core/harness.rs` runs agent work on a shared tokio runtime
+
+## Key Differences from Rig 0.10
+
+- `Tool` trait now uses `const NAME`, associated types for Args/Output/Error
+- `definition()` and `call()` are now async methods (not derive macros)
+- Client uses generic `Client<Ext, H>` architecture with `Capabilities` trait
+- `Chat::chat()` takes `impl Into<Message>` + `Vec<Message>` history
+- `PromptHook` replaces ad-hoc streaming callbacks
+- Agent builder has typestate for tool configuration (NoToolConfig → WithBuilderTools)
+
+## Workspace Integration Notes
+
+Rig-core uses `workspace = true` for its deps. Since it lives inside our repo (at `3pp/rig/`),
+Cargo resolves those against OUR workspace root. We added rig-core's transitive workspace deps
+(as-any, async-stream, bytes, etc.) to our workspace Cargo.toml to satisfy these references.

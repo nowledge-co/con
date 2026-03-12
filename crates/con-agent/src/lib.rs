@@ -6,5 +6,6 @@ pub mod tools;
 
 pub use context::TerminalContext;
 pub use conversation::{Conversation, Message, MessageRole};
-pub use provider::{AgentConfig, AgentProvider};
+pub use provider::{AgentConfig, AgentEvent, AgentProvider, ProviderKind};
 pub use skills::{Skill, SkillRegistry};
+pub use tools::{FileReadTool, FileWriteTool, SearchTool, ShellExecTool};

@@ -2,18 +2,19 @@ use gpui::*;
 
 use crate::agent_panel::AgentPanel;
 use crate::input_bar::InputBar;
+use crate::settings_panel::{self, SettingsPanel};
 use crate::terminal_view::TerminalView;
 use crate::theme::Theme;
 use crate::{CloseTab, NewTab, ToggleAgentPanel};
 use con_core::Config;
 
-/// The main workspace: terminal + agent panel + input bar
+/// The main workspace: terminal + agent panel + input bar + settings overlay
 pub struct ConWorkspace {
     terminal: Entity<TerminalView>,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
+    settings_panel: Entity<SettingsPanel>,
     agent_panel_open: bool,
-    config: Config,
 }
 
 impl ConWorkspace {
@@ -21,13 +22,14 @@ impl ConWorkspace {
         let terminal = cx.new(|cx| TerminalView::new(80, 24, cx));
         let agent_panel = cx.new(|cx| AgentPanel::new(cx));
         let input_bar = cx.new(|cx| InputBar::new(cx));
+        let settings_panel = cx.new(|cx| SettingsPanel::new(&config, cx));
 
         Self {
             terminal,
             agent_panel,
             input_bar,
+            settings_panel,
             agent_panel_open: false,
-            config,
         }
     }
 
@@ -38,6 +40,21 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.agent_panel_open = !self.agent_panel_open;
+        cx.notify();
+    }
+
+    fn toggle_settings(
+        &mut self,
+        _: &settings_panel::ToggleSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.toggle(cx);
+            if panel.is_visible() {
+                panel.focus_handle(cx).focus(window);
+            }
+        });
         cx.notify();
     }
 
@@ -66,13 +83,15 @@ impl Render for ConWorkspace {
             );
         }
 
-        div()
+        let mut root = div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
             .bg(rgb(Theme::base()))
             .key_context("ConWorkspace")
             .on_action(cx.listener(Self::toggle_agent_panel))
+            .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::close_tab))
             // Titlebar
@@ -102,6 +121,18 @@ impl Render for ConWorkspace {
                     .border_t_1()
                     .border_color(rgb(Theme::surface0()))
                     .child(self.input_bar.clone()),
-            )
+            );
+
+        // Settings overlay (rendered on top)
+        let settings_visible = self
+            .settings_panel
+            .read(cx)
+            .is_visible();
+
+        if settings_visible {
+            root = root.child(self.settings_panel.clone());
+        }
+
+        root
     }
 }

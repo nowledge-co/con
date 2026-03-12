@@ -1,6 +1,5 @@
-use gpui::*;
-
 /// Catppuccin Mocha theme colors
+#[allow(dead_code)]
 pub struct Theme;
 
 impl Theme {
