@@ -67,7 +67,11 @@ impl TerminalView {
         }
     }
 
-    fn write_to_pty(&self, data: &[u8]) {
+    pub fn grid(&self) -> &Arc<Mutex<Grid>> {
+        &self.grid
+    }
+
+    pub fn write_to_pty(&self, data: &[u8]) {
         let mut pty = self.pty.lock();
         let _ = pty.write(data);
     }

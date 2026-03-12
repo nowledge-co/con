@@ -5,6 +5,8 @@ use crate::theme::Theme;
 /// The agent panel — shows conversation, reasoning steps, tool calls
 pub struct AgentPanel {
     messages: Vec<PanelMessage>,
+    /// Whether we're currently streaming a response
+    streaming: bool,
 }
 
 struct PanelMessage {
@@ -21,10 +23,14 @@ impl AgentPanel {
                 content: "con agent ready. Press Cmd+L to toggle this panel.".to_string(),
                 steps: Vec::new(),
             }],
+            streaming: false,
         }
     }
 
     pub fn add_message(&mut self, role: &str, content: &str, cx: &mut Context<Self>) {
+        // If we were streaming, finalize it
+        self.streaming = false;
+
         self.messages.push(PanelMessage {
             role: role.to_string(),
             content: content.to_string(),
@@ -36,6 +42,41 @@ impl AgentPanel {
     pub fn add_step(&mut self, step: &str, cx: &mut Context<Self>) {
         if let Some(last) = self.messages.last_mut() {
             last.steps.push(step.to_string());
+        }
+        cx.notify();
+    }
+
+    /// Append streaming token to the current assistant message
+    pub fn update_streaming(&mut self, token: &str, cx: &mut Context<Self>) {
+        if !self.streaming {
+            // Start a new assistant message for streaming
+            self.messages.push(PanelMessage {
+                role: "assistant".to_string(),
+                content: String::new(),
+                steps: Vec::new(),
+            });
+            self.streaming = true;
+        }
+        if let Some(last) = self.messages.last_mut() {
+            last.content.push_str(token);
+        }
+        cx.notify();
+    }
+
+    /// Finalize the streaming response with the complete content
+    pub fn complete_streaming(&mut self, final_content: &str, cx: &mut Context<Self>) {
+        if self.streaming {
+            if let Some(last) = self.messages.last_mut() {
+                last.content = final_content.to_string();
+            }
+            self.streaming = false;
+        } else {
+            // No streaming was happening, just add the message
+            self.messages.push(PanelMessage {
+                role: "assistant".to_string(),
+                content: final_content.to_string(),
+                steps: Vec::new(),
+            });
         }
         cx.notify();
     }
@@ -52,18 +93,23 @@ impl Render for AgentPanel {
                 _ => (Theme::overlay0(), "System"),
             };
 
-            let mut msg_div = div().flex().flex_col().gap(px(4.0)).child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(role_color))
-                    .child(role_label.to_string()),
-            ).child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(Theme::text()))
-                    .child(msg.content.clone()),
-            );
+            let mut msg_div = div()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(role_color))
+                        .child(role_label.to_string()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(Theme::text()))
+                        .child(msg.content.clone()),
+                );
 
             for step in &msg.steps {
                 msg_div = msg_div.child(
@@ -79,6 +125,16 @@ impl Render for AgentPanel {
             }
 
             messages_container = messages_container.child(msg_div);
+        }
+
+        // Streaming indicator
+        if self.streaming {
+            messages_container = messages_container.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(Theme::overlay0()))
+                    .child("..."),
+            );
         }
 
         div()

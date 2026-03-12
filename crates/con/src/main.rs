@@ -22,11 +22,7 @@ fn main() {
             KeyBinding::new("cmd-t", NewTab, None),
             KeyBinding::new("cmd-l", ToggleAgentPanel, None),
             KeyBinding::new("cmd-w", CloseTab, None),
-            KeyBinding::new(
-                "cmd-,",
-                settings_panel::ToggleSettings,
-                None,
-            ),
+            KeyBinding::new("cmd-,", settings_panel::ToggleSettings, None),
         ]);
 
         cx.on_action::<Quit>(|_, cx| {

@@ -1,12 +1,13 @@
 use gpui::*;
 
 use crate::agent_panel::AgentPanel;
-use crate::input_bar::InputBar;
+use crate::input_bar::{EscapeInput, InputBar, InputMode, SubmitInput};
 use crate::settings_panel::{self, SettingsPanel};
 use crate::terminal_view::TerminalView;
 use crate::theme::Theme;
 use crate::{CloseTab, NewTab, ToggleAgentPanel};
-use con_core::Config;
+use con_core::config::Config;
+use con_core::harness::{AgentHarness, HarnessEvent};
 
 /// The main workspace: terminal + agent panel + input bar + settings overlay
 pub struct ConWorkspace {
@@ -14,6 +15,7 @@ pub struct ConWorkspace {
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
+    harness: AgentHarness,
     agent_panel_open: bool,
 }
 
@@ -23,14 +25,129 @@ impl ConWorkspace {
         let agent_panel = cx.new(|cx| AgentPanel::new(cx));
         let input_bar = cx.new(|cx| InputBar::new(cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, cx));
+        let harness = AgentHarness::new(&config);
+
+        // Listen for input bar events
+        cx.subscribe(&input_bar, Self::on_input_submit).detach();
+        cx.subscribe(&input_bar, Self::on_input_escape).detach();
+
+        // Poll harness events periodically
+        let events_rx = harness.events().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                let mut got_event = false;
+                // Drain all pending events
+                while let Ok(event) = events_rx.try_recv() {
+                    got_event = true;
+                    let ev = event.clone();
+                    this.update(cx, |workspace, cx| {
+                        workspace.handle_harness_event(ev, cx);
+                    })
+                    .ok();
+                }
+                if !got_event {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(50))
+                        .await;
+                }
+            }
+        })
+        .detach();
 
         Self {
             terminal,
             agent_panel,
             input_bar,
             settings_panel,
+            harness,
             agent_panel_open: false,
         }
+    }
+
+    fn on_input_escape(
+        &mut self,
+        _input_bar: Entity<InputBar>,
+        _event: &EscapeInput,
+        _cx: &mut Context<Self>,
+    ) {
+        // Terminal will regain focus since input bar is no longer capturing keys
+    }
+
+    fn on_input_submit(
+        &mut self,
+        input_bar: Entity<InputBar>,
+        _event: &SubmitInput,
+        cx: &mut Context<Self>,
+    ) {
+        let (content, mode) = input_bar.update(cx, |bar, _| {
+            (bar.take_content(), bar.mode())
+        });
+
+        if content.trim().is_empty() {
+            return;
+        }
+
+        match mode {
+            InputMode::Shell => {
+                // Write directly to terminal PTY
+                self.terminal.update(cx, |tv, _| {
+                    tv.write_to_pty(format!("{}\n", content).as_bytes());
+                });
+            }
+            InputMode::Agent | InputMode::Smart => {
+                // Open agent panel if not already open
+                if !self.agent_panel_open {
+                    self.agent_panel_open = true;
+                }
+
+                // Show user message in panel
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.add_message("user", &content, cx);
+                });
+
+                // Build context from terminal grid
+                let grid = self.terminal.read(cx).grid();
+                let context = self.harness.build_context(&grid.lock(), None);
+
+                // Send to agent
+                self.harness.send_message(content, context);
+            }
+        }
+
+        cx.notify();
+    }
+
+    fn handle_harness_event(&mut self, event: HarnessEvent, cx: &mut Context<Self>) {
+        match event {
+            HarnessEvent::Thinking => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.add_step("Thinking...", cx);
+                });
+            }
+            HarnessEvent::Step(step) => {
+                let step_text = format!("{:?}", step);
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.add_step(&step_text, cx);
+                });
+            }
+            HarnessEvent::Token(token) => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.update_streaming(&token, cx);
+                });
+            }
+            HarnessEvent::ResponseComplete(msg) => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.complete_streaming(&msg.content, cx);
+                });
+            }
+            HarnessEvent::Error(err) => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.add_message("system", &format!("Error: {}", err), cx);
+                });
+            }
+            HarnessEvent::SkillsUpdated(_) => {}
+        }
+        cx.notify();
     }
 
     fn toggle_agent_panel(
@@ -124,10 +241,7 @@ impl Render for ConWorkspace {
             );
 
         // Settings overlay (rendered on top)
-        let settings_visible = self
-            .settings_panel
-            .read(cx)
-            .is_visible();
+        let settings_visible = self.settings_panel.read(cx).is_visible();
 
         if settings_visible {
             root = root.child(self.settings_panel.clone());
