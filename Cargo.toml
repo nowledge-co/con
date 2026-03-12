@@ -1,0 +1,61 @@
+[workspace]
+members = [
+    "crates/con",
+    "crates/con-core",
+    "crates/con-terminal",
+    "crates/con-agent",
+    "crates/con-cli",
+]
+default-members = ["crates/con"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+
+[workspace.dependencies]
+# Internal crates
+con-core = { path = "crates/con-core" }
+con-terminal = { path = "crates/con-terminal" }
+con-agent = { path = "crates/con-agent" }
+
+# UI
+gpui = { path = "3pp/gpui-ce", package = "gpui-ce", default-features = false, features = ["font-kit", "runtime_shaders"] }
+
+# Terminal
+vte = "0.15"
+portable-pty = "0.8"
+
+# AI Agent
+rig-core = "0.10"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Utilities
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+
+[patch.crates-io]
+# Required by gpui-ce
+calloop = { git = "https://github.com/zed-industries/calloop" }
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

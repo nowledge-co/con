@@ -1,0 +1,25 @@
+[package]
+name = "con"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "con"
+path = "src/main.rs"
+
+[dependencies]
+con-core.workspace = true
+con-terminal.workspace = true
+con-agent.workspace = true
+gpui.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+crossbeam-channel.workspace = true
+vte.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+uuid.workspace = true

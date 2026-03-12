@@ -1,0 +1,13 @@
+[package]
+name = "con-terminal"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+vte.workspace = true
+portable-pty.workspace = true
+anyhow.workspace = true
+log.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
