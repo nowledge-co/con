@@ -81,7 +81,7 @@ impl SkillRegistry {
 
     /// Load skills from an AGENTS.md file.
     /// AGENTS.md format:
-    /// ```
+    /// ```text
     /// ## skill-name
     /// Description of what this skill does.
     ///
