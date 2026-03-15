@@ -231,12 +231,17 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Cursor blink (500ms timer, resets on keypress)
 - [x] Scrollback indicator (floating pill showing "N lines up")
 - [x] Agent panel auto-scroll (ScrollHandle on messages container)
-- [x] Double-click word selection
+- [x] Double-click word selection, triple-click line selection
 - [x] Theme-aware cursor and selection colors
-- [x] Sidebar synced with tab state
+- [x] Sidebar synced with tab state, new session button
 - [x] Centered settings and command palette overlays with shadows
 - [x] Code block rendering in agent panel (triple-backtick fences)
 - [x] Shell mode refocuses terminal after command submit
+- [x] Unified input routing (smart mode classifies shell/agent/skill)
+- [x] Skills wired end-to-end (/explain, /fix, /commit, /test, /review)
+- [x] Command palette expanded (clear, focus, toggle sidebar, cycle mode)
+- [x] Terminal settings in Settings UI (font size, scrollback lines)
+- [x] Cmd+A select all, Cmd+K clear scrollback
 - [ ] Configurable keybindings
 - [ ] Plugin system (Lua or WASM)
 - [ ] Auto-update (Sparkle on macOS, appimage on Linux)
@@ -360,8 +365,6 @@ auto_approve_tools = false         # require approval for shell_exec, file_write
 toggle-agent = "cmd+l"
 command-palette = "cmd+shift+p"
 new-tab = "cmd+t"
-split-right = "cmd+d"
-split-down = "cmd+shift+d"
 ```
 
 ---
