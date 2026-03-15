@@ -1,5 +1,6 @@
 mod agent_panel;
 mod assets;
+mod command_palette;
 mod input_bar;
 mod settings_panel;
 mod sidebar;
@@ -33,6 +34,7 @@ fn main() {
             KeyBinding::new("cmd-l", ToggleAgentPanel, None),
             KeyBinding::new("cmd-w", CloseTab, None),
             KeyBinding::new("cmd-,", settings_panel::ToggleSettings, None),
+            KeyBinding::new("cmd-shift-p", command_palette::ToggleCommandPalette, None),
         ]);
 
         cx.on_action::<Quit>(|_, cx| {

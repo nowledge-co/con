@@ -164,7 +164,7 @@ impl AgentHarness {
             cwd,
             recent_output,
             last_command: grid.last_command.clone(),
-            last_exit_code: None,
+            last_exit_code: grid.last_exit_code,
             git_branch,
             is_ssh,
             is_tmux,

@@ -2,6 +2,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 
 use crate::agent_panel::AgentPanel;
+use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{EscapeInput, InputBar, InputMode, SubmitInput};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel};
 use crate::sidebar::SessionSidebar;
@@ -17,6 +18,7 @@ pub struct ConWorkspace {
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
+    command_palette: Entity<CommandPalette>,
     harness: AgentHarness,
     agent_panel_open: bool,
 }
@@ -28,6 +30,7 @@ impl ConWorkspace {
         let agent_panel = cx.new(|cx| AgentPanel::new(cx));
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
+        let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
         let harness = AgentHarness::new(&config);
 
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
@@ -35,6 +38,8 @@ impl ConWorkspace {
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
             .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_settings_saved)
+            .detach();
+        cx.subscribe_in(&command_palette, window, Self::on_palette_select)
             .detach();
 
         // Poll harness events periodically
@@ -65,9 +70,37 @@ impl ConWorkspace {
             agent_panel,
             input_bar,
             settings_panel,
+            command_palette,
             harness,
             agent_panel_open: false,
         }
+    }
+
+    fn on_palette_select(
+        &mut self,
+        _palette: &Entity<CommandPalette>,
+        event: &PaletteSelect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event.action_id.as_str() {
+            "toggle-agent" => {
+                self.agent_panel_open = !self.agent_panel_open;
+            }
+            "settings" => {
+                self.settings_panel.update(cx, |panel, cx| {
+                    panel.toggle(window, cx);
+                });
+            }
+            "new-tab" | "close-tab" => {
+                // Stub — future tab management
+            }
+            "quit" => {
+                cx.quit();
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
     fn on_settings_saved(
@@ -206,6 +239,18 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn toggle_command_palette(
+        &mut self,
+        _: &ToggleCommandPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command_palette.update(cx, |palette, cx| {
+            palette.toggle(window, cx);
+        });
+        cx.notify();
+    }
+
     fn toggle_settings(
         &mut self,
         _: &settings_panel::ToggleSettings,
@@ -257,6 +302,7 @@ impl Render for ConWorkspace {
             .key_context("ConWorkspace")
             .on_action(cx.listener(Self::toggle_agent_panel))
             .on_action(cx.listener(Self::toggle_settings))
+            .on_action(cx.listener(Self::toggle_command_palette))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::close_tab))
             .child(
@@ -288,6 +334,11 @@ impl Render for ConWorkspace {
         let settings_visible = self.settings_panel.read(cx).is_visible();
         if settings_visible {
             root = root.child(self.settings_panel.clone());
+        }
+
+        let palette_visible = self.command_palette.read(cx).is_visible();
+        if palette_visible {
+            root = root.child(self.command_palette.clone());
         }
 
         root

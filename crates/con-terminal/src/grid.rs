@@ -110,6 +110,15 @@ impl Default for Cell {
     }
 }
 
+/// A completed command block detected via OSC 133 shell integration
+#[derive(Debug, Clone)]
+pub struct CommandBlock {
+    pub command: String,
+    pub output_start_row: usize,
+    pub output_end_row: usize,
+    pub exit_code: Option<i32>,
+}
+
 /// Cursor shape
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CursorShape {
@@ -143,7 +152,12 @@ pub struct Grid {
     // OSC 133 semantic prompt tracking
     pub last_prompt_row: Option<usize>,
     pub last_command: Option<String>,
+    pub last_exit_code: Option<i32>,
     pub current_dir: Option<String>,
+    /// Completed command blocks from OSC 133 sequences
+    pub command_blocks: Vec<CommandBlock>,
+    /// Row where the current command started (OSC 133;C)
+    command_start_row: Option<usize>,
     // Scroll region
     scroll_top: usize,
     scroll_bottom: usize,
@@ -178,7 +192,10 @@ impl Grid {
             dirty,
             last_prompt_row: None,
             last_command: None,
+            last_exit_code: None,
             current_dir: None,
+            command_blocks: Vec::new(),
+            command_start_row: None,
             scroll_top: 0,
             scroll_bottom: rows - 1,
             tab_stops,
@@ -191,6 +208,15 @@ impl Grid {
 
     pub fn is_dirty(&self, row: usize) -> bool {
         self.dirty[row]
+    }
+
+    /// Extract the text content of a single row, trimming trailing whitespace.
+    pub fn row_text(&self, row: usize) -> String {
+        if row >= self.rows {
+            return String::new();
+        }
+        let text: String = self.cells[row].iter().map(|c| c.c).collect();
+        text.trim_end().to_string()
     }
 
     pub fn clear_dirty(&mut self) {
@@ -494,18 +520,49 @@ impl Perform for Grid {
                 }
             }
             // OSC 133: Semantic prompts (shell integration)
+            // A = prompt start, B = prompt end, C = command start, D = command end
             b"133" => {
                 if params.len() > 1 {
                     match params[1] {
                         b"A" => {
-                            // Prompt start
                             self.last_prompt_row = Some(self.cursor.row);
                         }
                         b"C" => {
-                            // Command start — capture what's between prompt and here
+                            // Command start — extract command text from prompt row
+                            if let Some(prompt_row) = self.last_prompt_row {
+                                let cmd = self.row_text(prompt_row).trim().to_string();
+                                if !cmd.is_empty() {
+                                    self.last_command = Some(cmd);
+                                }
+                            }
+                            self.command_start_row = Some(self.cursor.row);
                         }
                         b"D" => {
-                            // Command end (with exit code in params[2] if present)
+                            // Command end — extract exit code and finalize block
+                            let exit_code = if params.len() > 2 {
+                                std::str::from_utf8(params[2])
+                                    .ok()
+                                    .and_then(|s| s.parse::<i32>().ok())
+                            } else {
+                                None
+                            };
+                            self.last_exit_code = exit_code;
+
+                            if let (Some(cmd), Some(start_row)) =
+                                (self.last_command.clone(), self.command_start_row)
+                            {
+                                self.command_blocks.push(CommandBlock {
+                                    command: cmd,
+                                    output_start_row: start_row,
+                                    output_end_row: self.cursor.row,
+                                    exit_code,
+                                });
+                                // Keep last 50 command blocks
+                                if self.command_blocks.len() > 50 {
+                                    self.command_blocks.remove(0);
+                                }
+                            }
+                            self.command_start_row = None;
                         }
                         _ => {}
                     }

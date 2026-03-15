@@ -206,15 +206,15 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [ ] Streaming text rendering via `stream_prompt()`
 
 ### Phase 5: Deep Integration
+- [x] OSC 133 command block tracking (prompt/command/exit code detection)
+- [x] Command palette (Cmd+Shift+P) with fuzzy search and keyboard nav
 - [ ] Inline AI suggestions (ghost text below prompt, Tab to accept)
-- [ ] Smart command blocks (detect command boundaries via OSC 133)
 - [ ] Command block actions: copy, re-run, explain, share
 - [ ] SSH-aware agent (knows when you're in a remote session)
 - [ ] tmux-aware agent (understands pane topology)
 - [ ] Conversation history + search
 
 ### Phase 6: Polish
-- [ ] Command palette (Cmd+Shift+P)
 - [ ] Session persistence and restore
 - [ ] Configurable keybindings
 - [ ] Plugin system (Lua or WASM)
