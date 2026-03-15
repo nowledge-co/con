@@ -160,6 +160,18 @@ impl AgentHarness {
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         });
 
+        let command_history: Vec<con_agent::context::CommandBlockInfo> = grid
+            .command_blocks
+            .iter()
+            .rev()
+            .take(10)
+            .rev()
+            .map(|block| con_agent::context::CommandBlockInfo {
+                command: block.command.clone(),
+                exit_code: block.exit_code,
+            })
+            .collect();
+
         TerminalContext {
             cwd,
             recent_output,
@@ -170,6 +182,7 @@ impl AgentHarness {
             is_tmux,
             agents_md,
             skills: self.skills.names(),
+            command_history,
         }
     }
 

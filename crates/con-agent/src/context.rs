@@ -23,6 +23,15 @@ pub struct TerminalContext {
     pub agents_md: Option<String>,
     /// Available skills
     pub skills: Vec<String>,
+    /// Recent command blocks from OSC 133 shell integration
+    pub command_history: Vec<CommandBlockInfo>,
+}
+
+/// A completed command block from OSC 133 shell integration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandBlockInfo {
+    pub command: String,
+    pub exit_code: Option<i32>,
 }
 
 impl TerminalContext {
@@ -37,6 +46,7 @@ impl TerminalContext {
             is_tmux: false,
             agents_md: None,
             skills: Vec::new(),
+            command_history: Vec::new(),
         }
     }
 
@@ -72,6 +82,23 @@ impl TerminalContext {
 
         if !self.skills.is_empty() {
             parts.push(format!("Available skills: {}", self.skills.join(", ")));
+        }
+
+        if !self.command_history.is_empty() {
+            let history: Vec<String> = self
+                .command_history
+                .iter()
+                .map(|block| {
+                    match block.exit_code {
+                        Some(code) => format!("$ {} (exit {})", block.command, code),
+                        None => format!("$ {}", block.command),
+                    }
+                })
+                .collect();
+            parts.push(format!(
+                "Recent command history:\n{}",
+                history.join("\n")
+            ));
         }
 
         if !self.recent_output.is_empty() {
