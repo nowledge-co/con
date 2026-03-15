@@ -28,3 +28,4 @@ futures.workspace = true
 uuid.workspace = true
 toml.workspace = true
 rust-embed.workspace = true
+dirs.workspace = true

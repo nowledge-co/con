@@ -21,6 +21,7 @@ pub struct ConWorkspace {
     sidebar: Entity<SessionSidebar>,
     tabs: Vec<Tab>,
     active_tab: usize,
+    font_size: f32,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -32,7 +33,9 @@ pub struct ConWorkspace {
 impl ConWorkspace {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
-        let first_terminal = cx.new(|cx| TerminalView::new(80, 24, cx));
+        let font_size = config.terminal.font_size;
+        let first_terminal =
+            cx.new(|cx| TerminalView::new(80, 24, font_size, cx));
         let tabs = vec![Tab {
             terminal: first_terminal,
             title: "Terminal".to_string(),
@@ -78,6 +81,7 @@ impl ConWorkspace {
             sidebar,
             tabs,
             active_tab: 0,
+            font_size,
             agent_panel,
             input_bar,
             settings_panel,
@@ -282,7 +286,8 @@ impl ConWorkspace {
     }
 
     fn new_tab(&mut self, _: &NewTab, _window: &mut Window, cx: &mut Context<Self>) {
-        let terminal = cx.new(|cx| TerminalView::new(80, 24, cx));
+        let font_size = self.font_size;
+        let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, cx));
         let tab_number = self.tabs.len() + 1;
         self.tabs.push(Tab {
             terminal,
@@ -313,8 +318,28 @@ impl ConWorkspace {
 
 impl Render for ConWorkspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let active_terminal = self.tabs[self.active_tab].terminal.clone();
+
+        // Sync CWD from active terminal to input bar
+        let cwd = active_terminal.read(cx).grid().lock().current_dir.clone();
+        if let Some(cwd) = cwd {
+            let display_cwd = match dirs::home_dir() {
+                Some(home) => {
+                    let home_str = home.to_string_lossy().to_string();
+                    if cwd.starts_with(&home_str) {
+                        format!("~{}", &cwd[home_str.len()..])
+                    } else {
+                        cwd
+                    }
+                }
+                None => cwd,
+            };
+            self.input_bar.update(cx, |bar, _cx| {
+                bar.set_cwd(display_cwd);
+            });
+        }
+
+        let theme = cx.theme();
 
         let mut main_area = div()
             .flex()

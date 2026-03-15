@@ -32,7 +32,7 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
-    pub fn new(cols: usize, rows: usize, cx: &mut Context<Self>) -> Self {
+    pub fn new(cols: usize, rows: usize, font_size: f32, cx: &mut Context<Self>) -> Self {
         let grid = Arc::new(Mutex::new(Grid::new(cols, rows)));
         let pty = Pty::spawn(PtySize {
             rows: rows as u16,
@@ -43,8 +43,8 @@ impl TerminalView {
         let pty = Arc::new(Mutex::new(pty));
         let parser = Arc::new(Mutex::new(Parser::new()));
 
-        let cell_width = 14.0 * 0.6;
-        let cell_height = 14.0 * 1.4;
+        let cell_width = font_size * 0.6;
+        let cell_height = font_size * 1.4;
 
         // Spawn IO processing loop
         let grid_for_io = grid.clone();

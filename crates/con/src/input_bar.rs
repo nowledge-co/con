@@ -43,6 +43,7 @@ impl InputMode {
 pub struct InputBar {
     input_state: Entity<InputState>,
     mode: InputMode,
+    cwd: String,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -74,6 +75,7 @@ impl InputBar {
         Self {
             input_state,
             mode: InputMode::Smart,
+            cwd: "~".to_string(),
             _subscriptions,
         }
     }
@@ -89,6 +91,10 @@ impl InputBar {
 
     pub fn mode(&self) -> InputMode {
         self.mode
+    }
+
+    pub fn set_cwd(&mut self, cwd: String) {
+        self.cwd = cwd;
     }
 
     fn indicator_color(&self, cx: &App) -> Hsla {
@@ -175,7 +181,7 @@ impl Render for InputBar {
                                 div()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .child("~"),
+                                    .child(self.cwd.clone()),
                             ),
                     )
                     .child(div().flex_1())
