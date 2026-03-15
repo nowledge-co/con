@@ -256,10 +256,35 @@ impl Render for TerminalView {
                     cx.notify();
                 }
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.modifiers.platform {
-                    return; // Don't send Cmd+key to PTY
+                    // Handle Cmd+V (paste) with bracketed paste support
+                    if event.keystroke.key == "v" {
+                        if let Some(text) = cx
+                            .read_from_clipboard()
+                            .and_then(|clip| clip.text())
+                        {
+                            if !text.is_empty() {
+                                let bracketed = this.grid.lock().bracketed_paste;
+                                if bracketed {
+                                    this.write_to_pty(b"\x1b[200~");
+                                }
+                                this.write_to_pty(text.as_bytes());
+                                if bracketed {
+                                    this.write_to_pty(b"\x1b[201~");
+                                }
+                            }
+                        }
+                    }
+                    // Handle Cmd+C (copy) — copy selected text if any
+                    // (selection not yet implemented, but Cmd+C should
+                    // send SIGINT when nothing is selected)
+                    if event.keystroke.key == "c" {
+                        this.write_to_pty(&[0x03]); // ETX = Ctrl+C
+                    }
+                    return;
                 }
+                let _ = window;
                 // Snap back to live view when user types
                 let app_cursor_keys;
                 {

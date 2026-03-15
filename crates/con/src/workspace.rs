@@ -477,6 +477,18 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::toggle_command_palette))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::close_tab))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                if event.keystroke.modifiers.platform && !event.keystroke.modifiers.shift {
+                    if let Some(digit) = event.keystroke.key.chars().next() {
+                        if let Some(index) = digit.to_digit(10) {
+                            let tab_index = if index == 0 { 9 } else { (index - 1) as usize };
+                            if tab_index < this.tabs.len() {
+                                this.activate_tab(tab_index, cx);
+                            }
+                        }
+                    }
+                }
+            }))
             .child(tab_bar)
             .child(main_area)
             .child(
