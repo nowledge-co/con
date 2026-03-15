@@ -416,24 +416,85 @@ impl Render for ConWorkspace {
             );
         }
 
-        // Tab bar
+        // Tab bar — macOS-style with close buttons and quiet active treatment
+        let tab_count = self.tabs.len();
         let mut tab_bar = div()
             .flex()
             .h(px(38.0))
             .bg(theme.title_bar)
             .items_end()
-            .px(px(80.0))
-            .gap(px(2.0));
+            .pl(px(80.0)) // leave room for traffic lights
+            .pr(px(16.0))
+            .gap(px(1.0))
+            .border_b_1()
+            .border_color(theme.border);
 
         for (index, tab) in self.tabs.iter().enumerate() {
             let is_active = index == self.active_tab;
-            let title = tab.terminal.read(cx).title().unwrap_or_else(|| tab.title.clone());
+            let title = tab
+                .terminal
+                .read(cx)
+                .title()
+                .unwrap_or_else(|| tab.title.clone());
+
+            // Truncate long titles
+            let display_title: String = if title.len() > 24 {
+                format!("{}...", &title[..21])
+            } else {
+                title
+            };
+
+            let close_id = ElementId::Name(format!("tab-close-{}", index).into());
+
+            // Close button — visible on hover for inactive tabs, always for active
+            let show_close = tab_count > 1;
+            let close_button = if show_close {
+                Some(
+                    div()
+                        .id(close_id)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(16.0))
+                        .rounded(px(4.0))
+                        .ml(px(6.0))
+                        .text_size(px(10.0))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.muted.opacity(0.3)))
+                        .text_color(theme.muted_foreground)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                // Close this specific tab
+                                if this.tabs.len() > 1 {
+                                    this.tabs.remove(index);
+                                    if this.active_tab >= this.tabs.len() {
+                                        this.active_tab = this.tabs.len() - 1;
+                                    } else if this.active_tab > index {
+                                        this.active_tab -= 1;
+                                    }
+                                    this.save_session(cx);
+                                    cx.notify();
+                                }
+                                let _ = window;
+                            }),
+                        )
+                        .child("×"),
+                )
+            } else {
+                None
+            };
+
             let mut tab_el = div()
                 .id(ElementId::Name(format!("tab-{}", index).into()))
-                .px(px(16.0))
+                .group("tab")
+                .flex()
+                .items_center()
+                .px(px(12.0))
                 .py(px(6.0))
                 .rounded_t(px(8.0))
                 .text_size(px(12.0))
+                .max_w(px(200.0))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.activate_tab(index, cx);
@@ -442,27 +503,41 @@ impl Render for ConWorkspace {
             if is_active {
                 tab_el = tab_el
                     .bg(theme.background)
-                    .text_color(theme.foreground);
+                    .text_color(theme.foreground)
+                    .font_weight(FontWeight::MEDIUM);
             } else {
                 tab_el = tab_el
                     .text_color(theme.muted_foreground)
-                    .hover(|s| s.bg(theme.secondary));
+                    .hover(|s| s.bg(theme.secondary.opacity(0.5)));
             }
 
-            tab_bar = tab_bar.child(tab_el.child(title));
+            let mut tab_content = div()
+                .flex()
+                .items_center()
+                .overflow_x_hidden()
+                .child(display_title);
+
+            if let Some(close) = close_button {
+                tab_content = tab_content.child(close);
+            }
+
+            tab_bar = tab_bar.child(tab_el.child(tab_content));
         }
 
         // "+" button for new tab
         tab_bar = tab_bar.child(
             div()
                 .id("tab-new")
-                .px(px(8.0))
-                .py(px(6.0))
-                .rounded_t(px(8.0))
-                .text_size(px(12.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(24.0))
+                .mb(px(4.0))
+                .rounded(px(6.0))
+                .text_size(px(14.0))
                 .text_color(theme.muted_foreground)
                 .cursor_pointer()
-                .hover(|s| s.bg(theme.secondary))
+                .hover(|s| s.bg(theme.secondary.opacity(0.5)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
@@ -482,14 +557,35 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::close_tab))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                if event.keystroke.modifiers.platform && !event.keystroke.modifiers.shift {
-                    if let Some(digit) = event.keystroke.key.chars().next() {
-                        if let Some(index) = digit.to_digit(10) {
-                            let tab_index = if index == 0 { 9 } else { (index - 1) as usize };
-                            if tab_index < this.tabs.len() {
-                                this.activate_tab(tab_index, cx);
-                            }
+                let mods = &event.keystroke.modifiers;
+                let key = event.keystroke.key.as_str();
+
+                // Cmd+1..9 — jump to tab
+                if mods.platform && !mods.shift {
+                    if let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10)) {
+                        let tab_index = if digit == 0 { 9 } else { (digit - 1) as usize };
+                        if tab_index < this.tabs.len() {
+                            this.activate_tab(tab_index, cx);
                         }
+                    }
+                }
+
+                // Cmd+Shift+[ — previous tab
+                if mods.platform && mods.shift && key == "[" {
+                    if this.active_tab > 0 {
+                        this.activate_tab(this.active_tab - 1, cx);
+                    } else if !this.tabs.is_empty() {
+                        this.activate_tab(this.tabs.len() - 1, cx);
+                    }
+                }
+
+                // Cmd+Shift+] — next tab
+                if mods.platform && mods.shift && key == "]" {
+                    let next = this.active_tab + 1;
+                    if next < this.tabs.len() {
+                        this.activate_tab(next, cx);
+                    } else {
+                        this.activate_tab(0, cx);
                     }
                 }
             }))
