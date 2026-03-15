@@ -2,9 +2,9 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 
 /// Entry representing a terminal session in the sidebar.
-struct SessionEntry {
-    name: String,
-    is_ssh: bool,
+pub struct SessionEntry {
+    pub name: String,
+    pub is_ssh: bool,
 }
 
 /// Session sidebar — lists terminal sessions with collapse/expand.
@@ -13,6 +13,13 @@ pub struct SessionSidebar {
     sessions: Vec<SessionEntry>,
     active_session: usize,
 }
+
+/// Emitted when user clicks a session entry
+pub struct SidebarSelect {
+    pub index: usize,
+}
+
+impl EventEmitter<SidebarSelect> for SessionSidebar {}
 
 impl SessionSidebar {
     pub fn new(_cx: &mut Context<Self>) -> Self {
@@ -28,6 +35,18 @@ impl SessionSidebar {
 
     pub fn toggle_collapsed(&mut self, cx: &mut Context<Self>) {
         self.collapsed = !self.collapsed;
+        cx.notify();
+    }
+
+    /// Update session list from workspace tabs
+    pub fn sync_sessions(
+        &mut self,
+        sessions: Vec<SessionEntry>,
+        active: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.sessions = sessions;
+        self.active_session = active;
         cx.notify();
     }
 }
@@ -71,6 +90,70 @@ impl Render for SessionSidebar {
                             cx.listener(|this, _, _, cx| this.toggle_collapsed(cx)),
                         ),
                 );
+        }
+
+        let mut session_list = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .px(px(8.0))
+            .pt(px(8.0))
+            .gap(px(2.0));
+
+        for (i, session) in self.sessions.iter().enumerate() {
+            let is_active = i == self.active_session;
+            let icon_path = if session.is_ssh {
+                "phosphor/globe.svg"
+            } else {
+                "phosphor/terminal.svg"
+            };
+
+            session_list = session_list.child(
+                div()
+                    .id(SharedString::from(format!("session-{i}")))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .text_sm()
+                    .bg(if is_active {
+                        theme.list_active
+                    } else {
+                        gpui::transparent_black()
+                    })
+                    .text_color(if is_active {
+                        theme.foreground
+                    } else {
+                        theme.sidebar_foreground
+                    })
+                    .hover(|s| {
+                        if is_active {
+                            s
+                        } else {
+                            s.bg(theme.secondary)
+                        }
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_this, _, _, cx| {
+                            cx.emit(SidebarSelect { index: i });
+                        }),
+                    )
+                    .child(
+                        svg()
+                            .path(icon_path)
+                            .size(px(16.0))
+                            .text_color(if is_active {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            }),
+                    )
+                    .child(session.name.clone()),
+            );
         }
 
         div()
@@ -123,83 +206,10 @@ impl Render for SessionSidebar {
                                         MouseButton::Left,
                                         cx.listener(|this, _, _, cx| this.toggle_collapsed(cx)),
                                     ),
-                            )
-                            // New session button
-                            .child(
-                                div()
-                                    .id("sidebar-new-session")
-                                    .size(px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(4.0))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme.secondary))
-                                    .child(
-                                        svg()
-                                            .path("phosphor/plus.svg")
-                                            .size(px(14.0))
-                                            .text_color(theme.muted_foreground),
-                                    ),
                             ),
                     ),
             )
             // Session list
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .px(px(8.0))
-                    .pt(px(8.0))
-                    .gap(px(2.0))
-                    .children(self.sessions.iter().enumerate().map(|(i, session)| {
-                        let is_active = i == self.active_session;
-                        let icon_path = if session.is_ssh {
-                            "phosphor/globe.svg"
-                        } else {
-                            "phosphor/terminal.svg"
-                        };
-
-                        div()
-                            .id(SharedString::from(format!("session-{i}")))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .px(px(8.0))
-                            .py(px(6.0))
-                            .rounded(px(6.0))
-                            .cursor_pointer()
-                            .text_sm()
-                            .bg(if is_active {
-                                theme.list_active
-                            } else {
-                                gpui::transparent_black()
-                            })
-                            .text_color(if is_active {
-                                theme.foreground
-                            } else {
-                                theme.sidebar_foreground
-                            })
-                            .hover(|s| {
-                                if is_active {
-                                    s
-                                } else {
-                                    s.bg(theme.secondary)
-                                }
-                            })
-                            .child(
-                                svg()
-                                    .path(icon_path)
-                                    .size(px(16.0))
-                                    .text_color(if is_active {
-                                        theme.primary
-                                    } else {
-                                        theme.muted_foreground
-                                    }),
-                            )
-                            .child(session.name.clone())
-                    })),
-            )
+            .child(session_list)
     }
 }

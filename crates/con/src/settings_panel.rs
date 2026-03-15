@@ -281,18 +281,20 @@ impl Render for SettingsPanel {
             .bg(rgba(0x00000088));
 
         let card = div()
+            .id("settings-card")
             .absolute()
             .top(px(60.0))
-            .left_auto()
-            .right_auto()
+            .left_0()
+            .right_0()
             .mx_auto()
-            .ml(px(200.0))
             .w(px(520.0))
             .max_h(px(600.0))
             .rounded(px(14.0))
             .bg(theme.title_bar)
             .border_1()
             .border_color(theme.border)
+            .shadow_lg()
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

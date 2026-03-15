@@ -5,7 +5,7 @@ use crate::agent_panel::AgentPanel;
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{EscapeInput, InputBar, InputMode, SubmitInput};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel};
-use crate::sidebar::SessionSidebar;
+use crate::sidebar::{SessionEntry, SessionSidebar, SidebarSelect};
 use crate::terminal_view::TerminalView;
 use crate::{CloseTab, NewTab, ToggleAgentPanel};
 use con_core::config::Config;
@@ -77,6 +77,8 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&command_palette, window, Self::on_palette_select)
             .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_select)
+            .detach();
 
         // Poll harness events periodically
         let events_rx = harness.events().clone();
@@ -146,6 +148,37 @@ impl ConWorkspace {
         if let Err(e) = session.save() {
             log::warn!("Failed to save session: {}", e);
         }
+    }
+
+    fn on_sidebar_select(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarSelect,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate_tab(event.index, cx);
+    }
+
+    fn sync_sidebar(&self, cx: &mut Context<Self>) {
+        let sessions: Vec<SessionEntry> = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                let title = tab
+                    .terminal
+                    .read(cx)
+                    .title()
+                    .unwrap_or_else(|| tab.title.clone());
+                SessionEntry {
+                    name: title,
+                    is_ssh: false,
+                }
+            })
+            .collect();
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.sync_sessions(sessions, self.active_tab, cx);
+        });
     }
 
     fn on_palette_select(
@@ -349,6 +382,7 @@ impl ConWorkspace {
             title: format!("Terminal {}", tab_number),
         });
         self.active_tab = self.tabs.len() - 1;
+        self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -361,6 +395,7 @@ impl ConWorkspace {
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
         }
+        self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -368,6 +403,7 @@ impl ConWorkspace {
     fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.tabs.len() {
             self.active_tab = index;
+            self.sync_sidebar(cx);
             self.save_session(cx);
             cx.notify();
         }
@@ -377,6 +413,9 @@ impl ConWorkspace {
 impl Render for ConWorkspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active_terminal = self.tabs[self.active_tab].terminal.clone();
+
+        // Sync sidebar with current tabs
+        self.sync_sidebar(cx);
 
         // Sync CWD from active terminal to input bar
         let cwd = active_terminal.read(cx).grid().lock().current_dir.clone();
