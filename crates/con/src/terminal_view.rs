@@ -77,6 +77,8 @@ pub struct TerminalView {
     selection: Option<Selection>,
     selecting: bool,
     terminal_origin: Arc<Mutex<(f32, f32)>>,
+    cursor_blink_visible: bool,
+    cursor_blink_epoch: std::time::Instant,
 }
 
 impl TerminalView {
@@ -135,6 +137,19 @@ impl TerminalView {
         })
         .detach();
 
+        // Cursor blink timer — triggers re-render every 500ms
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(500))
+                    .await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         Self {
             grid,
             pty,
@@ -146,6 +161,8 @@ impl TerminalView {
             selection: None,
             selecting: false,
             terminal_origin: Arc::new(Mutex::new((0.0, 0.0))),
+            cursor_blink_visible: true,
+            cursor_blink_epoch: std::time::Instant::now(),
         }
     }
 
@@ -204,6 +221,10 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Cursor blink: 500ms on, 500ms off. Reset on input.
+        let elapsed = self.cursor_blink_epoch.elapsed().as_millis();
+        self.cursor_blink_visible = (elapsed / 500) % 2 == 0;
+
         let grid = self.grid.lock();
         let rows = grid.rows;
         let cols = grid.cols;
@@ -228,7 +249,7 @@ impl Render for TerminalView {
         let mut cells: Vec<CellInfo> = Vec::new();
         let cursor_row = grid.cursor.row;
         let cursor_col = grid.cursor.col;
-        let cursor_visible = grid.cursor.visible;
+        let cursor_visible = grid.cursor.visible && self.cursor_blink_visible;
         let cursor_shape = grid.cursor.shape;
 
         for row in 0..rows {
@@ -255,7 +276,8 @@ impl Render for TerminalView {
                 }
             }
         }
-        let in_scrollback = grid.scrollback_offset > 0;
+        let scrollback_offset = grid.scrollback_offset;
+        let in_scrollback = scrollback_offset > 0;
         drop(grid);
 
         // Build text overlays using GPUI text engine
@@ -326,7 +348,7 @@ impl Render for TerminalView {
         let entity_id = cx.entity_id();
         let selection_for_canvas = self.selection;
 
-        div()
+        let mut terminal = div()
             .relative()
             .size_full()
             .bg(cx.theme().background)
@@ -425,10 +447,12 @@ impl Render for TerminalView {
                     return;
                 }
                 let _ = window;
+                // Reset cursor blink on keypress (stay visible while typing)
+                this.cursor_blink_epoch = std::time::Instant::now();
+                this.cursor_blink_visible = true;
                 // Clear selection on any non-Cmd keypress
                 if this.selection.is_some() {
                     this.selection = None;
-                    cx.notify();
                 }
                 // Snap back to live view when user types
                 let app_cursor_keys;
@@ -553,7 +577,32 @@ impl Render for TerminalView {
                 .size_full(),
             )
             // Text overlays
-            .children(text_divs)
+            .children(text_divs);
+
+        // Scrollback indicator — shown when viewing history
+        if in_scrollback {
+            terminal = terminal.child(
+                div()
+                    .absolute()
+                    .bottom(px(8.0))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .px(px(12.0))
+                            .py(px(4.0))
+                            .rounded(px(12.0))
+                            .bg(rgba(0x00000080))
+                            .text_size(px(11.0))
+                            .text_color(rgba(0xffffffcc))
+                            .child(format!("{} lines up", scrollback_offset)),
+                    ),
+            );
+        }
+
+        terminal
     }
 }
 

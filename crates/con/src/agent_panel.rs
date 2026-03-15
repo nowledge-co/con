@@ -36,6 +36,7 @@ pub struct AgentPanel {
     pending_approvals: Vec<PendingApproval>,
     streaming: bool,
     status: AgentStatus,
+    scroll_handle: ScrollHandle,
 }
 
 struct PanelMessage {
@@ -58,7 +59,12 @@ impl AgentPanel {
             pending_approvals: Vec::new(),
             streaming: false,
             status: AgentStatus::Idle,
+            scroll_handle: ScrollHandle::new(),
         }
+    }
+
+    fn scroll_to_bottom(&self) {
+        self.scroll_handle.scroll_to_bottom();
     }
 
     pub fn add_message(&mut self, role: &str, content: &str, cx: &mut Context<Self>) {
@@ -70,6 +76,7 @@ impl AgentPanel {
             steps: Vec::new(),
             steps_collapsed: false,
         });
+        self.scroll_to_bottom();
         cx.notify();
     }
 
@@ -95,6 +102,7 @@ impl AgentPanel {
             args: args.to_string(),
             result: None,
         });
+        self.scroll_to_bottom();
         cx.notify();
     }
 
@@ -108,6 +116,7 @@ impl AgentPanel {
         if let Some(entry) = self.tool_calls.iter_mut().find(|e| e.call_id == call_id) {
             entry.result = Some(result.to_string());
         }
+        self.scroll_to_bottom();
         cx.notify();
     }
 
@@ -126,6 +135,7 @@ impl AgentPanel {
             args: args.to_string(),
             approval_tx,
         });
+        self.scroll_to_bottom();
         cx.notify();
     }
 
@@ -166,6 +176,7 @@ impl AgentPanel {
         if let Some(last) = self.messages.last_mut() {
             last.content.push_str(token);
         }
+        self.scroll_to_bottom();
         cx.notify();
     }
 
@@ -196,6 +207,7 @@ impl AgentPanel {
                 last.steps.push(step);
             }
         }
+        self.scroll_to_bottom();
         cx.notify();
     }
 
@@ -253,10 +265,13 @@ impl Render for AgentPanel {
         let theme = cx.theme();
 
         let mut messages_container = div()
+            .id("agent-messages")
             .flex()
             .flex_col()
             .flex_1()
-            .overflow_y_scrollbar()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll_handle)
+            .vertical_scrollbar(&self.scroll_handle)
             .p(px(12.0))
             .gap(px(12.0));
 

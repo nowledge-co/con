@@ -1102,6 +1102,7 @@ dependencies = [
  "con-core",
  "con-terminal",
  "crossbeam-channel",
+ "dirs 6.0.0",
  "env_logger",
  "futures",
  "gpui",
