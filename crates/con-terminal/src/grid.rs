@@ -23,23 +23,23 @@ impl Color {
 fn default_palette() -> [Color; 256] {
     let mut palette = [Color::rgb(0, 0, 0); 256];
 
-    // Standard 16 colors
-    palette[0] = Color::rgb(0x1e, 0x1e, 0x2e); // black (catppuccin base)
-    palette[1] = Color::rgb(0xf3, 0x8b, 0xa8); // red
-    palette[2] = Color::rgb(0xa6, 0xe3, 0xa1); // green
-    palette[3] = Color::rgb(0xf9, 0xe2, 0xaf); // yellow
-    palette[4] = Color::rgb(0x89, 0xb4, 0xfa); // blue
-    palette[5] = Color::rgb(0xcb, 0xa6, 0xf7); // magenta
-    palette[6] = Color::rgb(0x94, 0xe2, 0xd5); // cyan
-    palette[7] = Color::rgb(0xcd, 0xd6, 0xf4); // white
-    palette[8] = Color::rgb(0x58, 0x5b, 0x70); // bright black
-    palette[9] = Color::rgb(0xf3, 0x8b, 0xa8); // bright red
-    palette[10] = Color::rgb(0xa6, 0xe3, 0xa1); // bright green
-    palette[11] = Color::rgb(0xf9, 0xe2, 0xaf); // bright yellow
-    palette[12] = Color::rgb(0x89, 0xb4, 0xfa); // bright blue
-    palette[13] = Color::rgb(0xcb, 0xa6, 0xf7); // bright magenta
-    palette[14] = Color::rgb(0x94, 0xe2, 0xd5); // bright cyan
-    palette[15] = Color::rgb(0xcd, 0xd6, 0xf4); // bright white
+    // Standard 16 colors — Flexoki dark palette
+    palette[0] = Color::rgb(0x10, 0x0F, 0x0F); // black (Flexoki base)
+    palette[1] = Color::rgb(0xD1, 0x4D, 0x41); // red
+    palette[2] = Color::rgb(0x87, 0x9A, 0x39); // green
+    palette[3] = Color::rgb(0xD0, 0xA2, 0x15); // yellow
+    palette[4] = Color::rgb(0x43, 0x85, 0xBE); // blue
+    palette[5] = Color::rgb(0x8B, 0x7E, 0xC8); // magenta
+    palette[6] = Color::rgb(0x3A, 0xA9, 0x9F); // cyan
+    palette[7] = Color::rgb(0xCE, 0xCD, 0xC3); // white (Flexoki tx)
+    palette[8] = Color::rgb(0x57, 0x56, 0x53); // bright black (Flexoki tx-3)
+    palette[9] = Color::rgb(0xD1, 0x4D, 0x41); // bright red
+    palette[10] = Color::rgb(0x87, 0x9A, 0x39); // bright green
+    palette[11] = Color::rgb(0xD0, 0xA2, 0x15); // bright yellow
+    palette[12] = Color::rgb(0x43, 0x85, 0xBE); // bright blue
+    palette[13] = Color::rgb(0xCE, 0x5D, 0x97); // bright magenta
+    palette[14] = Color::rgb(0x3A, 0xA9, 0x9F); // bright cyan
+    palette[15] = Color::rgb(0xCE, 0xCD, 0xC3); // bright white
 
     // 216 color cube (indices 16-231)
     for i in 0..216 {
@@ -78,8 +78,8 @@ pub struct Style {
 impl Default for Style {
     fn default() -> Self {
         Self {
-            fg: Color::rgb(0xcd, 0xd6, 0xf4), // catppuccin text
-            bg: Color::rgb(0x1e, 0x1e, 0x2e),  // catppuccin base
+            fg: Color::rgb(0xCE, 0xCD, 0xC3), // Flexoki tx (foreground)
+            bg: Color::rgb(0x10, 0x0F, 0x0F), // Flexoki bg (background)
             bold: false,
             italic: false,
             underline: false,
