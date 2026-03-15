@@ -11,10 +11,16 @@ use crate::{CloseTab, NewTab, ToggleAgentPanel};
 use con_core::config::Config;
 use con_core::harness::{AgentHarness, HarnessEvent};
 
-/// The main workspace: sidebar + terminal + agent panel + input bar + settings overlay
+struct Tab {
+    terminal: Entity<TerminalView>,
+    title: String,
+}
+
+/// The main workspace: sidebar + tabs + agent panel + input bar + settings overlay
 pub struct ConWorkspace {
     sidebar: Entity<SessionSidebar>,
-    terminal: Entity<TerminalView>,
+    tabs: Vec<Tab>,
+    active_tab: usize,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -26,7 +32,11 @@ pub struct ConWorkspace {
 impl ConWorkspace {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
-        let terminal = cx.new(|cx| TerminalView::new(80, 24, cx));
+        let first_terminal = cx.new(|cx| TerminalView::new(80, 24, cx));
+        let tabs = vec![Tab {
+            terminal: first_terminal,
+            title: "Terminal".to_string(),
+        }];
         let agent_panel = cx.new(|cx| AgentPanel::new(cx));
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
@@ -66,7 +76,8 @@ impl ConWorkspace {
 
         Self {
             sidebar,
-            terminal,
+            tabs,
+            active_tab: 0,
             agent_panel,
             input_bar,
             settings_panel,
@@ -74,6 +85,10 @@ impl ConWorkspace {
             harness,
             agent_panel_open: false,
         }
+    }
+
+    fn active_terminal(&self) -> &Entity<TerminalView> {
+        &self.tabs[self.active_tab].terminal
     }
 
     fn on_palette_select(
@@ -92,8 +107,11 @@ impl ConWorkspace {
                     panel.toggle(window, cx);
                 });
             }
-            "new-tab" | "close-tab" => {
-                // Stub — future tab management
+            "new-tab" => {
+                self.new_tab(&NewTab, window, cx);
+            }
+            "close-tab" => {
+                self.close_tab(&CloseTab, window, cx);
             }
             "quit" => {
                 cx.quit();
@@ -140,7 +158,7 @@ impl ConWorkspace {
 
         match mode {
             InputMode::Shell => {
-                self.terminal.update(cx, |tv, _| {
+                self.active_terminal().update(cx, |tv, _| {
                     tv.write_to_pty(format!("{}\n", content).as_bytes());
                 });
             }
@@ -153,7 +171,7 @@ impl ConWorkspace {
                     panel.add_message("user", &content, cx);
                 });
 
-                let grid = self.terminal.read(cx).grid();
+                let grid = self.active_terminal().read(cx).grid();
                 let context = self.harness.build_context(&grid.lock(), None);
                 self.harness.send_message(content, context);
             }
@@ -264,24 +282,46 @@ impl ConWorkspace {
     }
 
     fn new_tab(&mut self, _: &NewTab, _window: &mut Window, cx: &mut Context<Self>) {
+        let terminal = cx.new(|cx| TerminalView::new(80, 24, cx));
+        let tab_number = self.tabs.len() + 1;
+        self.tabs.push(Tab {
+            terminal,
+            title: format!("Terminal {}", tab_number),
+        });
+        self.active_tab = self.tabs.len() - 1;
         cx.notify();
     }
 
     fn close_tab(&mut self, _: &CloseTab, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        self.tabs.remove(self.active_tab);
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
         cx.notify();
+    }
+
+    fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.tabs.len() {
+            self.active_tab = index;
+            cx.notify();
+        }
     }
 }
 
 impl Render for ConWorkspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let active_terminal = self.tabs[self.active_tab].terminal.clone();
 
         let mut main_area = div()
             .flex()
             .flex_1()
             .min_h_0()
             .child(self.sidebar.clone())
-            .child(div().flex_1().min_w_0().child(self.terminal.clone()));
+            .child(div().flex_1().min_w_0().child(active_terminal));
 
         if self.agent_panel_open {
             main_area = main_area.child(
@@ -292,6 +332,59 @@ impl Render for ConWorkspace {
                     .child(self.agent_panel.clone()),
             );
         }
+
+        // Tab bar
+        let mut tab_bar = div()
+            .flex()
+            .h(px(38.0))
+            .bg(theme.title_bar)
+            .items_end()
+            .px(px(80.0))
+            .gap(px(2.0));
+
+        for (index, tab) in self.tabs.iter().enumerate() {
+            let is_active = index == self.active_tab;
+            let title = tab.terminal.read(cx).title().unwrap_or_else(|| tab.title.clone());
+            let mut tab_el = div()
+                .id(ElementId::Name(format!("tab-{}", index).into()))
+                .px(px(16.0))
+                .py(px(6.0))
+                .rounded_t(px(8.0))
+                .text_size(px(12.0))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    this.activate_tab(index, cx);
+                }));
+
+            if is_active {
+                tab_el = tab_el
+                    .bg(theme.background)
+                    .text_color(theme.foreground);
+            } else {
+                tab_el = tab_el
+                    .text_color(theme.muted_foreground)
+                    .hover(|s| s.bg(theme.secondary));
+            }
+
+            tab_bar = tab_bar.child(tab_el.child(title));
+        }
+
+        // "+" button for new tab
+        tab_bar = tab_bar.child(
+            div()
+                .id("tab-new")
+                .px(px(8.0))
+                .py(px(6.0))
+                .rounded_t(px(8.0))
+                .text_size(px(12.0))
+                .text_color(theme.muted_foreground)
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.secondary))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.new_tab(&NewTab, window, cx);
+                }))
+                .child("+"),
+        );
 
         let mut root = div()
             .relative()
@@ -305,24 +398,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::toggle_command_palette))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::close_tab))
-            .child(
-                div()
-                    .flex()
-                    .h(px(38.0))
-                    .bg(theme.title_bar)
-                    .items_center()
-                    .px(px(80.0))
-                    .child(
-                        div()
-                            .px(px(16.0))
-                            .py(px(6.0))
-                            .rounded_t(px(6.0))
-                            .text_sm()
-                            .bg(theme.background)
-                            .text_color(theme.foreground)
-                            .child("Terminal"),
-                    ),
-            )
+            .child(tab_bar)
             .child(main_area)
             .child(
                 div()

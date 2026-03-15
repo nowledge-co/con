@@ -95,6 +95,10 @@ impl TerminalView {
         &self.grid
     }
 
+    pub fn title(&self) -> Option<String> {
+        self.grid.lock().title.clone()
+    }
+
     pub fn write_to_pty(&self, data: &[u8]) {
         let mut pty = self.pty.lock();
         let _ = pty.write(data);
