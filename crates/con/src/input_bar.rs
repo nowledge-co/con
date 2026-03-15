@@ -104,6 +104,14 @@ impl InputBar {
             InputMode::Agent => cx.theme().primary,
         }
     }
+
+    fn placeholder(&self) -> &str {
+        match self.mode {
+            InputMode::Smart => "Type a command or ask AI...",
+            InputMode::Shell => "Type a shell command...",
+            InputMode::Agent => "Ask the AI agent...",
+        }
+    }
 }
 
 impl EventEmitter<SubmitInput> for InputBar {}
@@ -126,10 +134,14 @@ impl Render for InputBar {
             .flex()
             .flex_col()
             .bg(theme.title_bar)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Tab cycles modes (don't send to Input)
                 if event.keystroke.key == "tab" && !event.keystroke.modifiers.shift {
                     this.mode = this.mode.next();
+                    let placeholder = this.placeholder().to_string();
+                    this.input_state.update(cx, |s, cx| {
+                        s.set_placeholder(&placeholder, window, cx);
+                    });
                     cx.notify();
                 }
                 // Escape clears and emits escape event
@@ -185,12 +197,24 @@ impl Render for InputBar {
                             ),
                     )
                     .child(div().flex_1())
-                    // Tab hint
+                    // Keyboard hints
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("Tab: mode"),
+                            .flex()
+                            .items_center()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Tab mode"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Enter send"),
+                            ),
                     ),
             )
             // Input row
