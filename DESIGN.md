@@ -201,8 +201,8 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Structured tool call cards (icon, name, formatted args, result)
 - [x] Inline approval cards for dangerous tools (Allow/Deny buttons)
 - [x] Scrollable agent panel
-- [ ] Collapsible plan/step timeline
-- [ ] Auto-approve toggle in settings UI
+- [x] Collapsible step timeline (click to expand/collapse)
+- [x] Auto-approve toggle in settings UI (switch with live config propagation)
 - [ ] Streaming text rendering via `stream_prompt()`
 
 ### Phase 5: Deep Integration

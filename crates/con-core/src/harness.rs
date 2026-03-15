@@ -309,6 +309,10 @@ impl AgentHarness {
         }
     }
 
+    pub fn update_config(&mut self, config: con_agent::AgentConfig) {
+        self.config = config;
+    }
+
     pub fn conversation(&self) -> Arc<Mutex<Conversation>> {
         self.conversation.clone()
     }

@@ -42,6 +42,7 @@ struct PanelMessage {
     role: String,
     content: String,
     steps: Vec<String>,
+    steps_collapsed: bool,
 }
 
 impl AgentPanel {
@@ -51,6 +52,7 @@ impl AgentPanel {
                 role: "system".to_string(),
                 content: "con agent ready. Press Cmd+L to toggle this panel.".to_string(),
                 steps: Vec::new(),
+                steps_collapsed: false,
             }],
             tool_calls: Vec::new(),
             pending_approvals: Vec::new(),
@@ -66,6 +68,7 @@ impl AgentPanel {
             role: role.to_string(),
             content: content.to_string(),
             steps: Vec::new(),
+            steps_collapsed: false,
         });
         cx.notify();
     }
@@ -156,6 +159,7 @@ impl AgentPanel {
                 role: "assistant".to_string(),
                 content: String::new(),
                 steps: Vec::new(),
+                steps_collapsed: false,
             });
             self.streaming = true;
         }
@@ -178,6 +182,7 @@ impl AgentPanel {
                 role: "assistant".to_string(),
                 content: final_content.to_string(),
                 steps: Vec::new(),
+                steps_collapsed: false,
             });
         }
         for tc in self.tool_calls.drain(..) {
@@ -255,7 +260,7 @@ impl Render for AgentPanel {
             .p(px(12.0))
             .gap(px(12.0));
 
-        for msg in &self.messages {
+        for (msg_idx, msg) in self.messages.iter().enumerate() {
             let (role_color, role_label) = match msg.role.as_str() {
                 "user" => (theme.primary, "You"),
                 "assistant" => (theme.success, "Agent"),
@@ -280,17 +285,52 @@ impl Render for AgentPanel {
                         .child(msg.content.clone()),
                 );
 
-            for step in &msg.steps {
+            if !msg.steps.is_empty() {
+                let step_count = msg.steps.len();
+                let collapsed = msg.steps_collapsed;
+                let chevron = if collapsed { "▸" } else { "▾" };
+
                 msg_div = msg_div.child(
                     div()
+                        .id(SharedString::from(format!("steps-toggle-{msg_idx}")))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
                         .ml(px(8.0))
-                        .pl(px(8.0))
-                        .border_l_2()
-                        .border_color(theme.secondary)
+                        .cursor_pointer()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(step.clone()),
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                if let Some(m) = this.messages.get_mut(msg_idx) {
+                                    m.steps_collapsed = !m.steps_collapsed;
+                                }
+                                cx.notify();
+                            }),
+                        )
+                        .child(chevron)
+                        .child(format!(
+                            "{} step{}",
+                            step_count,
+                            if step_count == 1 { "" } else { "s" }
+                        )),
                 );
+
+                if !collapsed {
+                    for step in &msg.steps {
+                        msg_div = msg_div.child(
+                            div()
+                                .ml(px(8.0))
+                                .pl(px(8.0))
+                                .border_l_2()
+                                .border_color(theme.secondary)
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(step.clone()),
+                        );
+                    }
+                }
             }
 
             messages_container = messages_container.child(msg_div);

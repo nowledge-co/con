@@ -27,6 +27,7 @@ pub struct SettingsPanel {
     base_url_input: Entity<InputState>,
     max_tokens_input: Entity<InputState>,
     max_turns_input: Entity<InputState>,
+    auto_approve: bool,
 }
 
 const ALL_PROVIDERS: &[ProviderKind] = &[
@@ -100,6 +101,7 @@ impl SettingsPanel {
             base_url_input,
             max_tokens_input,
             max_turns_input,
+            auto_approve: config.agent.auto_approve_tools,
         }
     }
 
@@ -131,6 +133,7 @@ impl SettingsPanel {
             self.max_turns_input.update(cx, |s, cx| {
                 s.set_value(&max_turns_val, window, cx);
             });
+            self.auto_approve = agent.auto_approve_tools;
             self.focus_handle.focus(window, cx);
         }
         cx.notify();
@@ -155,7 +158,7 @@ impl SettingsPanel {
             max_tokens: max_tokens_text.parse().unwrap_or(4096),
             max_turns: max_turns_text.parse().unwrap_or(10),
             auto_context: self.config.agent.auto_context,
-            auto_approve_tools: self.config.agent.auto_approve_tools,
+            auto_approve_tools: self.auto_approve,
         };
 
         if let Err(e) = self.persist_config() {
@@ -163,7 +166,12 @@ impl SettingsPanel {
         }
 
         self.visible = false;
+        cx.emit(SaveSettings);
         cx.notify();
+    }
+
+    pub fn agent_config(&self) -> &AgentConfig {
+        &self.config.agent
     }
 
     fn persist_config(&self) -> anyhow::Result<()> {
@@ -240,6 +248,8 @@ impl SettingsPanel {
             .child(Input::new(input_state))
     }
 }
+
+impl EventEmitter<SaveSettings> for SettingsPanel {}
 
 impl Focusable for SettingsPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -391,6 +401,64 @@ impl Render for SettingsPanel {
                                     .flex_1()
                                     .child(Self::render_field("Max Turns", &max_turns_input)),
                             ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .pt(px(4.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child("Auto-approve tools"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child("Skip approval for shell_exec, file_write"),
+                                    ),
+                            )
+                            .child({
+                                let is_on = self.auto_approve;
+                                div()
+                                    .id("auto-approve-toggle")
+                                    .w(px(36.0))
+                                    .h(px(20.0))
+                                    .rounded(px(10.0))
+                                    .cursor_pointer()
+                                    .bg(if is_on {
+                                        theme.primary
+                                    } else {
+                                        theme.secondary
+                                    })
+                                    .child(
+                                        div()
+                                            .size(px(16.0))
+                                            .rounded_full()
+                                            .bg(if is_on {
+                                                theme.primary_foreground
+                                            } else {
+                                                theme.secondary_foreground
+                                            })
+                                            .mt(px(2.0))
+                                            .ml(if is_on { px(18.0) } else { px(2.0) }),
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.auto_approve = !this.auto_approve;
+                                            cx.notify();
+                                        }),
+                                    )
+                            }),
                     ),
             );
 

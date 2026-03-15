@@ -3,7 +3,7 @@ use gpui_component::ActiveTheme;
 
 use crate::agent_panel::AgentPanel;
 use crate::input_bar::{EscapeInput, InputBar, InputMode, SubmitInput};
-use crate::settings_panel::{self, SettingsPanel};
+use crate::settings_panel::{self, SaveSettings, SettingsPanel};
 use crate::sidebar::SessionSidebar;
 use crate::terminal_view::TerminalView;
 use crate::{CloseTab, NewTab, ToggleAgentPanel};
@@ -33,6 +33,8 @@ impl ConWorkspace {
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
+            .detach();
+        cx.subscribe_in(&settings_panel, window, Self::on_settings_saved)
             .detach();
 
         // Poll harness events periodically
@@ -66,6 +68,17 @@ impl ConWorkspace {
             harness,
             agent_panel_open: false,
         }
+    }
+
+    fn on_settings_saved(
+        &mut self,
+        settings: &Entity<SettingsPanel>,
+        _event: &SaveSettings,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_config = settings.read(cx).agent_config().clone();
+        self.harness.update_config(new_config);
     }
 
     fn on_input_escape(
