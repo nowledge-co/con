@@ -181,7 +181,10 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Basic tabs (Cmd+T / Cmd+W) with tab bar and OSC title
 - [x] Font size from config (config.toml terminal.font_size)
 - [x] CWD display in input bar from OSC 7
-- [ ] Mouse support (selection, click-to-position)
+- [x] Mouse text selection (click-drag, auto-copy, Cmd+C copy)
+- [x] Clipboard paste (Cmd+V) with bracketed paste mode support
+- [x] Cmd+1..9 tab switching
+- [x] Session persistence (tabs, active tab, agent panel state)
 - [ ] Kitty keyboard protocol
 - [ ] Split panes (horizontal + vertical)
 
@@ -224,7 +227,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [ ] Conversation history + search
 
 ### Phase 6: Polish
-- [ ] Session persistence and restore
+- [x] Session persistence and restore
 - [ ] Configurable keybindings
 - [ ] Plugin system (Lua or WASM)
 - [ ] Auto-update (Sparkle on macOS, appimage on Linux)
