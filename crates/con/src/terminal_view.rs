@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use vte::Parser;
 
-use crate::theme::Theme;
+use gpui_component::ActiveTheme;
 
 /// Terminal view — renders the grid and handles input
 pub struct TerminalView {
@@ -180,10 +180,10 @@ impl Render for TerminalView {
         div()
             .relative()
             .size_full()
-            .bg(rgb(Theme::base()))
+            .bg(cx.theme().background)
             .track_focus(&self.focus_handle(cx))
-            .on_mouse_down(MouseButton::Left, move |_, window, _cx| {
-                window.focus(&focus);
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                window.focus(&focus, cx);
             })
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, _cx| {
                 if event.keystroke.modifiers.platform {

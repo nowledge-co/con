@@ -6,6 +6,7 @@ mod theme;
 mod workspace;
 
 use gpui::*;
+use gpui_component::ActiveTheme;
 use workspace::ConWorkspace;
 
 actions!(con, [Quit, NewTab, ToggleAgentPanel, CloseTab]);
@@ -15,7 +16,14 @@ fn main() {
 
     let config = con_core::Config::load().unwrap_or_default();
 
-    Application::new().run(move |cx: &mut App| {
+    let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    app.run(move |cx: &mut App| {
+        // Initialize gpui-component subsystems (theme, input, dialog, etc.)
+        gpui_component::init(cx);
+
+        // Load and activate con's design theme
+        theme::init_theme(cx);
+
         // Register global keybindings
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
@@ -30,10 +38,10 @@ fn main() {
         });
 
         let window_options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: Point::default(),
-                size: size(px(1200.0), px(800.0)),
-            })),
+            window_bounds: Some(WindowBounds::centered(
+                size(px(1200.0), px(800.0)),
+                cx,
+            )),
             titlebar: Some(TitlebarOptions {
                 title: Some("con".into()),
                 appears_transparent: true,
@@ -42,9 +50,15 @@ fn main() {
             ..Default::default()
         };
 
-        cx.open_window(window_options, |_, cx| {
-            cx.new(|cx| ConWorkspace::new(config.clone(), cx))
+        cx.spawn(async move |cx| {
+            cx.open_window(window_options, |window, cx| {
+                let view = cx.new(|cx| ConWorkspace::new(config.clone(), window, cx));
+                cx.new(|cx| {
+                    gpui_component::Root::new(view, window, cx).bg(cx.theme().background)
+                })
+            })
+            .expect("Failed to open window");
         })
-        .unwrap();
+        .detach();
     });
 }

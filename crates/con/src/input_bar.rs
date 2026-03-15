@@ -1,16 +1,10 @@
 use gpui::*;
+use gpui_component::{
+    input::{Input, InputEvent, InputState},
+    ActiveTheme,
+};
 
-use crate::theme::Theme;
-
-// Action emitted when user presses Enter
-actions!(input_bar, [SubmitInput, EscapeInput, CycleMode, FocusInput]);
-
-/// The smart input bar — detects NLP vs shell commands, shows skill completions
-pub struct InputBar {
-    content: String,
-    focus_handle: FocusHandle,
-    mode: InputMode,
-}
+actions!(input_bar, [SubmitInput, EscapeInput]);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputMode {
@@ -27,82 +21,85 @@ impl InputMode {
             Self::Agent => Self::Smart,
         }
     }
-}
 
-impl InputBar {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        Self {
-            content: String::new(),
-            focus_handle: cx.focus_handle(),
-            mode: InputMode::Smart,
+    fn indicator(&self) -> &str {
+        match self {
+            Self::Smart => "~",
+            Self::Shell => "$",
+            Self::Agent => "@",
         }
     }
 
-    /// Take the current content, clearing the input bar
-    pub fn take_content(&mut self) -> String {
-        std::mem::take(&mut self.content)
+    fn label(&self) -> &str {
+        match self {
+            Self::Smart => "Auto",
+            Self::Shell => "Shell",
+            Self::Agent => "Agent",
+        }
+    }
+}
+
+/// The smart input bar — composable input with mode switching
+pub struct InputBar {
+    input_state: Entity<InputState>,
+    mode: InputMode,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl InputBar {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let input_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Type a command or ask AI...")
+        });
+
+        let _subscriptions = vec![
+            // Listen for Enter key
+            cx.subscribe_in(&input_state, window, {
+                let input_state = input_state.clone();
+                move |_this, _, ev: &InputEvent, _window, cx| {
+                    match ev {
+                        InputEvent::PressEnter { secondary: false } => {
+                            let value = input_state.read(cx).value();
+                            if !value.trim().is_empty() {
+                                cx.emit(SubmitInput);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }),
+        ];
+
+        Self {
+            input_state,
+            mode: InputMode::Smart,
+            _subscriptions,
+        }
+    }
+
+    /// Take the current content, clearing the input
+    pub fn take_content(&self, window: &mut Window, cx: &mut App) -> String {
+        let value = self.input_state.read(cx).value().to_string();
+        self.input_state.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+        });
+        value
     }
 
     pub fn mode(&self) -> InputMode {
         self.mode
     }
 
-    fn mode_indicator(&self) -> (&str, u32) {
-        match self.mode {
-            InputMode::Smart => ("~", Theme::overlay0()),
-            InputMode::Shell => ("$", Theme::green()),
-            InputMode::Agent => ("@", Theme::blue()),
-        }
+    pub fn input_state(&self) -> &Entity<InputState> {
+        &self.input_state
     }
 
-    fn placeholder(&self) -> &str {
+    fn indicator_color(&self, cx: &App) -> Hsla {
         match self.mode {
-            InputMode::Smart => "Type a command or ask AI... (/ for skills)",
-            InputMode::Shell => "Shell command...",
-            InputMode::Agent => "Ask the AI agent...",
-        }
-    }
-
-    fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        // Don't handle Cmd+key (let those bubble up to workspace)
-        if event.keystroke.modifiers.platform {
-            return;
-        }
-
-        match event.keystroke.key.as_str() {
-            "tab" => {
-                self.mode = self.mode.next();
-                cx.notify();
-            }
-            "enter" => {
-                if !self.content.trim().is_empty() {
-                    cx.emit(SubmitInput);
-                }
-            }
-            "escape" => {
-                // Clear content and notify (parent can handle re-focusing terminal)
-                self.content.clear();
-                cx.emit(EscapeInput);
-                cx.notify();
-            }
-            "backspace" => {
-                self.content.pop();
-                cx.notify();
-            }
-            key if key.len() == 1 => {
-                let ch = if event.keystroke.modifiers.shift {
-                    key.to_uppercase()
-                } else {
-                    key.to_string()
-                };
-                self.content.push_str(&ch);
-                cx.notify();
-            }
-            "space" => {
-                self.content.push(' ');
-                cx.notify();
-            }
-            _ => {}
+            InputMode::Smart => cx.theme().muted_foreground,
+            InputMode::Shell => cx.theme().success,
+            InputMode::Agent => cx.theme().primary,
         }
     }
 }
@@ -111,45 +108,32 @@ impl EventEmitter<SubmitInput> for InputBar {}
 impl EventEmitter<EscapeInput> for InputBar {}
 
 impl Focusable for InputBar {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.input_state.read(cx).focus_handle(cx).clone()
     }
 }
 
 impl Render for InputBar {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (indicator, indicator_color) = self.mode_indicator();
-        let placeholder = self.placeholder().to_string();
-        let is_focused = self.focus_handle.is_focused(window);
-
-        let text_child: Div = if self.content.is_empty() {
-            div()
-                .flex_1()
-                .text_sm()
-                .text_color(rgb(Theme::overlay0()))
-                .child(placeholder)
-        } else {
-            div()
-                .flex_1()
-                .text_sm()
-                .text_color(rgb(Theme::text()))
-                .child(format!(
-                    "{}{}",
-                    self.content,
-                    if is_focused { "▎" } else { "" }
-                ))
-        };
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let indicator = self.mode.indicator();
+        let mode_label = self.mode.label();
+        let indicator_color = self.indicator_color(cx);
+        let theme = cx.theme();
 
         div()
             .flex()
             .flex_col()
-            .bg(rgb(Theme::mantle()))
-            .track_focus(&self.focus_handle)
+            .bg(theme.title_bar)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                this.handle_key(event, cx);
-            }))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, _cx| {
-                window.focus(&this.focus_handle);
+                // Tab cycles modes (don't send to Input)
+                if event.keystroke.key == "tab" && !event.keystroke.modifiers.shift {
+                    this.mode = this.mode.next();
+                    cx.notify();
+                }
+                // Escape clears and emits escape event
+                if event.keystroke.key == "escape" {
+                    cx.emit(EscapeInput);
+                }
             }))
             .child(
                 div()
@@ -158,30 +142,29 @@ impl Render for InputBar {
                     .h(px(44.0))
                     .px(px(16.0))
                     .gap(px(8.0))
-                    // Focus ring on left border
-                    .border_l_2()
-                    .border_color(rgb(if is_focused {
-                        Theme::blue()
-                    } else {
-                        Theme::mantle() // invisible when not focused
-                    }))
                     // Mode indicator
                     .child(
                         div()
                             .w(px(20.0))
                             .text_sm()
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(indicator_color))
+                            .text_color(indicator_color)
                             .child(indicator.to_string()),
                     )
-                    // Input text
-                    .child(text_child)
+                    // Input field (gpui-component Input)
+                    .child(
+                        div().flex_1().child(
+                            Input::new(&self.input_state)
+                                .appearance(false) // no border/background — we style the container
+                                .cleanable(false),
+                        ),
+                    )
                     // Mode hint
                     .child(
                         div()
                             .text_xs()
-                            .text_color(rgb(Theme::surface2()))
-                            .child("Tab: mode · Enter: send · Esc: terminal"),
+                            .text_color(theme.muted_foreground)
+                            .child(format!("Tab: mode ({mode_label})")),
                     ),
             )
     }

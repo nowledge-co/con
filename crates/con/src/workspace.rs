@@ -1,10 +1,10 @@
 use gpui::*;
+use gpui_component::ActiveTheme;
 
 use crate::agent_panel::AgentPanel;
 use crate::input_bar::{EscapeInput, InputBar, InputMode, SubmitInput};
 use crate::settings_panel::{self, SettingsPanel};
 use crate::terminal_view::TerminalView;
-use crate::theme::Theme;
 use crate::{CloseTab, NewTab, ToggleAgentPanel};
 use con_core::config::Config;
 use con_core::harness::{AgentHarness, HarnessEvent};
@@ -20,23 +20,24 @@ pub struct ConWorkspace {
 }
 
 impl ConWorkspace {
-    pub fn new(config: Config, cx: &mut Context<Self>) -> Self {
+    pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let terminal = cx.new(|cx| TerminalView::new(80, 24, cx));
         let agent_panel = cx.new(|cx| AgentPanel::new(cx));
-        let input_bar = cx.new(|cx| InputBar::new(cx));
+        let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, cx));
         let harness = AgentHarness::new(&config);
 
         // Listen for input bar events
-        cx.subscribe(&input_bar, Self::on_input_submit).detach();
-        cx.subscribe(&input_bar, Self::on_input_escape).detach();
+        cx.subscribe_in(&input_bar, window, Self::on_input_submit)
+            .detach();
+        cx.subscribe_in(&input_bar, window, Self::on_input_escape)
+            .detach();
 
         // Poll harness events periodically
         let events_rx = harness.events().clone();
         cx.spawn(async move |this, cx| {
             loop {
                 let mut got_event = false;
-                // Drain all pending events
                 while let Ok(event) = events_rx.try_recv() {
                     got_event = true;
                     let ev = event.clone();
@@ -66,8 +67,9 @@ impl ConWorkspace {
 
     fn on_input_escape(
         &mut self,
-        _input_bar: Entity<InputBar>,
+        _input_bar: &Entity<InputBar>,
         _event: &EscapeInput,
+        _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
         // Terminal will regain focus since input bar is no longer capturing keys
@@ -75,12 +77,13 @@ impl ConWorkspace {
 
     fn on_input_submit(
         &mut self,
-        input_bar: Entity<InputBar>,
+        input_bar: &Entity<InputBar>,
         _event: &SubmitInput,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (content, mode) = input_bar.update(cx, |bar, _| {
-            (bar.take_content(), bar.mode())
+        let (content, mode) = input_bar.update(cx, |bar, cx| {
+            (bar.take_content(window, cx), bar.mode())
         });
 
         if content.trim().is_empty() {
@@ -89,27 +92,21 @@ impl ConWorkspace {
 
         match mode {
             InputMode::Shell => {
-                // Write directly to terminal PTY
                 self.terminal.update(cx, |tv, _| {
                     tv.write_to_pty(format!("{}\n", content).as_bytes());
                 });
             }
             InputMode::Agent | InputMode::Smart => {
-                // Open agent panel if not already open
                 if !self.agent_panel_open {
                     self.agent_panel_open = true;
                 }
 
-                // Show user message in panel
                 self.agent_panel.update(cx, |panel, cx| {
                     panel.add_message("user", &content, cx);
                 });
 
-                // Build context from terminal grid
                 let grid = self.terminal.read(cx).grid();
                 let context = self.harness.build_context(&grid.lock(), None);
-
-                // Send to agent
                 self.harness.send_message(content, context);
             }
         }
@@ -169,7 +166,8 @@ impl ConWorkspace {
         self.settings_panel.update(cx, |panel, cx| {
             panel.toggle(cx);
             if panel.is_visible() {
-                panel.focus_handle(cx).focus(window);
+                let fh = panel.focus_handle(cx);
+                fh.focus(window, cx);
             }
         });
         cx.notify();
@@ -186,16 +184,20 @@ impl ConWorkspace {
 
 impl Render for ConWorkspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut main_area = div().flex().flex_1().min_h_0().child(
-            div().flex_1().min_w_0().child(self.terminal.clone()),
-        );
+        let theme = cx.theme();
+
+        let mut main_area = div()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .child(div().flex_1().min_w_0().child(self.terminal.clone()));
 
         if self.agent_panel_open {
             main_area = main_area.child(
                 div()
                     .w(px(400.0))
                     .border_l_1()
-                    .border_color(rgb(Theme::surface0()))
+                    .border_color(theme.border)
                     .child(self.agent_panel.clone()),
             );
         }
@@ -205,7 +207,7 @@ impl Render for ConWorkspace {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(Theme::base()))
+            .bg(theme.background)
             .key_context("ConWorkspace")
             .on_action(cx.listener(Self::toggle_agent_panel))
             .on_action(cx.listener(Self::toggle_settings))
@@ -216,7 +218,7 @@ impl Render for ConWorkspace {
                 div()
                     .flex()
                     .h(px(38.0))
-                    .bg(rgb(Theme::mantle()))
+                    .bg(theme.title_bar)
                     .items_center()
                     .px(px(80.0))
                     .child(
@@ -225,8 +227,8 @@ impl Render for ConWorkspace {
                             .py(px(6.0))
                             .rounded_t(px(6.0))
                             .text_sm()
-                            .bg(rgb(Theme::base()))
-                            .text_color(rgb(Theme::text()))
+                            .bg(theme.background)
+                            .text_color(theme.foreground)
                             .child("Terminal"),
                     ),
             )
@@ -236,13 +238,12 @@ impl Render for ConWorkspace {
             .child(
                 div()
                     .border_t_1()
-                    .border_color(rgb(Theme::surface0()))
+                    .border_color(theme.border)
                     .child(self.input_bar.clone()),
             );
 
-        // Settings overlay (rendered on top)
+        // Settings overlay
         let settings_visible = self.settings_panel.read(cx).is_visible();
-
         if settings_visible {
             root = root.child(self.settings_panel.clone());
         }

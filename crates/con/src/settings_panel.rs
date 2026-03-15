@@ -2,7 +2,7 @@ use con_agent::{AgentConfig, ProviderKind};
 use con_core::Config;
 use gpui::*;
 
-use crate::theme::Theme;
+use gpui_component::ActiveTheme;
 
 // ── Actions ────────────────────────────────────────────────────────
 
@@ -249,7 +249,8 @@ impl SettingsPanel {
 
     // ── Render helpers ─────────────────────────────────────────────
 
-    fn render_provider_grid(&self) -> Div {
+    fn render_provider_grid(&self, cx: &App) -> Div {
+        let theme = cx.theme();
         let mut grid = div().flex().flex_wrap().gap(px(6.0));
 
         for provider in ALL_PROVIDERS {
@@ -266,16 +267,16 @@ impl SettingsPanel {
                 } else {
                     FontWeight::NORMAL
                 })
-                .bg(rgb(if is_selected {
-                    Theme::blue()
+                .bg(if is_selected {
+                    theme.primary
                 } else {
-                    Theme::surface0()
-                }))
-                .text_color(rgb(if is_selected {
-                    Theme::crust()
+                    theme.secondary
+                })
+                .text_color(if is_selected {
+                    theme.primary_foreground
                 } else {
-                    Theme::subtext0()
-                }))
+                    theme.secondary_foreground
+                })
                 .child(label);
 
             grid = grid.child(chip);
@@ -284,7 +285,8 @@ impl SettingsPanel {
         grid
     }
 
-    fn render_field(&self, label: &str, hint: &str, value: &str, field: SettingsField) -> Div {
+    fn render_field(&self, label: &str, hint: &str, value: &str, field: SettingsField, cx: &App) -> Div {
+        let theme = cx.theme();
         let is_active = self.active_field == field;
 
         div()
@@ -301,13 +303,13 @@ impl SettingsPanel {
                         div()
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(Theme::subtext0()))
+                            .text_color(theme.secondary_foreground)
                             .child(label.to_string()),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(rgb(Theme::overlay0()))
+                            .text_color(theme.muted_foreground)
                             .child(hint.to_string()),
                     ),
             )
@@ -319,22 +321,22 @@ impl SettingsPanel {
                     .flex()
                     .items_center()
                     .rounded(px(8.0))
-                    .bg(rgb(Theme::base()))
+                    .bg(theme.background)
                     .border_1()
-                    .border_color(rgb(if is_active {
-                        Theme::blue()
+                    .border_color(if is_active {
+                        theme.primary
                     } else {
-                        Theme::surface1()
-                    }))
+                        theme.border
+                    })
                     .child(if value.is_empty() {
                         div()
                             .text_sm()
-                            .text_color(rgb(Theme::overlay0()))
+                            .text_color(theme.muted_foreground)
                             .child("Default".to_string())
                     } else {
                         div()
                             .text_sm()
-                            .text_color(rgb(Theme::text()))
+                            .text_color(theme.foreground)
                             .child(format!(
                                 "{}{}",
                                 value,
@@ -357,6 +359,8 @@ impl Render for SettingsPanel {
             return div();
         }
 
+        let theme = cx.theme();
+
         // Backdrop
         let backdrop = div()
             .absolute()
@@ -375,9 +379,9 @@ impl Render for SettingsPanel {
             .w(px(520.0))
             .max_h(px(600.0))
             .rounded(px(14.0))
-            .bg(rgb(Theme::mantle()))
+            .bg(theme.title_bar)
             .border_1()
-            .border_color(rgb(Theme::surface0()))
+            .border_color(theme.border)
             .flex()
             .flex_col()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
@@ -393,18 +397,18 @@ impl Render for SettingsPanel {
                     .px(px(20.0))
                     .py(px(16.0))
                     .border_b_1()
-                    .border_color(rgb(Theme::surface0()))
+                    .border_color(theme.border)
                     .child(
                         div()
                             .text_base()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(Theme::text()))
+                            .text_color(theme.foreground)
                             .child("Provider Settings"),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(rgb(Theme::overlay0()))
+                            .text_color(theme.muted_foreground)
                             .child("⌘Enter to save · Esc to close"),
                     ),
             )
@@ -421,10 +425,10 @@ impl Render for SettingsPanel {
                         div()
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(Theme::subtext0()))
+                            .text_color(theme.secondary_foreground)
                             .child("PROVIDER"),
                     )
-                    .child(self.render_provider_grid()),
+                    .child(self.render_provider_grid(cx)),
             )
             // Model section
             .child(
@@ -437,13 +441,13 @@ impl Render for SettingsPanel {
                     .child(
                         div()
                             .h(px(1.0))
-                            .bg(rgb(Theme::surface0())),
+                            .bg(theme.border),
                     )
                     .child(
                         div()
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(Theme::subtext0()))
+                            .text_color(theme.secondary_foreground)
                             .child("MODEL CONFIGURATION"),
                     )
                     .child(self.render_field(
@@ -451,18 +455,21 @@ impl Render for SettingsPanel {
                         "Leave empty for provider default",
                         &self.model_text.clone(),
                         SettingsField::Model,
+                        cx,
                     ))
                     .child(self.render_field(
                         "API Key Environment Variable",
                         "e.g. ANTHROPIC_API_KEY",
                         &self.api_key_env_text.clone(),
                         SettingsField::ApiKeyEnv,
+                        cx,
                     ))
                     .child(self.render_field(
                         "Base URL",
                         "For custom/proxy endpoints",
                         &self.base_url_text.clone(),
                         SettingsField::BaseUrl,
+                        cx,
                     )),
             )
             // Advanced section
@@ -477,13 +484,13 @@ impl Render for SettingsPanel {
                     .child(
                         div()
                             .h(px(1.0))
-                            .bg(rgb(Theme::surface0())),
+                            .bg(theme.border),
                     )
                     .child(
                         div()
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(Theme::subtext0()))
+                            .text_color(theme.secondary_foreground)
                             .child("ADVANCED"),
                     )
                     .child(
@@ -496,6 +503,7 @@ impl Render for SettingsPanel {
                                     "",
                                     &self.max_tokens_text.clone(),
                                     SettingsField::MaxTokens,
+                                    cx,
                                 )),
                             )
                             .child(
@@ -504,6 +512,7 @@ impl Render for SettingsPanel {
                                     "",
                                     &self.max_turns_text.clone(),
                                     SettingsField::MaxTurns,
+                                    cx,
                                 )),
                             ),
                     ),
