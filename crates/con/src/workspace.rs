@@ -23,6 +23,7 @@ pub struct ConWorkspace {
     tabs: Vec<Tab>,
     active_tab: usize,
     font_size: f32,
+    scrollback_lines: usize,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -35,6 +36,7 @@ impl ConWorkspace {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
         let font_size = config.terminal.font_size;
+        let scrollback_lines = config.terminal.scrollback_lines;
         let session = Session::load().unwrap_or_default();
 
         let mut tabs: Vec<Tab> = session
@@ -42,7 +44,7 @@ impl ConWorkspace {
             .iter()
             .enumerate()
             .map(|(i, tab_state)| {
-                let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, cx));
+                let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
                 Tab {
                     terminal,
                     title: if tab_state.title.is_empty() {
@@ -55,7 +57,7 @@ impl ConWorkspace {
             .collect();
         if tabs.is_empty() {
             tabs.push(Tab {
-                terminal: cx.new(|cx| TerminalView::new(80, 24, font_size, cx)),
+                terminal: cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx)),
                 title: "Terminal".to_string(),
             });
         }
@@ -103,6 +105,7 @@ impl ConWorkspace {
             tabs,
             active_tab,
             font_size,
+            scrollback_lines,
             agent_panel,
             input_bar,
             settings_panel,
@@ -338,7 +341,8 @@ impl ConWorkspace {
 
     fn new_tab(&mut self, _: &NewTab, _window: &mut Window, cx: &mut Context<Self>) {
         let font_size = self.font_size;
-        let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, cx));
+        let scrollback_lines = self.scrollback_lines;
+        let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
         let tab_number = self.tabs.len() + 1;
         self.tabs.push(Tab {
             terminal,

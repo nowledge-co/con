@@ -172,10 +172,16 @@ pub struct Grid {
     pub title: Option<String>,
     /// Pending responses to write back to the PTY (e.g., DA, DSR)
     pending_responses: Vec<Vec<u8>>,
+    /// Maximum scrollback lines (configurable)
+    max_scrollback: usize,
 }
 
 impl Grid {
     pub fn new(cols: usize, rows: usize) -> Self {
+        Self::with_scrollback(cols, rows, 10_000)
+    }
+
+    pub fn with_scrollback(cols: usize, rows: usize, max_scrollback: usize) -> Self {
         let cells = vec![vec![Cell::default(); cols]; rows];
         let dirty = vec![true; rows];
         let mut tab_stops = vec![false; cols];
@@ -213,6 +219,7 @@ impl Grid {
             auto_wrap: true,
             title: None,
             pending_responses: Vec::new(),
+            max_scrollback,
         }
     }
 
@@ -350,7 +357,7 @@ impl Grid {
         let row = self.cells[self.scroll_top].clone();
         self.scrollback.push(row);
         // Limit scrollback
-        if self.scrollback.len() > 10_000 {
+        if self.scrollback.len() > self.max_scrollback {
             self.scrollback.remove(0);
         }
         // Shift lines up within scroll region

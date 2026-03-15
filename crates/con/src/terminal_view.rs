@@ -71,6 +71,7 @@ pub struct TerminalView {
     pty: Arc<Mutex<Pty>>,
     _parser: Arc<Mutex<Parser>>,
     focus_handle: FocusHandle,
+    font_size: f32,
     cell_width: f32,
     cell_height: f32,
     selection: Option<Selection>,
@@ -79,8 +80,14 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
-    pub fn new(cols: usize, rows: usize, font_size: f32, cx: &mut Context<Self>) -> Self {
-        let grid = Arc::new(Mutex::new(Grid::new(cols, rows)));
+    pub fn new(
+        cols: usize,
+        rows: usize,
+        font_size: f32,
+        scrollback_lines: usize,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let grid = Arc::new(Mutex::new(Grid::with_scrollback(cols, rows, scrollback_lines)));
         let pty = Pty::spawn(PtySize {
             rows: rows as u16,
             cols: cols as u16,
@@ -133,6 +140,7 @@ impl TerminalView {
             pty,
             _parser: parser,
             focus_handle: cx.focus_handle(),
+            font_size,
             cell_width,
             cell_height,
             selection: None,
@@ -264,10 +272,11 @@ impl Render for TerminalView {
             dim: false,
         };
 
+        let font_sz = self.font_size;
         let flush_run =
             |divs: &mut Vec<Div>, row: usize, col: usize, text: &str, style: &TextStyle| {
                 if !text.is_empty() {
-                    divs.push(make_text_div(row, col, text, style, cell_w, cell_h));
+                    divs.push(make_text_div(row, col, text, style, cell_w, cell_h, font_sz));
                 }
             };
 
@@ -555,6 +564,7 @@ fn make_text_div(
     style: &TextStyle,
     cell_w: f32,
     cell_h: f32,
+    font_size: f32,
 ) -> Div {
     let color = if style.dim {
         rgba((style.fg << 8) | 0x80) // 50% opacity
@@ -565,7 +575,9 @@ fn make_text_div(
         .absolute()
         .top(px(row as f32 * cell_h))
         .left(px(col as f32 * cell_w))
-        .text_sm()
+        .font_family("Ioskeley Mono")
+        .text_size(px(font_size))
+        .line_height(px(cell_h))
         .text_color(color);
     if style.bold {
         d = d.font_weight(FontWeight::BOLD);
