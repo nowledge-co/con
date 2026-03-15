@@ -63,7 +63,8 @@ impl Session {
 
     fn session_path() -> PathBuf {
         dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+            .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("con")
             .join("session.json")
     }

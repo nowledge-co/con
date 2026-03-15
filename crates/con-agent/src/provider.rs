@@ -38,6 +38,26 @@ impl Default for ProviderKind {
     }
 }
 
+impl std::fmt::Display for ProviderKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Anthropic => write!(f, "anthropic"),
+            Self::OpenAI => write!(f, "openai"),
+            Self::OpenAICompatible => write!(f, "openai-compatible"),
+            Self::DeepSeek => write!(f, "deepseek"),
+            Self::Groq => write!(f, "groq"),
+            Self::Cohere => write!(f, "cohere"),
+            Self::Gemini => write!(f, "gemini"),
+            Self::Ollama => write!(f, "ollama"),
+            Self::OpenRouter => write!(f, "openrouter"),
+            Self::Perplexity => write!(f, "perplexity"),
+            Self::Mistral => write!(f, "mistral"),
+            Self::Together => write!(f, "together"),
+            Self::XAI => write!(f, "xai"),
+        }
+    }
+}
+
 impl ProviderKind {
     fn default_api_key_env(&self) -> &str {
         match self {
@@ -184,9 +204,7 @@ impl AgentProvider {
 
         let _ = event_tx.send(AgentEvent::Step(AgentStep::Thinking(format!(
             "{}:{}",
-            serde_json::to_string(&self.config.provider)
-                .unwrap_or_default()
-                .trim_matches('"'),
+            self.config.provider,
             self.config.effective_model(),
         ))));
 
