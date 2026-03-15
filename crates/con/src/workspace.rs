@@ -10,6 +10,7 @@ use crate::terminal_view::TerminalView;
 use crate::{CloseTab, NewTab, ToggleAgentPanel};
 use con_core::config::Config;
 use con_core::harness::{AgentHarness, HarnessEvent};
+use con_core::session::Session;
 
 struct Tab {
     terminal: Entity<TerminalView>,
@@ -34,12 +35,32 @@ impl ConWorkspace {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
         let font_size = config.terminal.font_size;
-        let first_terminal =
-            cx.new(|cx| TerminalView::new(80, 24, font_size, cx));
-        let tabs = vec![Tab {
-            terminal: first_terminal,
-            title: "Terminal".to_string(),
-        }];
+        let session = Session::load().unwrap_or_default();
+
+        let mut tabs: Vec<Tab> = session
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab_state)| {
+                let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, cx));
+                Tab {
+                    terminal,
+                    title: if tab_state.title.is_empty() {
+                        format!("Terminal {}", i + 1)
+                    } else {
+                        tab_state.title.clone()
+                    },
+                }
+            })
+            .collect();
+        if tabs.is_empty() {
+            tabs.push(Tab {
+                terminal: cx.new(|cx| TerminalView::new(80, 24, font_size, cx)),
+                title: "Terminal".to_string(),
+            });
+        }
+        let active_tab = session.active_tab.min(tabs.len() - 1);
+        let agent_panel_open = session.agent_panel_open;
         let agent_panel = cx.new(|cx| AgentPanel::new(cx));
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
@@ -80,19 +101,48 @@ impl ConWorkspace {
         Self {
             sidebar,
             tabs,
-            active_tab: 0,
+            active_tab,
             font_size,
             agent_panel,
             input_bar,
             settings_panel,
             command_palette,
             harness,
-            agent_panel_open: false,
+            agent_panel_open,
         }
     }
 
     fn active_terminal(&self) -> &Entity<TerminalView> {
         &self.tabs[self.active_tab].terminal
+    }
+
+    fn save_session(&self, cx: &App) {
+        let tabs: Vec<con_core::session::TabState> = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                let cwd = tab.terminal.read(cx).grid().lock().current_dir.clone();
+                let title = tab
+                    .terminal
+                    .read(cx)
+                    .title()
+                    .unwrap_or_else(|| tab.title.clone());
+                con_core::session::TabState {
+                    title,
+                    cwd,
+                    panes: vec![],
+                }
+            })
+            .collect();
+
+        let session = Session {
+            tabs,
+            active_tab: self.active_tab,
+            agent_panel_open: self.agent_panel_open,
+        };
+        if let Err(e) = session.save() {
+            log::warn!("Failed to save session: {}", e);
+        }
     }
 
     fn on_palette_select(
@@ -258,6 +308,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.agent_panel_open = !self.agent_panel_open;
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -294,6 +345,7 @@ impl ConWorkspace {
             title: format!("Terminal {}", tab_number),
         });
         self.active_tab = self.tabs.len() - 1;
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -305,12 +357,14 @@ impl ConWorkspace {
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
         }
+        self.save_session(cx);
         cx.notify();
     }
 
     fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.tabs.len() {
             self.active_tab = index;
+            self.save_session(cx);
             cx.notify();
         }
     }
