@@ -22,6 +22,50 @@ struct TextStyle {
 /// The canvas prepaint callback measures the available bounds,
 /// calculates cols/rows from cell dimensions, and resizes if
 /// the terminal dimensions have changed.
+/// Selection anchor point (row, col)
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SelectionPoint {
+    row: usize,
+    col: usize,
+}
+
+/// Active text selection
+#[derive(Debug, Clone, Copy)]
+struct Selection {
+    start: SelectionPoint,
+    end: SelectionPoint,
+}
+
+impl Selection {
+    fn ordered(&self) -> (SelectionPoint, SelectionPoint) {
+        if self.start.row < self.end.row
+            || (self.start.row == self.end.row && self.start.col <= self.end.col)
+        {
+            (self.start, self.end)
+        } else {
+            (self.end, self.start)
+        }
+    }
+
+    #[allow(dead_code)]
+    fn contains(&self, row: usize, col: usize) -> bool {
+        let (start, end) = self.ordered();
+        if row < start.row || row > end.row {
+            return false;
+        }
+        if row == start.row && row == end.row {
+            return col >= start.col && col <= end.col;
+        }
+        if row == start.row {
+            return col >= start.col;
+        }
+        if row == end.row {
+            return col <= end.col;
+        }
+        true
+    }
+}
+
 pub struct TerminalView {
     grid: Arc<Mutex<Grid>>,
     pty: Arc<Mutex<Pty>>,
@@ -29,6 +73,9 @@ pub struct TerminalView {
     focus_handle: FocusHandle,
     cell_width: f32,
     cell_height: f32,
+    selection: Option<Selection>,
+    selecting: bool,
+    terminal_origin: Arc<Mutex<(f32, f32)>>,
 }
 
 impl TerminalView {
@@ -88,6 +135,9 @@ impl TerminalView {
             focus_handle: cx.focus_handle(),
             cell_width,
             cell_height,
+            selection: None,
+            selecting: false,
+            terminal_origin: Arc::new(Mutex::new((0.0, 0.0))),
         }
     }
 
@@ -97,6 +147,39 @@ impl TerminalView {
 
     pub fn title(&self) -> Option<String> {
         self.grid.lock().title.clone()
+    }
+
+    fn mouse_to_grid(&self, position: Point<Pixels>) -> SelectionPoint {
+        let (ox, oy) = *self.terminal_origin.lock();
+        let x: f32 = f32::from(position.x) - ox;
+        let y: f32 = f32::from(position.y) - oy;
+        let col = (x / self.cell_width).max(0.0) as usize;
+        let row = (y / self.cell_height).max(0.0) as usize;
+        SelectionPoint { row, col }
+    }
+
+    fn selected_text(&self) -> Option<String> {
+        let selection = self.selection?;
+        let (start, end) = selection.ordered();
+        let grid = self.grid.lock();
+        let mut text = String::new();
+        for row in start.row..=end.row.min(grid.rows - 1) {
+            let col_start = if row == start.row { start.col } else { 0 };
+            let col_end = if row == end.row {
+                end.col.min(grid.cols - 1)
+            } else {
+                grid.cols - 1
+            };
+            for col in col_start..=col_end {
+                text.push(grid.visible_cell(row, col).c);
+            }
+            if row != end.row {
+                text.push('\n');
+            }
+        }
+        // Trim trailing whitespace from each line
+        let trimmed: Vec<&str> = text.lines().map(|l| l.trim_end()).collect();
+        Some(trimmed.join("\n"))
     }
 
     pub fn write_to_pty(&self, data: &[u8]) {
@@ -229,17 +312,61 @@ impl Render for TerminalView {
         // We compare against the current (cols, rows) snapshot.
         let grid_for_resize = self.grid.clone();
         let pty_for_resize = self.pty.clone();
+        let terminal_origin_for_canvas = self.terminal_origin.clone();
         let current_dims = (cols, rows);
         let entity_id = cx.entity_id();
+        let selection_for_canvas = self.selection;
 
         div()
             .relative()
             .size_full()
             .bg(cx.theme().background)
             .track_focus(&self.focus_handle(cx))
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                window.focus(&focus, cx);
-            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&focus, cx);
+                    let point = this.mouse_to_grid(event.position);
+                    this.selection = Some(Selection {
+                        start: point,
+                        end: point,
+                    });
+                    this.selecting = true;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                if this.selecting {
+                    let point = this.mouse_to_grid(event.position);
+                    if let Some(ref mut sel) = this.selection {
+                        sel.end = point;
+                    }
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    if this.selecting {
+                        this.selecting = false;
+                        let point = this.mouse_to_grid(event.position);
+                        if let Some(ref mut sel) = this.selection {
+                            sel.end = point;
+                        }
+                        // If start == end, clear selection (just a click)
+                        if let Some(sel) = &this.selection {
+                            if sel.start == sel.end {
+                                this.selection = None;
+                            }
+                        }
+                        // Auto-copy selection to clipboard
+                        if let Some(text) = this.selected_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                        cx.notify();
+                    }
+                }),
+            )
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
                 let delta_y = match event.delta {
                     ScrollDelta::Lines(delta) => -delta.y as isize,
@@ -276,15 +403,24 @@ impl Render for TerminalView {
                             }
                         }
                     }
-                    // Handle Cmd+C (copy) — copy selected text if any
-                    // (selection not yet implemented, but Cmd+C should
-                    // send SIGINT when nothing is selected)
+                    // Cmd+C: copy selection if present, otherwise send SIGINT
                     if event.keystroke.key == "c" {
-                        this.write_to_pty(&[0x03]); // ETX = Ctrl+C
+                        if let Some(text) = this.selected_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            this.selection = None;
+                            cx.notify();
+                        } else {
+                            this.write_to_pty(&[0x03]);
+                        }
                     }
                     return;
                 }
                 let _ = window;
+                // Clear selection on any non-Cmd keypress
+                if this.selection.is_some() {
+                    this.selection = None;
+                    cx.notify();
+                }
                 // Snap back to live view when user types
                 let app_cursor_keys;
                 {
@@ -313,6 +449,12 @@ impl Render for TerminalView {
             .child(
                 canvas(
                     move |bounds, _window, cx| {
+                        // Store the terminal origin for mouse coordinate conversion
+                        *terminal_origin_for_canvas.lock() = (
+                            f32::from(bounds.origin.x),
+                            f32::from(bounds.origin.y),
+                        );
+
                         // Detect if the available space requires a terminal resize
                         let available_w: f32 = bounds.size.width.into();
                         let available_h: f32 = bounds.size.height.into();
@@ -349,6 +491,31 @@ impl Render for TerminalView {
                                 },
                                 rgb(bg),
                             ));
+                        }
+
+                        // Selection highlight
+                        if let Some(sel) = selection_for_canvas {
+                            let (start, end) = sel.ordered();
+                            for row in start.row..=end.row.min(rows.saturating_sub(1)) {
+                                let col_start = if row == start.row { start.col } else { 0 };
+                                let col_end = if row == end.row {
+                                    end.col.min(cols.saturating_sub(1))
+                                } else {
+                                    cols.saturating_sub(1)
+                                };
+                                if col_start <= col_end {
+                                    let x = origin.x + px(col_start as f32 * cell_w);
+                                    let y = origin.y + px(row as f32 * cell_h);
+                                    let w = (col_end - col_start + 1) as f32 * cell_w;
+                                    window.paint_quad(fill(
+                                        Bounds {
+                                            origin: point(x, y),
+                                            size: size(px(w), px(cell_h)),
+                                        },
+                                        rgba(0xb4befe40),
+                                    ));
+                                }
+                            }
                         }
 
                         // Cursor (hidden when scrolled into scrollback)
