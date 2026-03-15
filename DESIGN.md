@@ -174,10 +174,15 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Dynamic terminal resize (fills available window space)
 - [x] Scrollback buffer with mouse wheel navigation
 - [x] 256-color + truecolor
+- [x] DEC private modes: DECCKM, DECAWM, alt screen, bracketed paste
+- [x] DA/DSR responses written back to PTY
+- [x] Application cursor keys (SS3 mode for vim/less/top)
+- [x] Text style rendering: italic, underline, strikethrough, dim, inverse
+- [x] Basic tabs (Cmd+T / Cmd+W) with tab bar and OSC title
+- [x] Font size from config (config.toml terminal.font_size)
+- [x] CWD display in input bar from OSC 7
 - [ ] Mouse support (selection, click-to-position)
 - [ ] Kitty keyboard protocol
-- [ ] Ghostty config file compatibility (themes, fonts)
-- [ ] Basic tabs (Cmd+T / Ctrl+T)
 - [ ] Split panes (horizontal + vertical)
 
 ### Phase 2: Agent Harness
@@ -211,6 +216,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 ### Phase 5: Deep Integration
 - [x] OSC 133 command block tracking (prompt/command/exit code detection)
 - [x] Command palette (Cmd+Shift+P) with fuzzy search and keyboard nav
+- [x] Command history in agent context (last 10 commands with exit codes)
 - [ ] Inline AI suggestions (ghost text below prompt, Tab to accept)
 - [ ] Command block actions: copy, re-run, explain, share
 - [ ] SSH-aware agent (knows when you're in a remote session)
