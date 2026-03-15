@@ -1,6 +1,8 @@
 mod agent_panel;
+mod assets;
 mod input_bar;
 mod settings_panel;
+mod sidebar;
 mod terminal_view;
 mod theme;
 mod workspace;
@@ -16,7 +18,7 @@ fn main() {
 
     let config = con_core::Config::load().unwrap_or_default();
 
-    let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    let app = gpui_platform::application().with_assets(assets::ConAssets);
     app.run(move |cx: &mut App| {
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)
         gpui_component::init(cx);

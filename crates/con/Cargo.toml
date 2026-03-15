@@ -27,3 +27,4 @@ serde_json.workspace = true
 futures.workspace = true
 uuid.workspace = true
 toml.workspace = true
+rust-embed.workspace = true
