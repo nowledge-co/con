@@ -248,8 +248,19 @@ impl ConWorkspace {
             return;
         }
 
-        match mode {
-            InputMode::Shell => {
+        // Smart mode: auto-detect whether to send to shell or agent
+        let effective_mode = if mode == InputMode::Smart {
+            if looks_like_question(&content) {
+                InputMode::Agent
+            } else {
+                InputMode::Shell
+            }
+        } else {
+            mode
+        };
+
+        match effective_mode {
+            InputMode::Shell | InputMode::Smart => {
                 let terminal = self.active_terminal().clone();
                 terminal.update(cx, |tv, _| {
                     tv.write_to_pty(format!("{}\n", content).as_bytes());
@@ -257,7 +268,7 @@ impl ConWorkspace {
                 // Refocus terminal after sending shell command
                 terminal.focus_handle(cx).focus(window, cx);
             }
-            InputMode::Agent | InputMode::Smart => {
+            InputMode::Agent => {
                 if !self.agent_panel_open {
                     self.agent_panel_open = true;
                 }
@@ -413,6 +424,45 @@ impl ConWorkspace {
             cx.notify();
         }
     }
+}
+
+/// Simple heuristic: does the input look like a question for an AI agent?
+fn looks_like_question(input: &str) -> bool {
+    let lower = input.to_lowercase();
+    let trimmed = lower.trim();
+
+    // Starts with question words
+    if trimmed.starts_with("how ")
+        || trimmed.starts_with("what ")
+        || trimmed.starts_with("why ")
+        || trimmed.starts_with("when ")
+        || trimmed.starts_with("where ")
+        || trimmed.starts_with("who ")
+        || trimmed.starts_with("can you ")
+        || trimmed.starts_with("could you ")
+        || trimmed.starts_with("please ")
+        || trimmed.starts_with("explain ")
+        || trimmed.starts_with("help ")
+        || trimmed.starts_with("fix ")
+        || trimmed.starts_with("debug ")
+        || trimmed.starts_with("write ")
+        || trimmed.starts_with("create ")
+        || trimmed.starts_with("show me ")
+    {
+        return true;
+    }
+
+    // Ends with question mark
+    if trimmed.ends_with('?') {
+        return true;
+    }
+
+    // Multiple words with natural language patterns (more than 6 words)
+    if trimmed.split_whitespace().count() > 6 {
+        return true;
+    }
+
+    false
 }
 
 impl Render for ConWorkspace {
