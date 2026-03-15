@@ -1,8 +1,10 @@
 use anyhow::Result;
 use crossbeam_channel::Sender;
+use futures::StreamExt;
+use rig::agent::{MultiTurnStreamItem, StreamingResult};
 use rig::client::CompletionClient;
-use rig::completion::Prompt;
 use rig::providers::{anthropic, openai};
+use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use serde::{Deserialize, Serialize};
 
 use crate::context::TerminalContext;
@@ -196,7 +198,7 @@ impl AgentProvider {
         let _ = event_tx.send(AgentEvent::Thinking);
 
         let system_prompt = context.to_system_prompt();
-        let mut chat_history = conversation.to_rig_history();
+        let chat_history = conversation.to_rig_history();
         let last_user_msg = conversation
             .last_user_message()
             .map(|m| m.content.clone())
@@ -216,15 +218,15 @@ impl AgentProvider {
 
         let response = match self.config.provider {
             ProviderKind::Anthropic | ProviderKind::OpenAICompatible => {
-                self.send_anthropic(&system_prompt, &last_user_msg, &mut chat_history, hook)
+                self.send_anthropic(&system_prompt, &last_user_msg, chat_history, hook)
                     .await?
             }
             ProviderKind::OpenAI => {
-                self.send_openai(&system_prompt, &last_user_msg, &mut chat_history, hook)
+                self.send_openai(&system_prompt, &last_user_msg, chat_history, hook)
                     .await?
             }
             _ => {
-                self.send_openai_compat(&system_prompt, &last_user_msg, &mut chat_history, hook)
+                self.send_openai_compat(&system_prompt, &last_user_msg, chat_history, hook)
                     .await?
             }
         };
@@ -239,7 +241,7 @@ impl AgentProvider {
         &self,
         system_prompt: &str,
         prompt: &str,
-        history: &mut Vec<rig::message::Message>,
+        history: Vec<rig::message::Message>,
         hook: ConHook,
     ) -> Result<String> {
         let api_key = self.resolve_api_key()?;
@@ -262,19 +264,20 @@ impl AgentProvider {
             .default_max_turns(self.config.max_turns)
             .build();
 
-        agent
-            .prompt(prompt)
+        let stream = agent
+            .stream_prompt(prompt)
             .with_hook(hook)
             .with_history(history)
-            .await
-            .map_err(|e| anyhow::anyhow!("Agent error: {e}"))
+            .await;
+
+        consume_stream(stream).await
     }
 
     async fn send_openai(
         &self,
         system_prompt: &str,
         prompt: &str,
-        history: &mut Vec<rig::message::Message>,
+        history: Vec<rig::message::Message>,
         hook: ConHook,
     ) -> Result<String> {
         let api_key = self.resolve_api_key()?;
@@ -297,19 +300,20 @@ impl AgentProvider {
             .default_max_turns(self.config.max_turns)
             .build();
 
-        agent
-            .prompt(prompt)
+        let stream = agent
+            .stream_prompt(prompt)
             .with_hook(hook)
             .with_history(history)
-            .await
-            .map_err(|e| anyhow::anyhow!("Agent error: {e}"))
+            .await;
+
+        consume_stream(stream).await
     }
 
     async fn send_openai_compat(
         &self,
         system_prompt: &str,
         prompt: &str,
-        history: &mut Vec<rig::message::Message>,
+        history: Vec<rig::message::Message>,
         hook: ConHook,
     ) -> Result<String> {
         let api_key = self.resolve_api_key()?;
@@ -343,12 +347,13 @@ impl AgentProvider {
             .default_max_turns(self.config.max_turns)
             .build();
 
-        agent
-            .prompt(prompt)
+        let stream = agent
+            .stream_prompt(prompt)
             .with_hook(hook)
             .with_history(history)
-            .await
-            .map_err(|e| anyhow::anyhow!("Agent error: {e}"))
+            .await;
+
+        consume_stream(stream).await
     }
 
     fn default_base_url(&self) -> Option<String> {
@@ -377,4 +382,25 @@ impl AgentProvider {
             )
         })
     }
+}
+
+/// Consume a streaming response, accumulating the full text.
+/// Hook callbacks (on_text_delta, on_tool_call, on_tool_result) fire
+/// as the stream is consumed — this function just collects the result.
+async fn consume_stream<R: Send + 'static>(
+    mut stream: StreamingResult<R>,
+) -> Result<String> {
+    let mut response_text = String::new();
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::Text(text),
+            )) => {
+                response_text.push_str(&text.text);
+            }
+            Ok(_) => {}
+            Err(e) => return Err(anyhow::anyhow!("Streaming error: {e}")),
+        }
+    }
+    Ok(response_text)
 }

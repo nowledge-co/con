@@ -195,7 +195,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Agent status indicators (Idle/Thinking/Responding)
 - [x] Tool call rendering (in-progress dots, completed results)
 - [x] Approval dialog UI (inline approval cards with Allow/Deny)
-- [ ] Streaming via `stream_prompt()` (hook is wired, provider path not yet)
+- [x] Streaming via `stream_prompt()` with real-time token rendering
 
 ### Phase 4: Agent Chat Polish
 - [x] Structured tool call cards (icon, name, formatted args, result)
@@ -203,7 +203,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Scrollable agent panel
 - [x] Collapsible step timeline (click to expand/collapse)
 - [x] Auto-approve toggle in settings UI (switch with live config propagation)
-- [ ] Streaming text rendering via `stream_prompt()`
+- [x] Streaming text rendering via `stream_prompt()`
 
 ### Phase 5: Deep Integration
 - [x] OSC 133 command block tracking (prompt/command/exit code detection)

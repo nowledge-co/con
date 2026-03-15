@@ -31,10 +31,9 @@ pub struct ToolApprovalDecision {
 ///
 /// ## Streaming
 ///
-/// `on_text_delta` is implemented but only fires when using Rig's
-/// streaming API (`stream_prompt()`). The current non-streaming path
-/// (`prompt()`) does not call it. Real streaming is planned for a
-/// future phase.
+/// `on_text_delta` fires during streaming via `stream_prompt()`,
+/// emitting `AgentEvent::Token` for each text chunk. The UI
+/// receives these incrementally for real-time text rendering.
 #[derive(Clone)]
 pub struct ConHook {
     event_tx: Sender<AgentEvent>,
@@ -132,8 +131,6 @@ impl<M: CompletionModel> PromptHook<M> for ConHook {
         text_delta: &str,
         _aggregated_text: &str,
     ) -> impl Future<Output = HookAction> + Send {
-        // Only fires in streaming mode (stream_prompt). The current
-        // non-streaming path (prompt) does not trigger this callback.
         let _ = self.event_tx.send(AgentEvent::Token(text_delta.to_string()));
         async { HookAction::cont() }
     }
