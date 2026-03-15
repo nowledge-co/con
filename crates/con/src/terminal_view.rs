@@ -183,6 +183,36 @@ impl TerminalView {
         SelectionPoint { row, col }
     }
 
+    /// Expand selection to word boundaries at the given position
+    fn select_word(&self, point: SelectionPoint) -> Selection {
+        let grid = self.grid.lock();
+        let row = point.row.min(grid.rows.saturating_sub(1));
+        let cols = grid.cols;
+
+        // Find word boundaries (alphanumeric + underscore)
+        let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '.';
+
+        let ch = grid.visible_cell(row, point.col.min(cols.saturating_sub(1))).c;
+        let mut start_col = point.col.min(cols.saturating_sub(1));
+        let mut end_col = start_col;
+
+        if is_word_char(ch) {
+            // Expand left
+            while start_col > 0 && is_word_char(grid.visible_cell(row, start_col - 1).c) {
+                start_col -= 1;
+            }
+            // Expand right
+            while end_col + 1 < cols && is_word_char(grid.visible_cell(row, end_col + 1).c) {
+                end_col += 1;
+            }
+        }
+
+        Selection {
+            start: SelectionPoint { row, col: start_col },
+            end: SelectionPoint { row, col: end_col },
+        }
+    }
+
     fn selected_text(&self) -> Option<String> {
         let selection = self.selection?;
         let (start, end) = selection.ordered();
@@ -347,6 +377,8 @@ impl Render for TerminalView {
         let current_dims = (cols, rows);
         let entity_id = cx.entity_id();
         let selection_for_canvas = self.selection;
+        let cursor_color = cx.theme().primary;
+        let selection_color = cx.theme().selection;
 
         let mut terminal = div()
             .relative()
@@ -358,11 +390,20 @@ impl Render for TerminalView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
                     let point = this.mouse_to_grid(event.position);
-                    this.selection = Some(Selection {
-                        start: point,
-                        end: point,
-                    });
-                    this.selecting = true;
+                    if event.click_count == 2 {
+                        // Double-click: select word
+                        this.selection = Some(this.select_word(point));
+                        this.selecting = false;
+                        if let Some(text) = this.selected_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                    } else {
+                        this.selection = Some(Selection {
+                            start: point,
+                            end: point,
+                        });
+                        this.selecting = true;
+                    }
                     cx.notify();
                 }),
             )
@@ -545,7 +586,7 @@ impl Render for TerminalView {
                                             origin: point(x, y),
                                             size: size(px(w), px(cell_h)),
                                         },
-                                        rgba(0xb4befe40),
+                                        selection_color,
                                     ));
                                 }
                             }
@@ -569,7 +610,7 @@ impl Render for TerminalView {
                                     origin: point(cx_pos, y_offset),
                                     size: size(w, h),
                                 },
-                                rgba(0xb4befe80),
+                                cursor_color,
                             ));
                         }
                     },
@@ -579,12 +620,13 @@ impl Render for TerminalView {
             // Text overlays
             .children(text_divs);
 
-        // Scrollback indicator — shown when viewing history
+        // Scrollback indicator — floating pill when viewing history
         if in_scrollback {
+            let theme = cx.theme();
             terminal = terminal.child(
                 div()
                     .absolute()
-                    .bottom(px(8.0))
+                    .bottom(px(12.0))
                     .left_0()
                     .right_0()
                     .flex()
@@ -592,11 +634,14 @@ impl Render for TerminalView {
                     .child(
                         div()
                             .px(px(12.0))
-                            .py(px(4.0))
-                            .rounded(px(12.0))
-                            .bg(rgba(0x00000080))
+                            .py(px(5.0))
+                            .rounded(px(14.0))
+                            .bg(theme.title_bar.opacity(0.95))
+                            .border_1()
+                            .border_color(theme.border)
+                            .shadow_sm()
                             .text_size(px(11.0))
-                            .text_color(rgba(0xffffffcc))
+                            .text_color(theme.muted_foreground)
                             .child(format!("{} lines up", scrollback_offset)),
                     ),
             );
