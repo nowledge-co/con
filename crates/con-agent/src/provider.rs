@@ -1,19 +1,18 @@
 use anyhow::Result;
 use crossbeam_channel::Sender;
 use rig::client::CompletionClient;
-use rig::completion::Chat;
+use rig::completion::Prompt;
 use rig::providers::{anthropic, openai};
 use serde::{Deserialize, Serialize};
 
 use crate::context::TerminalContext;
 use crate::conversation::{AgentStep, Conversation, Message};
+use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{FileReadTool, FileWriteTool, SearchTool, ShellExecTool};
 
 // ── Provider enum ───────────────────────────────────────────────────
 
 /// Supported LLM providers.
-/// All providers that Rig supports can be added here — the config maps
-/// a string name to the appropriate client constructor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
@@ -81,12 +80,13 @@ impl ProviderKind {
 ///
 /// ```toml
 /// [agent]
-/// provider = "anthropic"          # or "openai", "ollama", "openai-compatible", etc.
-/// model = "claude-sonnet-4-0"     # provider-specific model ID
+/// provider = "anthropic"
+/// model = "claude-sonnet-4-0"
 /// api_key_env = "ANTHROPIC_API_KEY"
-/// base_url = "https://my-proxy.example.com/v1"  # optional, for custom endpoints
+/// base_url = "https://my-proxy.example.com/v1"
 /// max_tokens = 4096
 /// max_turns = 10
+/// auto_approve_tools = false
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -98,6 +98,7 @@ pub struct AgentConfig {
     pub max_tokens: u64,
     pub max_turns: usize,
     pub auto_context: bool,
+    pub auto_approve_tools: bool,
 }
 
 impl Default for AgentConfig {
@@ -110,6 +111,7 @@ impl Default for AgentConfig {
             max_tokens: 4096,
             max_turns: 10,
             auto_context: true,
+            auto_approve_tools: false,
         }
     }
 }
@@ -135,6 +137,16 @@ pub enum AgentEvent {
     Thinking,
     Token(String),
     Step(AgentStep),
+    ToolCallStart {
+        call_id: String,
+        tool_name: String,
+        args: String,
+    },
+    ToolCallComplete {
+        call_id: String,
+        tool_name: String,
+        result: String,
+    },
     Done(Message),
     Error(String),
 }
@@ -159,11 +171,12 @@ impl AgentProvider {
         conversation: &Conversation,
         context: &TerminalContext,
         event_tx: Sender<AgentEvent>,
+        approval_rx: crossbeam_channel::Receiver<ToolApprovalDecision>,
     ) -> Result<Message> {
         let _ = event_tx.send(AgentEvent::Thinking);
 
         let system_prompt = context.to_system_prompt();
-        let chat_history = conversation.to_rig_history();
+        let mut chat_history = conversation.to_rig_history();
         let last_user_msg = conversation
             .last_user_message()
             .map(|m| m.content.clone())
@@ -171,28 +184,32 @@ impl AgentProvider {
 
         let _ = event_tx.send(AgentEvent::Step(AgentStep::Thinking(format!(
             "{}:{}",
-            serde_json::to_string(&self.config.provider).unwrap_or_default().trim_matches('"'),
+            serde_json::to_string(&self.config.provider)
+                .unwrap_or_default()
+                .trim_matches('"'),
             self.config.effective_model(),
         ))));
 
+        let hook = ConHook::new(
+            event_tx.clone(),
+            approval_rx,
+            self.config.auto_approve_tools,
+        );
+
         let response = match self.config.provider {
             ProviderKind::Anthropic | ProviderKind::OpenAICompatible => {
-                self.send_anthropic(&system_prompt, &last_user_msg, chat_history)
+                self.send_anthropic(&system_prompt, &last_user_msg, &mut chat_history, hook)
                     .await?
             }
             ProviderKind::OpenAI => {
-                self.send_openai(&system_prompt, &last_user_msg, chat_history)
+                self.send_openai(&system_prompt, &last_user_msg, &mut chat_history, hook)
                     .await?
             }
-            // All other providers that follow the OpenAI-compatible pattern
-            // use the OpenAI client with a custom base URL
             _ => {
-                self.send_openai_compat(&system_prompt, &last_user_msg, chat_history)
+                self.send_openai_compat(&system_prompt, &last_user_msg, &mut chat_history, hook)
                     .await?
             }
         };
-
-        let _ = event_tx.send(AgentEvent::Token(response.clone()));
 
         let message = Message::assistant(&response);
         let _ = event_tx.send(AgentEvent::Done(message.clone()));
@@ -204,7 +221,8 @@ impl AgentProvider {
         &self,
         system_prompt: &str,
         prompt: &str,
-        history: Vec<rig::message::Message>,
+        history: &mut Vec<rig::message::Message>,
+        hook: ConHook,
     ) -> Result<String> {
         let api_key = self.resolve_api_key()?;
         let mut builder = anthropic::Client::builder().api_key(&api_key);
@@ -227,7 +245,9 @@ impl AgentProvider {
             .build();
 
         agent
-            .chat(prompt, history)
+            .prompt(prompt)
+            .with_hook(hook)
+            .with_history(history)
             .await
             .map_err(|e| anyhow::anyhow!("Agent error: {e}"))
     }
@@ -236,7 +256,8 @@ impl AgentProvider {
         &self,
         system_prompt: &str,
         prompt: &str,
-        history: Vec<rig::message::Message>,
+        history: &mut Vec<rig::message::Message>,
+        hook: ConHook,
     ) -> Result<String> {
         let api_key = self.resolve_api_key()?;
         let mut builder = openai::Client::builder().api_key(&api_key);
@@ -259,18 +280,19 @@ impl AgentProvider {
             .build();
 
         agent
-            .chat(prompt, history)
+            .prompt(prompt)
+            .with_hook(hook)
+            .with_history(history)
             .await
             .map_err(|e| anyhow::anyhow!("Agent error: {e}"))
     }
 
-    /// For providers that expose an OpenAI-compatible API (DeepSeek, Groq,
-    /// Together, Perplexity, etc.) — uses the OpenAI client with a custom base URL.
     async fn send_openai_compat(
         &self,
         system_prompt: &str,
         prompt: &str,
-        history: Vec<rig::message::Message>,
+        history: &mut Vec<rig::message::Message>,
+        hook: ConHook,
     ) -> Result<String> {
         let api_key = self.resolve_api_key()?;
 
@@ -304,7 +326,9 @@ impl AgentProvider {
             .build();
 
         agent
-            .chat(prompt, history)
+            .prompt(prompt)
+            .with_hook(hook)
+            .with_history(history)
             .await
             .map_err(|e| anyhow::anyhow!("Agent error: {e}"))
     }
@@ -325,7 +349,6 @@ impl AgentProvider {
 
     fn resolve_api_key(&self) -> Result<String> {
         let env_var = self.config.effective_api_key_env();
-        // Ollama typically doesn't need an API key
         if self.config.provider == ProviderKind::Ollama {
             return Ok(std::env::var(env_var).unwrap_or_else(|_| "ollama".into()));
         }

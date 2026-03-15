@@ -155,6 +155,7 @@ impl SettingsPanel {
             max_tokens: max_tokens_text.parse().unwrap_or(4096),
             max_turns: max_turns_text.parse().unwrap_or(10),
             auto_context: self.config.agent.auto_context,
+            auto_approve_tools: self.config.agent.auto_approve_tools,
         };
 
         if let Err(e) = self.persist_config() {

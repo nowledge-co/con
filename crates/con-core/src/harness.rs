@@ -1,22 +1,55 @@
 use con_agent::{
     AgentEvent, AgentProvider, Conversation, Message, SkillRegistry, TerminalContext,
+    ToolApprovalDecision,
 };
 use con_terminal::Grid;
 use crossbeam_channel::{Receiver, Sender};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 
 use crate::config::Config;
 
-/// Events from the harness to the UI
+/// Events from the harness to the UI.
+///
+/// These flow over a crossbeam channel polled by the GPUI workspace.
+/// All variants are Clone so the UI can cheaply forward them.
 #[derive(Debug, Clone)]
 pub enum HarnessEvent {
+    /// Agent is preparing to call the model
     Thinking,
+    /// Incremental text token (streaming mode only — currently unused)
     Token(String),
+    /// Reasoning step (e.g. "anthropic:claude-sonnet-4-0")
     Step(con_agent::conversation::AgentStep),
+    /// A tool is about to execute (safe tools proceed immediately)
+    ToolCallStart {
+        call_id: String,
+        tool_name: String,
+        args: String,
+    },
+    /// A dangerous tool needs user approval before executing.
+    /// The UI should present an approval dialog and call
+    /// `respond_to_approval()` with the decision.
+    ToolApprovalNeeded {
+        call_id: String,
+        tool_name: String,
+        args: String,
+        /// Sender to deliver the approval decision back to the hook.
+        /// This is per-request: each agent invocation gets its own channel.
+        approval_tx: Sender<ToolApprovalDecision>,
+    },
+    /// Tool finished executing
+    ToolCallComplete {
+        call_id: String,
+        tool_name: String,
+        result: String,
+    },
+    /// Agent produced a final response
     ResponseComplete(Message),
+    /// An error occurred
     Error(String),
+    /// Skill registry changed
     SkillsUpdated(Vec<String>),
 }
 
@@ -29,10 +62,26 @@ pub enum InputKind {
 }
 
 /// The agent harness — orchestrates agent <-> terminal interaction.
+///
 /// Owns a single shared tokio runtime for all async agent work.
+/// Each `send_message()` call spawns a task on this runtime.
+///
+/// ## Channel architecture
+///
+/// - `event_tx/rx`: Harness → UI. All events (tool calls, responses, errors).
+/// - Per-request approval channels: Created fresh for each `send_message()`.
+///   The sender is delivered inside `ToolApprovalNeeded` events. The receiver
+///   is owned by the `ConHook` for that request. This prevents cross-request
+///   interference — only one hook reads from each channel.
+///
+/// ## Conversation state
+///
+/// `Arc<Mutex<Conversation>>` is shared between the main thread and
+/// spawned tasks. The mutex is held briefly (clone snapshot, add message).
+/// The async agent work operates on a snapshot, not under the lock.
 pub struct AgentHarness {
-    provider: AgentProvider,
-    conversation: Conversation,
+    config: con_agent::AgentConfig,
+    conversation: Arc<Mutex<Conversation>>,
     skills: SkillRegistry,
     event_tx: Sender<HarnessEvent>,
     event_rx: Receiver<HarnessEvent>,
@@ -41,7 +90,6 @@ pub struct AgentHarness {
 
 impl AgentHarness {
     pub fn new(config: &Config) -> Self {
-        let provider = AgentProvider::new(config.agent.clone());
         let skills = SkillRegistry::new();
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
 
@@ -54,8 +102,8 @@ impl AgentHarness {
         );
 
         Self {
-            provider,
-            conversation: Conversation::new(),
+            config: config.agent.clone(),
+            conversation: Arc::new(Mutex::new(Conversation::new())),
             skills,
             event_tx,
             event_rx,
@@ -126,26 +174,71 @@ impl AgentHarness {
     }
 
     /// Send a natural language message to the agent.
-    /// Spawns work on the shared tokio runtime instead of creating a new one per message.
+    ///
+    /// Spawns an async task on the shared tokio runtime. The task:
+    /// 1. Snapshots the conversation (brief lock)
+    /// 2. Creates a per-request approval channel
+    /// 3. Runs the agent with a ConHook that emits events
+    /// 4. Adds the assistant response back to the conversation (brief lock)
     pub fn send_message(&mut self, content: String, context: TerminalContext) {
         let user_msg = Message::user(&content);
-        self.conversation.add_message(user_msg);
+        self.conversation
+            .lock()
+            .expect("conversation lock poisoned")
+            .add_message(user_msg);
 
         let harness_tx = self.event_tx.clone();
-        let provider = AgentProvider::new(self.provider.config().clone());
+        let agent_config = self.config.clone();
         let conversation = self.conversation.clone();
+
+        // Per-request approval channel: the sender goes to the UI via
+        // ToolApprovalNeeded events, the receiver goes to the ConHook.
+        // This ensures no cross-request interference.
+        let (approval_tx, approval_rx) = crossbeam_channel::unbounded();
 
         self.runtime.spawn(async move {
             let (agent_tx, agent_rx) = crossbeam_channel::unbounded();
 
-            // Bridge AgentEvent -> HarnessEvent on a blocking task
+            // Bridge AgentEvent → HarnessEvent on a blocking thread.
+            // The bridge terminates when agent_tx is dropped (provider.send returns).
             let htx = harness_tx.clone();
+            let per_request_approval_tx = approval_tx.clone();
             let bridge = tokio::task::spawn_blocking(move || {
                 while let Ok(event) = agent_rx.recv() {
                     let mapped = match event {
                         AgentEvent::Thinking => HarnessEvent::Thinking,
                         AgentEvent::Token(t) => HarnessEvent::Token(t),
                         AgentEvent::Step(s) => HarnessEvent::Step(s),
+                        AgentEvent::ToolCallStart {
+                            call_id,
+                            tool_name,
+                            args,
+                        } => {
+                            // Check if this is a dangerous tool that needs approval.
+                            // If so, emit ToolApprovalNeeded with the per-request sender.
+                            if matches!(tool_name.as_str(), "shell_exec" | "file_write") {
+                                let _ = htx.send(HarnessEvent::ToolApprovalNeeded {
+                                    call_id: call_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    args: args.clone(),
+                                    approval_tx: per_request_approval_tx.clone(),
+                                });
+                            }
+                            HarnessEvent::ToolCallStart {
+                                call_id,
+                                tool_name,
+                                args,
+                            }
+                        }
+                        AgentEvent::ToolCallComplete {
+                            call_id,
+                            tool_name,
+                            result,
+                        } => HarnessEvent::ToolCallComplete {
+                            call_id,
+                            tool_name,
+                            result,
+                        },
                         AgentEvent::Done(m) => HarnessEvent::ResponseComplete(m),
                         AgentEvent::Error(e) => HarnessEvent::Error(e),
                     };
@@ -155,8 +248,23 @@ impl AgentHarness {
                 }
             });
 
-            match provider.send(&conversation, &context, agent_tx).await {
-                Ok(_) => {}
+            let conv_snapshot = conversation
+                .lock()
+                .expect("conversation lock poisoned")
+                .clone();
+
+            let provider = AgentProvider::new(agent_config);
+
+            match provider
+                .send(&conv_snapshot, &context, agent_tx, approval_rx)
+                .await
+            {
+                Ok(assistant_msg) => {
+                    conversation
+                        .lock()
+                        .expect("conversation lock poisoned")
+                        .add_message(assistant_msg);
+                }
                 Err(e) => {
                     let _ = harness_tx.send(HarnessEvent::Error(e.to_string()));
                 }
@@ -201,8 +309,8 @@ impl AgentHarness {
         }
     }
 
-    pub fn conversation(&self) -> &Conversation {
-        &self.conversation
+    pub fn conversation(&self) -> Arc<Mutex<Conversation>> {
+        self.conversation.clone()
     }
 
     pub fn skill_names(&self) -> Vec<String> {
