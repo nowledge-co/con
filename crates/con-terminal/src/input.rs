@@ -5,8 +5,16 @@
 pub struct InputEncoder;
 
 impl InputEncoder {
-    /// Encode a key press into bytes to send to the PTY
-    pub fn encode_key(key: &str, modifiers: Modifiers) -> Option<Vec<u8>> {
+    /// Encode a key press into bytes to send to the PTY.
+    ///
+    /// When `application_cursor_keys` is true (DECCKM mode 1 set),
+    /// arrow keys send SS3 sequences (\x1bOA) instead of CSI (\x1b[A).
+    /// This is required for vim, less, top, and other full-screen apps.
+    pub fn encode_key(
+        key: &str,
+        modifiers: Modifiers,
+        application_cursor_keys: bool,
+    ) -> Option<Vec<u8>> {
         // Special keys
         let seq = match key {
             "enter" | "return" => b"\r".to_vec(),
@@ -26,12 +34,24 @@ impl InputEncoder {
                 }
             }
             "delete" => b"\x1b[3~".to_vec(),
-            "up" => encode_arrow(b'A', &modifiers),
-            "down" => encode_arrow(b'B', &modifiers),
-            "right" => encode_arrow(b'C', &modifiers),
-            "left" => encode_arrow(b'D', &modifiers),
-            "home" => b"\x1b[H".to_vec(),
-            "end" => b"\x1b[F".to_vec(),
+            "up" => encode_arrow(b'A', &modifiers, application_cursor_keys),
+            "down" => encode_arrow(b'B', &modifiers, application_cursor_keys),
+            "right" => encode_arrow(b'C', &modifiers, application_cursor_keys),
+            "left" => encode_arrow(b'D', &modifiers, application_cursor_keys),
+            "home" => {
+                if application_cursor_keys {
+                    b"\x1bOH".to_vec()
+                } else {
+                    b"\x1b[H".to_vec()
+                }
+            }
+            "end" => {
+                if application_cursor_keys {
+                    b"\x1bOF".to_vec()
+                } else {
+                    b"\x1b[F".to_vec()
+                }
+            }
             "pageup" => b"\x1b[5~".to_vec(),
             "pagedown" => b"\x1b[6~".to_vec(),
             "f1" => b"\x1bOP".to_vec(),
@@ -92,10 +112,14 @@ pub struct Modifiers {
     pub cmd: bool,
 }
 
-fn encode_arrow(arrow: u8, mods: &Modifiers) -> Vec<u8> {
+fn encode_arrow(arrow: u8, mods: &Modifiers, application_cursor_keys: bool) -> Vec<u8> {
     let modifier_code = modifier_param(mods);
     if modifier_code > 1 {
+        // Modified arrows always use CSI format
         format!("\x1b[1;{}{}", modifier_code, arrow as char).into_bytes()
+    } else if application_cursor_keys {
+        // DECCKM: unmodified arrows use SS3 (\x1bO)
+        vec![0x1b, b'O', arrow]
     } else {
         vec![0x1b, b'[', arrow]
     }

@@ -161,6 +161,17 @@ pub struct Grid {
     scroll_bottom: usize,
     // Tab stops
     tab_stops: Vec<bool>,
+    // DEC private modes
+    /// DECCKM: application cursor keys mode (arrow keys send SS3 instead of CSI)
+    pub application_cursor_keys: bool,
+    /// Bracketed paste mode (2004)
+    pub bracketed_paste: bool,
+    /// Auto-wrap mode (DECAWM, mode 7)
+    auto_wrap: bool,
+    /// Window/tab title from OSC 0/1/2
+    pub title: Option<String>,
+    /// Pending responses to write back to the PTY (e.g., DA, DSR)
+    pending_responses: Vec<Vec<u8>>,
 }
 
 impl Grid {
@@ -197,6 +208,11 @@ impl Grid {
             scroll_top: 0,
             scroll_bottom: rows - 1,
             tab_stops,
+            application_cursor_keys: false,
+            bracketed_paste: false,
+            auto_wrap: true,
+            title: None,
+            pending_responses: Vec::new(),
         }
     }
 
@@ -267,6 +283,12 @@ impl Grid {
     /// Number of scrollback lines available.
     pub fn scrollback_len(&self) -> usize {
         self.scrollback.len()
+    }
+
+    /// Drain any pending PTY responses (DA, DSR, etc.).
+    /// The caller should write these bytes back to the PTY.
+    pub fn drain_responses(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.pending_responses)
     }
 
     pub fn clear_dirty(&mut self) {
@@ -553,8 +575,7 @@ impl Perform for Grid {
             // OSC 0, 1, 2: Window title
             b"0" | b"1" | b"2" => {
                 if params.len() > 1 {
-                    let _title = String::from_utf8_lossy(params[1]);
-                    // TODO: propagate title to UI
+                    self.title = Some(String::from_utf8_lossy(params[1]).to_string());
                 }
             }
             // OSC 7: Current directory
@@ -655,6 +676,22 @@ impl Perform for Grid {
                 let n = p(0, 1) as usize;
                 self.cursor.col = self.cursor.col.saturating_sub(n);
             }
+            // CNL — Cursor Next Line
+            ('E', []) => {
+                let n = p(0, 1) as usize;
+                self.cursor.row = (self.cursor.row + n).min(self.rows - 1);
+                self.cursor.col = 0;
+            }
+            // CPL — Cursor Previous Line
+            ('F', []) => {
+                let n = p(0, 1) as usize;
+                self.cursor.row = self.cursor.row.saturating_sub(n);
+                self.cursor.col = 0;
+            }
+            // CHA — Cursor Horizontal Absolute
+            ('G', []) => {
+                self.cursor.col = (p(0, 1) as usize).saturating_sub(1).min(self.cols - 1);
+            }
             // CUP — Cursor Position
             ('H', []) | ('f', []) => {
                 let row = (p(0, 1) as usize).saturating_sub(1).min(self.rows - 1);
@@ -735,6 +772,68 @@ impl Perform for Grid {
                 }
                 self.dirty[row] = true;
             }
+            // SU — Scroll Up (pan down)
+            ('S', []) => {
+                let n = p(0, 1) as usize;
+                for _ in 0..n {
+                    self.scroll_up();
+                }
+            }
+            // SD — Scroll Down (pan up)
+            ('T', []) => {
+                let n = p(0, 1) as usize;
+                for _ in 0..n {
+                    self.scroll_down();
+                }
+            }
+            // REP — Repeat last character
+            ('b', []) => {
+                let n = p(0, 1) as usize;
+                if self.cursor.col > 0 {
+                    let last_char = self.cells[self.cursor.row][self.cursor.col - 1].c;
+                    for _ in 0..n {
+                        self.set_cell(last_char);
+                    }
+                }
+            }
+            // DA — Device Attributes (respond with VT100 identity)
+            ('c', []) | ('c', [b'?']) => {
+                // Report as VT100 with advanced video option
+                self.pending_responses.push(b"\x1b[?1;2c".to_vec());
+            }
+            // VPA — Vertical Position Absolute
+            ('d', []) => {
+                self.cursor.row = (p(0, 1) as usize).saturating_sub(1).min(self.rows - 1);
+            }
+            // TBC — Tab Clear
+            ('g', []) => {
+                match p(0, 0) {
+                    0 => {
+                        if self.cursor.col < self.tab_stops.len() {
+                            self.tab_stops[self.cursor.col] = false;
+                        }
+                    }
+                    3 => {
+                        self.tab_stops.fill(false);
+                    }
+                    _ => {}
+                }
+            }
+            // DSR — Device Status Report
+            ('n', []) => {
+                match p(0, 0) {
+                    5 => {
+                        // Report "OK"
+                        self.pending_responses.push(b"\x1b[0n".to_vec());
+                    }
+                    6 => {
+                        // CPR — Cursor Position Report
+                        let response = format!("\x1b[{};{}R", self.cursor.row + 1, self.cursor.col + 1);
+                        self.pending_responses.push(response.into_bytes());
+                    }
+                    _ => {}
+                }
+            }
             // DECSC — Save Cursor (via CSI s)
             ('s', []) => {
                 self.saved_cursor = Some(self.cursor);
@@ -749,14 +848,23 @@ impl Perform for Grid {
             ('h', [b'?']) => {
                 for &code in &params_vec {
                     match code {
+                        1 => self.application_cursor_keys = true,
+                        7 => self.auto_wrap = true,
                         25 => self.cursor.visible = true,
+                        47 | 1047 => {
+                            // Alternate screen (no save/restore cursor)
+                            self.alternate_screen = Some(self.cells.clone());
+                            self.cells = vec![vec![Cell::default(); self.cols]; self.rows];
+                            self.mark_all_dirty();
+                        }
                         1049 => {
-                            // Alternate screen buffer
+                            // Alternate screen buffer (with save/restore cursor)
                             self.saved_cursor = Some(self.cursor);
                             self.alternate_screen = Some(self.cells.clone());
                             self.cells = vec![vec![Cell::default(); self.cols]; self.rows];
                             self.mark_all_dirty();
                         }
+                        2004 => self.bracketed_paste = true,
                         _ => {}
                     }
                 }
@@ -764,7 +872,15 @@ impl Perform for Grid {
             ('l', [b'?']) => {
                 for &code in &params_vec {
                     match code {
+                        1 => self.application_cursor_keys = false,
+                        7 => self.auto_wrap = false,
                         25 => self.cursor.visible = false,
+                        47 | 1047 => {
+                            if let Some(saved) = self.alternate_screen.take() {
+                                self.cells = saved;
+                                self.mark_all_dirty();
+                            }
+                        }
                         1049 => {
                             // Restore from alternate screen buffer
                             if let Some(saved) = self.alternate_screen.take() {
@@ -775,6 +891,7 @@ impl Perform for Grid {
                                 self.cursor = saved;
                             }
                         }
+                        2004 => self.bracketed_paste = false,
                         _ => {}
                     }
                 }
@@ -815,6 +932,16 @@ impl Perform for Grid {
                     self.cursor = saved;
                 }
             }
+            // HTS — Horizontal Tab Set
+            (b'H', []) => {
+                if self.cursor.col < self.tab_stops.len() {
+                    self.tab_stops[self.cursor.col] = true;
+                }
+            }
+            // DECKPAM — Application Keypad Mode (numpad)
+            (b'=', []) => {}
+            // DECKPNM — Normal Keypad Mode
+            (b'>', []) => {}
             // RIS — Full Reset
             (b'c', []) => {
                 *self = Grid::new(self.cols, self.rows);

@@ -39,6 +39,7 @@ impl TerminalView {
         // Spawn IO processing loop
         let grid_for_io = grid.clone();
         let parser_for_io = parser.clone();
+        let pty_for_io = pty.clone();
         cx.spawn(async move |this, cx| {
             loop {
                 match pty_events.try_recv() {
@@ -46,8 +47,16 @@ impl TerminalView {
                         let mut grid = grid_for_io.lock();
                         let mut parser = parser_for_io.lock();
                         parser.advance(&mut *grid, &data);
-                        drop(grid);
                         drop(parser);
+                        // Send any pending responses (DA, DSR) back to PTY
+                        let responses = grid.drain_responses();
+                        drop(grid);
+                        if !responses.is_empty() {
+                            let mut pty = pty_for_io.lock();
+                            for response in responses {
+                                let _ = pty.write(&response);
+                            }
+                        }
                         this.update(cx, |_, cx| cx.notify()).ok();
                     }
                     Ok(PtyEvent::Exit(_)) => break,
@@ -219,8 +228,10 @@ impl Render for TerminalView {
                     return; // Don't send Cmd+key to PTY
                 }
                 // Snap back to live view when user types
+                let app_cursor_keys;
                 {
                     let mut grid = this.grid.lock();
+                    app_cursor_keys = grid.application_cursor_keys;
                     if grid.scrollback_offset > 0 {
                         grid.scrollback_offset = 0;
                         drop(grid);
@@ -234,7 +245,9 @@ impl Render for TerminalView {
                     cmd: event.keystroke.modifiers.platform,
                 };
                 let key_name = &event.keystroke.key;
-                if let Some(bytes) = con_terminal::InputEncoder::encode_key(key_name, mods) {
+                if let Some(bytes) =
+                    con_terminal::InputEncoder::encode_key(key_name, mods, app_cursor_keys)
+                {
                     this.write_to_pty(&bytes);
                 }
             }))
