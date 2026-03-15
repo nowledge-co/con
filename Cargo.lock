@@ -1110,6 +1110,7 @@ dependencies = [
  "gpui_platform",
  "log",
  "parking_lot",
+ "rust-embed",
  "serde",
  "serde_json",
  "toml 0.8.23",
