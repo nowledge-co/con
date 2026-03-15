@@ -6,7 +6,12 @@ use vte::Parser;
 
 use gpui_component::ActiveTheme;
 
-/// Terminal view — renders the grid and handles input
+/// Terminal view — renders the grid and handles input.
+///
+/// Dynamically resizes the grid and PTY to fill available space.
+/// The canvas prepaint callback measures the available bounds,
+/// calculates cols/rows from cell dimensions, and resizes if
+/// the terminal dimensions have changed.
 pub struct TerminalView {
     grid: Arc<Mutex<Grid>>,
     pty: Arc<Mutex<Pty>>,
@@ -177,6 +182,13 @@ impl Render for TerminalView {
 
         let focus = self.focus_handle.clone();
 
+        // Resize detection: capture handles for the canvas prepaint callback.
+        // We compare against the current (cols, rows) snapshot.
+        let grid_for_resize = self.grid.clone();
+        let pty_for_resize = self.pty.clone();
+        let current_dims = (cols, rows);
+        let entity_id = cx.entity_id();
+
         div()
             .relative()
             .size_full()
@@ -200,10 +212,32 @@ impl Render for TerminalView {
                     this.write_to_pty(&bytes);
                 }
             }))
-            // Background + cursor canvas
+            // Background + cursor canvas (also handles resize detection)
             .child(
                 canvas(
-                    move |_bounds, _window, _cx| {},
+                    move |bounds, _window, cx| {
+                        // Detect if the available space requires a terminal resize
+                        let available_w: f32 = bounds.size.width.into();
+                        let available_h: f32 = bounds.size.height.into();
+                        let new_cols = (available_w / cell_w).max(1.0) as usize;
+                        let new_rows = (available_h / cell_h).max(1.0) as usize;
+
+                        if (new_cols, new_rows) != current_dims && new_cols > 0 && new_rows > 0 {
+                            let mut grid = grid_for_resize.lock();
+                            grid.resize(new_cols, new_rows);
+                            drop(grid);
+
+                            let pty = pty_for_resize.lock();
+                            let _ = pty.resize(PtySize {
+                                rows: new_rows as u16,
+                                cols: new_cols as u16,
+                            });
+                            drop(pty);
+
+                            // Trigger re-render on next frame with new dimensions
+                            cx.notify(entity_id);
+                        }
+                    },
                     move |bounds, _, window, _cx| {
                         let origin = bounds.origin;
 
