@@ -228,6 +228,15 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 
 ### Phase 6: Polish
 - [x] Session persistence and restore
+- [x] Cursor blink (500ms timer, resets on keypress)
+- [x] Scrollback indicator (floating pill showing "N lines up")
+- [x] Agent panel auto-scroll (ScrollHandle on messages container)
+- [x] Double-click word selection
+- [x] Theme-aware cursor and selection colors
+- [x] Sidebar synced with tab state
+- [x] Centered settings and command palette overlays with shadows
+- [x] Code block rendering in agent panel (triple-backtick fences)
+- [x] Shell mode refocuses terminal after command submit
 - [ ] Configurable keybindings
 - [ ] Plugin system (Lua or WASM)
 - [ ] Auto-update (Sparkle on macOS, appimage on Linux)

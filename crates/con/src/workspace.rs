@@ -30,6 +30,7 @@ pub struct ConWorkspace {
     command_palette: Entity<CommandPalette>,
     harness: AgentHarness,
     agent_panel_open: bool,
+    agent_panel_width: f32,
 }
 
 impl ConWorkspace {
@@ -114,6 +115,7 @@ impl ConWorkspace {
             command_palette,
             harness,
             agent_panel_open,
+            agent_panel_width: 400.0,
         }
     }
 
@@ -451,7 +453,7 @@ impl Render for ConWorkspace {
         if self.agent_panel_open {
             main_area = main_area.child(
                 div()
-                    .w(px(400.0))
+                    .w(px(self.agent_panel_width))
                     .border_l_1()
                     .border_color(theme.border)
                     .child(self.agent_panel.clone()),

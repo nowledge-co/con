@@ -51,7 +51,7 @@ impl AgentPanel {
         Self {
             messages: vec![PanelMessage {
                 role: "system".to_string(),
-                content: "con agent ready. Press Cmd+L to toggle this panel.".to_string(),
+                content: "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.".to_string(),
                 steps: Vec::new(),
                 steps_collapsed: false,
             }],
