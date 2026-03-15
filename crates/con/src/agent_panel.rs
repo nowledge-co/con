@@ -247,6 +247,49 @@ impl AgentPanel {
     }
 }
 
+/// Render message content with basic code block support.
+/// Splits on ``` fences and renders code blocks with monospace background.
+fn render_message_content(content: &str, theme: &gpui_component::theme::Theme) -> Div {
+    let parts: Vec<&str> = content.split("```").collect();
+    let mut container = div().flex().flex_col().gap(px(4.0));
+
+    for (i, part) in parts.iter().enumerate() {
+        let is_code = i % 2 == 1; // odd indices are inside ``` fences
+        if part.is_empty() {
+            continue;
+        }
+        if is_code {
+            // Strip optional language tag on first line
+            let code = if let Some(newline_pos) = part.find('\n') {
+                &part[newline_pos + 1..]
+            } else {
+                part
+            };
+            container = container.child(
+                div()
+                    .p(px(8.0))
+                    .rounded(px(6.0))
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.border)
+                    .font_family("Ioskeley Mono")
+                    .text_xs()
+                    .text_color(theme.foreground)
+                    .child(code.trim_end().to_string()),
+            );
+        } else {
+            container = container.child(
+                div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(part.to_string()),
+            );
+        }
+    }
+
+    container
+}
+
 /// Truncate a string to max_len characters, adding "..." if truncated.
 /// Handles multi-byte characters correctly by using char boundaries.
 fn truncate_str(s: &str, max_len: usize) -> String {
@@ -293,12 +336,7 @@ impl Render for AgentPanel {
                         .text_color(role_color)
                         .child(role_label.to_string()),
                 )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.foreground)
-                        .child(msg.content.clone()),
-                );
+                .child(render_message_content(&msg.content, theme));
 
             if !msg.steps.is_empty() {
                 let step_count = msg.steps.len();

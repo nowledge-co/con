@@ -248,9 +248,12 @@ impl ConWorkspace {
 
         match mode {
             InputMode::Shell => {
-                self.active_terminal().update(cx, |tv, _| {
+                let terminal = self.active_terminal().clone();
+                terminal.update(cx, |tv, _| {
                     tv.write_to_pty(format!("{}\n", content).as_bytes());
                 });
+                // Refocus terminal after sending shell command
+                terminal.focus_handle(cx).focus(window, cx);
             }
             InputMode::Agent | InputMode::Smart => {
                 if !self.agent_panel_open {
