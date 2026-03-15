@@ -168,11 +168,14 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 ## Core Features (MVP → v0.1)
 
 ### Phase 1: Terminal That Works
-- [ ] GPUI window with single terminal pane
-- [ ] libghostty-vt parsing → grid state → GPUI canvas render loop
-- [ ] Keyboard input → PTY write (including Kitty protocol)
-- [ ] Mouse support (selection, scroll, click)
-- [ ] 256-color + truecolor
+- [x] GPUI window with single terminal pane
+- [x] vte parsing → grid state → GPUI canvas render loop
+- [x] Keyboard input → PTY write (special keys, Ctrl+key, Alt+key, F-keys)
+- [x] Dynamic terminal resize (fills available window space)
+- [x] Scrollback buffer with mouse wheel navigation
+- [x] 256-color + truecolor
+- [ ] Mouse support (selection, click-to-position)
+- [ ] Kitty keyboard protocol
 - [ ] Ghostty config file compatibility (themes, fonts)
 - [ ] Basic tabs (Cmd+T / Ctrl+T)
 - [ ] Split panes (horizontal + vertical)
