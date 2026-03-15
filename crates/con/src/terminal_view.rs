@@ -6,6 +6,16 @@ use vte::Parser;
 
 use gpui_component::ActiveTheme;
 
+#[derive(Clone, Copy, PartialEq)]
+struct TextStyle {
+    fg: u32,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strikethrough: bool,
+    dim: bool,
+}
+
 /// Terminal view — renders the grid and handles input.
 ///
 /// Dynamically resizes the grid and PTY to fill available space.
@@ -113,6 +123,10 @@ impl Render for TerminalView {
             fg: u32,
             bg: u32,
             bold: bool,
+            italic: bool,
+            underline: bool,
+            strikethrough: bool,
+            dim: bool,
         }
 
         let default_bg = con_terminal::Style::default().bg.to_u32();
@@ -125,15 +139,23 @@ impl Render for TerminalView {
         for row in 0..rows {
             for col in 0..cols {
                 let cell = grid.visible_cell(row, col);
-                let bg = cell.style.bg.to_u32();
+                let (fg, bg) = if cell.style.inverse {
+                    (cell.style.bg.to_u32(), cell.style.fg.to_u32())
+                } else {
+                    (cell.style.fg.to_u32(), cell.style.bg.to_u32())
+                };
                 if cell.c != ' ' || bg != default_bg {
                     cells.push(CellInfo {
                         row,
                         col,
                         ch: cell.c,
-                        fg: cell.style.fg.to_u32(),
+                        fg,
                         bg,
                         bold: cell.style.bold,
+                        italic: cell.style.italic,
+                        underline: cell.style.underline,
+                        strikethrough: cell.style.strikethrough,
+                        dim: cell.style.dim,
                     });
                 }
             }
@@ -146,42 +168,49 @@ impl Render for TerminalView {
         let mut run_row = usize::MAX;
         let mut run_col = 0usize;
         let mut run_text = String::new();
-        let mut run_fg: u32 = 0;
-        let mut run_bold = false;
+        let mut run_style = TextStyle {
+            fg: 0,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            dim: false,
+        };
+
+        let flush_run =
+            |divs: &mut Vec<Div>, row: usize, col: usize, text: &str, style: &TextStyle| {
+                if !text.is_empty() {
+                    divs.push(make_text_div(row, col, text, style, cell_w, cell_h));
+                }
+            };
 
         for cell in &cells {
+            let cell_style = TextStyle {
+                fg: cell.fg,
+                bold: cell.bold,
+                italic: cell.italic,
+                underline: cell.underline,
+                strikethrough: cell.strikethrough,
+                dim: cell.dim,
+            };
             if cell.ch == ' ' {
-                if !run_text.is_empty() {
-                    text_divs.push(make_text_div(
-                        run_row, run_col, &run_text, run_fg, run_bold, cell_w, cell_h,
-                    ));
-                    run_text.clear();
-                }
+                flush_run(&mut text_divs, run_row, run_col, &run_text, &run_style);
+                run_text.clear();
                 continue;
             }
             if cell.row != run_row
                 || cell.col != run_col + run_text.len()
-                || cell.fg != run_fg
-                || cell.bold != run_bold
+                || cell_style != run_style
             {
-                if !run_text.is_empty() {
-                    text_divs.push(make_text_div(
-                        run_row, run_col, &run_text, run_fg, run_bold, cell_w, cell_h,
-                    ));
-                    run_text.clear();
-                }
+                flush_run(&mut text_divs, run_row, run_col, &run_text, &run_style);
+                run_text.clear();
                 run_row = cell.row;
                 run_col = cell.col;
-                run_fg = cell.fg;
-                run_bold = cell.bold;
+                run_style = cell_style;
             }
             run_text.push(cell.ch);
         }
-        if !run_text.is_empty() {
-            text_divs.push(make_text_div(
-                run_row, run_col, &run_text, run_fg, run_bold, cell_w, cell_h,
-            ));
-        }
+        flush_run(&mut text_divs, run_row, run_col, &run_text, &run_style);
 
         // Canvas for backgrounds and cursor
         let cells_for_canvas: Vec<(usize, usize, u32)> = cells
@@ -327,19 +356,32 @@ fn make_text_div(
     row: usize,
     col: usize,
     text: &str,
-    fg: u32,
-    bold: bool,
+    style: &TextStyle,
     cell_w: f32,
     cell_h: f32,
 ) -> Div {
+    let color = if style.dim {
+        rgba((style.fg << 8) | 0x80) // 50% opacity
+    } else {
+        rgb(style.fg)
+    };
     let mut d = div()
         .absolute()
         .top(px(row as f32 * cell_h))
         .left(px(col as f32 * cell_w))
         .text_sm()
-        .text_color(rgb(fg));
-    if bold {
+        .text_color(color);
+    if style.bold {
         d = d.font_weight(FontWeight::BOLD);
+    }
+    if style.italic {
+        d = d.italic();
+    }
+    if style.underline {
+        d = d.underline();
+    }
+    if style.strikethrough {
+        d = d.line_through();
     }
     d.child(text.to_string())
 }
