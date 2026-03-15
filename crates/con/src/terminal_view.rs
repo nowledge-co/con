@@ -115,7 +115,7 @@ impl Render for TerminalView {
 
         for row in 0..rows {
             for col in 0..cols {
-                let cell = grid.cell(row, col);
+                let cell = grid.visible_cell(row, col);
                 let bg = cell.style.bg.to_u32();
                 if cell.c != ' ' || bg != default_bg {
                     cells.push(CellInfo {
@@ -129,6 +129,7 @@ impl Render for TerminalView {
                 }
             }
         }
+        let in_scrollback = grid.scrollback_offset > 0;
         drop(grid);
 
         // Build text overlays using GPUI text engine
@@ -197,9 +198,34 @@ impl Render for TerminalView {
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 window.focus(&focus, cx);
             })
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, _cx| {
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
+                let delta_y = match event.delta {
+                    ScrollDelta::Lines(delta) => -delta.y as isize,
+                    ScrollDelta::Pixels(delta) => (-f32::from(delta.y) / 20.0) as isize,
+                };
+                if delta_y != 0 {
+                    let mut grid = this.grid.lock();
+                    if delta_y < 0 {
+                        grid.scroll_viewport_up((-delta_y) as usize);
+                    } else {
+                        grid.scroll_viewport_down(delta_y as usize);
+                    }
+                    drop(grid);
+                    cx.notify();
+                }
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 if event.keystroke.modifiers.platform {
                     return; // Don't send Cmd+key to PTY
+                }
+                // Snap back to live view when user types
+                {
+                    let mut grid = this.grid.lock();
+                    if grid.scrollback_offset > 0 {
+                        grid.scrollback_offset = 0;
+                        drop(grid);
+                        cx.notify();
+                    }
                 }
                 let mods = con_terminal::input::Modifiers {
                     shift: event.keystroke.modifiers.shift,
@@ -254,8 +280,8 @@ impl Render for TerminalView {
                             ));
                         }
 
-                        // Cursor
-                        if cursor_visible && cursor_row < rows && cursor_col < cols {
+                        // Cursor (hidden when scrolled into scrollback)
+                        if cursor_visible && !in_scrollback && cursor_row < rows && cursor_col < cols {
                             let cx_pos = origin.x + px(cursor_col as f32 * cell_w);
                             let cy_pos = origin.y + px(cursor_row as f32 * cell_h);
                             let (w, h) = match cursor_shape {

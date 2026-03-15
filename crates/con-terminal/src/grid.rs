@@ -217,6 +217,58 @@ impl Grid {
         text.trim_end().to_string()
     }
 
+    /// Get the cell at a given viewport position, accounting for scrollback offset.
+    /// When scrollback_offset > 0, rows near the top show scrollback content.
+    pub fn visible_cell(&self, row: usize, col: usize) -> &Cell {
+        if self.scrollback_offset == 0 {
+            return self.cell(row, col);
+        }
+        let scrollback_row = self.scrollback.len() as isize - self.scrollback_offset as isize + row as isize;
+        if scrollback_row >= 0 && (scrollback_row as usize) < self.scrollback.len() {
+            let sb_row = scrollback_row as usize;
+            if col < self.scrollback[sb_row].len() {
+                return &self.scrollback[sb_row][col];
+            }
+        }
+        // Fall through to active screen for rows below scrollback
+        let active_row = row as isize - self.scrollback_offset as isize;
+        if active_row >= 0 && (active_row as usize) < self.rows {
+            return self.cell(active_row as usize, col);
+        }
+        // Out of bounds — return default
+        static DEFAULT_CELL: Cell = Cell {
+            c: ' ',
+            style: Style {
+                fg: Color { r: 204, g: 204, b: 204, a: 255 },
+                bg: Color { r: 28, g: 27, b: 25, a: 255 },
+                bold: false,
+                italic: false,
+                underline: false,
+                strikethrough: false,
+                inverse: false,
+                dim: false,
+            },
+            wide: false,
+        };
+        &DEFAULT_CELL
+    }
+
+    /// Scroll up into scrollback by `lines` lines.
+    pub fn scroll_viewport_up(&mut self, lines: usize) {
+        let max_offset = self.scrollback.len();
+        self.scrollback_offset = (self.scrollback_offset + lines).min(max_offset);
+    }
+
+    /// Scroll down toward live content by `lines` lines.
+    pub fn scroll_viewport_down(&mut self, lines: usize) {
+        self.scrollback_offset = self.scrollback_offset.saturating_sub(lines);
+    }
+
+    /// Number of scrollback lines available.
+    pub fn scrollback_len(&self) -> usize {
+        self.scrollback.len()
+    }
+
     pub fn clear_dirty(&mut self) {
         for d in &mut self.dirty {
             *d = false;
