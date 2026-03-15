@@ -1,0 +1,209 @@
+use gpui::*;
+use gpui_component::ActiveTheme;
+
+/// Entry representing a terminal session in the sidebar.
+struct SessionEntry {
+    name: String,
+    is_ssh: bool,
+}
+
+/// Session sidebar — lists terminal sessions with collapse/expand.
+pub struct SessionSidebar {
+    collapsed: bool,
+    sessions: Vec<SessionEntry>,
+    active_session: usize,
+}
+
+impl SessionSidebar {
+    pub fn new(_cx: &mut Context<Self>) -> Self {
+        Self {
+            collapsed: false,
+            sessions: vec![SessionEntry {
+                name: "Terminal".to_string(),
+                is_ssh: false,
+            }],
+            active_session: 0,
+        }
+    }
+
+    pub fn is_collapsed(&self) -> bool {
+        self.collapsed
+    }
+
+    pub fn toggle_collapsed(&mut self, cx: &mut Context<Self>) {
+        self.collapsed = !self.collapsed;
+        cx.notify();
+    }
+}
+
+impl Render for SessionSidebar {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        if self.collapsed {
+            return div()
+                .w(px(48.0))
+                .h_full()
+                .bg(theme.sidebar)
+                .border_r_1()
+                .border_color(theme.sidebar_border)
+                .flex()
+                .flex_col()
+                .items_center()
+                .pt(px(8.0))
+                // Expand button
+                .child(
+                    div()
+                        .id("sidebar-expand")
+                        .size(px(32.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.0))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.secondary))
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(
+                            svg()
+                                .path("phosphor/caret-right.svg")
+                                .size_4()
+                                .text_color(theme.muted_foreground),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| this.toggle_collapsed(cx)),
+                        ),
+                );
+        }
+
+        div()
+            .w(px(208.0))
+            .h_full()
+            .bg(theme.sidebar)
+            .border_r_1()
+            .border_color(theme.sidebar_border)
+            .flex()
+            .flex_col()
+            // Header
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(px(38.0))
+                    .px(px(12.0))
+                    .border_b_1()
+                    .border_color(theme.sidebar_border)
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.muted_foreground)
+                            .child("SESSIONS"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(4.0))
+                            // Collapse button
+                            .child(
+                                div()
+                                    .id("sidebar-collapse")
+                                    .size(px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.0))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.secondary))
+                                    .child(
+                                        svg()
+                                            .path("phosphor/arrows-in-simple.svg")
+                                            .size(px(14.0))
+                                            .text_color(theme.muted_foreground),
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| this.toggle_collapsed(cx)),
+                                    ),
+                            )
+                            // New session button
+                            .child(
+                                div()
+                                    .id("sidebar-new-session")
+                                    .size(px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.0))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.secondary))
+                                    .child(
+                                        svg()
+                                            .path("phosphor/plus.svg")
+                                            .size(px(14.0))
+                                            .text_color(theme.muted_foreground),
+                                    ),
+                            ),
+                    ),
+            )
+            // Session list
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .px(px(8.0))
+                    .pt(px(8.0))
+                    .gap(px(2.0))
+                    .children(self.sessions.iter().enumerate().map(|(i, session)| {
+                        let is_active = i == self.active_session;
+                        let icon_path = if session.is_ssh {
+                            "phosphor/globe.svg"
+                        } else {
+                            "phosphor/terminal.svg"
+                        };
+
+                        div()
+                            .id(SharedString::from(format!("session-{i}")))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .px(px(8.0))
+                            .py(px(6.0))
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .text_sm()
+                            .bg(if is_active {
+                                theme.list_active
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .text_color(if is_active {
+                                theme.foreground
+                            } else {
+                                theme.sidebar_foreground
+                            })
+                            .hover(|s| {
+                                if is_active {
+                                    s
+                                } else {
+                                    s.bg(theme.secondary)
+                                }
+                            })
+                            .child(
+                                svg()
+                                    .path(icon_path)
+                                    .size(px(16.0))
+                                    .text_color(if is_active {
+                                        theme.primary
+                                    } else {
+                                        theme.muted_foreground
+                                    }),
+                            )
+                            .child(session.name.clone())
+                    })),
+            )
+    }
+}

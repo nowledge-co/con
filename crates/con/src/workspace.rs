@@ -4,13 +4,15 @@ use gpui_component::ActiveTheme;
 use crate::agent_panel::AgentPanel;
 use crate::input_bar::{EscapeInput, InputBar, InputMode, SubmitInput};
 use crate::settings_panel::{self, SettingsPanel};
+use crate::sidebar::SessionSidebar;
 use crate::terminal_view::TerminalView;
 use crate::{CloseTab, NewTab, ToggleAgentPanel};
 use con_core::config::Config;
 use con_core::harness::{AgentHarness, HarnessEvent};
 
-/// The main workspace: terminal + agent panel + input bar + settings overlay
+/// The main workspace: sidebar + terminal + agent panel + input bar + settings overlay
 pub struct ConWorkspace {
+    sidebar: Entity<SessionSidebar>,
     terminal: Entity<TerminalView>,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
@@ -21,10 +23,11 @@ pub struct ConWorkspace {
 
 impl ConWorkspace {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let sidebar = cx.new(|cx| SessionSidebar::new(cx));
         let terminal = cx.new(|cx| TerminalView::new(80, 24, cx));
         let agent_panel = cx.new(|cx| AgentPanel::new(cx));
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
-        let settings_panel = cx.new(|cx| SettingsPanel::new(&config, cx));
+        let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
         let harness = AgentHarness::new(&config);
 
         // Listen for input bar events
@@ -56,6 +59,7 @@ impl ConWorkspace {
         .detach();
 
         Self {
+            sidebar,
             terminal,
             agent_panel,
             input_bar,
@@ -164,11 +168,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.settings_panel.update(cx, |panel, cx| {
-            panel.toggle(cx);
-            if panel.is_visible() {
-                let fh = panel.focus_handle(cx);
-                fh.focus(window, cx);
-            }
+            panel.toggle(window, cx);
         });
         cx.notify();
     }
@@ -190,6 +190,9 @@ impl Render for ConWorkspace {
             .flex()
             .flex_1()
             .min_h_0()
+            // Session sidebar
+            .child(self.sidebar.clone())
+            // Terminal pane
             .child(div().flex_1().min_w_0().child(self.terminal.clone()));
 
         if self.agent_panel_open {
