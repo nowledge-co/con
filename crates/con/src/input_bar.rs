@@ -97,6 +97,15 @@ impl InputBar {
         self.cwd = cwd;
     }
 
+    pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = self.mode.next();
+        let placeholder = self.placeholder().to_string();
+        self.input_state.update(cx, |s, cx| {
+            s.set_placeholder(&placeholder, window, cx);
+        });
+        cx.notify();
+    }
+
     fn indicator_color(&self, cx: &App) -> Hsla {
         match self.mode {
             InputMode::Smart => cx.theme().muted_foreground,

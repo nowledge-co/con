@@ -19,7 +19,11 @@ pub struct SidebarSelect {
     pub index: usize,
 }
 
+/// Emitted when user clicks the new session button
+pub struct NewSession;
+
 impl EventEmitter<SidebarSelect> for SessionSidebar {}
+impl EventEmitter<NewSession> for SessionSidebar {}
 
 impl SessionSidebar {
     pub fn new(_cx: &mut Context<Self>) -> Self {
@@ -185,6 +189,27 @@ impl Render for SessionSidebar {
                         div()
                             .flex()
                             .gap(px(4.0))
+                            // New session button
+                            .child(
+                                div()
+                                    .id("sidebar-new-session")
+                                    .size(px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.0))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.secondary))
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("+")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|_this, _, _, cx| {
+                                            cx.emit(NewSession);
+                                        }),
+                                    ),
+                            )
                             // Collapse button
                             .child(
                                 div()

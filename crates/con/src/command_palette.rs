@@ -15,18 +15,6 @@ struct PaletteAction {
 
 const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
-        id: "toggle-agent",
-        label: "Toggle Agent Panel",
-        shortcut: "⌘L",
-        category: "Agent",
-    },
-    PaletteAction {
-        id: "settings",
-        label: "Open Settings",
-        shortcut: "⌘,",
-        category: "Settings",
-    },
-    PaletteAction {
         id: "new-tab",
         label: "New Tab",
         shortcut: "⌘T",
@@ -37,6 +25,42 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         label: "Close Tab",
         shortcut: "⌘W",
         category: "Terminal",
+    },
+    PaletteAction {
+        id: "clear-terminal",
+        label: "Clear Terminal",
+        shortcut: "⌘K",
+        category: "Terminal",
+    },
+    PaletteAction {
+        id: "focus-terminal",
+        label: "Focus Terminal",
+        shortcut: "",
+        category: "Terminal",
+    },
+    PaletteAction {
+        id: "toggle-agent",
+        label: "Toggle Agent Panel",
+        shortcut: "⌘L",
+        category: "Agent",
+    },
+    PaletteAction {
+        id: "cycle-input-mode",
+        label: "Cycle Input Mode",
+        shortcut: "Tab",
+        category: "Input",
+    },
+    PaletteAction {
+        id: "toggle-sidebar",
+        label: "Toggle Sidebar",
+        shortcut: "",
+        category: "View",
+    },
+    PaletteAction {
+        id: "settings",
+        label: "Open Settings",
+        shortcut: "⌘,",
+        category: "Settings",
     },
     PaletteAction {
         id: "quit",
@@ -131,7 +155,7 @@ impl Focusable for CommandPalette {
 impl Render for CommandPalette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
-            return div();
+            return div().id("palette-overlay");
         }
 
         // Read current query text from input state
@@ -280,6 +304,7 @@ impl Render for CommandPalette {
             .child(list);
 
         div()
+            .id("palette-overlay")
             .absolute()
             .size_full()
             .child(backdrop)

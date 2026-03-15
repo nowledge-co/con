@@ -34,8 +34,6 @@ impl Default for TerminalConfig {
 fn default_toggle_agent() -> String { "cmd+l".into() }
 fn default_command_palette() -> String { "cmd+shift+p".into() }
 fn default_new_tab() -> String { "cmd+t".into() }
-fn default_split_right() -> String { "cmd+d".into() }
-fn default_split_down() -> String { "cmd+shift+d".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -43,8 +41,6 @@ pub struct KeybindingConfig {
     pub toggle_agent: String,
     pub command_palette: String,
     pub new_tab: String,
-    pub split_right: String,
-    pub split_down: String,
 }
 
 impl Default for KeybindingConfig {
@@ -53,8 +49,6 @@ impl Default for KeybindingConfig {
             toggle_agent: default_toggle_agent(),
             command_palette: default_command_palette(),
             new_tab: default_new_tab(),
-            split_right: default_split_right(),
-            split_down: default_split_down(),
         }
     }
 }

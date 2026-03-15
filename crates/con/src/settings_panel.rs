@@ -28,6 +28,9 @@ pub struct SettingsPanel {
     max_tokens_input: Entity<InputState>,
     max_turns_input: Entity<InputState>,
     auto_approve: bool,
+    // Terminal settings
+    font_size_input: Entity<InputState>,
+    scrollback_input: Entity<InputState>,
 }
 
 const ALL_PROVIDERS: &[ProviderKind] = &[
@@ -91,6 +94,20 @@ impl SettingsPanel {
             state
         });
 
+        let font_size_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("14.0", window, cx);
+            state.set_value(&config.terminal.font_size.to_string(), window, cx);
+            state
+        });
+
+        let scrollback_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("10000", window, cx);
+            state.set_value(&config.terminal.scrollback_lines.to_string(), window, cx);
+            state
+        });
+
         Self {
             visible: false,
             config: config.clone(),
@@ -102,6 +119,8 @@ impl SettingsPanel {
             max_tokens_input,
             max_turns_input,
             auto_approve: config.agent.auto_approve_tools,
+            font_size_input,
+            scrollback_input,
         }
     }
 
@@ -134,6 +153,14 @@ impl SettingsPanel {
                 s.set_value(&max_turns_val, window, cx);
             });
             self.auto_approve = agent.auto_approve_tools;
+
+            self.font_size_input.update(cx, |s, cx| {
+                s.set_value(&self.config.terminal.font_size.to_string(), window, cx);
+            });
+            self.scrollback_input.update(cx, |s, cx| {
+                s.set_value(&self.config.terminal.scrollback_lines.to_string(), window, cx);
+            });
+
             self.focus_handle.focus(window, cx);
         }
         cx.notify();
@@ -149,6 +176,8 @@ impl SettingsPanel {
         let base_url_text = self.base_url_input.read(cx).value().to_string();
         let max_tokens_text = self.max_tokens_input.read(cx).value().to_string();
         let max_turns_text = self.max_turns_input.read(cx).value().to_string();
+        let font_size_text = self.font_size_input.read(cx).value().to_string();
+        let scrollback_text = self.scrollback_input.read(cx).value().to_string();
 
         self.config.agent = AgentConfig {
             provider: self.selected_provider.clone(),
@@ -161,6 +190,9 @@ impl SettingsPanel {
             auto_approve_tools: self.auto_approve,
         };
 
+        self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
+        self.config.terminal.scrollback_lines = scrollback_text.parse().unwrap_or(10_000);
+
         if let Err(e) = self.persist_config() {
             log::error!("Failed to save config: {}", e);
         }
@@ -172,6 +204,10 @@ impl SettingsPanel {
 
     pub fn agent_config(&self) -> &AgentConfig {
         &self.config.agent
+    }
+
+    pub fn terminal_config(&self) -> &con_core::config::TerminalConfig {
+        &self.config.terminal
     }
 
     fn persist_config(&self) -> anyhow::Result<()> {
@@ -260,7 +296,7 @@ impl Focusable for SettingsPanel {
 impl Render for SettingsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
-            return div();
+            return div().id("settings-overlay");
         }
 
         // Build mutable-borrow components first (needs cx.listener)
@@ -272,13 +308,23 @@ impl Render for SettingsPanel {
         let base_url_input = self.base_url_input.clone();
         let max_tokens_input = self.max_tokens_input.clone();
         let max_turns_input = self.max_turns_input.clone();
+        let font_size_input = self.font_size_input.clone();
+        let scrollback_input = self.scrollback_input.clone();
 
         let theme = cx.theme();
 
         let backdrop = div()
+            .id("settings-backdrop")
             .absolute()
             .size_full()
-            .bg(rgba(0x00000088));
+            .bg(rgba(0x00000088))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.visible = false;
+                    cx.notify();
+                }),
+            );
 
         let card = div()
             .id("settings-card")
@@ -325,13 +371,45 @@ impl Render for SettingsPanel {
                             .text_base()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.foreground)
-                            .child("Provider Settings"),
+                            .child("Settings"),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child("⌘Enter to save · Esc to close"),
+                    ),
+            )
+            // Terminal section
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .px(px(20.0))
+                    .pt(px(16.0))
+                    .pb(px(12.0))
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.secondary_foreground)
+                            .child("TERMINAL"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Self::render_field("Font Size", &font_size_input)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Self::render_field("Scrollback Lines", &scrollback_input)),
+                            ),
                     ),
             )
             // Provider section
@@ -465,6 +543,7 @@ impl Render for SettingsPanel {
             );
 
         div()
+            .id("settings-overlay")
             .absolute()
             .size_full()
             .child(backdrop)

@@ -5,11 +5,11 @@ use crate::agent_panel::AgentPanel;
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{EscapeInput, InputBar, InputMode, SubmitInput};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel};
-use crate::sidebar::{SessionEntry, SessionSidebar, SidebarSelect};
+use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
 use crate::terminal_view::TerminalView;
 use crate::{CloseTab, NewTab, ToggleAgentPanel};
 use con_core::config::Config;
-use con_core::harness::{AgentHarness, HarnessEvent};
+use con_core::harness::{AgentHarness, HarnessEvent, InputKind};
 use con_core::session::Session;
 
 struct Tab {
@@ -79,6 +79,8 @@ impl ConWorkspace {
         cx.subscribe_in(&command_palette, window, Self::on_palette_select)
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_select)
+            .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
             .detach();
 
         // Poll harness events periodically
@@ -162,6 +164,16 @@ impl ConWorkspace {
         self.activate_tab(event.index, cx);
     }
 
+    fn on_sidebar_new_session(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        _event: &NewSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_tab(&NewTab, window, cx);
+    }
+
     fn sync_sidebar(&self, cx: &mut Context<Self>) {
         let sessions: Vec<SessionEntry> = self
             .tabs
@@ -205,6 +217,26 @@ impl ConWorkspace {
             "close-tab" => {
                 self.close_tab(&CloseTab, window, cx);
             }
+            "clear-terminal" => {
+                let terminal = self.active_terminal().clone();
+                terminal.update(cx, |tv, _| {
+                    tv.grid().lock().clear_scrollback();
+                });
+            }
+            "focus-terminal" => {
+                let terminal = self.active_terminal().clone();
+                terminal.focus_handle(cx).focus(window, cx);
+            }
+            "toggle-sidebar" => {
+                self.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.toggle_collapsed(cx);
+                });
+            }
+            "cycle-input-mode" => {
+                self.input_bar.update(cx, |bar, cx| {
+                    bar.cycle_mode(window, cx);
+                });
+            }
             "quit" => {
                 cx.quit();
             }
@@ -222,6 +254,10 @@ impl ConWorkspace {
     ) {
         let new_config = settings.read(cx).agent_config().clone();
         self.harness.update_config(new_config);
+
+        let term_config = settings.read(cx).terminal_config().clone();
+        self.font_size = term_config.font_size;
+        self.scrollback_lines = term_config.scrollback_lines;
     }
 
     fn on_input_escape(
@@ -248,38 +284,36 @@ impl ConWorkspace {
             return;
         }
 
-        // Smart mode: auto-detect whether to send to shell or agent
-        let effective_mode = if mode == InputMode::Smart {
-            if looks_like_question(&content) {
-                InputMode::Agent
-            } else {
-                InputMode::Shell
-            }
-        } else {
-            mode
-        };
-
-        match effective_mode {
-            InputMode::Shell | InputMode::Smart => {
-                let terminal = self.active_terminal().clone();
-                terminal.update(cx, |tv, _| {
-                    tv.write_to_pty(format!("{}\n", content).as_bytes());
-                });
-                // Refocus terminal after sending shell command
-                terminal.focus_handle(cx).focus(window, cx);
+        match mode {
+            InputMode::Shell => {
+                self.execute_shell(&content, window, cx);
             }
             InputMode::Agent => {
-                if !self.agent_panel_open {
-                    self.agent_panel_open = true;
+                self.send_to_agent(&content, cx);
+            }
+            InputMode::Smart => {
+                match self.harness.classify_input(&content) {
+                    InputKind::ShellCommand(cmd) => {
+                        self.execute_shell(&cmd, window, cx);
+                    }
+                    InputKind::NaturalLanguage(text) => {
+                        self.send_to_agent(&text, cx);
+                    }
+                    InputKind::SkillInvoke(name, args) => {
+                        let grid = self.active_terminal().read(cx).grid();
+                        let context = self.harness.build_context(&grid.lock(), None);
+                        if let Some(desc) = self.harness.invoke_skill(&name, args.as_deref(), context) {
+                            if !self.agent_panel_open {
+                                self.agent_panel_open = true;
+                            }
+                            self.agent_panel.update(cx, |panel, cx| {
+                                let label = format!("/{name}");
+                                panel.add_message("user", &label, cx);
+                                panel.add_step(&desc, cx);
+                            });
+                        }
+                    }
                 }
-
-                self.agent_panel.update(cx, |panel, cx| {
-                    panel.add_message("user", &content, cx);
-                });
-
-                let grid = self.active_terminal().read(cx).grid();
-                let context = self.harness.build_context(&grid.lock(), None);
-                self.harness.send_message(content, context);
             }
         }
 
@@ -416,6 +450,26 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn execute_shell(&self, cmd: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let terminal = self.active_terminal().clone();
+        terminal.update(cx, |tv, _| {
+            tv.write_to_pty(format!("{}\n", cmd).as_bytes());
+        });
+        terminal.focus_handle(cx).focus(window, cx);
+    }
+
+    fn send_to_agent(&mut self, content: &str, cx: &mut Context<Self>) {
+        if !self.agent_panel_open {
+            self.agent_panel_open = true;
+        }
+        self.agent_panel.update(cx, |panel, cx| {
+            panel.add_message("user", content, cx);
+        });
+        let grid = self.active_terminal().read(cx).grid();
+        let context = self.harness.build_context(&grid.lock(), None);
+        self.harness.send_message(content.to_string(), context);
+    }
+
     fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.tabs.len() {
             self.active_tab = index;
@@ -424,45 +478,6 @@ impl ConWorkspace {
             cx.notify();
         }
     }
-}
-
-/// Simple heuristic: does the input look like a question for an AI agent?
-fn looks_like_question(input: &str) -> bool {
-    let lower = input.to_lowercase();
-    let trimmed = lower.trim();
-
-    // Starts with question words
-    if trimmed.starts_with("how ")
-        || trimmed.starts_with("what ")
-        || trimmed.starts_with("why ")
-        || trimmed.starts_with("when ")
-        || trimmed.starts_with("where ")
-        || trimmed.starts_with("who ")
-        || trimmed.starts_with("can you ")
-        || trimmed.starts_with("could you ")
-        || trimmed.starts_with("please ")
-        || trimmed.starts_with("explain ")
-        || trimmed.starts_with("help ")
-        || trimmed.starts_with("fix ")
-        || trimmed.starts_with("debug ")
-        || trimmed.starts_with("write ")
-        || trimmed.starts_with("create ")
-        || trimmed.starts_with("show me ")
-    {
-        return true;
-    }
-
-    // Ends with question mark
-    if trimmed.ends_with('?') {
-        return true;
-    }
-
-    // Multiple words with natural language patterns (more than 6 words)
-    if trimmed.split_whitespace().count() > 6 {
-        return true;
-    }
-
-    false
 }
 
 impl Render for ConWorkspace {
@@ -651,6 +666,13 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::close_tab))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                // Don't handle workspace shortcuts when a modal overlay is open
+                if this.settings_panel.read(cx).is_visible()
+                    || this.command_palette.read(cx).is_visible()
+                {
+                    return;
+                }
+
                 let mods = &event.keystroke.modifiers;
                 let key = event.keystroke.key.as_str();
 

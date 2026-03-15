@@ -18,7 +18,7 @@ use crate::config::Config;
 pub enum HarnessEvent {
     /// Agent is preparing to call the model
     Thinking,
-    /// Incremental text token (streaming mode only — currently unused)
+    /// Incremental text token from streaming
     Token(String),
     /// Reasoning step (e.g. "anthropic:claude-sonnet-4-0")
     Step(con_agent::conversation::AgentStep),
