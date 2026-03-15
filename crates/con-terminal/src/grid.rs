@@ -333,6 +333,12 @@ impl Grid {
         }
     }
 
+    /// Clear scrollback buffer and reset scroll offset
+    pub fn clear_scrollback(&mut self) {
+        self.scrollback.clear();
+        self.scrollback_offset = 0;
+    }
+
     /// Get lines of text content from the terminal (for agent context)
     pub fn content_lines(&self, max_lines: usize) -> Vec<String> {
         let mut lines = Vec::new();

@@ -390,7 +390,21 @@ impl Render for TerminalView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
                     let point = this.mouse_to_grid(event.position);
-                    if event.click_count == 2 {
+                    if event.click_count >= 3 {
+                        // Triple-click: select entire line
+                        let grid = this.grid.lock();
+                        let row = point.row.min(grid.rows.saturating_sub(1));
+                        let cols = grid.cols;
+                        drop(grid);
+                        this.selection = Some(Selection {
+                            start: SelectionPoint { row, col: 0 },
+                            end: SelectionPoint { row, col: cols.saturating_sub(1) },
+                        });
+                        this.selecting = false;
+                        if let Some(text) = this.selected_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                    } else if event.click_count == 2 {
                         // Double-click: select word
                         this.selection = Some(this.select_word(point));
                         this.selecting = false;
@@ -474,6 +488,35 @@ impl Render for TerminalView {
                                 }
                             }
                         }
+                    }
+                    // Cmd+K: clear scrollback and screen
+                    if event.keystroke.key == "k" {
+                        let mut grid = this.grid.lock();
+                        grid.clear_scrollback();
+                        drop(grid);
+                        // Send clear command to shell
+                        this.write_to_pty(b"\x0c"); // Form feed (Ctrl+L)
+                        cx.notify();
+                        return;
+                    }
+                    // Cmd+A: select all visible text
+                    if event.keystroke.key == "a" {
+                        let grid = this.grid.lock();
+                        let rows = grid.rows;
+                        let cols = grid.cols;
+                        drop(grid);
+                        this.selection = Some(Selection {
+                            start: SelectionPoint { row: 0, col: 0 },
+                            end: SelectionPoint {
+                                row: rows.saturating_sub(1),
+                                col: cols.saturating_sub(1),
+                            },
+                        });
+                        if let Some(text) = this.selected_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                        cx.notify();
+                        return;
                     }
                     // Cmd+C: copy selection if present, otherwise send SIGINT
                     if event.keystroke.key == "c" {
