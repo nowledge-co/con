@@ -2,74 +2,31 @@ use con_agent::{AgentConfig, ProviderKind};
 use con_core::Config;
 use gpui::*;
 
-use gpui_component::ActiveTheme;
+use gpui_component::input::InputState;
+use gpui_component::{ActiveTheme, input::Input};
 
 // ── Actions ────────────────────────────────────────────────────────
 
 actions!(
     settings,
-    [
-        ToggleSettings,
-        SaveSettings,
-        DismissSettings,
-        FocusNextField,
-        FocusPrevField,
-    ]
+    [ToggleSettings, SaveSettings, DismissSettings]
 );
 
 // ── Settings panel ─────────────────────────────────────────────────
 
-/// Modal settings panel — Apple-style grouped sections.
+/// Modal settings panel with real text inputs.
 /// Opened with Cmd+, — standard macOS convention.
 pub struct SettingsPanel {
     visible: bool,
     config: Config,
     focus_handle: FocusHandle,
 
-    // Editable state
     selected_provider: ProviderKind,
-    model_text: String,
-    api_key_env_text: String,
-    base_url_text: String,
-    max_tokens_text: String,
-    max_turns_text: String,
-
-    // Which field is active for editing
-    active_field: SettingsField,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum SettingsField {
-    Provider,
-    Model,
-    ApiKeyEnv,
-    BaseUrl,
-    MaxTokens,
-    MaxTurns,
-}
-
-impl SettingsField {
-    fn next(self) -> Self {
-        match self {
-            Self::Provider => Self::Model,
-            Self::Model => Self::ApiKeyEnv,
-            Self::ApiKeyEnv => Self::BaseUrl,
-            Self::BaseUrl => Self::MaxTokens,
-            Self::MaxTokens => Self::MaxTurns,
-            Self::MaxTurns => Self::Provider,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            Self::Provider => Self::MaxTurns,
-            Self::Model => Self::Provider,
-            Self::ApiKeyEnv => Self::Model,
-            Self::BaseUrl => Self::ApiKeyEnv,
-            Self::MaxTokens => Self::BaseUrl,
-            Self::MaxTurns => Self::MaxTokens,
-        }
-    }
+    model_input: Entity<InputState>,
+    api_key_env_input: Entity<InputState>,
+    base_url_input: Entity<InputState>,
+    max_tokens_input: Entity<InputState>,
+    max_turns_input: Entity<InputState>,
 }
 
 const ALL_PROVIDERS: &[ProviderKind] = &[
@@ -89,34 +46,92 @@ const ALL_PROVIDERS: &[ProviderKind] = &[
 ];
 
 impl SettingsPanel {
-    pub fn new(config: &Config, cx: &mut Context<Self>) -> Self {
-        let agent = &config.agent;
+    pub fn new(config: &Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let agent = config.agent.clone();
+
+        let model_val = agent.model.clone().unwrap_or_default();
+        let api_key_val = agent.api_key_env.clone().unwrap_or_default();
+        let base_url_val = agent.base_url.clone().unwrap_or_default();
+        let max_tokens_val = agent.max_tokens.to_string();
+        let max_turns_val = agent.max_turns.to_string();
+
+        let model_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("Provider default", window, cx);
+            state.set_value(&model_val, window, cx);
+            state
+        });
+
+        let api_key_env_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("e.g. ANTHROPIC_API_KEY", window, cx);
+            state.set_value(&api_key_val, window, cx);
+            state
+        });
+
+        let base_url_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("Default endpoint", window, cx);
+            state.set_value(&base_url_val, window, cx);
+            state
+        });
+
+        let max_tokens_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("4096", window, cx);
+            state.set_value(&max_tokens_val, window, cx);
+            state
+        });
+
+        let max_turns_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("10", window, cx);
+            state.set_value(&max_turns_val, window, cx);
+            state
+        });
+
         Self {
             visible: false,
             config: config.clone(),
             focus_handle: cx.focus_handle(),
-            selected_provider: agent.provider.clone(),
-            model_text: agent.model.clone().unwrap_or_default(),
-            api_key_env_text: agent.api_key_env.clone().unwrap_or_default(),
-            base_url_text: agent.base_url.clone().unwrap_or_default(),
-            max_tokens_text: agent.max_tokens.to_string(),
-            max_turns_text: agent.max_turns.to_string(),
-            active_field: SettingsField::Provider,
+            selected_provider: config.agent.provider.clone(),
+            model_input,
+            api_key_env_input,
+            base_url_input,
+            max_tokens_input,
+            max_turns_input,
         }
     }
 
-    pub fn toggle(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = !self.visible;
         if self.visible {
-            // Reset to current config when opening
-            let agent = &self.config.agent;
+            // Reset inputs to current config
+            let agent = self.config.agent.clone();
             self.selected_provider = agent.provider.clone();
-            self.model_text = agent.model.clone().unwrap_or_default();
-            self.api_key_env_text = agent.api_key_env.clone().unwrap_or_default();
-            self.base_url_text = agent.base_url.clone().unwrap_or_default();
-            self.max_tokens_text = agent.max_tokens.to_string();
-            self.max_turns_text = agent.max_turns.to_string();
-            self.active_field = SettingsField::Provider;
+
+            let model_val = agent.model.unwrap_or_default();
+            let api_key_val = agent.api_key_env.unwrap_or_default();
+            let base_url_val = agent.base_url.unwrap_or_default();
+            let max_tokens_val = agent.max_tokens.to_string();
+            let max_turns_val = agent.max_turns.to_string();
+
+            self.model_input.update(cx, |s, cx| {
+                s.set_value(&model_val, window, cx);
+            });
+            self.api_key_env_input.update(cx, |s, cx| {
+                s.set_value(&api_key_val, window, cx);
+            });
+            self.base_url_input.update(cx, |s, cx| {
+                s.set_value(&base_url_val, window, cx);
+            });
+            self.max_tokens_input.update(cx, |s, cx| {
+                s.set_value(&max_tokens_val, window, cx);
+            });
+            self.max_turns_input.update(cx, |s, cx| {
+                s.set_value(&max_turns_val, window, cx);
+            });
+            self.focus_handle.focus(window, cx);
         }
         cx.notify();
     }
@@ -125,35 +140,23 @@ impl SettingsPanel {
         self.visible
     }
 
-    /// Returns the current effective config (after any saves)
-    pub fn config(&self) -> &Config {
-        &self.config
-    }
+    fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let model_text = self.model_input.read(cx).value().to_string();
+        let api_key_text = self.api_key_env_input.read(cx).value().to_string();
+        let base_url_text = self.base_url_input.read(cx).value().to_string();
+        let max_tokens_text = self.max_tokens_input.read(cx).value().to_string();
+        let max_turns_text = self.max_turns_input.read(cx).value().to_string();
 
-    fn save(&mut self, cx: &mut Context<Self>) {
         self.config.agent = AgentConfig {
             provider: self.selected_provider.clone(),
-            model: if self.model_text.is_empty() {
-                None
-            } else {
-                Some(self.model_text.clone())
-            },
-            api_key_env: if self.api_key_env_text.is_empty() {
-                None
-            } else {
-                Some(self.api_key_env_text.clone())
-            },
-            base_url: if self.base_url_text.is_empty() {
-                None
-            } else {
-                Some(self.base_url_text.clone())
-            },
-            max_tokens: self.max_tokens_text.parse().unwrap_or(4096),
-            max_turns: self.max_turns_text.parse().unwrap_or(10),
+            model: if model_text.is_empty() { None } else { Some(model_text) },
+            api_key_env: if api_key_text.is_empty() { None } else { Some(api_key_text) },
+            base_url: if base_url_text.is_empty() { None } else { Some(base_url_text) },
+            max_tokens: max_tokens_text.parse().unwrap_or(4096),
+            max_turns: max_turns_text.parse().unwrap_or(10),
             auto_context: self.config.agent.auto_context,
         };
 
-        // Persist to disk
         if let Err(e) = self.persist_config() {
             log::error!("Failed to save config: {}", e);
         }
@@ -172,96 +175,27 @@ impl SettingsPanel {
         Ok(())
     }
 
-    fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        match &event.keystroke.key {
-            key if key == "tab" => {
-                if event.keystroke.modifiers.shift {
-                    self.active_field = self.active_field.prev();
-                } else {
-                    self.active_field = self.active_field.next();
-                }
-                cx.notify();
-            }
-            key if key == "escape" => {
-                self.visible = false;
-                cx.notify();
-            }
-            key if key == "enter" => {
-                if event.keystroke.modifiers.platform {
-                    self.save(cx);
-                }
-            }
-            key if key == "backspace" => {
-                self.active_text_mut().pop();
-                cx.notify();
-            }
-            key if key.len() == 1 && !event.keystroke.modifiers.platform => {
-                let ch = if event.keystroke.modifiers.shift {
-                    key.to_uppercase()
-                } else {
-                    key.to_string()
-                };
-                // For numeric fields, only accept digits
-                match self.active_field {
-                    SettingsField::MaxTokens | SettingsField::MaxTurns => {
-                        if ch.chars().all(|c| c.is_ascii_digit()) {
-                            self.active_text_mut().push_str(&ch);
-                        }
-                    }
-                    SettingsField::Provider => {
-                        // Provider uses arrow keys / click, not text
-                    }
-                    _ => {
-                        self.active_text_mut().push_str(&ch);
-                    }
-                }
-                cx.notify();
-            }
-            key if (key == "left" || key == "right") && self.active_field == SettingsField::Provider => {
-                let current_idx = ALL_PROVIDERS
-                    .iter()
-                    .position(|p| p == &self.selected_provider)
-                    .unwrap_or(0);
-                let new_idx = if key == "right" {
-                    (current_idx + 1) % ALL_PROVIDERS.len()
-                } else if current_idx == 0 {
-                    ALL_PROVIDERS.len() - 1
-                } else {
-                    current_idx - 1
-                };
-                self.selected_provider = ALL_PROVIDERS[new_idx].clone();
-                cx.notify();
-            }
-            _ => {}
-        }
+    fn select_provider(&mut self, provider: ProviderKind, cx: &mut Context<Self>) {
+        self.selected_provider = provider;
+        cx.notify();
     }
 
-    fn active_text_mut(&mut self) -> &mut String {
-        match self.active_field {
-            SettingsField::Model => &mut self.model_text,
-            SettingsField::ApiKeyEnv => &mut self.api_key_env_text,
-            SettingsField::BaseUrl => &mut self.base_url_text,
-            SettingsField::MaxTokens => &mut self.max_tokens_text,
-            SettingsField::MaxTurns => &mut self.max_turns_text,
-            SettingsField::Provider => &mut self.model_text, // no-op target
-        }
-    }
-
-    // ── Render helpers ─────────────────────────────────────────────
-
-    fn render_provider_grid(&self, cx: &App) -> Div {
+    fn render_provider_grid(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let mut grid = div().flex().flex_wrap().gap(px(6.0));
 
         for provider in ALL_PROVIDERS {
             let is_selected = *provider == self.selected_provider;
             let label = provider_label(provider);
+            let provider_clone = provider.clone();
 
             let chip = div()
+                .id(SharedString::from(format!("provider-{label}")))
                 .px(px(10.0))
                 .py(px(6.0))
                 .rounded(px(8.0))
                 .text_xs()
+                .cursor_pointer()
                 .font_weight(if is_selected {
                     FontWeight::SEMIBOLD
                 } else {
@@ -277,6 +211,9 @@ impl SettingsPanel {
                 } else {
                     theme.secondary_foreground
                 })
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _window, cx| {
+                    this.select_provider(provider_clone.clone(), cx);
+                }))
                 .child(label);
 
             grid = grid.child(chip);
@@ -285,65 +222,21 @@ impl SettingsPanel {
         grid
     }
 
-    fn render_field(&self, label: &str, hint: &str, value: &str, field: SettingsField, cx: &App) -> Div {
-        let theme = cx.theme();
-        let is_active = self.active_field == field;
-
+    fn render_field(
+        label: &str,
+        input_state: &Entity<InputState>,
+    ) -> Div {
         div()
             .flex()
             .flex_col()
             .gap(px(4.0))
-            // Label row
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.secondary_foreground)
-                            .child(label.to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(hint.to_string()),
-                    ),
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(label.to_string()),
             )
-            // Value field
-            .child(
-                div()
-                    .h(px(34.0))
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .rounded(px(8.0))
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(if is_active {
-                        theme.primary
-                    } else {
-                        theme.border
-                    })
-                    .child(if value.is_empty() {
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child("Default".to_string())
-                    } else {
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(format!(
-                                "{}{}",
-                                value,
-                                if is_active { "▎" } else { "" }
-                            ))
-                    }),
-            )
+            .child(Input::new(input_state))
     }
 }
 
@@ -359,22 +252,29 @@ impl Render for SettingsPanel {
             return div();
         }
 
+        // Build mutable-borrow components first (needs cx.listener)
+        let provider_grid = self.render_provider_grid(cx);
+
+        // Clone input state refs for render_field (immutable)
+        let model_input = self.model_input.clone();
+        let api_key_env_input = self.api_key_env_input.clone();
+        let base_url_input = self.base_url_input.clone();
+        let max_tokens_input = self.max_tokens_input.clone();
+        let max_turns_input = self.max_turns_input.clone();
+
         let theme = cx.theme();
 
-        // Backdrop
         let backdrop = div()
             .absolute()
             .size_full()
             .bg(rgba(0x00000088));
 
-        // Card
         let card = div()
             .absolute()
             .top(px(60.0))
             .left_auto()
             .right_auto()
             .mx_auto()
-            // Center horizontally with margins
             .ml(px(200.0))
             .w(px(520.0))
             .max_h(px(600.0))
@@ -384,8 +284,17 @@ impl Render for SettingsPanel {
             .border_color(theme.border)
             .flex()
             .flex_col()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                this.handle_key(event, cx);
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" => {
+                        this.visible = false;
+                        cx.notify();
+                    }
+                    "enter" if event.keystroke.modifiers.platform => {
+                        this.save(window, cx);
+                    }
+                    _ => {}
+                }
             }))
             .track_focus(&self.focus_handle)
             // Header
@@ -428,7 +337,7 @@ impl Render for SettingsPanel {
                             .text_color(theme.secondary_foreground)
                             .child("PROVIDER"),
                     )
-                    .child(self.render_provider_grid(cx)),
+                    .child(provider_grid),
             )
             // Model section
             .child(
@@ -438,11 +347,7 @@ impl Render for SettingsPanel {
                     .px(px(20.0))
                     .py(px(8.0))
                     .gap(px(12.0))
-                    .child(
-                        div()
-                            .h(px(1.0))
-                            .bg(theme.border),
-                    )
+                    .child(div().h(px(1.0)).bg(theme.border))
                     .child(
                         div()
                             .text_xs()
@@ -450,27 +355,9 @@ impl Render for SettingsPanel {
                             .text_color(theme.secondary_foreground)
                             .child("MODEL CONFIGURATION"),
                     )
-                    .child(self.render_field(
-                        "Model",
-                        "Leave empty for provider default",
-                        &self.model_text.clone(),
-                        SettingsField::Model,
-                        cx,
-                    ))
-                    .child(self.render_field(
-                        "API Key Environment Variable",
-                        "e.g. ANTHROPIC_API_KEY",
-                        &self.api_key_env_text.clone(),
-                        SettingsField::ApiKeyEnv,
-                        cx,
-                    ))
-                    .child(self.render_field(
-                        "Base URL",
-                        "For custom/proxy endpoints",
-                        &self.base_url_text.clone(),
-                        SettingsField::BaseUrl,
-                        cx,
-                    )),
+                    .child(Self::render_field("Model", &model_input))
+                    .child(Self::render_field("API Key Env Var", &api_key_env_input))
+                    .child(Self::render_field("Base URL", &base_url_input)),
             )
             // Advanced section
             .child(
@@ -481,11 +368,7 @@ impl Render for SettingsPanel {
                     .pt(px(8.0))
                     .pb(px(20.0))
                     .gap(px(12.0))
-                    .child(
-                        div()
-                            .h(px(1.0))
-                            .bg(theme.border),
-                    )
+                    .child(div().h(px(1.0)).bg(theme.border))
                     .child(
                         div()
                             .text_xs()
@@ -498,22 +381,14 @@ impl Render for SettingsPanel {
                             .flex()
                             .gap(px(12.0))
                             .child(
-                                div().flex_1().child(self.render_field(
-                                    "Max Tokens",
-                                    "",
-                                    &self.max_tokens_text.clone(),
-                                    SettingsField::MaxTokens,
-                                    cx,
-                                )),
+                                div()
+                                    .flex_1()
+                                    .child(Self::render_field("Max Tokens", &max_tokens_input)),
                             )
                             .child(
-                                div().flex_1().child(self.render_field(
-                                    "Max Turns",
-                                    "",
-                                    &self.max_turns_text.clone(),
-                                    SettingsField::MaxTurns,
-                                    cx,
-                                )),
+                                div()
+                                    .flex_1()
+                                    .child(Self::render_field("Max Turns", &max_turns_input)),
                             ),
                     ),
             );
