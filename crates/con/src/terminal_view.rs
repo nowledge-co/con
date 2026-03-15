@@ -10,7 +10,7 @@ use gpui_component::ActiveTheme;
 pub struct TerminalView {
     grid: Arc<Mutex<Grid>>,
     pty: Arc<Mutex<Pty>>,
-    parser: Arc<Mutex<Parser>>,
+    _parser: Arc<Mutex<Parser>>,
     focus_handle: FocusHandle,
     cell_width: f32,
     cell_height: f32,
@@ -60,7 +60,7 @@ impl TerminalView {
         Self {
             grid,
             pty,
-            parser,
+            _parser: parser,
             focus_handle: cx.focus_handle(),
             cell_width,
             cell_height,

@@ -91,10 +91,6 @@ impl InputBar {
         self.mode
     }
 
-    pub fn input_state(&self) -> &Entity<InputState> {
-        &self.input_state
-    }
-
     fn indicator_color(&self, cx: &App) -> Hsla {
         match self.mode {
             InputMode::Smart => cx.theme().muted_foreground,

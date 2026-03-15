@@ -26,10 +26,6 @@ impl SessionSidebar {
         }
     }
 
-    pub fn is_collapsed(&self) -> bool {
-        self.collapsed
-    }
-
     pub fn toggle_collapsed(&mut self, cx: &mut Context<Self>) {
         self.collapsed = !self.collapsed;
         cx.notify();

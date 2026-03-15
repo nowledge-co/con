@@ -1,5 +1,3 @@
-use parking_lot::Mutex;
-use std::sync::Arc;
 use vte::{Params, Perform};
 
 /// RGBA color
@@ -772,11 +770,4 @@ impl Perform for Grid {
             _ => {}
         }
     }
-}
-
-/// Thread-safe grid handle
-pub type SharedGrid = Arc<Mutex<Grid>>;
-
-pub fn shared_grid(cols: usize, rows: usize) -> SharedGrid {
-    Arc::new(Mutex::new(Grid::new(cols, rows)))
 }

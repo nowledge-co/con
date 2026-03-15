@@ -56,7 +56,7 @@ impl ConHook {
     }
 }
 
-fn is_dangerous(tool_name: &str) -> bool {
+pub fn is_dangerous(tool_name: &str) -> bool {
     matches!(tool_name, "shell_exec" | "file_write")
 }
 

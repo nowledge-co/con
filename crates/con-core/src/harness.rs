@@ -1,6 +1,6 @@
 use con_agent::{
-    AgentEvent, AgentProvider, Conversation, Message, SkillRegistry, TerminalContext,
-    ToolApprovalDecision,
+    is_dangerous, AgentEvent, AgentProvider, Conversation, Message, SkillRegistry,
+    TerminalContext, ToolApprovalDecision,
 };
 use con_terminal::Grid;
 use crossbeam_channel::{Receiver, Sender};
@@ -184,7 +184,7 @@ impl AgentHarness {
         let user_msg = Message::user(&content);
         self.conversation
             .lock()
-            .expect("conversation lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .add_message(user_msg);
 
         let harness_tx = self.event_tx.clone();
@@ -214,9 +214,7 @@ impl AgentHarness {
                             tool_name,
                             args,
                         } => {
-                            // Check if this is a dangerous tool that needs approval.
-                            // If so, emit ToolApprovalNeeded with the per-request sender.
-                            if matches!(tool_name.as_str(), "shell_exec" | "file_write") {
+                            if is_dangerous(&tool_name) {
                                 let _ = htx.send(HarnessEvent::ToolApprovalNeeded {
                                     call_id: call_id.clone(),
                                     tool_name: tool_name.clone(),
@@ -250,7 +248,7 @@ impl AgentHarness {
 
             let conv_snapshot = conversation
                 .lock()
-                .expect("conversation lock poisoned")
+                .unwrap_or_else(|e| e.into_inner())
                 .clone();
 
             let provider = AgentProvider::new(agent_config);
@@ -262,7 +260,7 @@ impl AgentHarness {
                 Ok(assistant_msg) => {
                     conversation
                         .lock()
-                        .expect("conversation lock poisoned")
+                        .unwrap_or_else(|e| e.into_inner())
                         .add_message(assistant_msg);
                 }
                 Err(e) => {
