@@ -30,7 +30,6 @@ impl ConWorkspace {
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
         let harness = AgentHarness::new(&config);
 
-        // Listen for input bar events
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
@@ -76,7 +75,6 @@ impl ConWorkspace {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
-        // Terminal will regain focus since input bar is no longer capturing keys
     }
 
     fn on_input_submit(
@@ -136,9 +134,43 @@ impl ConWorkspace {
                     panel.update_streaming(&token, cx);
                 });
             }
+            HarnessEvent::ToolCallStart {
+                call_id,
+                tool_name,
+                args,
+            } => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.add_tool_call(&call_id, &tool_name, &args, cx);
+                });
+            }
+            HarnessEvent::ToolApprovalNeeded {
+                call_id,
+                tool_name,
+                args,
+                approval_tx,
+            } => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.add_pending_approval(
+                        &call_id,
+                        &tool_name,
+                        &args,
+                        approval_tx,
+                        cx,
+                    );
+                });
+            }
+            HarnessEvent::ToolCallComplete {
+                call_id,
+                tool_name,
+                result,
+            } => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.complete_tool_call(&call_id, &tool_name, &result, cx);
+                });
+            }
             HarnessEvent::ResponseComplete(msg) => {
                 self.agent_panel.update(cx, |panel, cx| {
-                    panel.complete_streaming(&msg.content, cx);
+                    panel.complete_response(&msg.content, cx);
                 });
             }
             HarnessEvent::Error(err) => {
@@ -190,9 +222,7 @@ impl Render for ConWorkspace {
             .flex()
             .flex_1()
             .min_h_0()
-            // Session sidebar
             .child(self.sidebar.clone())
-            // Terminal pane
             .child(div().flex_1().min_w_0().child(self.terminal.clone()));
 
         if self.agent_panel_open {
@@ -216,7 +246,6 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::close_tab))
-            // Titlebar
             .child(
                 div()
                     .flex()
@@ -235,9 +264,7 @@ impl Render for ConWorkspace {
                             .child("Terminal"),
                     ),
             )
-            // Main area
             .child(main_area)
-            // Input bar
             .child(
                 div()
                     .border_t_1()
@@ -245,7 +272,6 @@ impl Render for ConWorkspace {
                     .child(self.input_bar.clone()),
             );
 
-        // Settings overlay
         let settings_visible = self.settings_panel.read(cx).is_visible();
         if settings_visible {
             root = root.child(self.settings_panel.clone());

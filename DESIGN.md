@@ -57,7 +57,8 @@ kingston/
 │   │       ├── agent_panel.rs  # side panel for AI chat / tool output
 │   │       ├── input_bar.rs    # smart input bar (NLP/shell/skill modes)
 │   │       ├── settings_panel.rs # provider config UI (Cmd+,)
-│   │       └── theme.rs        # Catppuccin Mocha theme
+│   │       ├── sidebar.rs      # session sidebar
+│   │       └── theme.rs        # Flexoki dark theme
 │   │
 │   ├── con-core/              # shared logic, no UI dependency
 │   │   └── src/
@@ -77,6 +78,7 @@ kingston/
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── provider.rs    # Multi-provider Rig Agent (13 providers)
+│   │       ├── hook.rs        # ConHook — PromptHook lifecycle bridge
 │   │       ├── tools.rs       # Rig Tool trait impls (shell, file, search)
 │   │       ├── context.rs     # terminal context extraction for agent
 │   │       ├── conversation.rs # conversation state + Rig Message conversion
@@ -141,7 +143,13 @@ GPUI gives us Zed-level text rendering quality (critical for a terminal) and a p
 - `anthropic::Client::new(api_key)` — direct Anthropic provider with model constants (`CLAUDE_4_SONNET`)
 - Agent loop with automatic tool calling (up to N turns)
 
-**Current integration:** con-agent implements 4 tools as Rig `Tool` impls (shell_exec, file_read, file_write, search), supports 13 providers (Anthropic, OpenAI, OpenAI-compatible, DeepSeek, Groq, Gemini, Ollama, OpenRouter, Mistral, Together, Cohere, Perplexity, xAI) with custom base_url for proxy endpoints, and uses `Chat::chat()` for multi-turn conversation. The harness runs on a shared tokio runtime. Provider settings are configurable via Cmd+, settings panel.
+**Current integration:** con-agent implements 4 tools as Rig `Tool` impls (shell_exec, file_read, file_write, search), supports 13 providers (Anthropic, OpenAI, OpenAI-compatible, DeepSeek, Groq, Gemini, Ollama, OpenRouter, Mistral, Together, Cohere, Perplexity, xAI) with custom base_url for proxy endpoints. The harness runs on a shared tokio runtime. Provider settings are configurable via Cmd+, settings panel.
+
+**Agent lifecycle (PromptHook):** Each agent request uses `agent.prompt().with_hook(hook).with_history(history)` instead of `agent.chat()`. The `ConHook` struct implements Rig's `PromptHook<M>` trait, emitting `AgentEvent`s for every tool call start/result and text delta. For dangerous tools (`shell_exec`, `file_write`), the hook blocks on a per-request approval channel — the UI must explicitly allow or deny execution before the agent proceeds. Safe tools (`file_read`, `search`) execute immediately. A 5-minute timeout prevents indefinite hangs if the UI becomes unresponsive.
+
+**Per-request approval channels:** Each `send_message()` creates a fresh crossbeam channel pair. The sender is delivered to the UI via `ToolApprovalNeeded` events. The receiver is owned by the `ConHook` for that request. This eliminates race conditions between concurrent agent requests — only one hook instance reads from each channel.
+
+**Conversation round-trip:** The conversation state (`Arc<Mutex<Conversation>>`) is shared between the main thread and spawned tasks. After the agent completes, the assistant message is added back to the conversation, enabling multi-turn context.
 
 **Escape hatch:** If we later need ai-sdk features, we can spawn a Bun/Node sidecar process and communicate over IPC. This is a pragmatic fallback, not a primary architecture.
 
@@ -170,23 +178,42 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [ ] Split panes (horizontal + vertical)
 
 ### Phase 2: Agent Harness
-- [ ] Side panel for AI chat (Cmd+L to toggle)
-- [ ] Terminal context injection (last N lines, current command, cwd)
-- [ ] Streaming response rendering in panel
-- [ ] Tool execution: agent can run shell commands in terminal
-- [ ] Multi-provider config (OpenAI, Anthropic, local via Ollama)
+- [x] Side panel for AI chat (Cmd+L to toggle)
+- [x] Terminal context injection (last N lines, current command, cwd)
+- [x] Tool execution: agent can run shell commands in terminal
+- [x] Multi-provider config (13 providers via Rig 0.32)
+- [x] Settings panel (Cmd+,) with provider selector and model config
+- [x] Smart input bar (shell/agent/smart modes)
 - [ ] Agent notification system (blue ring on tab when agent needs attention)
 
-### Phase 3: Deep Integration
+### Phase 3: Agent Lifecycle & Tool Transparency
+- [x] PromptHook integration — tool calls visible in agent panel
+- [x] Tool danger classification (safe: file_read, search; dangerous: shell_exec, file_write)
+- [x] Per-request approval channels (no cross-request interference)
+- [x] Approval timeout (5 minutes, denies on expiry)
+- [x] Conversation round-trip (assistant messages added back for multi-turn)
+- [x] Agent status indicators (Idle/Thinking/Responding)
+- [x] Tool call rendering (in-progress dots, completed results)
+- [x] Approval dialog UI (inline approval cards with Allow/Deny)
+- [ ] Streaming via `stream_prompt()` (hook is wired, provider path not yet)
+
+### Phase 4: Agent Chat Polish
+- [x] Structured tool call cards (icon, name, formatted args, result)
+- [x] Inline approval cards for dangerous tools (Allow/Deny buttons)
+- [x] Scrollable agent panel
+- [ ] Collapsible plan/step timeline
+- [ ] Auto-approve toggle in settings UI
+- [ ] Streaming text rendering via `stream_prompt()`
+
+### Phase 5: Deep Integration
 - [ ] Inline AI suggestions (ghost text below prompt, Tab to accept)
 - [ ] Smart command blocks (detect command boundaries via OSC 133)
 - [ ] Command block actions: copy, re-run, explain, share
 - [ ] SSH-aware agent (knows when you're in a remote session)
 - [ ] tmux-aware agent (understands pane topology)
-- [ ] Agent tool: read/write files, search codebase, git operations
 - [ ] Conversation history + search
 
-### Phase 4: Polish
+### Phase 6: Polish
 - [ ] Command palette (Cmd+Shift+P)
 - [ ] Session persistence and restore
 - [ ] Configurable keybindings
@@ -306,6 +333,7 @@ base_url = ""                      # optional: custom/proxy endpoint
 max_tokens = 4096
 max_turns = 10
 auto_context = true                # inject terminal context automatically
+auto_approve_tools = false         # require approval for shell_exec, file_write
 
 [keybindings]
 toggle-agent = "cmd+l"
