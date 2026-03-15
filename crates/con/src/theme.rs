@@ -1,65 +1,51 @@
-/// Catppuccin Mocha theme colors
-#[allow(dead_code)]
-pub struct Theme;
+use gpui::App;
+use gpui_component::{Theme, ThemeMode, ThemeRegistry};
+use std::borrow::Cow;
 
-impl Theme {
-    // Base colors
-    pub fn base() -> u32 {
-        0x1e1e2e
-    }
-    pub fn mantle() -> u32 {
-        0x181825
-    }
-    pub fn crust() -> u32 {
-        0x11111b
-    }
-    pub fn surface0() -> u32 {
-        0x313244
-    }
-    pub fn surface1() -> u32 {
-        0x45475a
-    }
-    pub fn surface2() -> u32 {
-        0x585b70
+const CON_THEME: &str = include_str!("../../../assets/themes/con-dark.json");
+
+// Embed IoskeleyMono font files at compile time.
+// Only essential weights: Regular, Bold, Italic, BoldItalic for terminal,
+// plus Medium and SemiBold for UI labels.
+const FONT_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IoskeleyMono-Regular.ttf");
+const FONT_BOLD: &[u8] = include_bytes!("../../../assets/fonts/IoskeleyMono-Bold.ttf");
+const FONT_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/IoskeleyMono-Italic.ttf");
+const FONT_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/IoskeleyMono-BoldItalic.ttf");
+const FONT_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IoskeleyMono-Medium.ttf");
+const FONT_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/IoskeleyMono-SemiBold.ttf");
+
+/// Initialize the con theme system.
+///
+/// Registers IoskeleyMono fonts, loads the Flexoki-based con dark theme,
+/// and activates dark mode. CJK characters fall back to system fonts
+/// automatically via GPUI's font-kit backend.
+pub fn init_theme(cx: &mut App) {
+    // Register embedded fonts with the text system
+    cx.text_system()
+        .add_fonts(vec![
+            Cow::Borrowed(FONT_REGULAR),
+            Cow::Borrowed(FONT_BOLD),
+            Cow::Borrowed(FONT_ITALIC),
+            Cow::Borrowed(FONT_BOLD_ITALIC),
+            Cow::Borrowed(FONT_MEDIUM),
+            Cow::Borrowed(FONT_SEMIBOLD),
+        ])
+        .expect("Failed to register IoskeleyMono fonts");
+
+    // Load con theme into the registry
+    ThemeRegistry::global_mut(cx)
+        .load_themes_from_str(CON_THEME)
+        .expect("Failed to load con theme");
+
+    // Set our dark theme as the active dark theme
+    if let Some(con_dark) = ThemeRegistry::global(cx)
+        .themes()
+        .get("Con Dark")
+        .cloned()
+    {
+        Theme::global_mut(cx).dark_theme = con_dark;
     }
 
-    // Text colors
-    pub fn text() -> u32 {
-        0xcdd6f4
-    }
-    pub fn subtext0() -> u32 {
-        0xa6adc8
-    }
-    pub fn subtext1() -> u32 {
-        0xbac2de
-    }
-    pub fn overlay0() -> u32 {
-        0x6c7086
-    }
-
-    // Accent colors
-    pub fn blue() -> u32 {
-        0x89b4fa
-    }
-    pub fn green() -> u32 {
-        0xa6e3a1
-    }
-    pub fn red() -> u32 {
-        0xf38ba8
-    }
-    pub fn yellow() -> u32 {
-        0xf9e2af
-    }
-    pub fn mauve() -> u32 {
-        0xcba6f7
-    }
-    pub fn teal() -> u32 {
-        0x94e2d5
-    }
-    pub fn peach() -> u32 {
-        0xfab387
-    }
-    pub fn lavender() -> u32 {
-        0xb4befe
-    }
+    // Activate dark mode
+    Theme::change(ThemeMode::Dark, None, cx);
 }
