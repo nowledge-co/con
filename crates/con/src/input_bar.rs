@@ -135,6 +135,63 @@ impl Render for InputBar {
                     cx.emit(EscapeInput);
                 }
             }))
+            // Status line (mode, cwd hint)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(24.0))
+                    .px(px(16.0))
+                    .gap(px(8.0))
+                    .border_b_1()
+                    .border_color(theme.border)
+                    // Mode pill
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .px(px(6.0))
+                            .py(px(2.0))
+                            .rounded(px(4.0))
+                            .bg(indicator_color.opacity(0.15))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(indicator_color)
+                                    .child(format!("{indicator} {mode_label}")),
+                            ),
+                    )
+                    // CWD hint
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .child(
+                                svg()
+                                    .path("phosphor/folder.svg")
+                                    .size(px(12.0))
+                                    .text_color(theme.muted_foreground),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("~"),
+                            ),
+                    )
+                    .child(div().flex_1())
+                    // Tab hint
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Tab: mode"),
+                    ),
+            )
+            // Input row
             .child(
                 div()
                     .flex()
@@ -142,29 +199,38 @@ impl Render for InputBar {
                     .h(px(44.0))
                     .px(px(16.0))
                     .gap(px(8.0))
-                    // Mode indicator
-                    .child(
-                        div()
-                            .w(px(20.0))
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(indicator_color)
-                            .child(indicator.to_string()),
-                    )
-                    // Input field (gpui-component Input)
+                    // Input field
                     .child(
                         div().flex_1().child(
                             Input::new(&self.input_state)
-                                .appearance(false) // no border/background — we style the container
+                                .appearance(false)
                                 .cleanable(false),
                         ),
                     )
-                    // Mode hint
+                    // Send button (circular, Apple Messages style)
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("Tab: mode ({mode_label})")),
+                            .id("send-button")
+                            .size(px(28.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .cursor_pointer()
+                            .bg(theme.primary)
+                            .hover(|s| s.bg(theme.primary_hover))
+                            .child(
+                                svg()
+                                    .path("phosphor/arrow-up.svg")
+                                    .size(px(16.0))
+                                    .text_color(theme.primary_foreground),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_this, _, _, cx| {
+                                    cx.emit(SubmitInput);
+                                }),
+                            ),
                     ),
             )
     }
