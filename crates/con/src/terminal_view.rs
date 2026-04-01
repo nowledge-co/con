@@ -66,6 +66,23 @@ impl Selection {
     }
 }
 
+/// Emitted when the user clicks "Explain" on a command block
+pub struct ExplainCommand {
+    pub command: String,
+    pub output: String,
+}
+
+/// Emitted when Ctrl+D is pressed — workspace should close the pane
+pub struct ClosePaneRequest;
+
+/// Emitted when the terminal gains focus (mouse click) so the workspace
+/// can re-render and update pane focus tracking via sync_focus().
+pub struct FocusChanged;
+
+impl EventEmitter<ExplainCommand> for TerminalView {}
+impl EventEmitter<ClosePaneRequest> for TerminalView {}
+impl EventEmitter<FocusChanged> for TerminalView {}
+
 pub struct TerminalView {
     grid: Arc<Mutex<Grid>>,
     pty: Arc<Mutex<Pty>>,
@@ -79,6 +96,10 @@ pub struct TerminalView {
     terminal_origin: Arc<Mutex<(f32, f32)>>,
     cursor_blink_visible: bool,
     cursor_blink_epoch: std::time::Instant,
+    hovered_row: Option<usize>,
+    /// Last dimensions we resized to — prevents oscillation when canvas
+    /// measures slightly different bounds on each render.
+    last_resized_dims: Arc<Mutex<(usize, usize)>>,
 }
 
 impl TerminalView {
@@ -163,6 +184,8 @@ impl TerminalView {
             terminal_origin: Arc::new(Mutex::new((0.0, 0.0))),
             cursor_blink_visible: true,
             cursor_blink_epoch: std::time::Instant::now(),
+            hovered_row: None,
+            last_resized_dims: Arc::new(Mutex::new((cols, rows))),
         }
     }
 
@@ -261,6 +284,13 @@ impl Render for TerminalView {
         let cell_w = self.cell_width;
         let cell_h = self.cell_height;
 
+        // Clip rendering to the last known canvas size to prevent text
+        // overflow into adjacent panes when the grid is larger than
+        // the available space (before resize catches up).
+        let (vis_cols, vis_rows) = *self.last_resized_dims.lock();
+        let render_cols = cols.min(vis_cols);
+        let render_rows = rows.min(vis_rows);
+
         // Snapshot grid for rendering
         struct CellInfo {
             row: usize,
@@ -282,8 +312,8 @@ impl Render for TerminalView {
         let cursor_visible = grid.cursor.visible && self.cursor_blink_visible;
         let cursor_shape = grid.cursor.shape;
 
-        for row in 0..rows {
-            for col in 0..cols {
+        for row in 0..render_rows {
+            for col in 0..render_cols {
                 let cell = grid.visible_cell(row, col);
                 let (fg, bg) = if cell.style.inverse {
                     (cell.style.bg.to_u32(), cell.style.fg.to_u32())
@@ -308,6 +338,7 @@ impl Render for TerminalView {
         }
         let scrollback_offset = grid.scrollback_offset;
         let in_scrollback = scrollback_offset > 0;
+        let visible_blocks = grid.visible_command_blocks();
         drop(grid);
 
         // Build text overlays using GPUI text engine
@@ -370,11 +401,13 @@ impl Render for TerminalView {
         let focus = self.focus_handle.clone();
 
         // Resize detection: capture handles for the canvas prepaint callback.
-        // We compare against the current (cols, rows) snapshot.
+        // We compare against last_resized_dims (not current grid state) to
+        // prevent oscillation when layout gives slightly different bounds on
+        // each render cycle.
         let grid_for_resize = self.grid.clone();
         let pty_for_resize = self.pty.clone();
         let terminal_origin_for_canvas = self.terminal_origin.clone();
-        let current_dims = (cols, rows);
+        let last_resized = self.last_resized_dims.clone();
         let entity_id = cx.entity_id();
         let selection_for_canvas = self.selection;
         let cursor_color = cx.theme().primary;
@@ -418,6 +451,7 @@ impl Render for TerminalView {
                         });
                         this.selecting = true;
                     }
+                    cx.emit(FocusChanged);
                     cx.notify();
                 }),
             )
@@ -427,6 +461,13 @@ impl Render for TerminalView {
                     if let Some(ref mut sel) = this.selection {
                         sel.end = point;
                     }
+                    cx.notify();
+                }
+                // Track hovered row for command block actions
+                let point = this.mouse_to_grid(event.position);
+                let new_row = Some(point.row);
+                if this.hovered_row != new_row {
+                    this.hovered_row = new_row;
                     cx.notify();
                 }
             }))
@@ -539,16 +580,23 @@ impl Render for TerminalView {
                     this.selection = None;
                 }
                 // Snap back to live view when user types
-                let app_cursor_keys;
+                let (app_cursor_keys, kitty_flags);
                 {
                     let mut grid = this.grid.lock();
                     app_cursor_keys = grid.application_cursor_keys;
+                    kitty_flags = grid.kitty_keyboard_flags;
                     if grid.scrollback_offset > 0 {
                         grid.scrollback_offset = 0;
                         drop(grid);
                         cx.notify();
                     }
                 }
+                // Ctrl+D: close pane instead of sending EOT
+                if event.keystroke.modifiers.control && event.keystroke.key == "d" {
+                    cx.emit(ClosePaneRequest);
+                    return;
+                }
+
                 let mods = con_terminal::input::Modifiers {
                     shift: event.keystroke.modifiers.shift,
                     ctrl: event.keystroke.modifiers.control,
@@ -556,9 +604,14 @@ impl Render for TerminalView {
                     cmd: event.keystroke.modifiers.platform,
                 };
                 let key_name = &event.keystroke.key;
-                if let Some(bytes) =
+                // Use Kitty encoder when flags are active, fall back to standard
+                let bytes = if kitty_flags > 0 {
+                    con_terminal::InputEncoder::encode_key_kitty(key_name, mods)
+                        .or_else(|| con_terminal::InputEncoder::encode_key(key_name, mods, app_cursor_keys))
+                } else {
                     con_terminal::InputEncoder::encode_key(key_name, mods, app_cursor_keys)
-                {
+                };
+                if let Some(bytes) = bytes {
                     this.write_to_pty(&bytes);
                 }
             }))
@@ -572,13 +625,22 @@ impl Render for TerminalView {
                             f32::from(bounds.origin.y),
                         );
 
-                        // Detect if the available space requires a terminal resize
+                        // Detect if the available space requires a terminal resize.
                         let available_w: f32 = bounds.size.width.into();
                         let available_h: f32 = bounds.size.height.into();
                         let new_cols = (available_w / cell_w).max(1.0) as usize;
                         let new_rows = (available_h / cell_h).max(1.0) as usize;
 
-                        if (new_cols, new_rows) != current_dims && new_cols > 0 && new_rows > 0 {
+                        // Skip degenerate sizes during layout settling
+                        if new_cols < 4 || new_rows < 2 {
+                            return;
+                        }
+
+                        let (last_cols, last_rows) = *last_resized.lock();
+
+                        if new_cols != last_cols || new_rows != last_rows {
+                            *last_resized.lock() = (new_cols, new_rows);
+
                             let mut grid = grid_for_resize.lock();
                             grid.resize(new_cols, new_rows);
                             drop(grid);
@@ -662,6 +724,143 @@ impl Render for TerminalView {
             )
             // Text overlays
             .children(text_divs);
+
+        // Command block action bar — appears when hovering near a command block
+        if let Some(hovered_row) = self.hovered_row {
+            let theme = cx.theme();
+            for block in &visible_blocks {
+                // Show action bar if hovering within 1 row of the block's prompt row
+                if hovered_row <= block.viewport_row + 1
+                    && hovered_row + 2 >= block.viewport_row
+                {
+                    let exit_color = match block.exit_code {
+                        Some(0) => theme.success,
+                        Some(_) => theme.danger,
+                        None => theme.muted_foreground,
+                    };
+
+                    let cmd_for_rerun = block.command.clone();
+                    let cmd_for_explain = block.command.clone();
+                    let output_start = block.output_start_row;
+                    let output_end = block.output_end_row;
+                    let grid_for_copy = self.grid.clone();
+                    let grid_for_explain = self.grid.clone();
+
+                    let action_bar = div()
+                        .absolute()
+                        .top(px(block.viewport_row as f32 * cell_h))
+                        .right(px(8.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .px(px(6.0))
+                        .py(px(2.0))
+                        .rounded(px(6.0))
+                        .bg(theme.title_bar.opacity(0.95))
+                        .border_1()
+                        .border_color(theme.border)
+                        .shadow_sm()
+                        // Exit code dot
+                        .child(
+                            div()
+                                .size(px(6.0))
+                                .rounded_full()
+                                .bg(exit_color),
+                        )
+                        // Copy output
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "cmd-copy-{}",
+                                    block.viewport_row
+                                )))
+                                .cursor_pointer()
+                                .p(px(3.0))
+                                .rounded(px(4.0))
+                                .hover(|s| s.bg(theme.secondary.opacity(0.5)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        let output = grid_for_copy
+                                            .lock()
+                                            .command_block_output(output_start, output_end);
+                                        cx.write_to_clipboard(
+                                            ClipboardItem::new_string(output),
+                                        );
+                                        let _ = this;
+                                    }),
+                                )
+                                .child(
+                                    svg()
+                                        .path("phosphor/copy.svg")
+                                        .size(px(12.0))
+                                        .text_color(theme.muted_foreground),
+                                ),
+                        )
+                        // Re-run
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "cmd-rerun-{}",
+                                    block.viewport_row
+                                )))
+                                .cursor_pointer()
+                                .p(px(3.0))
+                                .rounded(px(4.0))
+                                .hover(|s| s.bg(theme.secondary.opacity(0.5)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.write_to_pty(
+                                            format!("{}\n", cmd_for_rerun).as_bytes(),
+                                        );
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(
+                                    svg()
+                                        .path("phosphor/arrow-clockwise.svg")
+                                        .size(px(12.0))
+                                        .text_color(theme.muted_foreground),
+                                ),
+                        )
+                        // Explain
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "cmd-explain-{}",
+                                    block.viewport_row
+                                )))
+                                .cursor_pointer()
+                                .p(px(3.0))
+                                .rounded(px(4.0))
+                                .hover(|s| s.bg(theme.secondary.opacity(0.5)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        let output = grid_for_explain
+                                            .lock()
+                                            .command_block_output(output_start, output_end);
+                                        cx.emit(ExplainCommand {
+                                            command: cmd_for_explain.clone(),
+                                            output,
+                                        });
+                                        let _ = this;
+                                    }),
+                                )
+                                .child(
+                                    svg()
+                                        .path("phosphor/chat-circle.svg")
+                                        .size(px(12.0))
+                                        .text_color(theme.muted_foreground),
+                                ),
+                        );
+
+                    terminal = terminal.child(action_bar);
+                    break; // Only show one action bar at a time
+                }
+            }
+        }
 
         // Scrollback indicator — floating pill when viewing history
         if in_scrollback {

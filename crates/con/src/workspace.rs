@@ -1,23 +1,25 @@
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-use crate::agent_panel::AgentPanel;
+use crate::agent_panel::{AgentPanel, LoadConversation, NewConversation};
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
-use crate::input_bar::{EscapeInput, InputBar, InputMode, SubmitInput};
+use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
+use crate::pane_tree::{PaneTree, SplitDirection};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
-use crate::terminal_view::TerminalView;
-use crate::{CloseTab, NewTab, ToggleAgentPanel};
+use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, TerminalView};
+use crate::{CloseTab, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
 use con_core::config::Config;
 use con_core::harness::{AgentHarness, HarnessEvent, InputKind};
 use con_core::session::Session;
 
 struct Tab {
-    terminal: Entity<TerminalView>,
+    pane_tree: PaneTree,
     title: String,
+    needs_attention: bool,
 }
 
-/// The main workspace: sidebar + tabs + agent panel + input bar + settings overlay
+/// The main workspace: tabs + agent panel + input bar + settings overlay
 pub struct ConWorkspace {
     sidebar: Entity<SessionSidebar>,
     tabs: Vec<Tab>,
@@ -31,6 +33,12 @@ pub struct ConWorkspace {
     harness: AgentHarness,
     agent_panel_open: bool,
     agent_panel_width: f32,
+    /// Tracks whether a modal was open on the last render, so we can
+    /// restore terminal focus when a modal dismisses itself internally.
+    modal_was_open: bool,
+    /// Shared bridge between divider on_mouse_down (plain Fn closure) and
+    /// workspace's entity-level drag handler. Persists across render cycles.
+    pending_drag_init: std::sync::Arc<std::sync::Mutex<Option<(usize, f32)>>>,
 }
 
 impl ConWorkspace {
@@ -47,20 +55,34 @@ impl ConWorkspace {
             .map(|(i, tab_state)| {
                 let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
                 Tab {
-                    terminal,
+                    pane_tree: PaneTree::new(terminal),
                     title: if tab_state.title.is_empty() {
                         format!("Terminal {}", i + 1)
                     } else {
                         tab_state.title.clone()
                     },
+                    needs_attention: false,
                 }
             })
             .collect();
         if tabs.is_empty() {
+            let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
             tabs.push(Tab {
-                terminal: cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx)),
+                pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),
+                needs_attention: false,
             });
+        }
+        // Subscribe to events from all terminals
+        for tab in &tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                cx.subscribe_in(terminal, window, Self::on_explain_command)
+                    .detach();
+                cx.subscribe_in(terminal, window, Self::on_close_pane_request)
+                    .detach();
+                cx.subscribe_in(terminal, window, Self::on_focus_changed)
+                    .detach();
+            }
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
         let agent_panel_open = session.agent_panel_open;
@@ -68,7 +90,12 @@ impl ConWorkspace {
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
-        let harness = AgentHarness::new(&config);
+        let mut harness = AgentHarness::new(&config);
+
+        // Restore previous conversation if saved in session
+        if let Some(conv_id) = &session.conversation_id {
+            harness.load_conversation(conv_id);
+        }
 
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
@@ -77,6 +104,10 @@ impl ConWorkspace {
         cx.subscribe_in(&settings_panel, window, Self::on_settings_saved)
             .detach();
         cx.subscribe_in(&command_palette, window, Self::on_palette_select)
+            .detach();
+        cx.subscribe_in(&agent_panel, window, Self::on_new_conversation)
+            .detach();
+        cx.subscribe_in(&agent_panel, window, Self::on_load_conversation)
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_select)
             .detach();
@@ -105,6 +136,10 @@ impl ConWorkspace {
         })
         .detach();
 
+        // Focus the initial terminal so the user can start typing immediately
+        let initial_terminal = tabs[active_tab].pane_tree.focused_terminal().clone();
+        initial_terminal.focus_handle(cx).focus(window, cx);
+
         Self {
             sidebar,
             tabs,
@@ -118,11 +153,13 @@ impl ConWorkspace {
             harness,
             agent_panel_open,
             agent_panel_width: 400.0,
+            modal_was_open: false,
+            pending_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
     fn active_terminal(&self) -> &Entity<TerminalView> {
-        &self.tabs[self.active_tab].terminal
+        self.tabs[self.active_tab].pane_tree.focused_terminal()
     }
 
     fn save_session(&self, cx: &App) {
@@ -130,9 +167,9 @@ impl ConWorkspace {
             .tabs
             .iter()
             .map(|tab| {
-                let cwd = tab.terminal.read(cx).grid().lock().current_dir.clone();
-                let title = tab
-                    .terminal
+                let terminal = tab.pane_tree.focused_terminal();
+                let cwd = terminal.read(cx).grid().lock().current_dir.clone();
+                let title = terminal
                     .read(cx)
                     .title()
                     .unwrap_or_else(|| tab.title.clone());
@@ -148,9 +185,48 @@ impl ConWorkspace {
             tabs,
             active_tab: self.active_tab,
             agent_panel_open: self.agent_panel_open,
+            conversation_id: Some(self.harness.conversation_id()),
         };
         if let Err(e) = session.save() {
             log::warn!("Failed to save session: {}", e);
+        }
+    }
+
+    fn on_new_conversation(
+        &mut self,
+        _panel: &Entity<AgentPanel>,
+        _event: &NewConversation,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.harness.new_conversation();
+        self.save_session(cx);
+    }
+
+    fn on_load_conversation(
+        &mut self,
+        _panel: &Entity<AgentPanel>,
+        event: &LoadConversation,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.harness.load_conversation(&event.id) {
+            // Replay messages into the panel
+            self.agent_panel.update(cx, |panel, cx| {
+                panel.clear_messages(cx);
+                let conv = self.harness.conversation();
+                let conv = conv.lock().unwrap_or_else(|e| e.into_inner());
+                for msg in &conv.messages {
+                    let role = match msg.role {
+                        con_agent::MessageRole::User => "user",
+                        con_agent::MessageRole::Assistant => "assistant",
+                        con_agent::MessageRole::System => "system",
+                        con_agent::MessageRole::Tool => "system",
+                    };
+                    panel.add_message(role, &msg.content, cx);
+                }
+            });
+            self.save_session(cx);
         }
     }
 
@@ -158,10 +234,10 @@ impl ConWorkspace {
         &mut self,
         _sidebar: &Entity<SessionSidebar>,
         event: &SidebarSelect,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.activate_tab(event.index, cx);
+        self.activate_tab(event.index, window, cx);
     }
 
     fn on_sidebar_new_session(
@@ -179,8 +255,8 @@ impl ConWorkspace {
             .tabs
             .iter()
             .map(|tab| {
-                let title = tab
-                    .terminal
+                let terminal = tab.pane_tree.focused_terminal();
+                let title = terminal
                     .read(cx)
                     .title()
                     .unwrap_or_else(|| tab.title.clone());
@@ -217,6 +293,12 @@ impl ConWorkspace {
             "close-tab" => {
                 self.close_tab(&CloseTab, window, cx);
             }
+            "split-right" => {
+                self.split_pane(SplitDirection::Horizontal, window, cx);
+            }
+            "split-down" => {
+                self.split_pane(SplitDirection::Vertical, window, cx);
+            }
             "clear-terminal" => {
                 let terminal = self.active_terminal().clone();
                 terminal.update(cx, |tv, _| {
@@ -249,7 +331,7 @@ impl ConWorkspace {
         &mut self,
         settings: &Entity<SettingsPanel>,
         _event: &SaveSettings,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let new_config = settings.read(cx).agent_config().clone();
@@ -258,6 +340,9 @@ impl ConWorkspace {
         let term_config = settings.read(cx).terminal_config().clone();
         self.font_size = term_config.font_size;
         self.scrollback_lines = term_config.scrollback_lines;
+
+        // Settings panel closes on save — restore terminal focus
+        self.focus_terminal(window, cx);
     }
 
     fn on_input_escape(
@@ -376,6 +461,12 @@ impl ConWorkspace {
                 self.agent_panel.update(cx, |panel, cx| {
                     panel.complete_response(&msg.content, cx);
                 });
+                // Mark non-active tabs for attention
+                for (i, tab) in self.tabs.iter_mut().enumerate() {
+                    if i != self.active_tab {
+                        tab.needs_attention = true;
+                    }
+                }
             }
             HarnessEvent::Error(err) => {
                 self.agent_panel.update(cx, |panel, cx| {
@@ -404,9 +495,19 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Close settings if open (mutually exclusive)
+        if self.settings_panel.read(cx).is_visible() {
+            self.settings_panel.update(cx, |panel, cx| {
+                panel.toggle(window, cx);
+            });
+        }
         self.command_palette.update(cx, |palette, cx| {
             palette.toggle(window, cx);
         });
+        // Restore terminal focus if palette just closed
+        if !self.is_modal_open(cx) {
+            self.focus_terminal(window, cx);
+        }
         cx.notify();
     }
 
@@ -416,23 +517,46 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Close command palette if open (mutually exclusive)
+        if self.command_palette.read(cx).is_visible() {
+            self.command_palette.update(cx, |palette, cx| {
+                palette.toggle(window, cx);
+            });
+        }
         self.settings_panel.update(cx, |panel, cx| {
             panel.toggle(window, cx);
         });
+        // Restore terminal focus if settings just closed
+        if !self.is_modal_open(cx) {
+            self.focus_terminal(window, cx);
+        }
         cx.notify();
     }
 
-    fn new_tab(&mut self, _: &NewTab, _window: &mut Window, cx: &mut Context<Self>) {
+    fn is_modal_open(&self, cx: &App) -> bool {
+        self.settings_panel.read(cx).is_visible()
+            || self.command_palette.read(cx).is_visible()
+    }
+
+    fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let font_size = self.font_size;
         let scrollback_lines = self.scrollback_lines;
         let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
+        cx.subscribe_in(&terminal, window, Self::on_explain_command)
+            .detach();
+        cx.subscribe_in(&terminal, window, Self::on_close_pane_request)
+            .detach();
+        cx.subscribe_in(&terminal, window, Self::on_focus_changed)
+            .detach();
         let tab_number = self.tabs.len() + 1;
         self.tabs.push(Tab {
-            terminal,
+            pane_tree: PaneTree::new(terminal.clone()),
             title: format!("Terminal {}", tab_number),
+            needs_attention: false,
         });
         self.active_tab = self.tabs.len() - 1;
-        self.sync_sidebar(cx);
+        // Focus the new terminal
+        terminal.focus_handle(cx).focus(window, cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -451,11 +575,29 @@ impl ConWorkspace {
     }
 
     fn execute_shell(&self, cmd: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let terminal = self.active_terminal().clone();
-        terminal.update(cx, |tv, _| {
-            tv.write_to_pty(format!("{}\n", cmd).as_bytes());
-        });
-        terminal.focus_handle(cx).focus(window, cx);
+        let target_ids = self.input_bar.read(cx).target_pane_ids();
+        let is_broadcast = target_ids.len() > 1;
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let all_terminals = pane_tree.all_terminals();
+
+        for terminal in &all_terminals {
+            if all_terminals.len() == 1 || target_ids.iter().any(|&tid| {
+                pane_tree.terminal_has_pane_id(terminal, tid)
+            }) {
+                terminal.update(cx, |tv, _| {
+                    tv.write_to_pty(format!("{}\n", cmd).as_bytes());
+                });
+            }
+        }
+
+        if is_broadcast {
+            // After broadcast, keep focus on input bar so user can type another command
+            self.input_bar.focus_handle(cx).focus(window, cx);
+        } else {
+            // Single-pane send: focus the target terminal
+            let focused = self.active_terminal().clone();
+            focused.focus_handle(cx).focus(window, cx);
+        }
     }
 
     fn send_to_agent(&mut self, content: &str, cx: &mut Context<Self>) {
@@ -470,27 +612,141 @@ impl ConWorkspace {
         self.harness.send_message(content.to_string(), context);
     }
 
-    fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn split_pane(
+        &mut self,
+        direction: SplitDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let font_size = self.font_size;
+        let scrollback_lines = self.scrollback_lines;
+        let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
+        cx.subscribe_in(&terminal, window, Self::on_explain_command)
+            .detach();
+        cx.subscribe_in(&terminal, window, Self::on_close_pane_request)
+            .detach();
+        cx.subscribe_in(&terminal, window, Self::on_focus_changed)
+            .detach();
+        self.tabs[self.active_tab]
+            .pane_tree
+            .split(direction, terminal.clone());
+        terminal.focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    fn split_right(
+        &mut self,
+        _: &SplitRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.split_pane(SplitDirection::Horizontal, window, cx);
+    }
+
+    fn split_down(
+        &mut self,
+        _: &SplitDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.split_pane(SplitDirection::Vertical, window, cx);
+    }
+
+    fn on_close_pane_request(
+        &mut self,
+        _terminal: &Entity<TerminalView>,
+        _event: &ClosePaneRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
+        if pane_tree.pane_count() > 1 {
+            pane_tree.close_focused();
+            // Focus the new focused terminal
+            let terminal = pane_tree.focused_terminal().clone();
+            terminal.focus_handle(cx).focus(window, cx);
+        } else if self.tabs.len() > 1 {
+            self.close_tab(&CloseTab, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn on_focus_changed(
+        &mut self,
+        terminal: &Entity<TerminalView>,
+        _event: &FocusChanged,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Terminal gained focus — directly update pane tracking and ensure focus sticks
+        let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
+        if let Some(pane_id) = pane_tree.pane_id_for_terminal(terminal) {
+            pane_tree.focus(pane_id);
+            // Re-assert focus on the terminal to ensure nothing steals it
+            terminal.focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn on_explain_command(
+        &mut self,
+        _terminal: &Entity<TerminalView>,
+        event: &ExplainCommand,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prompt = format!(
+            "Explain this command and its output:\n\nCommand: {}\n\nOutput:\n```\n{}\n```",
+            event.command, event.output
+        );
+        self.send_to_agent(&prompt, cx);
+    }
+
+    fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index < self.tabs.len() {
             self.active_tab = index;
-            self.sync_sidebar(cx);
+            self.tabs[index].needs_attention = false;
+            // Focus the terminal in the newly activated tab
+            let terminal = self.tabs[index].pane_tree.focused_terminal().clone();
+            terminal.focus_handle(cx).focus(window, cx);
             self.save_session(cx);
             cx.notify();
         }
     }
+
+    /// Focus the active terminal (used after modal close, etc.)
+    fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
+        let terminal = self.active_terminal().clone();
+        terminal.focus_handle(cx).focus(window, cx);
+    }
 }
 
 impl Render for ConWorkspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_terminal = self.tabs[self.active_tab].terminal.clone();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let active_terminal = self.active_terminal().clone();
 
-        // Sync sidebar with current tabs
-        self.sync_sidebar(cx);
+        // If a modal was dismissed internally (escape/backdrop), restore terminal focus
+        let is_modal_open = self.is_modal_open(cx);
+        if self.modal_was_open && !is_modal_open {
+            self.focus_terminal(window, cx);
+        }
+        self.modal_was_open = is_modal_open;
 
-        // Sync CWD from active terminal to input bar
+        // Keep pane focus in sync with which terminal has window focus
+        self.tabs[self.active_tab].pane_tree.sync_focus(window, cx);
+
+        // Sync pane info and CWD to input bar
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let pane_names = pane_tree.pane_names(cx);
+        let focused_pane_id = pane_tree.focused_pane_id();
+        let pane_infos: Vec<PaneInfo> = pane_names
+            .into_iter()
+            .map(|(id, name)| PaneInfo { id, name })
+            .collect();
+
         let cwd = active_terminal.read(cx).grid().lock().current_dir.clone();
-        if let Some(cwd) = cwd {
-            let display_cwd = match dirs::home_dir() {
+        let display_cwd = cwd
+            .map(|cwd| match dirs::home_dir() {
                 Some(home) => {
                     let home_str = home.to_string_lossy().to_string();
                     if cwd.starts_with(&home_str) {
@@ -500,20 +756,41 @@ impl Render for ConWorkspace {
                     }
                 }
                 None => cwd,
-            };
-            self.input_bar.update(cx, |bar, _cx| {
-                bar.set_cwd(display_cwd);
-            });
-        }
+            })
+            .unwrap_or_else(|| "~".to_string());
+
+        self.input_bar.update(cx, |bar, _cx| {
+            bar.set_panes(pane_infos, focused_pane_id);
+            bar.set_cwd(display_cwd);
+        });
 
         let theme = cx.theme();
+
+        let pane_tree_rendered = {
+            let pending = self.pending_drag_init.clone();
+            let begin_drag_cb = move |split_id: usize, start_pos: f32| {
+                if let Ok(mut guard) = pending.lock() {
+                    *guard = Some((split_id, start_pos));
+                }
+            };
+            self.tabs[self.active_tab]
+                .pane_tree
+                .render(begin_drag_cb, cx)
+        };
+
+        let terminal_area = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(pane_tree_rendered);
 
         let mut main_area = div()
             .flex()
             .flex_1()
             .min_h_0()
-            .child(self.sidebar.clone())
-            .child(div().flex_1().min_w_0().child(active_terminal));
+            .child(terminal_area);
 
         if self.agent_panel_open {
             main_area = main_area.child(
@@ -540,8 +817,9 @@ impl Render for ConWorkspace {
 
         for (index, tab) in self.tabs.iter().enumerate() {
             let is_active = index == self.active_tab;
-            let title = tab
-                .terminal
+            let needs_attention = tab.needs_attention && !is_active;
+            let terminal = tab.pane_tree.focused_terminal();
+            let title = terminal
                 .read(cx)
                 .title()
                 .unwrap_or_else(|| tab.title.clone());
@@ -605,8 +883,8 @@ impl Render for ConWorkspace {
                 .text_size(px(12.0))
                 .max_w(px(200.0))
                 .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.activate_tab(index, cx);
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.activate_tab(index, window, cx);
                 }));
 
             if is_active {
@@ -623,8 +901,20 @@ impl Render for ConWorkspace {
             let mut tab_content = div()
                 .flex()
                 .items_center()
-                .overflow_x_hidden()
-                .child(display_title);
+                .overflow_x_hidden();
+
+            // Attention dot for tabs with pending agent activity
+            if needs_attention {
+                tab_content = tab_content.child(
+                    div()
+                        .size(px(6.0))
+                        .rounded_full()
+                        .bg(theme.primary)
+                        .mr(px(6.0)),
+                );
+            }
+
+            tab_content = tab_content.child(display_title);
 
             if let Some(close) = close_button {
                 tab_content = tab_content.child(close);
@@ -660,12 +950,68 @@ impl Render for ConWorkspace {
             .size_full()
             .bg(theme.background)
             .key_context("ConWorkspace")
+            // Pane drag-to-resize: capture mouse move/up on root so it works
+            // even when cursor is over terminal views (which capture mouse events).
+            .on_mouse_move({
+                let pending = self.pending_drag_init.clone();
+                let agent_panel_open = self.agent_panel_open;
+                let agent_panel_width = self.agent_panel_width;
+                cx.listener(move |this, event: &MouseMoveEvent, win, cx| {
+                    let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
+
+                    // Consume a pending drag initiation written by divider on_mouse_down
+                    if let Ok(mut guard) = pending.lock() {
+                        if let Some((split_id, start_pos)) = guard.take() {
+                            pane_tree.begin_drag(split_id, start_pos);
+                        }
+                    }
+
+                    if !pane_tree.is_dragging() {
+                        return;
+                    }
+
+                    // Estimate terminal area from window bounds minus fixed chrome
+                    // (tab bar ~38px, input bar ~40px, agent panel if open)
+                    let win_w = f32::from(win.bounds().size.width);
+                    let win_h = f32::from(win.bounds().size.height);
+                    let (current_pos, total_size) =
+                        if let Some(dir) = pane_tree.dragging_direction() {
+                            match dir {
+                                SplitDirection::Horizontal => {
+                                    let panel_w = if agent_panel_open { agent_panel_width } else { 0.0 };
+                                    (f32::from(event.position.x), win_w - panel_w)
+                                }
+                                SplitDirection::Vertical => {
+                                    (f32::from(event.position.y), win_h - 78.0) // tab bar + input bar
+                                }
+                            }
+                        } else {
+                            return;
+                        };
+
+                    if pane_tree.update_drag(current_pos, total_size) {
+                        cx.notify();
+                    }
+                })
+            })
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
+                    if pane_tree.is_dragging() {
+                        pane_tree.end_drag();
+                        cx.notify();
+                    }
+                }),
+            )
             .on_action(cx.listener(Self::toggle_agent_panel))
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::toggle_command_palette))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::close_tab))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+            .on_action(cx.listener(Self::split_right))
+            .on_action(cx.listener(Self::split_down))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Don't handle workspace shortcuts when a modal overlay is open
                 if this.settings_panel.read(cx).is_visible()
                     || this.command_palette.read(cx).is_visible()
@@ -681,7 +1027,7 @@ impl Render for ConWorkspace {
                     if let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10)) {
                         let tab_index = if digit == 0 { 9 } else { (digit - 1) as usize };
                         if tab_index < this.tabs.len() {
-                            this.activate_tab(tab_index, cx);
+                            this.activate_tab(tab_index, window, cx);
                         }
                     }
                 }
@@ -689,9 +1035,11 @@ impl Render for ConWorkspace {
                 // Cmd+Shift+[ — previous tab
                 if mods.platform && mods.shift && key == "[" {
                     if this.active_tab > 0 {
-                        this.activate_tab(this.active_tab - 1, cx);
+                        let prev = this.active_tab - 1;
+                        this.activate_tab(prev, window, cx);
                     } else if !this.tabs.is_empty() {
-                        this.activate_tab(this.tabs.len() - 1, cx);
+                        let last = this.tabs.len() - 1;
+                        this.activate_tab(last, window, cx);
                     }
                 }
 
@@ -699,9 +1047,9 @@ impl Render for ConWorkspace {
                 if mods.platform && mods.shift && key == "]" {
                     let next = this.active_tab + 1;
                     if next < this.tabs.len() {
-                        this.activate_tab(next, cx);
+                        this.activate_tab(next, window, cx);
                     } else {
-                        this.activate_tab(0, cx);
+                        this.activate_tab(0, window, cx);
                     }
                 }
             }))
