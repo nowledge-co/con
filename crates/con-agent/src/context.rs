@@ -15,10 +15,10 @@ pub struct TerminalContext {
     pub last_exit_code: Option<i32>,
     /// Git branch if in a repo
     pub git_branch: Option<String>,
-    /// Whether the user is in an SSH session
-    pub is_ssh: bool,
-    /// Whether the user is in tmux
-    pub is_tmux: bool,
+    /// SSH remote host (parsed from SSH_CONNECTION), if in an SSH session
+    pub ssh_host: Option<String>,
+    /// tmux session name, if inside tmux
+    pub tmux_session: Option<String>,
     /// Contents of AGENTS.md in the cwd (if present)
     pub agents_md: Option<String>,
     /// Available skills
@@ -42,8 +42,8 @@ impl TerminalContext {
             last_command: None,
             last_exit_code: None,
             git_branch: None,
-            is_ssh: false,
-            is_tmux: false,
+            ssh_host: None,
+            tmux_session: None,
             agents_md: None,
             skills: Vec::new(),
             command_history: Vec::new(),
@@ -65,12 +65,12 @@ impl TerminalContext {
             parts.push(format!("Git branch: {}", branch));
         }
 
-        if self.is_ssh {
-            parts.push("User is in an SSH session.".to_string());
+        if let Some(host) = &self.ssh_host {
+            parts.push(format!("Connected via SSH to {}", host));
         }
 
-        if self.is_tmux {
-            parts.push("User is in a tmux session.".to_string());
+        if let Some(session) = &self.tmux_session {
+            parts.push(format!("Inside tmux session '{}'", session));
         }
 
         if let Some(agents_md) = &self.agents_md {

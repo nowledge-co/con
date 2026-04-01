@@ -147,8 +147,29 @@ impl AgentHarness {
             std::fs::read_to_string(&agents_path).ok()
         });
 
-        let is_ssh = std::env::var("SSH_CONNECTION").is_ok();
-        let is_tmux = std::env::var("TMUX").is_ok();
+        // Parse SSH_CONNECTION for remote host IP (format: "client_ip client_port server_ip server_port")
+        let ssh_host = std::env::var("SSH_CONNECTION")
+            .ok()
+            .and_then(|val| val.split_whitespace().next().map(|s| s.to_string()));
+
+        // Parse TMUX for session name (format: "/tmp/tmux-uid/default,pid,index")
+        let tmux_session = std::env::var("TMUX").ok().and_then(|val| {
+            // Get the session name via tmux command, falling back to socket path parsing
+            std::process::Command::new("tmux")
+                .args(["display-message", "-p", "#S"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .or_else(|| {
+                    // Fallback: extract from socket path
+                    val.split(',').next().and_then(|path| {
+                        std::path::Path::new(path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                    })
+                })
+        });
 
         let git_branch = cwd.as_ref().and_then(|dir| {
             std::process::Command::new("git")
@@ -178,8 +199,8 @@ impl AgentHarness {
             last_command: grid.last_command.clone(),
             last_exit_code: grid.last_exit_code,
             git_branch,
-            is_ssh,
-            is_tmux,
+            ssh_host,
+            tmux_session,
             agents_md,
             skills: self.skills.names(),
             command_history,
@@ -271,10 +292,13 @@ impl AgentHarness {
                 .await
             {
                 Ok(assistant_msg) => {
-                    conversation
+                    let mut conv = conversation
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .add_message(assistant_msg);
+                        .unwrap_or_else(|e| e.into_inner());
+                    conv.add_message(assistant_msg);
+                    if let Err(e) = conv.save() {
+                        log::warn!("Failed to auto-save conversation: {}", e);
+                    }
                 }
                 Err(e) => {
                     let _ = harness_tx.send(HarnessEvent::Error(e.to_string()));
@@ -318,6 +342,43 @@ impl AgentHarness {
                 }
             }
         }
+    }
+
+    /// Start a new conversation, saving the current one first
+    pub fn new_conversation(&mut self) {
+        let conv = self.conversation.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = conv.save() {
+            log::warn!("Failed to save conversation: {}", e);
+        }
+        drop(conv);
+        self.conversation = Arc::new(Mutex::new(Conversation::new()));
+    }
+
+    /// Restore a conversation by ID
+    pub fn load_conversation(&mut self, id: &str) -> bool {
+        match Conversation::load(id) {
+            Ok(conv) => {
+                // Save current first
+                let current = self.conversation.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = current.save();
+                drop(current);
+                self.conversation = Arc::new(Mutex::new(conv));
+                true
+            }
+            Err(e) => {
+                log::warn!("Failed to load conversation {}: {}", id, e);
+                false
+            }
+        }
+    }
+
+    /// Get the current conversation ID
+    pub fn conversation_id(&self) -> String {
+        self.conversation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .id
+            .clone()
     }
 
     pub fn update_config(&mut self, config: con_agent::AgentConfig) {
