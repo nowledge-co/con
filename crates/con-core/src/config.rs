@@ -31,9 +31,12 @@ impl Default for TerminalConfig {
     }
 }
 
-fn default_toggle_agent() -> String { "cmd+l".into() }
-fn default_command_palette() -> String { "cmd+shift+p".into() }
-fn default_new_tab() -> String { "cmd+t".into() }
+fn default_toggle_agent() -> String { "cmd-l".into() }
+fn default_command_palette() -> String { "cmd-shift-p".into() }
+fn default_new_tab() -> String { "cmd-t".into() }
+fn default_close_tab() -> String { "cmd-w".into() }
+fn default_settings() -> String { "cmd-,".into() }
+fn default_quit() -> String { "cmd-q".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -41,6 +44,9 @@ pub struct KeybindingConfig {
     pub toggle_agent: String,
     pub command_palette: String,
     pub new_tab: String,
+    pub close_tab: String,
+    pub settings: String,
+    pub quit: String,
 }
 
 impl Default for KeybindingConfig {
@@ -49,6 +55,9 @@ impl Default for KeybindingConfig {
             toggle_agent: default_toggle_agent(),
             command_palette: default_command_palette(),
             new_tab: default_new_tab(),
+            close_tab: default_close_tab(),
+            settings: default_settings(),
+            quit: default_quit(),
         }
     }
 }

@@ -56,6 +56,7 @@ kingston/
 │   │       ├── terminal_view.rs # GPUI canvas rendering of terminal grid
 │   │       ├── agent_panel.rs  # side panel for AI chat / tool output
 │   │       ├── input_bar.rs    # smart input bar (NLP/shell/skill modes)
+│   │       ├── pane_tree.rs    # split pane layout tree
 │   │       ├── settings_panel.rs # provider config UI (Cmd+,)
 │   │       ├── sidebar.rs      # session sidebar
 │   │       └── theme.rs        # Flexoki dark theme
@@ -65,7 +66,8 @@ kingston/
 │   │       ├── lib.rs
 │   │       ├── harness.rs     # orchestrates agent ↔ terminal
 │   │       ├── session.rs     # persist/restore workspace state
-│   │       └── config.rs      # con config (TOML)
+│   │       ├── config.rs      # con config (TOML)
+│   │       └── suggestions.rs # AI shell command suggestions
 │   │
 │   ├── con-terminal/          # terminal emulation layer
 │   │   └── src/
@@ -185,8 +187,8 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Clipboard paste (Cmd+V) with bracketed paste mode support
 - [x] Cmd+1..9 tab switching
 - [x] Session persistence (tabs, active tab, agent panel state)
-- [ ] Kitty keyboard protocol
-- [ ] Split panes (horizontal + vertical)
+- [x] Kitty keyboard protocol (CSI u encoding, push/pop/query flags)
+- [x] Split panes (horizontal Cmd+D, vertical Cmd+Shift+D, pane tree)
 
 ### Phase 2: Agent Harness
 - [x] Side panel for AI chat (Cmd+L to toggle)
@@ -195,7 +197,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Multi-provider config (13 providers via Rig 0.32)
 - [x] Settings panel (Cmd+,) with provider selector and model config
 - [x] Smart input bar (shell/agent/smart modes)
-- [ ] Agent notification system (blue ring on tab when agent needs attention)
+- [x] Agent notification system (blue dot on tab when agent responds)
 
 ### Phase 3: Agent Lifecycle & Tool Transparency
 - [x] PromptHook integration — tool calls visible in agent panel
@@ -220,11 +222,11 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] OSC 133 command block tracking (prompt/command/exit code detection)
 - [x] Command palette (Cmd+Shift+P) with fuzzy search and keyboard nav
 - [x] Command history in agent context (last 10 commands with exit codes)
-- [ ] Inline AI suggestions (ghost text below prompt, Tab to accept)
-- [ ] Command block actions: copy, re-run, explain, share
-- [ ] SSH-aware agent (knows when you're in a remote session)
-- [ ] tmux-aware agent (understands pane topology)
-- [ ] Conversation history + search
+- [x] Inline AI suggestions (debounced completion engine with caching)
+- [x] Command block actions (copy output, re-run, explain via agent)
+- [x] SSH-aware agent (parses SSH_CONNECTION for remote host)
+- [x] tmux-aware agent (queries tmux session name)
+- [x] Conversation history + search (save/load/list, new chat, history panel)
 
 ### Phase 6: Polish
 - [x] Session persistence and restore
@@ -242,7 +244,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Command palette expanded (clear, focus, toggle sidebar, cycle mode)
 - [x] Terminal settings in Settings UI (font size, scrollback lines)
 - [x] Cmd+A select all, Cmd+K clear scrollback
-- [ ] Configurable keybindings
+- [x] Configurable keybindings (config.toml keybindings section)
 - [ ] Plugin system (Lua or WASM)
 - [ ] Auto-update (Sparkle on macOS, appimage on Linux)
 - [ ] CLI tool (`con` command for scripting)

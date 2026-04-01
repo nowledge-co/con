@@ -1126,6 +1126,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "crossbeam-channel",
+ "dirs 6.0.0",
  "futures",
  "log",
  "rig-core",

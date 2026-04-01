@@ -2,6 +2,7 @@ mod agent_panel;
 mod assets;
 mod command_palette;
 mod input_bar;
+mod pane_tree;
 mod settings_panel;
 mod sidebar;
 mod terminal_view;
@@ -12,7 +13,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use workspace::ConWorkspace;
 
-actions!(con, [Quit, NewTab, ToggleAgentPanel, CloseTab]);
+actions!(con, [Quit, NewTab, ToggleAgentPanel, CloseTab, SplitRight, SplitDown, Undo, Redo, Cut, Copy, Paste, SelectAll]);
 
 fn main() {
     env_logger::init();
@@ -27,19 +28,67 @@ fn main() {
         // Load and activate con's design theme
         theme::init_theme(cx);
 
-        // Register global keybindings
+        // Register global keybindings from user config
+        let kb = &config.keybindings;
         cx.bind_keys([
-            KeyBinding::new("cmd-q", Quit, None),
-            KeyBinding::new("cmd-t", NewTab, None),
-            KeyBinding::new("cmd-l", ToggleAgentPanel, None),
-            KeyBinding::new("cmd-w", CloseTab, None),
-            KeyBinding::new("cmd-,", settings_panel::ToggleSettings, None),
-            KeyBinding::new("cmd-shift-p", command_palette::ToggleCommandPalette, None),
+            KeyBinding::new(&kb.quit, Quit, None),
+            KeyBinding::new(&kb.new_tab, NewTab, None),
+            KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
+            KeyBinding::new(&kb.close_tab, CloseTab, None),
+            KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
+            KeyBinding::new(&kb.command_palette, command_palette::ToggleCommandPalette, None),
+            KeyBinding::new("cmd-d", SplitRight, None),
+            KeyBinding::new("cmd-shift-d", SplitDown, None),
         ]);
 
         cx.on_action::<Quit>(|_, cx| {
             cx.quit();
         });
+
+        cx.set_menus(vec![
+            Menu {
+                name: "con".into(),
+                items: vec![
+                    MenuItem::action("Settings...", settings_panel::ToggleSettings),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit con", Quit),
+                ],
+            },
+            Menu {
+                name: "File".into(),
+                items: vec![
+                    MenuItem::action("New Tab", NewTab),
+                    MenuItem::action("Close Tab", CloseTab),
+                ],
+            },
+            Menu {
+                name: "Edit".into(),
+                items: vec![
+                    MenuItem::os_action("Undo", Undo, OsAction::Undo),
+                    MenuItem::os_action("Redo", Redo, OsAction::Redo),
+                    MenuItem::separator(),
+                    MenuItem::os_action("Cut", Cut, OsAction::Cut),
+                    MenuItem::os_action("Copy", Copy, OsAction::Copy),
+                    MenuItem::os_action("Paste", Paste, OsAction::Paste),
+                    MenuItem::separator(),
+                    MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+                ],
+            },
+            Menu {
+                name: "View".into(),
+                items: vec![
+                    MenuItem::action("Toggle Agent Panel", ToggleAgentPanel),
+                    MenuItem::action("Command Palette", command_palette::ToggleCommandPalette),
+                ],
+            },
+            Menu {
+                name: "Terminal".into(),
+                items: vec![
+                    MenuItem::action("Split Right", SplitRight),
+                    MenuItem::action("Split Down", SplitDown),
+                ],
+            },
+        ]);
 
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(
