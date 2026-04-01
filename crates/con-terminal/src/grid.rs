@@ -117,6 +117,16 @@ pub struct CommandBlock {
     pub exit_code: Option<i32>,
 }
 
+/// A command block visible in the current viewport
+#[derive(Debug, Clone)]
+pub struct VisibleCommandBlock {
+    pub command: String,
+    pub viewport_row: usize,
+    pub exit_code: Option<i32>,
+    pub output_start_row: usize,
+    pub output_end_row: usize,
+}
+
 /// Cursor shape
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CursorShape {
@@ -174,6 +184,10 @@ pub struct Grid {
     pending_responses: Vec<Vec<u8>>,
     /// Maximum scrollback lines (configurable)
     max_scrollback: usize,
+    /// Kitty keyboard protocol flags (0 = disabled)
+    pub kitty_keyboard_flags: u32,
+    /// Kitty keyboard flags stack (for push/pop)
+    kitty_flags_stack: Vec<u32>,
 }
 
 impl Grid {
@@ -220,6 +234,8 @@ impl Grid {
             title: None,
             pending_responses: Vec::new(),
             max_scrollback,
+            kitty_keyboard_flags: 0,
+            kitty_flags_stack: Vec::new(),
         }
     }
 
@@ -311,19 +327,80 @@ impl Grid {
     }
 
     pub fn resize(&mut self, new_cols: usize, new_rows: usize) {
-        // Reflow cells into new dimensions
-        let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
-        let copy_rows = new_rows.min(self.rows);
-        let copy_cols = new_cols.min(self.cols);
-        for row in 0..copy_rows {
-            for col in 0..copy_cols {
-                new_cells[row][col] = self.cells[row][col].clone();
+        if new_rows < self.rows {
+            // Shrinking vertically: push excess rows above cursor into scrollback
+            // so content near the cursor (recent output, prompt) stays visible.
+            let excess = self.rows - new_rows;
+            let save_count = excess.min(self.cursor.row);
+
+            // Save top rows to scrollback
+            for i in 0..save_count {
+                // Rewidth the row to new_cols for consistency
+                let mut row = self.cells[i].clone();
+                row.resize(new_cols, Cell::default());
+                self.scrollback.push(row);
             }
+            while self.scrollback.len() > self.max_scrollback {
+                self.scrollback.remove(0);
+            }
+
+            // Build new cells from remaining rows (starting after saved rows)
+            let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
+            for row in 0..new_rows {
+                let src_row = save_count + row;
+                if src_row < self.rows {
+                    let copy_cols = new_cols.min(self.cells[src_row].len());
+                    for col in 0..copy_cols {
+                        new_cells[row][col] = self.cells[src_row][col].clone();
+                    }
+                }
+            }
+            self.cursor.row = self.cursor.row.saturating_sub(save_count).min(new_rows - 1);
+            self.cells = new_cells;
+        } else if new_rows > self.rows {
+            // Growing vertically: pull lines from scrollback to fill extra space
+            let extra = new_rows - self.rows;
+            let pull = extra.min(self.scrollback.len());
+
+            let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
+
+            // Pull scrollback lines into top of new grid
+            for i in 0..pull {
+                let sb_idx = self.scrollback.len() - pull + i;
+                let copy_cols = new_cols.min(self.scrollback[sb_idx].len());
+                for col in 0..copy_cols {
+                    new_cells[i][col] = self.scrollback[sb_idx][col].clone();
+                }
+            }
+            let new_sb_len = self.scrollback.len() - pull;
+            self.scrollback.truncate(new_sb_len);
+
+            // Copy existing screen content below pulled lines
+            for row in 0..self.rows {
+                let dst_row = pull + row;
+                let copy_cols = new_cols.min(self.cells[row].len());
+                for col in 0..copy_cols {
+                    new_cells[dst_row][col] = self.cells[row][col].clone();
+                }
+            }
+            self.cursor.row = (self.cursor.row + pull).min(new_rows - 1);
+            self.cells = new_cells;
+        } else {
+            // Same row count — just adjust columns
+            let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
+            for row in 0..new_rows {
+                let copy_cols = new_cols.min(self.cells[row].len());
+                for col in 0..copy_cols {
+                    new_cells[row][col] = self.cells[row][col].clone();
+                }
+            }
+            self.cells = new_cells;
         }
-        self.cells = new_cells;
+
         self.cols = new_cols;
         self.rows = new_rows;
         self.dirty = vec![true; new_rows];
+        self.scroll_top = 0;
         self.scroll_bottom = new_rows - 1;
         self.cursor.row = self.cursor.row.min(new_rows - 1);
         self.cursor.col = self.cursor.col.min(new_cols - 1);
@@ -340,6 +417,71 @@ impl Grid {
     }
 
     /// Get lines of text content from the terminal (for agent context)
+    /// Return command blocks whose output rows overlap the current viewport.
+    /// Row indices are adjusted to viewport-relative coordinates.
+    pub fn visible_command_blocks(&self) -> Vec<VisibleCommandBlock> {
+        let scrollback_len = self.scrollback.len();
+        let viewport_start = scrollback_len.saturating_sub(self.scrollback_offset);
+        let viewport_end = viewport_start + self.rows;
+
+        self.command_blocks
+            .iter()
+            .filter_map(|block| {
+                // Command block rows are absolute (scrollback + screen)
+                let block_start = block.output_start_row;
+                let block_end = block.output_end_row;
+
+                // Check overlap with viewport
+                if block_end < viewport_start || block_start >= viewport_end {
+                    return None;
+                }
+
+                // Convert to viewport-relative row
+                let rel_row = block_start.saturating_sub(viewport_start);
+
+                Some(VisibleCommandBlock {
+                    command: block.command.clone(),
+                    viewport_row: rel_row,
+                    exit_code: block.exit_code,
+                    output_start_row: block.output_start_row,
+                    output_end_row: block.output_end_row,
+                })
+            })
+            .collect()
+    }
+
+    /// Extract the text output of a command block
+    pub fn command_block_output(&self, output_start: usize, output_end: usize) -> String {
+        let scrollback_len = self.scrollback.len();
+        let mut lines = Vec::new();
+
+        for abs_row in output_start..=output_end {
+            let line = if abs_row < scrollback_len {
+                self.scrollback[abs_row]
+                    .iter()
+                    .map(|c| c.c)
+                    .collect::<String>()
+            } else {
+                let screen_row = abs_row - scrollback_len;
+                if screen_row < self.rows {
+                    self.cells[screen_row]
+                        .iter()
+                        .map(|c| c.c)
+                        .collect::<String>()
+                } else {
+                    String::new()
+                }
+            };
+            lines.push(line.trim_end().to_string());
+        }
+
+        // Trim trailing empty lines
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
     pub fn content_lines(&self, max_lines: usize) -> Vec<String> {
         let mut lines = Vec::new();
         let start = if self.rows > max_lines {
@@ -908,6 +1050,29 @@ impl Perform for Grid {
                         _ => {}
                     }
                 }
+            }
+            // Kitty keyboard protocol: CSI > u — push flags
+            ('u', [b'>']) => {
+                let flags = p(0, 0) as u32;
+                self.kitty_flags_stack.push(self.kitty_keyboard_flags);
+                self.kitty_keyboard_flags = flags;
+            }
+            // Kitty keyboard protocol: CSI < u — pop flags
+            ('u', [b'<']) => {
+                let count = p(0, 1) as usize;
+                for _ in 0..count {
+                    if let Some(flags) = self.kitty_flags_stack.pop() {
+                        self.kitty_keyboard_flags = flags;
+                    } else {
+                        self.kitty_keyboard_flags = 0;
+                        break;
+                    }
+                }
+            }
+            // Kitty keyboard protocol: CSI ? u — query flags
+            ('u', [b'?']) => {
+                let response = format!("\x1b[?{}u", self.kitty_keyboard_flags);
+                self.pending_responses.push(response.into_bytes());
             }
             // Cursor style (DECSCUSR)
             ('q', [b' ']) => {

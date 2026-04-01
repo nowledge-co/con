@@ -138,3 +138,59 @@ fn modifier_param(mods: &Modifiers) -> u8 {
     }
     code
 }
+
+impl InputEncoder {
+    /// Encode a key using the Kitty keyboard protocol (CSI u format).
+    /// Returns None if the key should fall through to standard encoding.
+    pub fn encode_key_kitty(key: &str, modifiers: Modifiers) -> Option<Vec<u8>> {
+        let keycode = kitty_keycode(key)?;
+        let mods = modifier_param(&modifiers);
+
+        if mods > 1 {
+            Some(format!("\x1b[{};{}u", keycode, mods).into_bytes())
+        } else {
+            Some(format!("\x1b[{}u", keycode).into_bytes())
+        }
+    }
+}
+
+/// Map GPUI key names to Kitty protocol key codes (Unicode codepoints)
+fn kitty_keycode(key: &str) -> Option<u32> {
+    match key {
+        "escape" => Some(27),
+        "enter" | "return" => Some(13),
+        "tab" => Some(9),
+        "backspace" => Some(127),
+        "delete" => Some(57423),
+        "insert" => Some(57425),
+        "left" => Some(57419),
+        "right" => Some(57421),
+        "up" => Some(57417),
+        "down" => Some(57420),
+        "pageup" => Some(57422),
+        "pagedown" => Some(57424),
+        "home" => Some(57418),
+        "end" => Some(57416),
+        "space" => Some(32),
+        "f1" => Some(57364),
+        "f2" => Some(57365),
+        "f3" => Some(57366),
+        "f4" => Some(57367),
+        "f5" => Some(57368),
+        "f6" => Some(57369),
+        "f7" => Some(57370),
+        "f8" => Some(57371),
+        "f9" => Some(57372),
+        "f10" => Some(57373),
+        "f11" => Some(57374),
+        "f12" => Some(57375),
+        _ => {
+            // Single character — use Unicode codepoint
+            if key.len() == 1 {
+                key.chars().next().map(|c| c as u32)
+            } else {
+                None
+            }
+        }
+    }
+}
