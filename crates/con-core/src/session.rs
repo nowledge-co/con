@@ -8,6 +8,8 @@ pub struct Session {
     pub active_tab: usize,
     pub agent_panel_open: bool,
     #[serde(default)]
+    pub agent_panel_width: Option<f32>,
+    #[serde(default)]
     pub conversation_id: Option<String>,
 }
 
@@ -37,6 +39,7 @@ impl Default for Session {
             }],
             active_tab: 0,
             agent_panel_open: false,
+            agent_panel_width: None,
             conversation_id: None,
         }
     }

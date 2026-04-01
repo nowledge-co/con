@@ -1,3 +1,4 @@
+use crossbeam_channel::Sender;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,106 @@ pub enum ToolError {
     Io(#[from] std::io::Error),
 }
 
-// ── shell_exec ──────────────────────────────────────────────────────
+// ── terminal_exec (visible) ─────────────────────────────────────────
+
+/// Request to execute a command in the visible terminal.
+/// The workspace polls for these and writes the command to the focused PTY.
+#[derive(Debug)]
+pub struct TerminalExecRequest {
+    pub command: String,
+    pub working_dir: Option<String>,
+    pub response_tx: Sender<TerminalExecResponse>,
+}
+
+/// Response from a visible terminal execution.
+#[derive(Debug, Clone)]
+pub struct TerminalExecResponse {
+    pub output: String,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Deserialize)]
+pub struct TerminalExecArgs {
+    pub command: String,
+}
+
+/// Tool that executes commands in the user's visible terminal.
+///
+/// Unlike `ShellExecTool` (which runs commands in a hidden subprocess),
+/// this tool writes commands directly to the terminal PTY. The user sees
+/// the command execute in real time — full transparency.
+///
+/// Communication flow:
+/// 1. Tool sends `TerminalExecRequest` to the workspace via channel
+/// 2. Workspace writes command to focused PTY
+/// 3. Shell integration (OSC 133) reports completion with output
+/// 4. Workspace sends `TerminalExecResponse` back
+/// 5. Tool returns the output to the agent
+pub struct TerminalExecTool {
+    request_tx: Sender<TerminalExecRequest>,
+}
+
+impl TerminalExecTool {
+    pub fn new(request_tx: Sender<TerminalExecRequest>) -> Self {
+        Self { request_tx }
+    }
+}
+
+impl Tool for TerminalExecTool {
+    const NAME: &'static str = "terminal_exec";
+    type Error = ToolError;
+    type Args = TerminalExecArgs;
+    type Output = ShellExecOutput;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Execute a command in the user's visible terminal. The user sees the command run in real time. Prefer this over shell_exec for transparency.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute in the visible terminal"
+                    }
+                },
+                "required": ["command"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+
+        self.request_tx
+            .send(TerminalExecRequest {
+                command: args.command,
+                working_dir: None,
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Terminal exec channel closed".into()))?;
+
+        // Wait for the terminal to execute and report back.
+        // 60s timeout: most commands finish quickly, but builds/tests can take longer.
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .map_err(|_| {
+                    ToolError::CommandFailed(
+                        "Terminal exec timed out (60s) — the command may still be running".into(),
+                    )
+                })
+        })?;
+
+        Ok(ShellExecOutput {
+            stdout: response.output,
+            stderr: String::new(),
+            exit_code: response.exit_code,
+        })
+    }
+}
+
+// ── shell_exec (background) ────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct ShellExecArgs {
@@ -38,7 +138,7 @@ impl Tool for ShellExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute a shell command. The command runs in a visible terminal pane — the user sees everything.".to_string(),
+            description: "Execute a shell command in a background process. Output is captured but not shown in the terminal. Use terminal_exec instead for visible execution.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -166,6 +266,166 @@ impl Tool for FileWriteTool {
         }
         std::fs::write(&args.path, &args.content)?;
         Ok(format!("Wrote {} bytes to {}", args.content.len(), args.path))
+    }
+}
+
+// ── edit_file ──────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct EditFileArgs {
+    pub path: String,
+    pub old_text: String,
+    pub new_text: String,
+}
+
+/// Surgical file editing: finds `old_text` in the file and replaces it with `new_text`.
+/// Much safer than file_write (which overwrites the entire file).
+pub struct EditFileTool;
+
+impl Tool for EditFileTool {
+    const NAME: &'static str = "edit_file";
+    type Error = ToolError;
+    type Args = EditFileArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Edit a file by replacing a specific text snippet. Safer than file_write — only changes the targeted section.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file to edit"
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": "The exact text to find and replace (must match exactly)"
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": "The replacement text"
+                    }
+                },
+                "required": ["path", "old_text", "new_text"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let content = std::fs::read_to_string(&args.path)?;
+
+        let count = content.matches(&args.old_text).count();
+        if count == 0 {
+            return Err(ToolError::CommandFailed(format!(
+                "old_text not found in {}",
+                args.path
+            )));
+        }
+        if count > 1 {
+            return Err(ToolError::CommandFailed(format!(
+                "old_text matches {} times in {} — must be unique. Provide more surrounding context.",
+                count, args.path
+            )));
+        }
+
+        let new_content = content.replacen(&args.old_text, &args.new_text, 1);
+        std::fs::write(&args.path, &new_content)?;
+
+        // Generate a simple diff summary
+        let old_lines = args.old_text.lines().count();
+        let new_lines = args.new_text.lines().count();
+        Ok(format!(
+            "Edited {}: replaced {} line(s) with {} line(s)",
+            args.path, old_lines, new_lines
+        ))
+    }
+}
+
+// ── list_files ─────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ListFilesArgs {
+    pub path: Option<String>,
+    pub pattern: Option<String>,
+    pub max_depth: Option<usize>,
+}
+
+/// List files in a directory, optionally filtered by glob pattern.
+pub struct ListFilesTool;
+
+impl Tool for ListFilesTool {
+    const NAME: &'static str = "list_files";
+    type Error = ToolError;
+    type Args = ListFilesArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "List files and directories. Returns a tree-like listing.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to list (defaults to cwd)"
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern to filter (e.g. '*.rs', '**/*.toml')"
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Maximum directory depth (default: 3)"
+                    }
+                }
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let dir = args.path.as_deref().unwrap_or(".");
+        let max_depth = args.max_depth.unwrap_or(3);
+
+        // Try git ls-files first (respects .gitignore, fast)
+        let stdout = std::process::Command::new("git")
+            .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+            .current_dir(dir)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+
+        // Fall back to find for non-git directories
+        let stdout = match stdout {
+            Some(s) if !s.trim().is_empty() => s,
+            _ => {
+                let mut cmd = std::process::Command::new("find");
+                cmd.arg(dir);
+                cmd.args(["-maxdepth", &max_depth.to_string()]);
+                cmd.args(["-not", "-path", "*/.git/*"]);
+                if let Some(ref pattern) = args.pattern {
+                    cmd.args(["-name", pattern]);
+                }
+                cmd.args(["-type", "f"]);
+                let output = cmd.output()?;
+                String::from_utf8_lossy(&output.stdout).to_string()
+            }
+        };
+
+        let mut files: Vec<&str> = stdout.lines().collect();
+        files.sort();
+
+        let total = files.len();
+        let listing: String = files.into_iter().take(500).collect::<Vec<_>>().join("\n");
+
+        if total > 500 {
+            Ok(format!("{}\n... ({} more files)", listing, total - 500))
+        } else {
+            Ok(listing)
+        }
     }
 }
 

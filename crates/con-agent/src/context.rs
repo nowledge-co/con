@@ -25,6 +25,10 @@ pub struct TerminalContext {
     pub skills: Vec<String>,
     /// Recent command blocks from OSC 133 shell integration
     pub command_history: Vec<CommandBlockInfo>,
+    /// Git diff output (from `git diff --stat` + `git diff`, truncated)
+    pub git_diff: Option<String>,
+    /// Project file structure (truncated directory listing)
+    pub project_structure: Option<String>,
 }
 
 /// A completed command block from OSC 133 shell integration
@@ -47,68 +51,113 @@ impl TerminalContext {
             agents_md: None,
             skills: Vec::new(),
             command_history: Vec::new(),
+            git_diff: None,
+            project_structure: None,
         }
     }
 
-    /// Build a system prompt enriched with terminal context
+    /// Build a system prompt enriched with terminal context.
+    ///
+    /// Uses XML tags for structured context injection — models parse these
+    /// more reliably than plain text blocks, and it prevents context from
+    /// being confused with user instructions.
     pub fn to_system_prompt(&self) -> String {
-        let mut parts = vec![
-            "You are con, a terminal AI assistant. You help users with their terminal tasks.".to_string(),
-            "You can execute shell commands, read/write files, and reason about the user's environment.".to_string(),
-        ];
+        let mut prompt = String::with_capacity(4096);
+
+        prompt.push_str(
+            "You are con, a terminal AI assistant. You help users with their terminal tasks.\n\
+             You can execute shell commands, read/write files, and reason about the user's environment.\n\n\
+             When executing commands, prefer terminal_exec over shell_exec. terminal_exec runs commands \
+             visibly in the user's terminal so they can see what you're doing. Use shell_exec only for \
+             background operations or when you need to suppress output.\n\n",
+        );
+
+        prompt.push_str("<terminal_context>\n");
 
         if let Some(cwd) = &self.cwd {
-            parts.push(format!("Current directory: {}", cwd));
+            prompt.push_str(&format!("<cwd>{}</cwd>\n", cwd));
         }
 
         if let Some(branch) = &self.git_branch {
-            parts.push(format!("Git branch: {}", branch));
+            prompt.push_str(&format!("<git_branch>{}</git_branch>\n", branch));
         }
 
         if let Some(host) = &self.ssh_host {
-            parts.push(format!("Connected via SSH to {}", host));
+            prompt.push_str(&format!("<ssh_host>{}</ssh_host>\n", host));
         }
 
         if let Some(session) = &self.tmux_session {
-            parts.push(format!("Inside tmux session '{}'", session));
+            prompt.push_str(&format!("<tmux_session>{}</tmux_session>\n", session));
         }
 
-        if let Some(agents_md) = &self.agents_md {
-            parts.push(format!(
-                "The project has an AGENTS.md with these instructions:\n{}",
-                agents_md
-            ));
-        }
-
-        if !self.skills.is_empty() {
-            parts.push(format!("Available skills: {}", self.skills.join(", ")));
+        if let Some(cmd) = &self.last_command {
+            match self.last_exit_code {
+                Some(code) => prompt.push_str(&format!(
+                    "<last_command exit_code=\"{}\">{}</last_command>\n",
+                    code, cmd
+                )),
+                None => prompt.push_str(&format!("<last_command>{}</last_command>\n", cmd)),
+            }
         }
 
         if !self.command_history.is_empty() {
-            let history: Vec<String> = self
-                .command_history
-                .iter()
-                .map(|block| {
-                    match block.exit_code {
-                        Some(code) => format!("$ {} (exit {})", block.command, code),
-                        None => format!("$ {}", block.command),
+            prompt.push_str("<command_history>\n");
+            for block in &self.command_history {
+                match block.exit_code {
+                    Some(code) => {
+                        prompt.push_str(&format!("$ {} (exit {})\n", block.command, code))
                     }
-                })
-                .collect();
-            parts.push(format!(
-                "Recent command history:\n{}",
-                history.join("\n")
-            ));
+                    None => prompt.push_str(&format!("$ {}\n", block.command)),
+                }
+            }
+            prompt.push_str("</command_history>\n");
         }
 
         if !self.recent_output.is_empty() {
-            let output = self.recent_output.join("\n");
-            parts.push(format!(
-                "Recent terminal output:\n```\n{}\n```",
-                output
+            prompt.push_str("<terminal_output>\n");
+            for line in &self.recent_output {
+                prompt.push_str(line);
+                prompt.push('\n');
+            }
+            prompt.push_str("</terminal_output>\n");
+        }
+
+        if let Some(diff) = &self.git_diff {
+            prompt.push_str("<git_diff>\n");
+            prompt.push_str(diff);
+            if !diff.ends_with('\n') {
+                prompt.push('\n');
+            }
+            prompt.push_str("</git_diff>\n");
+        }
+
+        if let Some(structure) = &self.project_structure {
+            prompt.push_str("<project_structure>\n");
+            prompt.push_str(structure);
+            if !structure.ends_with('\n') {
+                prompt.push('\n');
+            }
+            prompt.push_str("</project_structure>\n");
+        }
+
+        prompt.push_str("</terminal_context>\n");
+
+        if let Some(agents_md) = &self.agents_md {
+            prompt.push_str("\n<agents_md>\n");
+            prompt.push_str(agents_md);
+            if !agents_md.ends_with('\n') {
+                prompt.push('\n');
+            }
+            prompt.push_str("</agents_md>\n");
+        }
+
+        if !self.skills.is_empty() {
+            prompt.push_str(&format!(
+                "\nAvailable skills: {}\n",
+                self.skills.join(", ")
             ));
         }
 
-        parts.join("\n\n")
+        prompt
     }
 }

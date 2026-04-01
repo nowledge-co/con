@@ -21,7 +21,7 @@ members = [
     "crates/con",           # main binary (GPUI app shell)
     "crates/con-core",      # shared logic (harness, config, session)
     "crates/con-terminal",  # terminal emulation (grid, pty, input)
-    "crates/con-agent",     # AI agent harness (Rig 0.32, tools)
+    "crates/con-agent",     # AI agent harness (Rig 0.34, tools)
     "crates/con-cli",       # CLI client (stub)
 ]
 resolver = "3"
@@ -33,7 +33,7 @@ resolver = "3"
 |-------|---------|---------|
 | gpui | mainline (git) | GPU-accelerated UI framework (from zed-industries/zed) |
 | gpui-component | git | shadcn/ui-style component library |
-| rig-core | 0.32 | Multi-provider AI agent framework |
+| rig-core | 0.34 | Multi-provider AI agent framework |
 | portable-pty | 0.8 | Cross-platform PTY management |
 | vte | 0.15 | Pure Rust VT100/xterm parser |
 | crossbeam-channel | 0.5 | Lock-free channels for event passing |

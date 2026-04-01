@@ -17,8 +17,8 @@ pub struct ToolApprovalDecision {
 /// Emits `AgentEvent`s for tool calls and tool results so the UI
 /// can show what the agent is doing in real time.
 ///
-/// For dangerous tools (shell_exec, file_write), blocks on an
-/// approval channel waiting for the user's decision before proceeding.
+/// For dangerous tools (terminal_exec, shell_exec, file_write, edit_file),
+/// blocks on an approval channel waiting for the user's decision before proceeding.
 ///
 /// ## Channel design
 ///
@@ -56,7 +56,10 @@ impl ConHook {
 }
 
 pub fn is_dangerous(tool_name: &str) -> bool {
-    matches!(tool_name, "shell_exec" | "file_write")
+    matches!(
+        tool_name,
+        "shell_exec" | "terminal_exec" | "file_write" | "edit_file"
+    )
 }
 
 /// Approval timeout: 5 minutes. If the user doesn't respond, the tool

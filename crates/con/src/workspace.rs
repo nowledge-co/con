@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-use crate::agent_panel::{AgentPanel, LoadConversation, NewConversation};
+use crate::agent_panel::{AgentPanel, CancelRequest, LoadConversation, NewConversation};
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
 use crate::pane_tree::{PaneTree, SplitDirection};
@@ -10,6 +10,7 @@ use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
 use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, TerminalView};
 use crate::{CloseTab, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
 use con_core::config::Config;
+use con_agent::{TerminalExecRequest, TerminalExecResponse};
 use con_core::harness::{AgentHarness, HarnessEvent, InputKind};
 use con_core::session::Session;
 
@@ -39,6 +40,8 @@ pub struct ConWorkspace {
     /// Shared bridge between divider on_mouse_down (plain Fn closure) and
     /// workspace's entity-level drag handler. Persists across render cycles.
     pending_drag_init: std::sync::Arc<std::sync::Mutex<Option<(usize, f32)>>>,
+    /// Agent panel drag state: start X position and start width when drag began.
+    agent_panel_drag: Option<(f32, f32)>,
 }
 
 impl ConWorkspace {
@@ -86,6 +89,7 @@ impl ConWorkspace {
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
         let agent_panel_open = session.agent_panel_open;
+        let agent_panel_width = session.agent_panel_width.unwrap_or(400.0);
         let agent_panel = cx.new(|cx| AgentPanel::new(cx));
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
@@ -109,13 +113,16 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_load_conversation)
             .detach();
+        cx.subscribe_in(&agent_panel, window, Self::on_cancel_request)
+            .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_select)
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
             .detach();
 
-        // Poll harness events periodically
+        // Poll harness events and terminal exec requests periodically
         let events_rx = harness.events().clone();
+        let terminal_exec_rx = harness.terminal_exec_requests().clone();
         cx.spawn(async move |this, cx| {
             loop {
                 let mut got_event = false;
@@ -127,6 +134,16 @@ impl ConWorkspace {
                     })
                     .ok();
                 }
+
+                // Handle visible terminal exec requests from the agent
+                while let Ok(req) = terminal_exec_rx.try_recv() {
+                    got_event = true;
+                    this.update(cx, |workspace, cx| {
+                        workspace.handle_terminal_exec_request(req, cx);
+                    })
+                    .ok();
+                }
+
                 if !got_event {
                     cx.background_executor()
                         .timer(std::time::Duration::from_millis(50))
@@ -152,9 +169,10 @@ impl ConWorkspace {
             command_palette,
             harness,
             agent_panel_open,
-            agent_panel_width: 400.0,
+            agent_panel_width,
             modal_was_open: false,
             pending_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            agent_panel_drag: None,
         }
     }
 
@@ -185,6 +203,7 @@ impl ConWorkspace {
             tabs,
             active_tab: self.active_tab,
             agent_panel_open: self.agent_panel_open,
+            agent_panel_width: Some(self.agent_panel_width),
             conversation_id: Some(self.harness.conversation_id()),
         };
         if let Err(e) = session.save() {
@@ -228,6 +247,16 @@ impl ConWorkspace {
             });
             self.save_session(cx);
         }
+    }
+
+    fn on_cancel_request(
+        &mut self,
+        _panel: &Entity<AgentPanel>,
+        _event: &CancelRequest,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.harness.cancel_current();
     }
 
     fn on_sidebar_select(
@@ -412,6 +441,11 @@ impl ConWorkspace {
                     panel.add_step("Thinking...", cx);
                 });
             }
+            HarnessEvent::ThinkingDelta(text) => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.update_thinking(&text, cx);
+                });
+            }
             HarnessEvent::Step(step) => {
                 let step_text = format!("{:?}", step);
                 self.agent_panel.update(cx, |panel, cx| {
@@ -476,6 +510,57 @@ impl ConWorkspace {
             HarnessEvent::SkillsUpdated(_) => {}
         }
         cx.notify();
+    }
+
+    /// Handle a visible terminal execution request from the agent.
+    ///
+    /// Writes the command to the focused PTY so the user sees it execute.
+    /// Registers an OSC 133 completion callback to capture the output
+    /// and send it back to the tool. Falls back to a timeout-based capture
+    /// for shells without shell integration.
+    fn handle_terminal_exec_request(
+        &mut self,
+        req: TerminalExecRequest,
+        cx: &mut Context<Self>,
+    ) {
+        let terminal = self.active_terminal().clone();
+        let tv = terminal.read(cx);
+
+        // Register the completion callback BEFORE writing the command.
+        // When OSC 133 D fires, the grid captures output and sends it back.
+        let response_tx = req.response_tx.clone();
+        tv.grid().lock().set_command_complete_callback(Box::new(
+            move |output, exit_code| {
+                let _ = response_tx.send(TerminalExecResponse { output, exit_code });
+            },
+        ));
+
+        // Write the command to the PTY — user sees it execute in real time
+        let cmd_with_newline = format!("{}\n", req.command);
+        tv.write_to_pty(cmd_with_newline.as_bytes());
+
+        // Timeout fallback: if OSC 133 never fires (no shell integration),
+        // capture whatever is in the terminal after 30 seconds.
+        let fallback_response_tx = req.response_tx;
+        let grid = tv.grid().clone();
+        cx.spawn(async move |_this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(30))
+                .await;
+
+            // If the callback already fired, the channel is closed.
+            // try_send will fail with SendError, which we ignore.
+            let output = {
+                let g = grid.lock();
+                // Capture recent terminal output as fallback
+                g.content_lines(50).join("\n")
+            };
+            let _ = fallback_response_tx.try_send(TerminalExecResponse {
+                output,
+                exit_code: None,
+            });
+        })
+        .detach();
     }
 
     fn toggle_agent_panel(
@@ -793,13 +878,35 @@ impl Render for ConWorkspace {
             .child(terminal_area);
 
         if self.agent_panel_open {
-            main_area = main_area.child(
-                div()
-                    .w(px(self.agent_panel_width))
-                    .border_l_1()
-                    .border_color(theme.border)
-                    .child(self.agent_panel.clone()),
-            );
+            // Draggable divider between terminal area and agent panel
+            main_area = main_area
+                .child(
+                    div()
+                        .id("agent-panel-divider")
+                        .w(px(7.0))
+                        .h_full()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_col_resize()
+                        .hover(|s| s.bg(theme.primary.opacity(0.15)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
+                                this.agent_panel_drag =
+                                    Some((f32::from(event.position.x), this.agent_panel_width));
+                            }),
+                        )
+                        .child(div().w(px(1.0)).h_full().bg(theme.border)),
+                )
+                .child(
+                    div()
+                        .w(px(self.agent_panel_width))
+                        .h_full()
+                        .overflow_hidden()
+                        .child(self.agent_panel.clone()),
+                );
         }
 
         // Tab bar — macOS-style with close buttons and quiet active treatment
@@ -954,9 +1061,22 @@ impl Render for ConWorkspace {
             // even when cursor is over terminal views (which capture mouse events).
             .on_mouse_move({
                 let pending = self.pending_drag_init.clone();
-                let agent_panel_open = self.agent_panel_open;
-                let agent_panel_width = self.agent_panel_width;
                 cx.listener(move |this, event: &MouseMoveEvent, win, cx| {
+                    // Agent panel resize drag
+                    if let Some((start_x, start_width)) = this.agent_panel_drag {
+                        let delta = start_x - f32::from(event.position.x);
+                        let new_width = (start_width + delta).clamp(200.0, 800.0);
+                        if (this.agent_panel_width - new_width).abs() > 1.0 {
+                            this.agent_panel_width = new_width;
+                            // Notify all terminals so they detect new available space
+                            for terminal in this.tabs[this.active_tab].pane_tree.all_terminals() {
+                                terminal.update(cx, |_, cx| cx.notify());
+                            }
+                            cx.notify();
+                        }
+                        return;
+                    }
+
                     let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
 
                     // Consume a pending drag initiation written by divider on_mouse_down
@@ -978,7 +1098,7 @@ impl Render for ConWorkspace {
                         if let Some(dir) = pane_tree.dragging_direction() {
                             match dir {
                                 SplitDirection::Horizontal => {
-                                    let panel_w = if agent_panel_open { agent_panel_width } else { 0.0 };
+                                    let panel_w = if this.agent_panel_open { this.agent_panel_width + 7.0 } else { 0.0 };
                                     (f32::from(event.position.x), win_w - panel_w)
                                 }
                                 SplitDirection::Vertical => {
@@ -1002,6 +1122,12 @@ impl Render for ConWorkspace {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    if this.agent_panel_drag.is_some() {
+                        this.agent_panel_drag = None;
+                        this.save_session(cx);
+                        cx.notify();
+                        return;
+                    }
                     let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
                     if pane_tree.is_dragging() {
                         pane_tree.end_drag();

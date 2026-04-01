@@ -39,7 +39,7 @@ vte = "0.15"
 portable-pty = "0.8"
 
 # AI Agent
-rig-core = { version = "0.32", default-features = false, features = ["reqwest-rustls"] }
+rig-core = { version = "0.34", default-features = false, features = ["rustls"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }

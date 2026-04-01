@@ -7,11 +7,16 @@ use rig::completion::CompletionModel;
 use rig::providers::{anthropic, openai};
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::context::TerminalContext;
 use crate::conversation::{AgentStep, Conversation, Message};
 use crate::hook::{ConHook, ToolApprovalDecision};
-use crate::tools::{FileReadTool, FileWriteTool, SearchTool, ShellExecTool};
+use crate::tools::{
+    EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, SearchTool, ShellExecTool,
+    TerminalExecRequest, TerminalExecTool,
+};
 
 // ── Provider enum ───────────────────────────────────────────────────
 
@@ -158,6 +163,8 @@ impl AgentConfig {
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     Thinking,
+    /// Incremental extended thinking/reasoning text from the model
+    ThinkingDelta(String),
     Token(String),
     Step(AgentStep),
     ToolCallStart {
@@ -195,6 +202,8 @@ impl AgentProvider {
         context: &TerminalContext,
         event_tx: Sender<AgentEvent>,
         approval_rx: crossbeam_channel::Receiver<ToolApprovalDecision>,
+        terminal_exec_tx: crossbeam_channel::Sender<TerminalExecRequest>,
+        cancelled: Arc<AtomicBool>,
     ) -> Result<Message> {
         let _ = event_tx.send(AgentEvent::Thinking);
 
@@ -219,16 +228,40 @@ impl AgentProvider {
 
         let response = match self.config.provider {
             ProviderKind::Anthropic | ProviderKind::OpenAICompatible => {
-                self.send_anthropic(&system_prompt, &last_user_msg, chat_history, hook)
-                    .await?
+                self.send_anthropic(
+                    &system_prompt,
+                    &last_user_msg,
+                    chat_history,
+                    hook,
+                    terminal_exec_tx,
+                    &event_tx,
+                    &cancelled,
+                )
+                .await?
             }
             ProviderKind::OpenAI => {
-                self.send_openai(&system_prompt, &last_user_msg, chat_history, hook)
-                    .await?
+                self.send_openai(
+                    &system_prompt,
+                    &last_user_msg,
+                    chat_history,
+                    hook,
+                    terminal_exec_tx,
+                    &event_tx,
+                    &cancelled,
+                )
+                .await?
             }
             _ => {
-                self.send_openai_compat(&system_prompt, &last_user_msg, chat_history, hook)
-                    .await?
+                self.send_openai_compat(
+                    &system_prompt,
+                    &last_user_msg,
+                    chat_history,
+                    hook,
+                    terminal_exec_tx,
+                    &event_tx,
+                    &cancelled,
+                )
+                .await?
             }
         };
 
@@ -244,6 +277,9 @@ impl AgentProvider {
         prompt: &str,
         history: Vec<rig::message::Message>,
         hook: ConHook,
+        terminal_exec_tx: crossbeam_channel::Sender<TerminalExecRequest>,
+        event_tx: &Sender<AgentEvent>,
+        cancelled: &Arc<AtomicBool>,
     ) -> Result<String> {
         let api_key = self.resolve_api_key()?;
         let mut builder = anthropic::Client::builder().api_key(&api_key);
@@ -257,9 +293,12 @@ impl AgentProvider {
         let agent = client
             .agent(self.config.effective_model())
             .preamble(system_prompt)
+            .tool(TerminalExecTool::new(terminal_exec_tx))
             .tool(ShellExecTool)
             .tool(FileReadTool)
             .tool(FileWriteTool)
+            .tool(EditFileTool)
+            .tool(ListFilesTool)
             .tool(SearchTool)
             .max_tokens(self.config.max_tokens)
             .default_max_turns(self.config.max_turns)
@@ -271,7 +310,7 @@ impl AgentProvider {
             .with_history(history)
             .await;
 
-        consume_stream(stream).await
+        consume_stream(stream, event_tx, cancelled).await
     }
 
     async fn send_openai(
@@ -280,6 +319,9 @@ impl AgentProvider {
         prompt: &str,
         history: Vec<rig::message::Message>,
         hook: ConHook,
+        terminal_exec_tx: crossbeam_channel::Sender<TerminalExecRequest>,
+        event_tx: &Sender<AgentEvent>,
+        cancelled: &Arc<AtomicBool>,
     ) -> Result<String> {
         let api_key = self.resolve_api_key()?;
         let mut builder = openai::Client::builder().api_key(&api_key);
@@ -293,9 +335,12 @@ impl AgentProvider {
         let agent = client
             .agent(self.config.effective_model())
             .preamble(system_prompt)
+            .tool(TerminalExecTool::new(terminal_exec_tx))
             .tool(ShellExecTool)
             .tool(FileReadTool)
             .tool(FileWriteTool)
+            .tool(EditFileTool)
+            .tool(ListFilesTool)
             .tool(SearchTool)
             .max_tokens(self.config.max_tokens)
             .default_max_turns(self.config.max_turns)
@@ -307,7 +352,7 @@ impl AgentProvider {
             .with_history(history)
             .await;
 
-        consume_stream(stream).await
+        consume_stream(stream, event_tx, cancelled).await
     }
 
     async fn send_openai_compat(
@@ -316,6 +361,9 @@ impl AgentProvider {
         prompt: &str,
         history: Vec<rig::message::Message>,
         hook: ConHook,
+        terminal_exec_tx: crossbeam_channel::Sender<TerminalExecRequest>,
+        event_tx: &Sender<AgentEvent>,
+        cancelled: &Arc<AtomicBool>,
     ) -> Result<String> {
         let api_key = self.resolve_api_key()?;
 
@@ -340,9 +388,12 @@ impl AgentProvider {
         let agent = client
             .agent(self.config.effective_model())
             .preamble(system_prompt)
+            .tool(TerminalExecTool::new(terminal_exec_tx))
             .tool(ShellExecTool)
             .tool(FileReadTool)
             .tool(FileWriteTool)
+            .tool(EditFileTool)
+            .tool(ListFilesTool)
             .tool(SearchTool)
             .max_tokens(self.config.max_tokens)
             .default_max_turns(self.config.max_turns)
@@ -354,7 +405,7 @@ impl AgentProvider {
             .with_history(history)
             .await;
 
-        consume_stream(stream).await
+        consume_stream(stream, event_tx, cancelled).await
     }
 
     fn default_base_url(&self) -> Option<String> {
@@ -451,17 +502,52 @@ impl AgentProvider {
 /// Consume a streaming response, accumulating the full text.
 /// Hook callbacks (on_text_delta, on_tool_call, on_tool_result) fire
 /// as the stream is consumed — this function just collects the result.
+///
+/// Emits `ThinkingDelta` events for extended thinking/reasoning blocks,
+/// allowing the UI to display the model's reasoning process.
+///
+/// Checks the cancellation flag between stream items. When cancelled,
+/// returns the partial response accumulated so far.
 async fn consume_stream<R: Send + 'static>(
     mut stream: StreamingResult<R>,
+    event_tx: &Sender<AgentEvent>,
+    cancelled: &AtomicBool,
 ) -> Result<String> {
     let mut response_text = String::new();
+    // Track whether we received streaming reasoning deltas.
+    // If so, the final Reasoning block is redundant (it contains the same text).
+    let mut had_reasoning_deltas = false;
+
     while let Some(item) = stream.next().await {
+        if cancelled.load(Ordering::Relaxed) {
+            break;
+        }
         match item {
-            Ok(MultiTurnStreamItem::StreamAssistantItem(
-                StreamedAssistantContent::Text(text),
-            )) => {
-                response_text.push_str(&text.text);
-            }
+            Ok(MultiTurnStreamItem::StreamAssistantItem(content)) => match content {
+                StreamedAssistantContent::Text(text) => {
+                    response_text.push_str(&text.text);
+                }
+                StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                    had_reasoning_deltas = true;
+                    let _ = event_tx.send(AgentEvent::ThinkingDelta(reasoning));
+                }
+                StreamedAssistantContent::Reasoning(reasoning) => {
+                    // Only emit if we didn't get streaming deltas (avoids duplication).
+                    // Some providers send only the full block without deltas.
+                    if !had_reasoning_deltas {
+                        for part in &reasoning.content {
+                            if let rig::completion::message::ReasoningContent::Text {
+                                text, ..
+                            } = part
+                            {
+                                let _ =
+                                    event_tx.send(AgentEvent::ThinkingDelta(text.clone()));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
             Ok(_) => {}
             Err(e) => return Err(anyhow::anyhow!("Streaming error: {e}")),
         }

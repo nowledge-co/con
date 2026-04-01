@@ -69,7 +69,7 @@ con is structured as a Rust workspace with clear crate boundaries:
 - **con** — GPUI app shell (window, tabs, panels, input bar)
 - **con-core** — Shared logic (agent harness, config, session management)
 - **con-terminal** — Terminal emulation (VT parser, PTY, grid, keyboard encoding)
-- **con-agent** — AI harness (Rig 0.32, tool definitions, conversation, skills)
+- **con-agent** — AI harness (Rig 0.34, tool definitions, conversation, skills)
 
 The agent harness runs on a shared tokio runtime. Events flow from the agent to the UI via crossbeam channels. Tool calls go through a PromptHook lifecycle that emits events for every step — the UI is never in the dark about what the agent is doing.
 

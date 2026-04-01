@@ -284,12 +284,12 @@ impl Render for TerminalView {
         let cell_w = self.cell_width;
         let cell_h = self.cell_height;
 
-        // Clip rendering to the last known canvas size to prevent text
-        // overflow into adjacent panes when the grid is larger than
-        // the available space (before resize catches up).
-        let (vis_cols, vis_rows) = *self.last_resized_dims.lock();
-        let render_cols = cols.min(vis_cols);
-        let render_rows = rows.min(vis_rows);
+        // The split container has overflow_hidden() so any text outside
+        // the pane bounds is clipped at the CSS level. We render the full
+        // grid — the canvas prepaint will resize on the next frame if the
+        // available space differs from the grid dimensions.
+        let render_cols = cols;
+        let render_rows = rows;
 
         // Snapshot grid for rendering
         struct CellInfo {

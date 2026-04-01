@@ -34,6 +34,9 @@ pub struct LoadConversation {
 }
 impl EventEmitter<LoadConversation> for AgentPanel {}
 
+pub struct CancelRequest;
+impl EventEmitter<CancelRequest> for AgentPanel {}
+
 pub struct AgentPanel {
     messages: Vec<PanelMessage>,
     tool_calls: Vec<ToolCallEntry>,
@@ -48,6 +51,9 @@ pub struct AgentPanel {
 struct PanelMessage {
     role: String,
     content: String,
+    /// Extended thinking/reasoning text from the model (collapsible)
+    thinking: Option<String>,
+    thinking_collapsed: bool,
     steps: Vec<String>,
     steps_collapsed: bool,
 }
@@ -58,6 +64,8 @@ impl AgentPanel {
             messages: vec![PanelMessage {
                 role: "system".to_string(),
                 content: "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.".to_string(),
+                thinking: None,
+                thinking_collapsed: true,
                 steps: Vec::new(),
                 steps_collapsed: false,
             }],
@@ -75,6 +83,8 @@ impl AgentPanel {
         self.messages = vec![PanelMessage {
             role: "system".to_string(),
             content: "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.".to_string(),
+            thinking: None,
+            thinking_collapsed: true,
             steps: Vec::new(),
             steps_collapsed: false,
         }];
@@ -104,6 +114,8 @@ impl AgentPanel {
         self.messages.push(PanelMessage {
             role: role.to_string(),
             content: content.to_string(),
+            thinking: None,
+            thinking_collapsed: true,
             steps: Vec::new(),
             steps_collapsed: false,
         });
@@ -191,12 +203,38 @@ impl AgentPanel {
         cx.notify();
     }
 
+    /// Accumulate extended thinking/reasoning text into the current message.
+    /// Creates an assistant message if one doesn't exist yet (thinking arrives
+    /// before text tokens).
+    pub fn update_thinking(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.status = AgentStatus::Thinking;
+        if !self.streaming {
+            self.messages.push(PanelMessage {
+                role: "assistant".to_string(),
+                content: String::new(),
+                thinking: Some(String::new()),
+                thinking_collapsed: true,
+                steps: Vec::new(),
+                steps_collapsed: false,
+            });
+            self.streaming = true;
+        }
+        if let Some(last) = self.messages.last_mut() {
+            let thinking = last.thinking.get_or_insert_with(String::new);
+            thinking.push_str(text);
+        }
+        self.scroll_to_bottom();
+        cx.notify();
+    }
+
     pub fn update_streaming(&mut self, token: &str, cx: &mut Context<Self>) {
         self.status = AgentStatus::Responding;
         if !self.streaming {
             self.messages.push(PanelMessage {
                 role: "assistant".to_string(),
                 content: String::new(),
+                thinking: None,
+                thinking_collapsed: true,
                 steps: Vec::new(),
                 steps_collapsed: false,
             });
@@ -220,6 +258,8 @@ impl AgentPanel {
             self.messages.push(PanelMessage {
                 role: "assistant".to_string(),
                 content: final_content.to_string(),
+                thinking: None,
+                thinking_collapsed: true,
                 steps: Vec::new(),
                 steps_collapsed: false,
             });
@@ -241,9 +281,12 @@ impl AgentPanel {
 
     fn tool_icon(tool_name: &str) -> &'static str {
         match tool_name {
+            "terminal_exec" => "phosphor/play.svg",
             "shell_exec" => "phosphor/terminal.svg",
             "file_write" => "phosphor/pencil-simple.svg",
             "file_read" => "phosphor/file-code.svg",
+            "edit_file" => "phosphor/pencil-simple.svg",
+            "list_files" => "phosphor/folder.svg",
             "search" => "phosphor/magnifying-glass.svg",
             _ => "phosphor/gear.svg",
         }
@@ -252,7 +295,7 @@ impl AgentPanel {
     fn format_tool_args(tool_name: &str, args: &str) -> String {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
             match tool_name {
-                "shell_exec" => {
+                "terminal_exec" | "shell_exec" => {
                     if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
                         return cmd.to_string();
                     }
@@ -262,9 +305,20 @@ impl AgentPanel {
                         return path.to_string();
                     }
                 }
+                "edit_file" => {
+                    if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
+                        return path.to_string();
+                    }
+                }
+                "list_files" => {
+                    if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
+                        return path.to_string();
+                    }
+                    return ".".to_string();
+                }
                 "search" => {
-                    if let Some(query) = v.get("query").and_then(|q| q.as_str()) {
-                        return format!("\"{}\"", query);
+                    if let Some(pattern) = v.get("pattern").and_then(|q| q.as_str()) {
+                        return format!("\"{}\"", pattern);
                     }
                 }
                 _ => {}
@@ -407,7 +461,76 @@ impl Render for AgentPanel {
                                     .text_color(theme.primary)
                                     .child("Agent"),
                             ),
-                    )
+                    );
+
+                // Extended thinking (collapsible, dimmed)
+                if let Some(thinking) = &msg.thinking {
+                    if !thinking.is_empty() {
+                        let thinking_collapsed = msg.thinking_collapsed;
+                        let chevron = if thinking_collapsed {
+                            "phosphor/caret-right.svg"
+                        } else {
+                            "phosphor/caret-down.svg"
+                        };
+                        let word_count = thinking.split_whitespace().count();
+
+                        msg_el = msg_el.child(
+                            div()
+                                .id(SharedString::from(format!("thinking-toggle-{msg_idx}")))
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .pl(px(18.0))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .hover(|s| s.text_color(theme.foreground))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        if let Some(m) = this.messages.get_mut(msg_idx) {
+                                            m.thinking_collapsed = !m.thinking_collapsed;
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(
+                                    svg()
+                                        .path(chevron)
+                                        .size(px(10.0))
+                                        .text_color(theme.muted_foreground),
+                                )
+                                .child(format!("Thinking ({} words)", word_count)),
+                        );
+
+                        if !thinking_collapsed {
+                            // Truncate display to first 2000 chars for render performance
+                            let display_text = if thinking.len() > 2000 {
+                                format!("{}…", &thinking[..thinking.floor_char_boundary(2000)])
+                            } else {
+                                thinking.clone()
+                            };
+                            msg_el = msg_el.child(
+                                div()
+                                    .pl(px(18.0))
+                                    .ml(px(4.0))
+                                    .border_l_1()
+                                    .border_color(theme.muted.opacity(0.15))
+                                    .child(
+                                        div()
+                                            .pl(px(8.0))
+                                            .py(px(4.0))
+                                            .text_xs()
+                                            .line_height(px(16.0))
+                                            .text_color(theme.muted_foreground.opacity(0.7))
+                                            .child(display_text),
+                                    ),
+                            );
+                        }
+                    }
+                }
+
+                msg_el = msg_el
                     .child(
                         div()
                             .pl(px(18.0))
@@ -720,11 +843,29 @@ impl Render for AgentPanel {
                     ),
             )
             // Right: actions
-            .child(
-                div()
+            .child({
+                let mut actions = div()
                     .flex()
                     .items_center()
-                    .gap(px(2.0))
+                    .gap(px(2.0));
+
+                // Stop button — only visible when agent is working
+                if self.status != AgentStatus::Idle {
+                    actions = actions.child(
+                        icon_button("agent-stop", "phosphor/stop.svg", theme)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    cx.emit(CancelRequest);
+                                    this.status = AgentStatus::Idle;
+                                    this.streaming = false;
+                                    cx.notify();
+                                }),
+                            ),
+                    );
+                }
+
+                actions
                     .child(
                         icon_button("agent-history-toggle", "phosphor/clock-counter-clockwise.svg", theme)
                             .on_mouse_down(
@@ -743,8 +884,8 @@ impl Render for AgentPanel {
                                     this.clear_messages(cx);
                                 }),
                             ),
-                    ),
-            );
+                    )
+            });
 
         // ── Panel ─────────────────────────────────────────────────
         let mut panel = div()

@@ -8,7 +8,7 @@ con is an open-source, cross-platform, GPU-accelerated terminal emulator with a 
 
 - **UI**: GPUI-CE v0.3.3 (community edition of Zed's framework, Apache 2.0)
 - **Terminal emulation**: vte v0.15 (pure Rust VT parser) + portable-pty
-- **AI agent**: Rig v0.32.0 (from crates.io, 13 providers, Tool trait)
+- **AI agent**: Rig v0.34.0 (from crates.io, 13 providers, Tool trait)
 - **PTY**: portable-pty crate (cross-platform)
 - **Socket API**: planned — Unix domain sockets, JSON-RPC (cmux-inspired)
 
@@ -26,7 +26,7 @@ kingston/
 │   ├── con/           # Main binary (GPUI app shell)
 │   ├── con-core/      # Shared logic (harness, config, session)
 │   ├── con-terminal/  # Terminal emulation (grid, pty, input encoding)
-│   ├── con-agent/     # AI harness (Rig 0.32, tools, conversation)
+│   ├── con-agent/     # AI harness (Rig 0.34, tools, conversation)
 │   └── con-cli/       # CLI + socket client (stub)
 ├── postmortem/        # Integration & incident postmortems
 └── assets/            # Themes, fonts, icons

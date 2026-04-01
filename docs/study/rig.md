@@ -1,9 +1,9 @@
-# Study: Rig v0.32.0 — Rust AI Agent Framework
+# Study: Rig — Rust AI Agent Framework
 
 ## Overview
 
 [Rig](https://rig.rs/) is the most mature Rust-native AI agent framework. MIT licensed.
-Vendored at `3pp/rig/rig/rig-core` (v0.32.0).
+Using `rig-core` v0.34 from crates.io (upgraded from v0.32; API stable, feature renamed `reqwest-rustls` → `rustls`).
 
 ## Core Architecture
 
@@ -58,7 +58,7 @@ let response: String = agent
     .await?;
 ```
 
-## Tool Definition (Rig 0.32 API)
+## Tool Definition (Rig API)
 
 ```rust
 use rig::tool::Tool;

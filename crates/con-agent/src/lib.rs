@@ -10,4 +10,7 @@ pub use conversation::{Conversation, ConversationSummary, Message, MessageRole};
 pub use hook::{is_dangerous, ConHook, ToolApprovalDecision};
 pub use provider::{AgentConfig, AgentEvent, AgentProvider, ProviderKind};
 pub use skills::{Skill, SkillRegistry};
-pub use tools::{FileReadTool, FileWriteTool, SearchTool, ShellExecTool};
+pub use tools::{
+    EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, SearchTool, ShellExecTool,
+    TerminalExecRequest, TerminalExecResponse, TerminalExecTool,
+};

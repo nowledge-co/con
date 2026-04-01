@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to con are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/) conventions.
+All notable changes to con are documented here.
 
 ## [Unreleased]
 
@@ -8,33 +8,31 @@ All notable changes to con are documented here. This project follows [Keep a Cha
 
 **Terminal**
 - Full terminal emulation with 256-color and truecolor support
-- Mouse text selection: click-drag, double-click word select, triple-click line select, Cmd+A select all
-- Cursor blink with 500ms cycle, resets on keypress
-- Scrollback buffer with mouse wheel navigation and floating scroll indicator
-- Clipboard support: Cmd+C copy, Cmd+V paste with bracketed paste mode
-- Cmd+K to clear terminal scrollback
-- Dynamic resize — terminal fills available window space
-- Alternate screen, DEC private modes, application cursor keys
-- OSC 7 working directory tracking, OSC 133 command block detection
-- Tab management: Cmd+T new, Cmd+W close, Cmd+1-9 switch, Cmd+Shift+[/] cycle
-- Session persistence — tabs, active tab, and panel state restored on launch
+- Split panes — divide your workspace horizontally (Cmd+D) or vertically (Cmd+Shift+D), with drag-to-resize dividers
+- Mouse text selection with click-drag, double-click for words, triple-click for lines, and Cmd+A to select all
+- Scrollback buffer with smooth scroll and a floating indicator showing how far back you are
+- Clipboard integration with Cmd+C / Cmd+V, including bracketed paste mode for safe pasting into editors
+- Cmd+K to clear your scrollback history
+- Tab management — Cmd+T to open, Cmd+W to close, Cmd+1–9 to switch, Cmd+Shift+[/] to cycle
+- Session restore — your tabs, layout, and panel state are preserved when you relaunch
+- Full compatibility with terminal applications like vim, htop, and tmux (alternate screen, application cursor keys, DEC private modes, Kitty keyboard protocol)
 
 **AI Agent**
-- Built-in AI agent with 13 provider support (Anthropic, OpenAI, DeepSeek, Groq, Gemini, Ollama, OpenRouter, Mistral, Together, Cohere, Perplexity, xAI, and OpenAI-compatible endpoints)
-- Terminal context injection — the agent sees your recent output, working directory, git branch, and command history
-- Streaming responses with real-time token rendering
-- Tool transparency — tool calls appear in the agent panel with arguments and results
-- Tool approval — dangerous tools (shell_exec, file_write) require explicit Allow/Deny before execution
-- Auto-approve toggle in settings for trusted workflows
-- Multi-turn conversation with context preserved across messages
-- Built-in skills: /explain, /fix, /commit, /test, /review
-- Custom skills via AGENTS.md files in your project directory
+- Built-in AI assistant that works with 13 providers — Anthropic, OpenAI, DeepSeek, Groq, Gemini, Ollama, OpenRouter, Mistral, Together, Cohere, Perplexity, xAI, and any OpenAI-compatible endpoint
+- Transparent execution — when the agent runs a command, it executes right in your terminal. You see every keystroke, every output, in real time. No hidden processes.
+- Deep context awareness — the agent sees your working directory, recent output, command history, git branch, uncommitted changes, and project structure. It reasons about what you're actually doing.
+- Seven tools at the agent's disposal: run commands (visibly or in the background), read files, write files, surgically edit specific sections of a file, list project files, and search your codebase
+- Streaming responses you can cancel mid-flight — hit Stop and the partial response is preserved
+- Extended thinking — when the model reasons before responding, you can expand a collapsible section to see its thought process
+- Approval workflow — the agent asks before running commands or modifying files. You stay in control. (Or toggle auto-approve for trusted sessions.)
+- Multi-turn conversations with full context carried across messages
+- Built-in skills: type /explain, /fix, /commit, /test, or /review to trigger purpose-built agent workflows
+- Custom skills via AGENTS.md files in your project
 
 **Interface**
-- Smart input bar with three modes: Smart (auto-detect), Shell, Agent
-- Smart mode classifies input using known command detection — shell commands go to the terminal, questions go to the agent, /skills invoke agent skills
-- Agent panel (Cmd+L) with structured tool call cards, approval dialogs, and code block rendering
-- Settings panel (Cmd+,) with provider selector, model configuration, terminal settings, and auto-approve toggle
-- Command palette (Cmd+Shift+P) with fuzzy search — access all actions from the keyboard
-- Session sidebar with tab list and new session button
-- Flexoki dark theme with matched terminal ANSI colors
+- Smart input bar that auto-detects intent — shell commands go to the terminal, questions go to the agent, /skills invoke workflows
+- Agent panel (Cmd+L) with structured tool call cards, inline approval dialogs, code block rendering, and a resizable width you can drag to adjust
+- Settings panel (Cmd+,) to configure your provider, model, and preferences
+- Command palette (Cmd+Shift+P) with fuzzy search for every action
+- Session sidebar showing your open tabs
+- Flexoki dark theme with carefully matched ANSI colors

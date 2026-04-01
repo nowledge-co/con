@@ -188,6 +188,10 @@ pub struct Grid {
     pub kitty_keyboard_flags: u32,
     /// Kitty keyboard flags stack (for push/pop)
     kitty_flags_stack: Vec<u32>,
+    /// Callback fired when a command completes (OSC 133 D).
+    /// Used by the visible terminal tool to capture command output.
+    /// Takes the output text and optional exit code.
+    on_command_complete: Option<Box<dyn FnOnce(String, Option<i32>) + Send>>,
 }
 
 impl Grid {
@@ -236,7 +240,18 @@ impl Grid {
             max_scrollback,
             kitty_keyboard_flags: 0,
             kitty_flags_stack: Vec::new(),
+            on_command_complete: None,
         }
+    }
+
+    /// Register a one-shot callback for the next command completion.
+    /// Used by the visible terminal tool: the workspace sets this before
+    /// writing a command to the PTY, and it fires when OSC 133 D arrives.
+    pub fn set_command_complete_callback(
+        &mut self,
+        callback: Box<dyn FnOnce(String, Option<i32>) + Send>,
+    ) {
+        self.on_command_complete = Some(callback);
     }
 
     pub fn cell(&self, row: usize, col: usize) -> &Cell {
@@ -777,15 +792,23 @@ impl Perform for Grid {
                             if let (Some(cmd), Some(start_row)) =
                                 (self.last_command.clone(), self.command_start_row)
                             {
+                                let output_end = self.cursor.row;
                                 self.command_blocks.push(CommandBlock {
                                     command: cmd,
                                     output_start_row: start_row,
-                                    output_end_row: self.cursor.row,
+                                    output_end_row: output_end,
                                     exit_code,
                                 });
                                 // Keep last 50 command blocks
                                 if self.command_blocks.len() > 50 {
                                     self.command_blocks.remove(0);
+                                }
+
+                                // Fire the visible terminal tool callback if registered
+                                if let Some(callback) = self.on_command_complete.take() {
+                                    let output =
+                                        self.command_block_output(start_row, output_end);
+                                    callback(output, exit_code);
                                 }
                             }
                             self.command_start_row = None;

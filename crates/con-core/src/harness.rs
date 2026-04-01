@@ -1,10 +1,11 @@
 use con_agent::{
     is_dangerous, AgentEvent, AgentProvider, Conversation, Message, SkillRegistry,
-    TerminalContext, ToolApprovalDecision,
+    TerminalContext, TerminalExecRequest, ToolApprovalDecision,
 };
 use con_terminal::Grid;
 use crossbeam_channel::{Receiver, Sender};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 
@@ -18,6 +19,8 @@ use crate::config::Config;
 pub enum HarnessEvent {
     /// Agent is preparing to call the model
     Thinking,
+    /// Incremental extended thinking/reasoning text from the model
+    ThinkingDelta(String),
     /// Incremental text token from streaming
     Token(String),
     /// Reasoning step (e.g. "anthropic:claude-sonnet-4-0")
@@ -86,12 +89,20 @@ pub struct AgentHarness {
     event_tx: Sender<HarnessEvent>,
     event_rx: Receiver<HarnessEvent>,
     runtime: Arc<Runtime>,
+    /// Channel for visible terminal execution requests (agent → workspace).
+    /// The sender is cloned into TerminalExecTool instances.
+    terminal_exec_tx: Sender<TerminalExecRequest>,
+    terminal_exec_rx: Receiver<TerminalExecRequest>,
+    /// Cancellation flag for the current agent request.
+    /// Set to true to stop streaming. Reset on each new send_message().
+    cancel_flag: Arc<AtomicBool>,
 }
 
 impl AgentHarness {
     pub fn new(config: &Config) -> Self {
         let skills = SkillRegistry::new();
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (terminal_exec_tx, terminal_exec_rx) = crossbeam_channel::unbounded();
 
         let runtime = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
@@ -108,11 +119,20 @@ impl AgentHarness {
             event_tx,
             event_rx,
             runtime,
+            terminal_exec_tx,
+            terminal_exec_rx,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn events(&self) -> &Receiver<HarnessEvent> {
         &self.event_rx
+    }
+
+    /// Channel for terminal exec requests — the workspace polls this to
+    /// execute agent commands in the visible terminal.
+    pub fn terminal_exec_requests(&self) -> &Receiver<TerminalExecRequest> {
+        &self.terminal_exec_rx
     }
 
     /// Classify user input: NLP, command, or skill
@@ -193,6 +213,81 @@ impl AgentHarness {
             })
             .collect();
 
+        // Gather git diff (stat + diff, truncated to avoid bloating context)
+        let git_diff = cwd.as_ref().and_then(|dir| {
+            let stat = std::process::Command::new("git")
+                .args(["diff", "--stat"])
+                .current_dir(dir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+
+            if stat.trim().is_empty() {
+                return None;
+            }
+
+            let diff = std::process::Command::new("git")
+                .args(["diff"])
+                .current_dir(dir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+
+            // Truncate diff to ~2000 lines to keep context manageable
+            let diff_lines: Vec<&str> = diff.lines().collect();
+            let was_truncated = diff_lines.len() > 2000;
+
+            let mut result = stat;
+            result.push('\n');
+            result.push_str(&diff_lines[..diff_lines.len().min(2000)].join("\n"));
+            if was_truncated {
+                result.push_str("\n... (truncated)");
+            }
+
+            Some(result)
+        });
+
+        // Gather project file structure (shallow directory listing)
+        let project_structure = cwd.as_ref().and_then(|dir| {
+            // Use `git ls-files` if in a repo (respects .gitignore), fall back to find
+            let output = std::process::Command::new("git")
+                .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+                .current_dir(dir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+
+            let listing = output.or_else(|| {
+                std::process::Command::new("find")
+                    .args([".", "-maxdepth", "3", "-type", "f", "-not", "-path", "./.git/*"])
+                    .current_dir(dir)
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            })?;
+
+            if listing.trim().is_empty() {
+                return None;
+            }
+
+            // Truncate to 200 files
+            let file_lines: Vec<&str> = listing.lines().collect();
+            let total = file_lines.len();
+
+            if total > 200 {
+                let truncated = file_lines[..200].join("\n");
+                Some(format!("{}\n... ({} more files)", truncated, total - 200))
+            } else {
+                Some(file_lines.join("\n"))
+            }
+        });
+
         TerminalContext {
             cwd,
             recent_output,
@@ -204,6 +299,8 @@ impl AgentHarness {
             agents_md,
             skills: self.skills.names(),
             command_history,
+            git_diff,
+            project_structure,
         }
     }
 
@@ -221,9 +318,14 @@ impl AgentHarness {
             .unwrap_or_else(|e| e.into_inner())
             .add_message(user_msg);
 
+        // Reset cancellation flag for new request
+        self.cancel_flag.store(false, Ordering::Relaxed);
+
         let harness_tx = self.event_tx.clone();
         let agent_config = self.config.clone();
         let conversation = self.conversation.clone();
+        let terminal_exec_tx = self.terminal_exec_tx.clone();
+        let cancelled = self.cancel_flag.clone();
 
         // Per-request approval channel: the sender goes to the UI via
         // ToolApprovalNeeded events, the receiver goes to the ConHook.
@@ -241,6 +343,7 @@ impl AgentHarness {
                 while let Ok(event) = agent_rx.recv() {
                     let mapped = match event {
                         AgentEvent::Thinking => HarnessEvent::Thinking,
+                        AgentEvent::ThinkingDelta(t) => HarnessEvent::ThinkingDelta(t),
                         AgentEvent::Token(t) => HarnessEvent::Token(t),
                         AgentEvent::Step(s) => HarnessEvent::Step(s),
                         AgentEvent::ToolCallStart {
@@ -288,7 +391,7 @@ impl AgentHarness {
             let provider = AgentProvider::new(agent_config);
 
             match provider
-                .send(&conv_snapshot, &context, agent_tx, approval_rx)
+                .send(&conv_snapshot, &context, agent_tx, approval_rx, terminal_exec_tx, cancelled)
                 .await
             {
                 Ok(assistant_msg) => {
@@ -379,6 +482,12 @@ impl AgentHarness {
             .unwrap_or_else(|e| e.into_inner())
             .id
             .clone()
+    }
+
+    /// Cancel the current agent request. The streaming loop will
+    /// stop and return the partial response accumulated so far.
+    pub fn cancel_current(&self) {
+        self.cancel_flag.store(true, Ordering::Relaxed);
     }
 
     pub fn update_config(&mut self, config: con_agent::AgentConfig) {

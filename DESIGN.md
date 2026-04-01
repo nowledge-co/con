@@ -35,7 +35,7 @@ An open-source, cross-platform, GPU-accelerated terminal emulator that treats AI
 │           │              │                               │
 │  ┌────────┴────────┐  ┌──┴──────────────┐               │
 │  │ con-terminal    │  │ con-agent       │               │
-│  │ (vte parser     │  │ (rig 0.32,      │               │
+│  │ (vte parser     │  │ (rig 0.34,      │               │
 │  │  + PTY)         │  │  multi-provider)     │               │
 │  └─────────────────┘  └─────────────────┘               │
 └─────────────────────────────────────────────────────────┘
@@ -76,12 +76,12 @@ kingston/
 │   │       ├── grid.rs        # terminal grid + VTE Perform impl
 │   │       └── input.rs       # keyboard → escape sequence encoding
 │   │
-│   ├── con-agent/             # AI agent harness (Rig 0.32)
+│   ├── con-agent/             # AI agent harness (Rig 0.34)
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── provider.rs    # Multi-provider Rig Agent (13 providers)
 │   │       ├── hook.rs        # ConHook — PromptHook lifecycle bridge
-│   │       ├── tools.rs       # Rig Tool trait impls (shell, file, search)
+│   │       ├── tools.rs       # Rig Tool trait impls (terminal_exec, shell, file, edit, list, search)
 │   │       ├── context.rs     # terminal context extraction for agent
 │   │       ├── conversation.rs # conversation state + Rig Message conversion
 │   │       └── skills.rs      # skill registry + AGENTS.md parser
@@ -137,7 +137,7 @@ GPUI gives us Zed-level text rendering quality (critical for a terminal) and a p
 | **AutoAgents** | Multi-agent focused, heavier weight. Good for orchestration but overkill for terminal agent. |
 | **Raw HTTP** | Maximum control but months of provider-specific work. |
 
-**Rig v0.32 gives us:**
+**Rig v0.34 gives us:**
 - `CompletionClient::agent()` builder — preamble + tools + model config in one chain
 - `Tool` trait — type-safe tool definitions with `Args` (Deserialize), `Output` (Serialize), `Error`
 - `Chat` trait — multi-turn conversation with `Vec<Message>` history
@@ -145,9 +145,13 @@ GPUI gives us Zed-level text rendering quality (critical for a terminal) and a p
 - `anthropic::Client::new(api_key)` — direct Anthropic provider with model constants (`CLAUDE_4_SONNET`)
 - Agent loop with automatic tool calling (up to N turns)
 
-**Current integration:** con-agent implements 4 tools as Rig `Tool` impls (shell_exec, file_read, file_write, search), supports 13 providers (Anthropic, OpenAI, OpenAI-compatible, DeepSeek, Groq, Gemini, Ollama, OpenRouter, Mistral, Together, Cohere, Perplexity, xAI) with custom base_url for proxy endpoints. The harness runs on a shared tokio runtime. Provider settings are configurable via Cmd+, settings panel.
+**Current integration:** con-agent implements 7 tools as Rig `Tool` impls (terminal_exec, shell_exec, file_read, file_write, edit_file, list_files, search), supports 13 providers (Anthropic, OpenAI, OpenAI-compatible, DeepSeek, Groq, Gemini, Ollama, OpenRouter, Mistral, Together, Cohere, Perplexity, xAI) with custom base_url for proxy endpoints. The harness runs on a shared tokio runtime. Provider settings are configurable via Cmd+, settings panel.
 
-**Agent lifecycle (PromptHook):** Each agent request uses `agent.prompt().with_hook(hook).with_history(history)` instead of `agent.chat()`. The `ConHook` struct implements Rig's `PromptHook<M>` trait, emitting `AgentEvent`s for every tool call start/result and text delta. For dangerous tools (`shell_exec`, `file_write`), the hook blocks on a per-request approval channel — the UI must explicitly allow or deny execution before the agent proceeds. Safe tools (`file_read`, `search`) execute immediately. A 5-minute timeout prevents indefinite hangs if the UI becomes unresponsive.
+**Agent lifecycle (PromptHook):** Each agent request uses `agent.prompt().with_hook(hook).with_history(history)` instead of `agent.chat()`. The `ConHook` struct implements Rig's `PromptHook<M>` trait, emitting `AgentEvent`s for every tool call start/result and text delta. For dangerous tools (`shell_exec`, `terminal_exec`, `file_write`, `edit_file`), the hook blocks on a per-request approval channel — the UI must explicitly allow or deny execution before the agent proceeds. Safe tools (`file_read`, `list_files`, `search`) execute immediately. A 5-minute timeout prevents indefinite hangs if the UI becomes unresponsive.
+
+**Visible terminal tool:** The `terminal_exec` tool is con's core differentiator. Instead of running commands in a hidden subprocess, it writes commands to the user's visible terminal PTY. Output is captured via OSC 133 shell integration (with a 30-second timeout fallback for shells without it). The user sees every command the agent runs in real time — full transparency. The architecture uses a crossbeam channel from the tool to the workspace, with a completion callback registered on the grid.
+
+**Streaming cancellation:** Agent requests can be cancelled mid-stream. The harness maintains an `Arc<AtomicBool>` cancellation flag checked between stream items. The agent panel shows a "Stop" button during streaming. Cancellation preserves the partial response accumulated so far.
 
 **Per-request approval channels:** Each `send_message()` creates a fresh crossbeam channel pair. The sender is delivered to the UI via `ToolApprovalNeeded` events. The receiver is owned by the `ConHook` for that request. This eliminates race conditions between concurrent agent requests — only one hook instance reads from each channel.
 
@@ -194,7 +198,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Side panel for AI chat (Cmd+L to toggle)
 - [x] Terminal context injection (last N lines, current command, cwd)
 - [x] Tool execution: agent can run shell commands in terminal
-- [x] Multi-provider config (13 providers via Rig 0.32)
+- [x] Multi-provider config (13 providers via Rig 0.34)
 - [x] Settings panel (Cmd+,) with provider selector and model config
 - [x] Smart input bar (shell/agent/smart modes)
 - [x] Agent notification system (blue dot on tab when agent responds)
@@ -248,6 +252,18 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [ ] Plugin system (Lua or WASM)
 - [ ] Auto-update (Sparkle on macOS, appimage on Linux)
 - [ ] CLI tool (`con` command for scripting)
+
+### Phase 7: Agent Capabilities & Terminal Polish
+- [x] Rig 0.32 → 0.34 upgrade (stable API, `rustls` feature rename)
+- [x] Rich context injection (git diff, project structure, XML-tagged system prompt)
+- [x] Visible terminal tool (terminal_exec — commands execute in user's visible PTY)
+- [x] Surgical file editing tool (edit_file — find & replace, not full overwrite)
+- [x] Directory listing tool (list_files — .gitignore-aware)
+- [x] Streaming cancellation (Stop button, partial response preserved)
+- [x] Resizable agent panel (drag divider, width persisted in session)
+- [ ] Inline suggestions ghost text (Tab to accept)
+- [x] Extended thinking display (collapsible sections in agent panel)
+- [ ] Theme configurability (load external palettes, light mode)
 
 ---
 
@@ -333,7 +349,7 @@ cargo test --workspace         # test everything
 ```
 
 ### Build Pipeline
-1. Cargo resolves workspace deps from crates.io (gpui-ce 0.3, rig-core 0.32)
+1. Cargo resolves workspace deps from crates.io (gpui, rig-core 0.34)
 2. GPUI-CE compiles Metal shaders at runtime (`runtime_shaders` feature — no Xcode.app needed for dev)
 3. `cargo build` produces the `con` binary with all crates linked
 
