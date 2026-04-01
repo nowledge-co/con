@@ -990,6 +990,11 @@ impl Render for ConWorkspace {
                         };
 
                     if pane_tree.update_drag(current_pos, total_size) {
+                        // Notify all terminals in the active tab so they
+                        // re-render and detect new bounds during canvas prepaint
+                        for terminal in pane_tree.all_terminals() {
+                            terminal.update(cx, |_, cx| cx.notify());
+                        }
                         cx.notify();
                     }
                 })
