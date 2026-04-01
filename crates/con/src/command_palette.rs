@@ -1,5 +1,6 @@
 use gpui::*;
 use gpui_component::input::InputState;
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::{input::Input, ActiveTheme};
 
 actions!(command_palette, [ToggleCommandPalette]);
@@ -51,6 +52,18 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Input",
     },
     PaletteAction {
+        id: "split-right",
+        label: "Split Right",
+        shortcut: "⌘D",
+        category: "Pane",
+    },
+    PaletteAction {
+        id: "split-down",
+        label: "Split Down",
+        shortcut: "⇧⌘D",
+        category: "Pane",
+    },
+    PaletteAction {
         id: "toggle-sidebar",
         label: "Toggle Sidebar",
         shortcut: "",
@@ -77,6 +90,7 @@ pub struct CommandPalette {
     query_text: String,
     selected_index: usize,
     focus_handle: FocusHandle,
+    scroll_handle: ScrollHandle,
 }
 
 /// Emitted when the user selects an action
@@ -100,6 +114,7 @@ impl CommandPalette {
             query_text: String::new(),
             selected_index: 0,
             focus_handle: cx.focus_handle(),
+            scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -165,7 +180,16 @@ impl Render for CommandPalette {
 
         let theme = cx.theme();
 
-        let mut list = div().flex().flex_col().max_h(px(320.0));
+        let mut list = div()
+            .id("palette-list")
+            .flex()
+            .flex_col()
+            .max_h(px(320.0))
+            .py(px(6.0))
+            .px(px(6.0))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll_handle)
+            .vertical_scrollbar(&self.scroll_handle);
 
         for (i, action) in actions.iter().enumerate() {
             let is_selected = i == selected;
@@ -177,8 +201,9 @@ impl Render for CommandPalette {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px(px(16.0))
-                    .py(px(8.0))
+                    .px(px(10.0))
+                    .py(px(6.0))
+                    .rounded(px(6.0))
                     .cursor_pointer()
                     .bg(if is_selected {
                         theme.primary
@@ -200,8 +225,10 @@ impl Render for CommandPalette {
                     .child(
                         div()
                             .flex()
+                            .flex_1()
                             .items_center()
                             .gap(px(8.0))
+                            .overflow_x_hidden()
                             .child(
                                 div()
                                     .text_xs()
@@ -210,7 +237,7 @@ impl Render for CommandPalette {
                                     } else {
                                         theme.muted_foreground
                                     })
-                                    .w(px(60.0))
+                                    .min_w(px(60.0))
                                     .child(action.category),
                             )
                             .child(div().text_sm().child(action.label)),
@@ -218,6 +245,7 @@ impl Render for CommandPalette {
                     .child(
                         div()
                             .text_xs()
+                            .flex_shrink_0()
                             .text_color(if is_selected {
                                 theme.primary_foreground
                             } else {
@@ -239,11 +267,15 @@ impl Render for CommandPalette {
             );
         }
 
+        // Scroll selected item into view
+        self.scroll_handle.scroll_to_item(selected);
+
         let backdrop = div()
+            .id("palette-backdrop")
+            .occlude()
             .absolute()
             .size_full()
             .bg(rgba(0x00000088))
-            .id("palette-backdrop")
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -266,6 +298,8 @@ impl Render for CommandPalette {
             .shadow_lg()
             .flex()
             .flex_col()
+            .overflow_hidden()
+            .occlude()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 let actions = this.filtered_actions();

@@ -1,34 +1,66 @@
 use con_agent::{AgentConfig, ProviderKind};
 use con_core::Config;
 use gpui::*;
+use gpui::prelude::FluentBuilder;
 
 use gpui_component::input::InputState;
 use gpui_component::{ActiveTheme, input::Input};
-
-// ── Actions ────────────────────────────────────────────────────────
 
 actions!(
     settings,
     [ToggleSettings, SaveSettings, DismissSettings]
 );
 
-// ── Settings panel ─────────────────────────────────────────────────
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SettingsSection {
+    General,
+    Appearance,
+    AI,
+    Keys,
+}
 
-/// Modal settings panel with real text inputs.
-/// Opened with Cmd+, — standard macOS convention.
+impl SettingsSection {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Appearance => "Appearance",
+            Self::AI => "AI",
+            Self::Keys => "Keys",
+        }
+    }
+
+    fn icon(&self) -> &'static str {
+        match self {
+            Self::General => "phosphor/sliders.svg",
+            Self::Appearance => "phosphor/sun.svg",
+            Self::AI => "phosphor/robot.svg",
+            Self::Keys => "phosphor/keyboard.svg",
+        }
+    }
+}
+
+const ALL_SECTIONS: &[SettingsSection] = &[
+    SettingsSection::General,
+    SettingsSection::Appearance,
+    SettingsSection::AI,
+    SettingsSection::Keys,
+];
+
 pub struct SettingsPanel {
     visible: bool,
     config: Config,
     focus_handle: FocusHandle,
+    active_section: SettingsSection,
 
     selected_provider: ProviderKind,
-    model_input: Entity<InputState>,
+    selected_model: String,
+    model_dropdown_open: bool,
     api_key_env_input: Entity<InputState>,
     base_url_input: Entity<InputState>,
     max_tokens_input: Entity<InputState>,
     max_turns_input: Entity<InputState>,
     auto_approve: bool,
-    // Terminal settings
+
     font_size_input: Entity<InputState>,
     scrollback_input: Entity<InputState>,
 }
@@ -53,67 +85,53 @@ impl SettingsPanel {
     pub fn new(config: &Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let agent = config.agent.clone();
 
-        let model_val = agent.model.clone().unwrap_or_default();
-        let api_key_val = agent.api_key_env.clone().unwrap_or_default();
-        let base_url_val = agent.base_url.clone().unwrap_or_default();
-        let max_tokens_val = agent.max_tokens.to_string();
-        let max_turns_val = agent.max_turns.to_string();
-
-        let model_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
-            state.set_placeholder("Provider default", window, cx);
-            state.set_value(&model_val, window, cx);
-            state
-        });
-
         let api_key_env_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
-            state.set_placeholder("e.g. ANTHROPIC_API_KEY", window, cx);
-            state.set_value(&api_key_val, window, cx);
-            state
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("e.g. ANTHROPIC_API_KEY", window, cx);
+            s.set_value(&agent.api_key_env.clone().unwrap_or_default(), window, cx);
+            s
         });
-
         let base_url_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
-            state.set_placeholder("Default endpoint", window, cx);
-            state.set_value(&base_url_val, window, cx);
-            state
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("Default endpoint", window, cx);
+            s.set_value(&agent.base_url.clone().unwrap_or_default(), window, cx);
+            s
         });
-
         let max_tokens_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
-            state.set_placeholder("4096", window, cx);
-            state.set_value(&max_tokens_val, window, cx);
-            state
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("4096", window, cx);
+            s.set_value(&agent.max_tokens.to_string(), window, cx);
+            s
         });
-
         let max_turns_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
-            state.set_placeholder("10", window, cx);
-            state.set_value(&max_turns_val, window, cx);
-            state
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("10", window, cx);
+            s.set_value(&agent.max_turns.to_string(), window, cx);
+            s
         });
-
         let font_size_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
-            state.set_placeholder("14.0", window, cx);
-            state.set_value(&config.terminal.font_size.to_string(), window, cx);
-            state
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("14.0", window, cx);
+            s.set_value(&config.terminal.font_size.to_string(), window, cx);
+            s
+        });
+        let scrollback_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("10000", window, cx);
+            s.set_value(&config.terminal.scrollback_lines.to_string(), window, cx);
+            s
         });
 
-        let scrollback_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
-            state.set_placeholder("10000", window, cx);
-            state.set_value(&config.terminal.scrollback_lines.to_string(), window, cx);
-            state
-        });
+        let selected_model = agent.model.clone().unwrap_or_default();
 
         Self {
             visible: false,
             config: config.clone(),
             focus_handle: cx.focus_handle(),
+            active_section: SettingsSection::General,
             selected_provider: config.agent.provider.clone(),
-            model_input,
+            selected_model,
+            model_dropdown_open: false,
             api_key_env_input,
             base_url_input,
             max_tokens_input,
@@ -127,40 +145,16 @@ impl SettingsPanel {
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = !self.visible;
         if self.visible {
-            // Reset inputs to current config
             let agent = self.config.agent.clone();
             self.selected_provider = agent.provider.clone();
-
-            let model_val = agent.model.unwrap_or_default();
-            let api_key_val = agent.api_key_env.unwrap_or_default();
-            let base_url_val = agent.base_url.unwrap_or_default();
-            let max_tokens_val = agent.max_tokens.to_string();
-            let max_turns_val = agent.max_turns.to_string();
-
-            self.model_input.update(cx, |s, cx| {
-                s.set_value(&model_val, window, cx);
-            });
-            self.api_key_env_input.update(cx, |s, cx| {
-                s.set_value(&api_key_val, window, cx);
-            });
-            self.base_url_input.update(cx, |s, cx| {
-                s.set_value(&base_url_val, window, cx);
-            });
-            self.max_tokens_input.update(cx, |s, cx| {
-                s.set_value(&max_tokens_val, window, cx);
-            });
-            self.max_turns_input.update(cx, |s, cx| {
-                s.set_value(&max_turns_val, window, cx);
-            });
+            self.selected_model = agent.model.unwrap_or_default();
+            self.api_key_env_input.update(cx, |s, cx| s.set_value(&agent.api_key_env.unwrap_or_default(), window, cx));
+            self.base_url_input.update(cx, |s, cx| s.set_value(&agent.base_url.unwrap_or_default(), window, cx));
+            self.max_tokens_input.update(cx, |s, cx| s.set_value(&agent.max_tokens.to_string(), window, cx));
+            self.max_turns_input.update(cx, |s, cx| s.set_value(&agent.max_turns.to_string(), window, cx));
             self.auto_approve = agent.auto_approve_tools;
-
-            self.font_size_input.update(cx, |s, cx| {
-                s.set_value(&self.config.terminal.font_size.to_string(), window, cx);
-            });
-            self.scrollback_input.update(cx, |s, cx| {
-                s.set_value(&self.config.terminal.scrollback_lines.to_string(), window, cx);
-            });
-
+            self.font_size_input.update(cx, |s, cx| s.set_value(&self.config.terminal.font_size.to_string(), window, cx));
+            self.scrollback_input.update(cx, |s, cx| s.set_value(&self.config.terminal.scrollback_lines.to_string(), window, cx));
             self.focus_handle.focus(window, cx);
         }
         cx.notify();
@@ -171,7 +165,6 @@ impl SettingsPanel {
     }
 
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let model_text = self.model_input.read(cx).value().to_string();
         let api_key_text = self.api_key_env_input.read(cx).value().to_string();
         let base_url_text = self.base_url_input.read(cx).value().to_string();
         let max_tokens_text = self.max_tokens_input.read(cx).value().to_string();
@@ -181,7 +174,7 @@ impl SettingsPanel {
 
         self.config.agent = AgentConfig {
             provider: self.selected_provider.clone(),
-            model: if model_text.is_empty() { None } else { Some(model_text) },
+            model: if self.selected_model.is_empty() { None } else { Some(self.selected_model.clone()) },
             api_key_env: if api_key_text.is_empty() { None } else { Some(api_key_text) },
             base_url: if base_url_text.is_empty() { None } else { Some(base_url_text) },
             max_tokens: max_tokens_text.parse().unwrap_or(4096),
@@ -189,26 +182,19 @@ impl SettingsPanel {
             auto_context: self.config.agent.auto_context,
             auto_approve_tools: self.auto_approve,
         };
-
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
         self.config.terminal.scrollback_lines = scrollback_text.parse().unwrap_or(10_000);
 
         if let Err(e) = self.persist_config() {
             log::error!("Failed to save config: {}", e);
         }
-
         self.visible = false;
         cx.emit(SaveSettings);
         cx.notify();
     }
 
-    pub fn agent_config(&self) -> &AgentConfig {
-        &self.config.agent
-    }
-
-    pub fn terminal_config(&self) -> &con_core::config::TerminalConfig {
-        &self.config.terminal
-    }
+    pub fn agent_config(&self) -> &AgentConfig { &self.config.agent }
+    pub fn terminal_config(&self) -> &con_core::config::TerminalConfig { &self.config.terminal }
 
     fn persist_config(&self) -> anyhow::Result<()> {
         let path = Config::config_path();
@@ -221,67 +207,411 @@ impl SettingsPanel {
     }
 
     fn select_provider(&mut self, provider: ProviderKind, cx: &mut Context<Self>) {
+        let models = provider_models(&provider);
+        self.selected_model = if models.is_empty() {
+            String::new()
+        } else {
+            models[0].to_string()
+        };
         self.selected_provider = provider;
+        self.model_dropdown_open = false;
         cx.notify();
     }
 
-    fn render_provider_grid(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let mut grid = div().flex().flex_wrap().gap(px(6.0));
+    fn select_model(&mut self, model: &str, cx: &mut Context<Self>) {
+        self.selected_model = model.to_string();
+        self.model_dropdown_open = false;
+        cx.notify();
+    }
 
-        for provider in ALL_PROVIDERS {
+    fn toggle_model_dropdown(&mut self, cx: &mut Context<Self>) {
+        self.model_dropdown_open = !self.model_dropdown_open;
+        cx.notify();
+    }
+
+    // ── Section content ──────────────────────────────────────────
+
+    fn render_general(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let font_size_input = self.font_size_input.clone();
+        let scrollback_input = self.scrollback_input.clone();
+
+        // Auto-approve toggle
+        let is_on = self.auto_approve;
+        let toggle = div()
+            .id("auto-approve-toggle")
+            .w(px(40.0))
+            .h(px(22.0))
+            .rounded(px(11.0))
+            .cursor_pointer()
+            .bg(if is_on { theme.primary } else { theme.muted.opacity(0.25) })
+            .child(
+                div()
+                    .size(px(18.0))
+                    .rounded_full()
+                    .bg(gpui::white())
+                    .mt(px(2.0))
+                    .ml(if is_on { px(20.0) } else { px(2.0) }),
+            )
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.auto_approve = !this.auto_approve;
+                cx.notify();
+            }));
+
+        let theme = cx.theme();
+        section_content("General", "Terminal and editor settings.", theme)
+            .child(
+                card(theme)
+                    .child(row_field("Font Size", &font_size_input))
+                    .child(row_separator(theme))
+                    .child(row_field("Scrollback Lines", &scrollback_input)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("AGENT"))
+                    .child(
+                        card(theme)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px(px(16.0))
+                                    .h(px(44.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(2.0))
+                                            .child(div().text_sm().child("Auto-approve tools"))
+                                            .child(
+                                                div()
+                                                    .text_size(px(11.0))
+                                                    .text_color(theme.muted_foreground)
+                                                    .child("Allow agent to run tools without confirmation"),
+                                            ),
+                                    )
+                                    .child(toggle),
+                            ),
+                    ),
+            )
+    }
+
+    fn render_appearance(&self, theme: &gpui_component::Theme) -> Div {
+        section_content("Appearance", "Customize the look and feel.", theme)
+            .child(
+                card(theme)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px(px(16.0))
+                            .h(px(44.0))
+                            .child(
+                                div().text_sm().child("Theme"),
+                            )
+                            .child(
+                                segmented_control("theme-sel", &["Dark", "Light"], 0, theme),
+                            ),
+                    ),
+            )
+    }
+
+    fn render_ai(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let api_key_env_input = self.api_key_env_input.clone();
+        let base_url_input = self.base_url_input.clone();
+        let max_tokens_input = self.max_tokens_input.clone();
+        let max_turns_input = self.max_turns_input.clone();
+
+        // Provider list — compact rows
+        let mut provider_list = card(theme);
+        let provider_count = ALL_PROVIDERS.len();
+        for (idx, provider) in ALL_PROVIDERS.iter().enumerate() {
             let is_selected = *provider == self.selected_provider;
             let label = provider_label(provider);
             let provider_clone = provider.clone();
 
-            let chip = div()
-                .id(SharedString::from(format!("provider-{label}")))
-                .px(px(10.0))
-                .py(px(6.0))
-                .rounded(px(8.0))
-                .text_xs()
+            let indicator = div()
+                .size(px(14.0))
+                .rounded_full()
+                .flex_shrink_0()
+                .border_1()
+                .border_color(if is_selected { theme.primary } else { theme.muted.opacity(0.3) })
+                .bg(if is_selected { theme.primary } else { theme.transparent })
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .size(px(5.0))
+                        .rounded_full()
+                        .bg(if is_selected { gpui::white() } else { theme.transparent }),
+                );
+
+            let row = div()
+                .id(SharedString::from(format!("prov-{label}")))
+                .h(px(32.0))
+                .px(px(12.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
                 .cursor_pointer()
-                .font_weight(if is_selected {
-                    FontWeight::SEMIBOLD
-                } else {
-                    FontWeight::NORMAL
-                })
-                .bg(if is_selected {
-                    theme.primary
-                } else {
-                    theme.secondary
-                })
-                .text_color(if is_selected {
-                    theme.primary_foreground
-                } else {
-                    theme.secondary_foreground
-                })
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _window, cx| {
+                .bg(if is_selected { theme.primary.opacity(0.08) } else { theme.transparent })
+                .hover(|s| s.bg(theme.muted.opacity(0.1)))
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
                     this.select_provider(provider_clone.clone(), cx);
                 }))
-                .child(label);
+                .child(indicator)
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .font_weight(if is_selected { FontWeight::MEDIUM } else { FontWeight::NORMAL })
+                        .text_color(theme.foreground)
+                        .child(label),
+                );
 
-            grid = grid.child(chip);
+            provider_list = provider_list.child(row);
+            if idx + 1 < provider_count {
+                provider_list = provider_list.child(row_separator(theme));
+            }
         }
 
-        grid
-    }
+        // Model dropdown for the selected provider
+        let models = provider_models(&self.selected_provider);
+        let has_models = !models.is_empty();
+        let display_model = if self.selected_model.is_empty() {
+            "Provider default".to_string()
+        } else {
+            self.selected_model.clone()
+        };
+        let dropdown_open = self.model_dropdown_open && has_models;
 
-    fn render_field(
-        label: &str,
-        input_state: &Entity<InputState>,
-    ) -> Div {
-        div()
+        // Dropdown trigger button — Apple-style popup button
+        let model_trigger = div()
+            .id("model-dropdown-trigger")
+            .h(px(36.0))
+            .px(px(12.0))
             .flex()
-            .flex_col()
-            .gap(px(4.0))
+            .items_center()
+            .justify_between()
+            .rounded(px(8.0))
+            .cursor_pointer()
+            .bg(theme.muted.opacity(0.08))
+            .hover(|s| s.bg(theme.muted.opacity(0.14)))
+            .border_1()
+            .border_color(if dropdown_open { theme.primary.opacity(0.4) } else { theme.border.opacity(0.3) })
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.toggle_model_dropdown(cx);
+            }))
             .child(
                 div()
-                    .text_xs()
+                    .text_size(px(12.0))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(label.to_string()),
+                    .text_color(if has_models { theme.foreground } else { theme.muted_foreground })
+                    .child(display_model),
             )
-            .child(Input::new(input_state))
+            .child(
+                svg()
+                    .path(if dropdown_open { "phosphor/caret-up.svg" } else { "phosphor/caret-down.svg" })
+                    .size(px(12.0))
+                    .text_color(theme.muted_foreground),
+            );
+
+        // Dropdown menu — appears below trigger when open
+        let model_section = if dropdown_open {
+            let mut menu = div()
+                .flex()
+                .flex_col()
+                .mt(px(4.0))
+                .rounded(px(8.0))
+                .bg(theme.title_bar)
+                .border_1()
+                .border_color(theme.border)
+                .shadow_md()
+                .py(px(4.0))
+                .overflow_y_hidden();
+
+            for model in models {
+                let is_selected = self.selected_model == *model;
+                let model_name = model.to_string();
+                let model_clone = model_name.clone();
+
+                let row = div()
+                    .id(SharedString::from(format!("model-{model_name}")))
+                    .h(px(30.0))
+                    .px(px(12.0))
+                    .mx(px(4.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .cursor_pointer()
+                    .rounded(px(6.0))
+                    .bg(if is_selected { theme.primary.opacity(0.1) } else { theme.transparent })
+                    .hover(|s| s.bg(theme.muted.opacity(0.12)))
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        this.select_model(&model_clone, cx);
+                    }))
+                    .child(
+                        div()
+                            .size(px(14.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .flex_shrink_0()
+                            .child(if is_selected {
+                                svg()
+                                    .path("phosphor/check.svg")
+                                    .size(px(12.0))
+                                    .text_color(theme.primary)
+                            } else {
+                                svg()
+                                    .path("phosphor/check.svg")
+                                    .size(px(12.0))
+                                    .text_color(theme.transparent)
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .font_weight(if is_selected { FontWeight::MEDIUM } else { FontWeight::NORMAL })
+                            .text_color(theme.foreground)
+                            .child(model_name),
+                    );
+
+                menu = menu.child(row);
+            }
+
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(group_label("MODEL"))
+                .child(model_trigger)
+                .child(menu)
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(group_label("MODEL"))
+                .child(model_trigger)
+        };
+
+        // Right column — model + config + advanced
+        let right_col = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .gap(px(16.0))
+            .child(model_section)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("CONFIGURATION"))
+                    .child(
+                        card(theme)
+                            .child(row_field("API Key Env", &api_key_env_input))
+                            .child(row_separator(theme))
+                            .child(row_field("Base URL", &base_url_input)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("ADVANCED"))
+                    .child(
+                        card(theme)
+                            .child(row_field("Max Tokens", &max_tokens_input))
+                            .child(row_separator(theme))
+                            .child(row_field("Max Turns", &max_turns_input)),
+                    ),
+            );
+
+        // Two-column layout: providers left, config right
+        section_content("AI", "Configure your AI provider and model.", theme)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .gap(px(20.0))
+                    // Left: provider list
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .w(px(200.0))
+                            .flex_shrink_0()
+                            .child(group_label("PROVIDER"))
+                            .child(provider_list),
+                    )
+                    // Right: model + config + advanced
+                    .child(right_col),
+            )
+    }
+
+    fn render_keys(&self, theme: &gpui_component::Theme) -> Div {
+        section_content("Keyboard Shortcuts", "View and customize key bindings.", theme)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("GENERAL"))
+                    .child(
+                        card(theme)
+                            .child(key_row("New Tab", "⌘T", theme))
+                            .child(row_separator(theme))
+                            .child(key_row("Close Tab", "⌘W", theme))
+                            .child(row_separator(theme))
+                            .child(key_row("Settings", "⌘,", theme))
+                            .child(row_separator(theme))
+                            .child(key_row("Command Palette", "⇧⌘P", theme))
+                            .child(row_separator(theme))
+                            .child(key_row("Toggle Agent", "⌘L", theme)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("PANES"))
+                    .child(
+                        card(theme)
+                            .child(key_row("Split Right", "⌘D", theme))
+                            .child(row_separator(theme))
+                            .child(key_row("Split Down", "⇧⌘D", theme))
+                            .child(row_separator(theme))
+                            .child(key_row("Close Pane", "⌃D", theme)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("TERMINAL"))
+                    .child(
+                        card(theme)
+                            .child(key_row("Clear", "⌘K", theme))
+                            .child(row_separator(theme))
+                            .child(key_row("Copy", "⌘C", theme))
+                            .child(row_separator(theme))
+                            .child(key_row("Paste", "⌘V", theme))
+                            .child(row_separator(theme))
+                            .child(key_row("Select All", "⌘A", theme)),
+                    ),
+            )
     }
 }
 
@@ -299,246 +629,152 @@ impl Render for SettingsPanel {
             return div().id("settings-overlay");
         }
 
-        // Build mutable-borrow components first (needs cx.listener)
-        let provider_grid = self.render_provider_grid(cx);
+        let active = self.active_section;
 
-        // Clone input state refs for render_field (immutable)
-        let model_input = self.model_input.clone();
-        let api_key_env_input = self.api_key_env_input.clone();
-        let base_url_input = self.base_url_input.clone();
-        let max_tokens_input = self.max_tokens_input.clone();
-        let max_turns_input = self.max_turns_input.clone();
-        let font_size_input = self.font_size_input.clone();
-        let scrollback_input = self.scrollback_input.clone();
+        // Render content first (AI needs &mut self)
+        let content = match active {
+            SettingsSection::General => self.render_general(cx),
+            SettingsSection::Appearance => {
+                let theme = cx.theme();
+                self.render_appearance(theme)
+            }
+            SettingsSection::AI => self.render_ai(cx),
+            SettingsSection::Keys => {
+                let theme = cx.theme();
+                self.render_keys(theme)
+            }
+        };
 
         let theme = cx.theme();
 
+        // Sidebar
+        let mut sidebar = div()
+            .flex()
+            .flex_col()
+            .w(px(160.0))
+            .pt(px(8.0))
+            .pb(px(12.0))
+            .px(px(8.0))
+            .gap(px(1.0))
+            .border_r_1()
+            .border_color(theme.border)
+            .flex_shrink_0();
+
+        for section in ALL_SECTIONS {
+            let is_active = *section == active;
+            let section_val = *section;
+            sidebar = sidebar.child(
+                div()
+                    .id(SharedString::from(format!("nav-{}", section.label())))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .h(px(30.0))
+                    .px(px(10.0))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .text_size(px(13.0))
+                    .bg(if is_active { theme.muted.opacity(0.15) } else { theme.transparent })
+                    .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
+                    .font_weight(if is_active { FontWeight::MEDIUM } else { FontWeight::NORMAL })
+                    .hover(|s| if is_active { s } else { s.bg(theme.muted.opacity(0.08)) })
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        this.active_section = section_val;
+                        cx.notify();
+                    }))
+                    .child(
+                        svg()
+                            .path(section.icon())
+                            .size(px(15.0))
+                            .text_color(if is_active { theme.foreground } else { theme.muted_foreground }),
+                    )
+                    .child(section.label()),
+            );
+        }
+
+        let content_scroll = div()
+            .flex_1()
+            .overflow_y_hidden()
+            .p(px(24.0))
+            .child(content);
+
         let backdrop = div()
             .id("settings-backdrop")
+            .occlude()
             .absolute()
             .size_full()
-            .bg(rgba(0x00000088))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.visible = false;
-                    cx.notify();
-                }),
-            );
+            .bg(rgba(0x00000055))
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.visible = false;
+                cx.notify();
+            }));
 
+        // Card — centered with flex centering
         let card = div()
             .id("settings-card")
             .absolute()
-            .top(px(60.0))
-            .left_0()
-            .right_0()
-            .mx_auto()
-            .w(px(520.0))
-            .max_h(px(600.0))
-            .rounded(px(14.0))
-            .bg(theme.title_bar)
-            .border_1()
-            .border_color(theme.border)
-            .shadow_lg()
-            .overflow_y_scroll()
+            .inset_0()
             .flex()
-            .flex_col()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                match event.keystroke.key.as_str() {
-                    "escape" => {
-                        this.visible = false;
-                        cx.notify();
-                    }
-                    "enter" if event.keystroke.modifiers.platform => {
-                        this.save(window, cx);
-                    }
-                    _ => {}
-                }
-            }))
-            .track_focus(&self.focus_handle)
-            // Header
+            .items_center()
+            .justify_center()
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(20.0))
-                    .py(px(16.0))
-                    .border_b_1()
+                    .w(px(800.0))
+                    .h(px(560.0))
+                    .rounded(px(12.0))
+                    .bg(theme.title_bar)
+                    .border_1()
                     .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_base()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground)
-                            .child("Settings"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("⌘Enter to save · Esc to close"),
-                    ),
-            )
-            // Terminal section
-            .child(
-                div()
+                    .shadow_lg()
+                    .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .px(px(20.0))
-                    .pt(px(16.0))
-                    .pb(px(12.0))
-                    .gap(px(12.0))
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.secondary_foreground)
-                            .child("TERMINAL"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(12.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(Self::render_field("Font Size", &font_size_input)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(Self::render_field("Scrollback Lines", &scrollback_input)),
-                            ),
-                    ),
-            )
-            // Provider section
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .px(px(20.0))
-                    .pt(px(16.0))
-                    .pb(px(12.0))
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.secondary_foreground)
-                            .child("PROVIDER"),
-                    )
-                    .child(provider_grid),
-            )
-            // Model section
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .px(px(20.0))
-                    .py(px(8.0))
-                    .gap(px(12.0))
-                    .child(div().h(px(1.0)).bg(theme.border))
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.secondary_foreground)
-                            .child("MODEL CONFIGURATION"),
-                    )
-                    .child(Self::render_field("Model", &model_input))
-                    .child(Self::render_field("API Key Env Var", &api_key_env_input))
-                    .child(Self::render_field("Base URL", &base_url_input)),
-            )
-            // Advanced section
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .px(px(20.0))
-                    .pt(px(8.0))
-                    .pb(px(20.0))
-                    .gap(px(12.0))
-                    .child(div().h(px(1.0)).bg(theme.border))
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.secondary_foreground)
-                            .child("ADVANCED"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(12.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(Self::render_field("Max Tokens", &max_tokens_input)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(Self::render_field("Max Turns", &max_turns_input)),
-                            ),
-                    )
+                    .occlude()
+                    .track_focus(&self.focus_handle)
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        match event.keystroke.key.as_str() {
+                            "escape" => {
+                                this.visible = false;
+                                cx.notify();
+                            }
+                            "enter" if event.keystroke.modifiers.platform => {
+                                this.save(window, cx);
+                            }
+                            _ => {}
+                        }
+                    }))
+                    // Header
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .justify_between()
-                            .pt(px(4.0))
+                            .h(px(44.0))
+                            .px(px(16.0))
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .flex_shrink_0()
                             .child(
                                 div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.0))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child("Auto-approve tools"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .child("Skip approval for shell_exec, file_write"),
-                                    ),
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Settings"),
                             )
-                            .child({
-                                let is_on = self.auto_approve;
+                            .child(
                                 div()
-                                    .id("auto-approve-toggle")
-                                    .w(px(36.0))
-                                    .h(px(20.0))
-                                    .rounded(px(10.0))
-                                    .cursor_pointer()
-                                    .bg(if is_on {
-                                        theme.primary
-                                    } else {
-                                        theme.secondary
-                                    })
-                                    .child(
-                                        div()
-                                            .size(px(16.0))
-                                            .rounded_full()
-                                            .bg(if is_on {
-                                                theme.primary_foreground
-                                            } else {
-                                                theme.secondary_foreground
-                                            })
-                                            .mt(px(2.0))
-                                            .ml(if is_on { px(18.0) } else { px(2.0) }),
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.auto_approve = !this.auto_approve;
-                                            cx.notify();
-                                        }),
-                                    )
-                            }),
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("⌘↵ save · Esc close"),
+                            ),
+                    )
+                    // Body
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_h_0()
+                            .child(sidebar)
+                            .child(content_scroll),
                     ),
             );
 
@@ -549,6 +785,134 @@ impl Render for SettingsPanel {
             .child(backdrop)
             .child(card)
     }
+}
+
+// ── Reusable building blocks ──────────────────────────────────────
+
+fn section_content(title: &str, subtitle: &str, theme: &gpui_component::Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(16.0))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title.to_string()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(subtitle.to_string()),
+                ),
+        )
+}
+
+fn group_label(text: &str) -> Div {
+    div()
+        .text_size(px(10.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
+        .px(px(2.0))
+        .child(text.to_string())
+}
+
+fn card(theme: &gpui_component::Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .rounded(px(8.0))
+        .bg(theme.muted.opacity(0.08))
+}
+
+fn row_separator(theme: &gpui_component::Theme) -> Div {
+    div()
+        .h(px(1.0))
+        .mx(px(12.0))
+        .bg(theme.border.opacity(0.5))
+}
+
+fn row_field(label: &str, input: &Entity<InputState>) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(px(16.0))
+        .h(px(44.0))
+        .child(
+            div().text_sm().flex_shrink_0().child(label.to_string()),
+        )
+        .child(
+            div().w(px(180.0)).child(Input::new(input)),
+        )
+}
+
+fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(px(16.0))
+        .h(px(36.0))
+        .child(
+            div().text_sm().child(action.to_string()),
+        )
+        .child(
+            div()
+                .h(px(22.0))
+                .px(px(7.0))
+                .flex()
+                .items_center()
+                .rounded(px(4.0))
+                .bg(theme.muted.opacity(0.15))
+                .text_size(px(11.0))
+                .text_color(theme.muted_foreground)
+                .child(shortcut.to_string()),
+        )
+}
+
+fn segmented_control(
+    id: &str,
+    options: &[&str],
+    selected: usize,
+    theme: &gpui_component::Theme,
+) -> Div {
+    let mut row = div()
+        .flex()
+        .items_center()
+        .h(px(28.0))
+        .rounded(px(6.0))
+        .bg(theme.muted.opacity(0.12))
+        .p(px(2.0))
+        .gap(px(1.0));
+
+    for (i, option) in options.iter().enumerate() {
+        let is_sel = i == selected;
+        row = row.child(
+            div()
+                .id(SharedString::from(format!("{id}-{i}")))
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(24.0))
+                .px(px(14.0))
+                .rounded(px(4.0))
+                .text_size(px(12.0))
+                .font_weight(FontWeight::MEDIUM)
+                .cursor_pointer()
+                .bg(if is_sel { theme.background } else { theme.transparent })
+                .text_color(if is_sel { theme.foreground } else { theme.muted_foreground })
+                .when(is_sel, |s: Stateful<Div>| s.shadow_sm())
+                .child(option.to_string()),
+        );
+    }
+    row
 }
 
 fn provider_label(provider: &ProviderKind) -> &'static str {
@@ -566,5 +930,60 @@ fn provider_label(provider: &ProviderKind) -> &'static str {
         ProviderKind::Mistral => "Mistral",
         ProviderKind::Together => "Together",
         ProviderKind::XAI => "xAI",
+    }
+}
+
+fn provider_models(provider: &ProviderKind) -> &'static [&'static str] {
+    match provider {
+        ProviderKind::Anthropic => &[
+            "claude-sonnet-4-20250514",
+            "claude-haiku-4-20250414",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+        ],
+        ProviderKind::OpenAI => &[
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            "o1",
+            "o1-mini",
+            "o3-mini",
+        ],
+        ProviderKind::DeepSeek => &[
+            "deepseek-chat",
+            "deepseek-reasoner",
+        ],
+        ProviderKind::Groq => &[
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768",
+        ],
+        ProviderKind::Gemini => &[
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+        ],
+        ProviderKind::Mistral => &[
+            "mistral-large-latest",
+            "mistral-medium-latest",
+            "mistral-small-latest",
+            "codestral-latest",
+        ],
+        ProviderKind::Cohere => &[
+            "command-r-plus",
+            "command-r",
+        ],
+        ProviderKind::Perplexity => &[
+            "sonar-pro",
+            "sonar",
+            "sonar-reasoning-pro",
+        ],
+        ProviderKind::XAI => &[
+            "grok-3",
+            "grok-3-mini",
+            "grok-2",
+        ],
+        // OpenAICompatible, Ollama, OpenRouter, Together — user provides custom model
+        _ => &[],
     }
 }

@@ -3,9 +3,8 @@ use gpui::*;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::ActiveTheme;
 
-use con_agent::ToolApprovalDecision;
+use con_agent::{ConversationSummary, ToolApprovalDecision};
 
-/// Agent status for header indicator
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentStatus {
     Idle,
@@ -13,7 +12,6 @@ pub enum AgentStatus {
     Responding,
 }
 
-/// A tool call being tracked in the panel
 struct ToolCallEntry {
     call_id: String,
     tool_name: String,
@@ -21,7 +19,6 @@ struct ToolCallEntry {
     result: Option<String>,
 }
 
-/// A dangerous tool call awaiting user approval
 struct PendingApproval {
     call_id: String,
     tool_name: String,
@@ -29,7 +26,14 @@ struct PendingApproval {
     approval_tx: Sender<ToolApprovalDecision>,
 }
 
-/// The agent panel — shows conversation, reasoning steps, tool calls, approvals
+pub struct NewConversation;
+impl EventEmitter<NewConversation> for AgentPanel {}
+
+pub struct LoadConversation {
+    pub id: String,
+}
+impl EventEmitter<LoadConversation> for AgentPanel {}
+
 pub struct AgentPanel {
     messages: Vec<PanelMessage>,
     tool_calls: Vec<ToolCallEntry>,
@@ -37,6 +41,8 @@ pub struct AgentPanel {
     streaming: bool,
     status: AgentStatus,
     scroll_handle: ScrollHandle,
+    showing_history: bool,
+    conversation_list: Vec<ConversationSummary>,
 }
 
 struct PanelMessage {
@@ -60,7 +66,32 @@ impl AgentPanel {
             streaming: false,
             status: AgentStatus::Idle,
             scroll_handle: ScrollHandle::new(),
+            showing_history: false,
+            conversation_list: Vec::new(),
         }
+    }
+
+    pub fn clear_messages(&mut self, cx: &mut Context<Self>) {
+        self.messages = vec![PanelMessage {
+            role: "system".to_string(),
+            content: "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.".to_string(),
+            steps: Vec::new(),
+            steps_collapsed: false,
+        }];
+        self.tool_calls.clear();
+        self.pending_approvals.clear();
+        self.streaming = false;
+        self.status = AgentStatus::Idle;
+        self.showing_history = false;
+        cx.notify();
+    }
+
+    pub fn toggle_history(&mut self, cx: &mut Context<Self>) {
+        self.showing_history = !self.showing_history;
+        if self.showing_history {
+            self.conversation_list = con_agent::Conversation::list_all();
+        }
+        cx.notify();
     }
 
     fn scroll_to_bottom(&self) {
@@ -120,7 +151,6 @@ impl AgentPanel {
         cx.notify();
     }
 
-    /// Queue a dangerous tool call for user approval
     pub fn add_pending_approval(
         &mut self,
         call_id: &str,
@@ -161,7 +191,6 @@ impl AgentPanel {
         cx.notify();
     }
 
-    /// Append streaming text tokens (only fires when using Rig's streaming API)
     pub fn update_streaming(&mut self, token: &str, cx: &mut Context<Self>) {
         self.status = AgentStatus::Responding;
         if !self.streaming {
@@ -180,7 +209,6 @@ impl AgentPanel {
         cx.notify();
     }
 
-    /// Agent finished — show the final response and fold tool calls into steps
     pub fn complete_response(&mut self, final_content: &str, cx: &mut Context<Self>) {
         self.status = AgentStatus::Idle;
         if self.streaming {
@@ -211,7 +239,7 @@ impl AgentPanel {
         cx.notify();
     }
 
-    fn render_tool_icon(tool_name: &str) -> &'static str {
+    fn tool_icon(tool_name: &str) -> &'static str {
         match tool_name {
             "shell_exec" => "phosphor/terminal.svg",
             "file_write" => "phosphor/pencil-simple.svg",
@@ -222,7 +250,6 @@ impl AgentPanel {
     }
 
     fn format_tool_args(tool_name: &str, args: &str) -> String {
-        // Try to extract the most useful field from JSON args
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
             match tool_name {
                 "shell_exec" => {
@@ -247,19 +274,16 @@ impl AgentPanel {
     }
 }
 
-/// Render message content with basic code block support.
-/// Splits on ``` fences and renders code blocks with monospace background.
 fn render_message_content(content: &str, theme: &gpui_component::theme::Theme) -> Div {
     let parts: Vec<&str> = content.split("```").collect();
-    let mut container = div().flex().flex_col().gap(px(4.0));
+    let mut container = div().flex().flex_col().gap(px(6.0));
 
     for (i, part) in parts.iter().enumerate() {
-        let is_code = i % 2 == 1; // odd indices are inside ``` fences
+        let is_code = i % 2 == 1;
         if part.is_empty() {
             continue;
         }
         if is_code {
-            // Strip optional language tag on first line
             let code = if let Some(newline_pos) = part.find('\n') {
                 &part[newline_pos + 1..]
             } else {
@@ -267,31 +291,34 @@ fn render_message_content(content: &str, theme: &gpui_component::theme::Theme) -
             };
             container = container.child(
                 div()
-                    .p(px(8.0))
+                    .px(px(10.0))
+                    .py(px(8.0))
                     .rounded(px(6.0))
                     .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
                     .font_family("Ioskeley Mono")
                     .text_xs()
                     .text_color(theme.foreground)
                     .child(code.trim_end().to_string()),
             );
         } else {
-            container = container.child(
-                div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(part.to_string()),
-            );
+            for line in part.split('\n') {
+                if line.trim().is_empty() {
+                    container = container.child(div().h(px(6.0)));
+                } else {
+                    container = container.child(
+                        div()
+                            .text_sm()
+                            .line_height(px(20.0))
+                            .text_color(theme.foreground)
+                            .child(line.to_string()),
+                    );
+                }
+            }
         }
     }
-
     container
 }
 
-/// Truncate a string to max_len characters, adding "..." if truncated.
-/// Handles multi-byte characters correctly by using char boundaries.
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         return s.to_string();
@@ -300,14 +327,15 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}...", &s[..end])
+    format!("{}…", &s[..end])
 }
 
 impl Render for AgentPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        let mut messages_container = div()
+        // ── Messages ──────────────────────────────────────────────
+        let mut messages_area = div()
             .id("agent-messages")
             .flex()
             .flex_col()
@@ -315,44 +343,99 @@ impl Render for AgentPanel {
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .vertical_scrollbar(&self.scroll_handle)
-            .p(px(12.0))
-            .gap(px(12.0));
+            .px(px(16.0))
+            .pt(px(16.0))
+            .pb(px(12.0))
+            .gap(px(16.0));
 
         for (msg_idx, msg) in self.messages.iter().enumerate() {
-            let (role_color, role_label) = match msg.role.as_str() {
-                "user" => (theme.primary, "You"),
-                "assistant" => (theme.success, "Agent"),
-                _ => (theme.muted_foreground, "System"),
-            };
+            let is_user = msg.role == "user";
+            let is_system = msg.role == "system";
 
-            let mut msg_div = div()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(
+            let mut msg_el = div().flex().flex_col().gap(px(6.0));
+
+            if is_system {
+                // System message: subtle, centered
+                msg_el = msg_el.child(
                     div()
                         .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(role_color)
-                        .child(role_label.to_string()),
-                )
-                .child(render_message_content(&msg.content, theme));
+                        .text_color(theme.muted_foreground)
+                        .line_height(px(18.0))
+                        .child(msg.content.clone()),
+                );
+            } else if is_user {
+                // User message: right-aligned bubble
+                msg_el = msg_el.child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .child(
+                            div()
+                                .max_w(rems(18.0))
+                                .px(px(12.0))
+                                .py(px(8.0))
+                                .rounded(px(12.0))
+                                .rounded_tr(px(4.0))
+                                .bg(theme.primary.opacity(0.15))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .line_height(px(20.0))
+                                        .text_color(theme.foreground)
+                                        .child(msg.content.clone()),
+                                ),
+                        ),
+                );
+            } else {
+                // Assistant message
+                msg_el = msg_el
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                svg()
+                                    .path("phosphor/sparkle.svg")
+                                    .size(px(12.0))
+                                    .text_color(theme.primary),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.primary)
+                                    .child("Agent"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .pl(px(18.0))
+                            .child(render_message_content(&msg.content, theme)),
+                    );
+            }
 
+            // Steps (collapsible)
             if !msg.steps.is_empty() {
                 let step_count = msg.steps.len();
                 let collapsed = msg.steps_collapsed;
-                let chevron = if collapsed { "▸" } else { "▾" };
+                let chevron = if collapsed {
+                    "phosphor/caret-right.svg"
+                } else {
+                    "phosphor/caret-down.svg"
+                };
 
-                msg_div = msg_div.child(
+                msg_el = msg_el.child(
                     div()
                         .id(SharedString::from(format!("steps-toggle-{msg_idx}")))
                         .flex()
                         .items_center()
                         .gap(px(4.0))
-                        .ml(px(8.0))
+                        .pl(px(18.0))
                         .cursor_pointer()
                         .text_xs()
                         .text_color(theme.muted_foreground)
+                        .hover(|s| s.text_color(theme.foreground))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, _, cx| {
@@ -362,7 +445,12 @@ impl Render for AgentPanel {
                                 cx.notify();
                             }),
                         )
-                        .child(chevron)
+                        .child(
+                            svg()
+                                .path(chevron)
+                                .size(px(10.0))
+                                .text_color(theme.muted_foreground),
+                        )
                         .child(format!(
                             "{} step{}",
                             step_count,
@@ -371,116 +459,120 @@ impl Render for AgentPanel {
                 );
 
                 if !collapsed {
+                    let mut steps_el = div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .pl(px(18.0))
+                        .ml(px(4.0))
+                        .border_l_1()
+                        .border_color(theme.muted.opacity(0.15));
+
                     for step in &msg.steps {
-                        msg_div = msg_div.child(
+                        steps_el = steps_el.child(
                             div()
-                                .ml(px(8.0))
                                 .pl(px(8.0))
-                                .border_l_2()
-                                .border_color(theme.secondary)
+                                .py(px(2.0))
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
-                                .child(step.clone()),
+                                .child(truncate_str(step, 100)),
                         );
                     }
+                    msg_el = msg_el.child(steps_el);
                 }
             }
 
-            messages_container = messages_container.child(msg_div);
+            messages_area = messages_area.child(msg_el);
         }
 
-        // Render active tool calls as structured cards
+        // ── Active tool calls ─────────────────────────────────────
         for tc in &self.tool_calls {
-            let is_complete = tc.result.is_some();
-            let status_color = if is_complete {
-                theme.success
-            } else {
-                theme.warning
-            };
-            let icon_path = Self::render_tool_icon(&tc.tool_name);
-            let display_args = Self::format_tool_args(&tc.tool_name, &tc.args);
+            let is_done = tc.result.is_some();
+            let icon = Self::tool_icon(&tc.tool_name);
+            let args_display = Self::format_tool_args(&tc.tool_name, &tc.args);
 
-            let mut tc_card = div()
+            let mut tc_el = div()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
+                .gap(px(6.0))
                 .mx(px(4.0))
-                .p(px(10.0))
+                .px(px(12.0))
+                .py(px(10.0))
                 .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.background)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(div().size(px(6.0)).rounded_full().bg(status_color))
-                        .child(
-                            svg()
-                                .path(icon_path)
-                                .size(px(14.0))
-                                .text_color(theme.muted_foreground),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.foreground)
-                                .child(tc.tool_name.clone()),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .overflow_x_hidden()
-                        .child(display_args),
-                );
-
-            if let Some(result) = &tc.result {
-                tc_card = tc_card.child(
-                    div()
-                        .mt(px(2.0))
-                        .pt(px(4.0))
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .text_xs()
-                        .text_color(theme.success)
-                        .child(truncate_str(result, 200)),
-                );
-            }
-
-            messages_container = messages_container.child(tc_card);
-        }
-
-        // Render pending approval cards
-        for (i, approval) in self.pending_approvals.iter().enumerate() {
-            let icon_path = Self::render_tool_icon(&approval.tool_name);
-            let display_args = Self::format_tool_args(&approval.tool_name, &approval.args);
-            let allow_idx = i;
-            let deny_idx = i;
-
-            let approval_card = div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .mx(px(4.0))
-                .p(px(12.0))
-                .rounded(px(10.0))
-                .border_1()
-                .border_color(theme.warning)
-                .bg(theme.background)
+                .bg(theme.muted.opacity(0.06))
                 // Header
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(6.0))
-                        .child(div().size(px(6.0)).rounded_full().bg(theme.warning))
+                        .child(
+                            div()
+                                .size(px(5.0))
+                                .rounded_full()
+                                .bg(if is_done { theme.success } else { theme.warning }),
+                        )
                         .child(
                             svg()
-                                .path(icon_path)
+                                .path(icon)
+                                .size(px(13.0))
+                                .text_color(theme.muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.foreground)
+                                .child(tc.tool_name.clone()),
+                        ),
+                )
+                // Args
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .overflow_x_hidden()
+                        .font_family("Ioskeley Mono")
+                        .child(truncate_str(&args_display, 80)),
+                );
+
+            if let Some(result) = &tc.result {
+                tc_el = tc_el.child(
+                    div()
+                        .pt(px(4.0))
+                        .text_xs()
+                        .text_color(theme.success.opacity(0.8))
+                        .child(truncate_str(result, 120)),
+                );
+            }
+            messages_area = messages_area.child(tc_el);
+        }
+
+        // ── Pending approvals ─────────────────────────────────────
+        for (i, approval) in self.pending_approvals.iter().enumerate() {
+            let icon = Self::tool_icon(&approval.tool_name);
+            let args_display = Self::format_tool_args(&approval.tool_name, &approval.args);
+            let allow_idx = i;
+            let deny_idx = i;
+
+            let approval_el = div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .mx(px(4.0))
+                .px(px(12.0))
+                .py(px(10.0))
+                .rounded(px(8.0))
+                .bg(theme.warning.opacity(0.06))
+                // Header
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(
+                            svg()
+                                .path("phosphor/warning.svg")
                                 .size(px(14.0))
                                 .text_color(theme.warning),
                         )
@@ -492,34 +584,47 @@ impl Render for AgentPanel {
                                 .child(format!("{} requires approval", approval.tool_name)),
                         ),
                 )
-                // Args display
-                .child(
-                    div()
-                        .p(px(8.0))
-                        .rounded(px(6.0))
-                        .bg(theme.title_bar)
-                        .text_xs()
-                        .text_color(theme.foreground)
-                        .overflow_x_hidden()
-                        .child(display_args),
-                )
-                // Action buttons
+                // Command preview
                 .child(
                     div()
                         .flex()
-                        .gap(px(8.0))
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(
+                            svg()
+                                .path(icon)
+                                .size(px(12.0))
+                                .text_color(theme.muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_family("Ioskeley Mono")
+                                .text_color(theme.foreground)
+                                .overflow_x_hidden()
+                                .child(truncate_str(&args_display, 80)),
+                        ),
+                )
+                // Actions
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(6.0))
                         .justify_end()
                         .child(
                             div()
-                                .id(SharedString::from(format!("deny-{}", i)))
+                                .id(SharedString::from(format!("deny-{i}")))
+                                .h(px(28.0))
                                 .px(px(12.0))
-                                .py(px(5.0))
+                                .flex()
+                                .items_center()
                                 .rounded(px(6.0))
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .cursor_pointer()
-                                .bg(theme.secondary)
-                                .text_color(theme.secondary_foreground)
+                                .bg(theme.muted.opacity(0.12))
+                                .text_color(theme.muted_foreground)
+                                .hover(|s| s.bg(theme.muted.opacity(0.2)))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -530,15 +635,18 @@ impl Render for AgentPanel {
                         )
                         .child(
                             div()
-                                .id(SharedString::from(format!("allow-{}", i)))
+                                .id(SharedString::from(format!("allow-{i}")))
+                                .h(px(28.0))
                                 .px(px(12.0))
-                                .py(px(5.0))
+                                .flex()
+                                .items_center()
                                 .rounded(px(6.0))
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .cursor_pointer()
                                 .bg(theme.primary)
                                 .text_color(theme.primary_foreground)
+                                .hover(|s| s.bg(theme.primary_hover))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -549,77 +657,198 @@ impl Render for AgentPanel {
                         ),
                 );
 
-            messages_container = messages_container.child(approval_card);
+            messages_area = messages_area.child(approval_el);
         }
 
+        // Streaming indicator
         if self.streaming {
-            messages_container = messages_container.child(
+            messages_area = messages_area.child(
                 div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("..."),
+                    .pl(px(18.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .size(px(4.0))
+                            .rounded_full()
+                            .bg(theme.primary.opacity(0.6)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("typing…"),
+                    ),
             );
         }
 
-        let status_color = match self.status {
-            AgentStatus::Idle => theme.muted_foreground,
+        // ── Header ────────────────────────────────────────────────
+        let status_dot_color = match self.status {
+            AgentStatus::Idle => theme.muted_foreground.opacity(0.4),
             AgentStatus::Thinking => theme.warning,
             AgentStatus::Responding => theme.success,
         };
 
-        let status_label = match self.status {
-            AgentStatus::Idle => "Idle",
-            AgentStatus::Thinking => "Thinking",
-            AgentStatus::Responding => "Responding",
-        };
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(px(40.0))
+            .px(px(16.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .flex_shrink_0()
+            // Left: title + status
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child("Agent"),
+                    )
+                    .child(
+                        div()
+                            .size(px(6.0))
+                            .rounded_full()
+                            .bg(status_dot_color),
+                    ),
+            )
+            // Right: actions
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.0))
+                    .child(
+                        icon_button("agent-history-toggle", "phosphor/clock-counter-clockwise.svg", theme)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.toggle_history(cx);
+                                }),
+                            ),
+                    )
+                    .child(
+                        icon_button("agent-new-chat", "phosphor/plus.svg", theme)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    cx.emit(NewConversation);
+                                    this.clear_messages(cx);
+                                }),
+                            ),
+                    ),
+            );
 
-        div()
+        // ── Panel ─────────────────────────────────────────────────
+        let mut panel = div()
             .flex()
             .flex_col()
             .size_full()
             .bg(theme.title_bar)
-            .child(
-                div()
-                    .flex()
-                    .h(px(38.0))
-                    .px(px(16.0))
-                    .items_center()
-                    .justify_between()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
+            .child(header);
+
+        if self.showing_history {
+            let mut history = div()
+                .id("agent-history-list")
+                .flex()
+                .flex_col()
+                .flex_1()
+                .overflow_y_scroll()
+                .track_scroll(&self.scroll_handle)
+                .px(px(12.0))
+                .pt(px(8.0))
+                .gap(px(1.0));
+
+            if self.conversation_list.is_empty() {
+                history = history.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .p(px(16.0))
+                        .child("No saved conversations"),
+                );
+            } else {
+                for (i, summary) in self.conversation_list.iter().enumerate() {
+                    let conv_id = summary.id.clone();
+                    let date = summary.created_at.format("%b %d, %H:%M").to_string();
+                    history = history.child(
                         div()
+                            .id(SharedString::from(format!("conv-{i}")))
                             .flex()
                             .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                svg()
-                                    .path("phosphor/robot.svg")
-                                    .size(px(16.0))
-                                    .text_color(theme.foreground),
+                            .justify_between()
+                            .px(px(12.0))
+                            .h(px(40.0))
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.emit(LoadConversation {
+                                        id: conv_id.clone(),
+                                    });
+                                    this.showing_history = false;
+                                    cx.notify();
+                                }),
                             )
                             .child(
                                 div()
                                     .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.foreground)
-                                    .child("Agent"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .child(div().size(px(6.0)).rounded_full().bg(status_color))
+                                    .overflow_x_hidden()
+                                    .flex_1()
+                                    .child(truncate_str(&summary.title, 30)),
+                            )
                             .child(
                                 div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .flex_shrink_0()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .child(status_label),
+                                    .child(date)
+                                    .child(format!("{}m", summary.message_count)),
                             ),
-                    ),
-            )
-            .child(messages_container)
+                    );
+                }
+            }
+            panel = panel.child(history);
+        } else {
+            panel = panel.child(messages_area);
+        }
+
+        panel
     }
+}
+
+fn icon_button(
+    id: &str,
+    icon_path: &str,
+    theme: &gpui_component::Theme,
+) -> Stateful<Div> {
+    let icon_path = SharedString::from(icon_path.to_string());
+    div()
+        .id(SharedString::from(id.to_string()))
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(28.0))
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.muted.opacity(0.12)))
+        .child(
+            svg()
+                .path(icon_path)
+                .size(px(14.0))
+                .text_color(theme.muted_foreground),
+        )
 }
