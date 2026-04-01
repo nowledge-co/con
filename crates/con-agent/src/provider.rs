@@ -3,6 +3,7 @@ use crossbeam_channel::Sender;
 use futures::StreamExt;
 use rig::agent::{MultiTurnStreamItem, StreamingResult};
 use rig::client::CompletionClient;
+use rig::completion::CompletionModel;
 use rig::providers::{anthropic, openai};
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use serde::{Deserialize, Serialize};
@@ -367,6 +368,69 @@ impl AgentProvider {
             ProviderKind::Ollama => Some("http://localhost:11434".into()),
             ProviderKind::OpenRouter => Some("https://openrouter.ai/api".into()),
             _ => None,
+        }
+    }
+
+    /// Lightweight completion — no tools, no history, just a simple prompt→response.
+    /// Used for suggestions and other quick completions.
+    pub async fn complete(&self, prompt: &str) -> Result<String> {
+        use rig::completion::AssistantContent;
+
+        let api_key = self.resolve_api_key()?;
+        let preamble = "You are a shell command completion assistant. Be extremely concise.";
+
+        match self.config.provider {
+            ProviderKind::Anthropic | ProviderKind::OpenAICompatible => {
+                let mut builder = anthropic::Client::builder().api_key(&api_key);
+                if let Some(ref base_url) = self.config.base_url {
+                    builder = builder.base_url(base_url);
+                }
+                let client = builder
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Client error: {e}"))?;
+
+                let model = client.completion_model(self.config.effective_model());
+                let response = model
+                    .completion_request(prompt)
+                    .preamble(preamble.to_string())
+                    .max_tokens(100)
+                    .send()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))?;
+
+                match response.choice.first() {
+                    AssistantContent::Text(t) => Ok(t.text.clone()),
+                    _ => Ok(String::new()),
+                }
+            }
+            _ => {
+                let base_url = self
+                    .config
+                    .base_url
+                    .clone()
+                    .or_else(|| self.default_base_url())
+                    .unwrap_or_else(|| "https://api.openai.com/v1".into());
+
+                let client = openai::Client::builder()
+                    .api_key(&api_key)
+                    .base_url(&base_url)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Client error: {e}"))?;
+
+                let model = client.completion_model(self.config.effective_model());
+                let response = model
+                    .completion_request(prompt)
+                    .preamble(preamble.to_string())
+                    .max_tokens(100)
+                    .send()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))?;
+
+                match response.choice.first() {
+                    AssistantContent::Text(t) => Ok(t.text.clone()),
+                    _ => Ok(String::new()),
+                }
+            }
         }
     }
 

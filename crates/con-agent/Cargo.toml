@@ -17,3 +17,4 @@ futures.workspace = true
 crossbeam-channel.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+dirs.workspace = true

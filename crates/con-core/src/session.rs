@@ -7,6 +7,8 @@ pub struct Session {
     pub tabs: Vec<TabState>,
     pub active_tab: usize,
     pub agent_panel_open: bool,
+    #[serde(default)]
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +37,7 @@ impl Default for Session {
             }],
             active_tab: 0,
             agent_panel_open: false,
+            conversation_id: None,
         }
     }
 }

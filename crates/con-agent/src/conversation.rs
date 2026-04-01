@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use rig::message::{Message as RigMessage, UserContent, AssistantContent, Text};
 use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Maximum number of messages to keep in a conversation before truncating
@@ -149,6 +150,89 @@ impl Conversation {
             }
         }
         history
+    }
+}
+
+/// Summary of a saved conversation for listing in the UI
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationSummary {
+    pub id: String,
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+    pub message_count: usize,
+}
+
+impl Conversation {
+    /// Save this conversation to disk
+    pub fn save(&self) -> anyhow::Result<()> {
+        if self.messages.is_empty() {
+            return Ok(());
+        }
+        let path = Self::conversation_path(&self.id);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string(self)?;
+        std::fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// Load a conversation by ID
+    pub fn load(id: &str) -> anyhow::Result<Self> {
+        let path = Self::conversation_path(id);
+        let content = std::fs::read_to_string(&path)?;
+        let conv: Conversation = serde_json::from_str(&content)?;
+        Ok(conv)
+    }
+
+    /// List all saved conversations as summaries, newest first
+    pub fn list_all() -> Vec<ConversationSummary> {
+        let dir = Self::conversations_dir();
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+
+        let mut summaries: Vec<ConversationSummary> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|e| {
+                let content = std::fs::read_to_string(e.path()).ok()?;
+                let conv: Conversation = serde_json::from_str(&content).ok()?;
+                let title = conv
+                    .messages
+                    .iter()
+                    .find(|m| m.role == MessageRole::User)
+                    .map(|m| {
+                        if m.content.len() > 60 {
+                            format!("{}...", &m.content[..57])
+                        } else {
+                            m.content.clone()
+                        }
+                    })
+                    .unwrap_or_else(|| "Empty conversation".to_string());
+                Some(ConversationSummary {
+                    id: conv.id,
+                    title,
+                    created_at: conv.created_at,
+                    message_count: conv.messages.len(),
+                })
+            })
+            .collect();
+
+        summaries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        summaries
+    }
+
+    fn conversations_dir() -> PathBuf {
+        dirs::data_dir()
+            .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("con")
+            .join("conversations")
+    }
+
+    fn conversation_path(id: &str) -> PathBuf {
+        Self::conversations_dir().join(format!("{}.json", id))
     }
 }
 
