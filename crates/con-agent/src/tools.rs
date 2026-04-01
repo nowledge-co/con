@@ -390,18 +390,39 @@ impl Tool for ListFilesTool {
         let max_depth = args.max_depth.unwrap_or(3);
 
         // Try git ls-files first (respects .gitignore, fast)
-        let stdout = std::process::Command::new("git")
+        let git_listing = std::process::Command::new("git")
             .args(["ls-files", "--cached", "--others", "--exclude-standard"])
             .current_dir(dir)
             .output()
             .ok()
             .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .filter(|s| !s.trim().is_empty());
 
         // Fall back to find for non-git directories
-        let stdout = match stdout {
-            Some(s) if !s.trim().is_empty() => s,
-            _ => {
+        let stdout = match git_listing {
+            Some(listing) => {
+                // Apply pattern and max_depth filters that git ls-files doesn't handle
+                let filtered: Vec<&str> = listing
+                    .lines()
+                    .filter(|path| {
+                        // Respect max_depth: count path separators
+                        let depth = path.chars().filter(|c| *c == '/').count();
+                        if depth >= max_depth {
+                            return false;
+                        }
+                        // Respect glob pattern: match against filename
+                        if let Some(ref pattern) = args.pattern {
+                            let filename = path.rsplit('/').next().unwrap_or(path);
+                            glob_match(pattern, filename)
+                        } else {
+                            true
+                        }
+                    })
+                    .collect();
+                filtered.join("\n")
+            }
+            None => {
                 let mut cmd = std::process::Command::new("find");
                 cmd.arg(dir);
                 cmd.args(["-maxdepth", &max_depth.to_string()]);
@@ -514,4 +535,60 @@ impl Tool for SearchTool {
 
         Ok(SearchOutput { matches, truncated })
     }
+}
+
+/// Simple glob matching for filename filtering.
+/// Supports `*` (matches any sequence) and `?` (matches one char).
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let mut p = pattern.chars().peekable();
+    let mut t = text.chars().peekable();
+
+    fn inner(
+        p: &mut std::iter::Peekable<std::str::Chars>,
+        t: &mut std::iter::Peekable<std::str::Chars>,
+    ) -> bool {
+        while let Some(&pc) = p.peek() {
+            match pc {
+                '*' => {
+                    p.next();
+                    // Skip consecutive stars
+                    while p.peek() == Some(&'*') {
+                        p.next();
+                    }
+                    if p.peek().is_none() {
+                        return true; // trailing * matches everything
+                    }
+                    // Try matching * against 0, 1, 2, ... chars
+                    let mut t_clone = t.clone();
+                    let p_save = p.clone();
+                    loop {
+                        let mut p_try = p_save.clone();
+                        let mut t_try = t_clone.clone();
+                        if inner(&mut p_try, &mut t_try) {
+                            return true;
+                        }
+                        if t_clone.next().is_none() {
+                            return false;
+                        }
+                    }
+                }
+                '?' => {
+                    p.next();
+                    if t.next().is_none() {
+                        return false;
+                    }
+                }
+                _ => {
+                    p.next();
+                    match t.next() {
+                        Some(tc) if tc == pc => {}
+                        _ => return false,
+                    }
+                }
+            }
+        }
+        t.peek().is_none()
+    }
+
+    inner(&mut p, &mut t)
 }

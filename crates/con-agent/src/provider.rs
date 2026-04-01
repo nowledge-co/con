@@ -3,7 +3,7 @@ use crossbeam_channel::Sender;
 use futures::StreamExt;
 use rig::agent::{MultiTurnStreamItem, StreamingResult};
 use rig::client::CompletionClient;
-use rig::completion::CompletionModel;
+use rig::completion::CompletionModel as _;
 use rig::providers::{anthropic, openai};
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use serde::{Deserialize, Serialize};
@@ -181,6 +181,42 @@ pub enum AgentEvent {
     Error(String),
 }
 
+// ── Agent builder macro ─────────────────────────────────────────────
+
+/// Build an agent with all tools, stream the response, and consume it.
+///
+/// Rig's `CompletionClient` trait has associated types (`CompletionModel`,
+/// `StreamingResponse`) whose lifetime bounds prevent a clean generic function.
+/// This macro expands identically at each call site, giving the compiler
+/// concrete types while keeping tool registration in one place.
+macro_rules! build_and_stream {
+    ($client:expr, $cfg:expr, $system_prompt:expr, $prompt:expr,
+     $history:expr, $hook:expr, $terminal_exec_tx:expr,
+     $event_tx:expr, $cancelled:expr) => {{
+        let agent = $client
+            .agent($cfg.effective_model())
+            .preamble($system_prompt)
+            .tool(TerminalExecTool::new($terminal_exec_tx))
+            .tool(ShellExecTool)
+            .tool(FileReadTool)
+            .tool(FileWriteTool)
+            .tool(EditFileTool)
+            .tool(ListFilesTool)
+            .tool(SearchTool)
+            .max_tokens($cfg.max_tokens)
+            .default_max_turns($cfg.max_turns)
+            .build();
+
+        let stream = agent
+            .stream_prompt($prompt)
+            .with_hook($hook)
+            .with_history($history)
+            .await;
+
+        consume_stream(stream, $event_tx, $cancelled).await
+    }};
+}
+
 // ── Provider ────────────────────────────────────────────────────────
 
 pub struct AgentProvider {
@@ -228,40 +264,33 @@ impl AgentProvider {
 
         let response = match self.config.provider {
             ProviderKind::Anthropic | ProviderKind::OpenAICompatible => {
-                self.send_anthropic(
-                    &system_prompt,
-                    &last_user_msg,
-                    chat_history,
-                    hook,
-                    terminal_exec_tx,
-                    &event_tx,
-                    &cancelled,
-                )
-                .await?
+                let client = self.build_anthropic_client()?;
+                build_and_stream!(
+                    client, self.config, &system_prompt, &last_user_msg,
+                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled
+                )?
             }
             ProviderKind::OpenAI => {
-                self.send_openai(
-                    &system_prompt,
-                    &last_user_msg,
-                    chat_history,
-                    hook,
-                    terminal_exec_tx,
-                    &event_tx,
-                    &cancelled,
-                )
-                .await?
+                let client = self.build_openai_client(None)?;
+                build_and_stream!(
+                    client, self.config, &system_prompt, &last_user_msg,
+                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled
+                )?
             }
             _ => {
-                self.send_openai_compat(
-                    &system_prompt,
-                    &last_user_msg,
-                    chat_history,
-                    hook,
-                    terminal_exec_tx,
-                    &event_tx,
-                    &cancelled,
-                )
-                .await?
+                let base_url = self
+                    .default_base_url()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No base_url configured for provider {:?}. Set [agent] base_url in config.toml.",
+                            self.config.provider
+                        )
+                    })?;
+                let client = self.build_openai_client(Some(&base_url))?;
+                build_and_stream!(
+                    client, self.config, &system_prompt, &last_user_msg,
+                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled
+                )?
             }
         };
 
@@ -271,141 +300,32 @@ impl AgentProvider {
         Ok(message)
     }
 
-    async fn send_anthropic(
-        &self,
-        system_prompt: &str,
-        prompt: &str,
-        history: Vec<rig::message::Message>,
-        hook: ConHook,
-        terminal_exec_tx: crossbeam_channel::Sender<TerminalExecRequest>,
-        event_tx: &Sender<AgentEvent>,
-        cancelled: &Arc<AtomicBool>,
-    ) -> Result<String> {
+    // Note: Tool registration is centralized via the `build_and_stream!` macro below.
+    // A generic `stream_agent(client: impl CompletionClient, ...)` approach doesn't work
+    // because Rig's CompletionClient has associated types with complex lifetime bounds
+    // that can't be easily expressed in a generic context. The macro achieves the same
+    // deduplication without fighting the type system.
+
+    fn build_anthropic_client(&self) -> Result<anthropic::Client> {
         let api_key = self.resolve_api_key()?;
         let mut builder = anthropic::Client::builder().api_key(&api_key);
         if let Some(ref base_url) = self.config.base_url {
             builder = builder.base_url(base_url);
         }
-        let client = builder
+        builder
             .build()
-            .map_err(|e| anyhow::anyhow!("Anthropic client error: {e}"))?;
-
-        let agent = client
-            .agent(self.config.effective_model())
-            .preamble(system_prompt)
-            .tool(TerminalExecTool::new(terminal_exec_tx))
-            .tool(ShellExecTool)
-            .tool(FileReadTool)
-            .tool(FileWriteTool)
-            .tool(EditFileTool)
-            .tool(ListFilesTool)
-            .tool(SearchTool)
-            .max_tokens(self.config.max_tokens)
-            .default_max_turns(self.config.max_turns)
-            .build();
-
-        let stream = agent
-            .stream_prompt(prompt)
-            .with_hook(hook)
-            .with_history(history)
-            .await;
-
-        consume_stream(stream, event_tx, cancelled).await
+            .map_err(|e| anyhow::anyhow!("Anthropic client error: {e}"))
     }
 
-    async fn send_openai(
-        &self,
-        system_prompt: &str,
-        prompt: &str,
-        history: Vec<rig::message::Message>,
-        hook: ConHook,
-        terminal_exec_tx: crossbeam_channel::Sender<TerminalExecRequest>,
-        event_tx: &Sender<AgentEvent>,
-        cancelled: &Arc<AtomicBool>,
-    ) -> Result<String> {
+    fn build_openai_client(&self, base_url: Option<&str>) -> Result<openai::Client> {
         let api_key = self.resolve_api_key()?;
         let mut builder = openai::Client::builder().api_key(&api_key);
-        if let Some(ref base_url) = self.config.base_url {
-            builder = builder.base_url(base_url);
+        if let Some(url) = base_url.or(self.config.base_url.as_deref()) {
+            builder = builder.base_url(url);
         }
-        let client = builder
+        builder
             .build()
-            .map_err(|e| anyhow::anyhow!("OpenAI client error: {e}"))?;
-
-        let agent = client
-            .agent(self.config.effective_model())
-            .preamble(system_prompt)
-            .tool(TerminalExecTool::new(terminal_exec_tx))
-            .tool(ShellExecTool)
-            .tool(FileReadTool)
-            .tool(FileWriteTool)
-            .tool(EditFileTool)
-            .tool(ListFilesTool)
-            .tool(SearchTool)
-            .max_tokens(self.config.max_tokens)
-            .default_max_turns(self.config.max_turns)
-            .build();
-
-        let stream = agent
-            .stream_prompt(prompt)
-            .with_hook(hook)
-            .with_history(history)
-            .await;
-
-        consume_stream(stream, event_tx, cancelled).await
-    }
-
-    async fn send_openai_compat(
-        &self,
-        system_prompt: &str,
-        prompt: &str,
-        history: Vec<rig::message::Message>,
-        hook: ConHook,
-        terminal_exec_tx: crossbeam_channel::Sender<TerminalExecRequest>,
-        event_tx: &Sender<AgentEvent>,
-        cancelled: &Arc<AtomicBool>,
-    ) -> Result<String> {
-        let api_key = self.resolve_api_key()?;
-
-        let base_url = self
-            .config
-            .base_url
-            .clone()
-            .or_else(|| self.default_base_url())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No base_url configured for provider {:?}. Set [agent] base_url in config.toml.",
-                    self.config.provider
-                )
-            })?;
-
-        let client = openai::Client::builder()
-            .api_key(&api_key)
-            .base_url(&base_url)
-            .build()
-            .map_err(|e| anyhow::anyhow!("Client error: {e}"))?;
-
-        let agent = client
-            .agent(self.config.effective_model())
-            .preamble(system_prompt)
-            .tool(TerminalExecTool::new(terminal_exec_tx))
-            .tool(ShellExecTool)
-            .tool(FileReadTool)
-            .tool(FileWriteTool)
-            .tool(EditFileTool)
-            .tool(ListFilesTool)
-            .tool(SearchTool)
-            .max_tokens(self.config.max_tokens)
-            .default_max_turns(self.config.max_turns)
-            .build();
-
-        let stream = agent
-            .stream_prompt(prompt)
-            .with_hook(hook)
-            .with_history(history)
-            .await;
-
-        consume_stream(stream, event_tx, cancelled).await
+            .map_err(|e| anyhow::anyhow!("OpenAI client error: {e}"))
     }
 
     fn default_base_url(&self) -> Option<String> {

@@ -58,17 +58,27 @@ struct PanelMessage {
     steps_collapsed: bool,
 }
 
+impl PanelMessage {
+    fn new(role: &str, content: &str) -> Self {
+        Self {
+            role: role.to_string(),
+            content: content.to_string(),
+            thinking: None,
+            thinking_collapsed: true,
+            steps: Vec::new(),
+            steps_collapsed: false,
+        }
+    }
+
+    fn assistant() -> Self {
+        Self::new("assistant", "")
+    }
+}
+
 impl AgentPanel {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
-            messages: vec![PanelMessage {
-                role: "system".to_string(),
-                content: "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.".to_string(),
-                thinking: None,
-                thinking_collapsed: true,
-                steps: Vec::new(),
-                steps_collapsed: false,
-            }],
+            messages: vec![PanelMessage::new("system", "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.")],
             tool_calls: Vec::new(),
             pending_approvals: Vec::new(),
             streaming: false,
@@ -80,14 +90,7 @@ impl AgentPanel {
     }
 
     pub fn clear_messages(&mut self, cx: &mut Context<Self>) {
-        self.messages = vec![PanelMessage {
-            role: "system".to_string(),
-            content: "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.".to_string(),
-            thinking: None,
-            thinking_collapsed: true,
-            steps: Vec::new(),
-            steps_collapsed: false,
-        }];
+        self.messages = vec![PanelMessage::new("system", "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.")];
         self.tool_calls.clear();
         self.pending_approvals.clear();
         self.streaming = false;
@@ -111,14 +114,7 @@ impl AgentPanel {
     pub fn add_message(&mut self, role: &str, content: &str, cx: &mut Context<Self>) {
         self.streaming = false;
         self.status = AgentStatus::Idle;
-        self.messages.push(PanelMessage {
-            role: role.to_string(),
-            content: content.to_string(),
-            thinking: None,
-            thinking_collapsed: true,
-            steps: Vec::new(),
-            steps_collapsed: false,
-        });
+        self.messages.push(PanelMessage::new(role, content));
         self.scroll_to_bottom();
         cx.notify();
     }
@@ -209,14 +205,9 @@ impl AgentPanel {
     pub fn update_thinking(&mut self, text: &str, cx: &mut Context<Self>) {
         self.status = AgentStatus::Thinking;
         if !self.streaming {
-            self.messages.push(PanelMessage {
-                role: "assistant".to_string(),
-                content: String::new(),
-                thinking: Some(String::new()),
-                thinking_collapsed: true,
-                steps: Vec::new(),
-                steps_collapsed: false,
-            });
+            let mut msg = PanelMessage::assistant();
+            msg.thinking = Some(String::new());
+            self.messages.push(msg);
             self.streaming = true;
         }
         if let Some(last) = self.messages.last_mut() {
@@ -230,14 +221,7 @@ impl AgentPanel {
     pub fn update_streaming(&mut self, token: &str, cx: &mut Context<Self>) {
         self.status = AgentStatus::Responding;
         if !self.streaming {
-            self.messages.push(PanelMessage {
-                role: "assistant".to_string(),
-                content: String::new(),
-                thinking: None,
-                thinking_collapsed: true,
-                steps: Vec::new(),
-                steps_collapsed: false,
-            });
+            self.messages.push(PanelMessage::assistant());
             self.streaming = true;
         }
         if let Some(last) = self.messages.last_mut() {
@@ -255,14 +239,8 @@ impl AgentPanel {
             }
             self.streaming = false;
         } else {
-            self.messages.push(PanelMessage {
-                role: "assistant".to_string(),
-                content: final_content.to_string(),
-                thinking: None,
-                thinking_collapsed: true,
-                steps: Vec::new(),
-                steps_collapsed: false,
-            });
+            self.messages
+                .push(PanelMessage::new("assistant", final_content));
         }
         for tc in self.tool_calls.drain(..) {
             let step = if let Some(result) = &tc.result {
@@ -300,21 +278,17 @@ impl AgentPanel {
                         return cmd.to_string();
                     }
                 }
-                "file_read" | "file_write" => {
-                    if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
-                        return path.to_string();
-                    }
-                }
-                "edit_file" => {
+                "file_read" | "file_write" | "edit_file" => {
                     if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
                         return path.to_string();
                     }
                 }
                 "list_files" => {
-                    if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
-                        return path.to_string();
-                    }
-                    return ".".to_string();
+                    return v
+                        .get("path")
+                        .and_then(|p| p.as_str())
+                        .unwrap_or(".")
+                        .to_string();
                 }
                 "search" => {
                     if let Some(pattern) = v.get("pattern").and_then(|q| q.as_str()) {
@@ -375,13 +349,10 @@ fn render_message_content(content: &str, theme: &gpui_component::theme::Theme) -
 
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
-        return s.to_string();
+        s.to_string()
+    } else {
+        format!("{}…", &s[..s.floor_char_boundary(max_len)])
     }
-    let mut end = max_len;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
 }
 
 impl Render for AgentPanel {
