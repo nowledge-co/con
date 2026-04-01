@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 fn default_font_family() -> String { "JetBrains Mono".into() }
 fn default_font_size() -> f32 { 14.0 }
-fn default_theme() -> String { "catppuccin-mocha".into() }
+fn default_theme() -> String { "flexoki-dark".into() }
 fn default_scrollback() -> usize { 10_000 }
 fn default_cursor_style() -> String { "block".into() }
 

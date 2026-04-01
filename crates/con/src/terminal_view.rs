@@ -1,4 +1,4 @@
-use con_terminal::{CursorShape, Grid, Pty, PtyEvent, PtySize};
+use con_terminal::{CursorShape, Grid, Pty, PtyEvent, PtySize, TerminalTheme};
 use gpui::*;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -83,6 +83,13 @@ impl EventEmitter<ExplainCommand> for TerminalView {}
 impl EventEmitter<ClosePaneRequest> for TerminalView {}
 impl EventEmitter<FocusChanged> for TerminalView {}
 
+/// Emitted when the current shell input changes (for suggestion engine).
+pub struct InputChanged {
+    pub input: Option<String>,
+}
+
+impl EventEmitter<InputChanged> for TerminalView {}
+
 pub struct TerminalView {
     grid: Arc<Mutex<Grid>>,
     pty: Arc<Mutex<Pty>>,
@@ -100,6 +107,10 @@ pub struct TerminalView {
     /// Last dimensions we resized to — prevents oscillation when canvas
     /// measures slightly different bounds on each render.
     last_resized_dims: Arc<Mutex<(usize, usize)>>,
+    /// Ghost text suggestion shown after cursor (dim, Tab to accept)
+    suggestion: Option<String>,
+    /// Last input we sent to the suggestion engine (avoids re-requesting)
+    last_suggestion_input: Option<String>,
 }
 
 impl TerminalView {
@@ -110,7 +121,18 @@ impl TerminalView {
         scrollback_lines: usize,
         cx: &mut Context<Self>,
     ) -> Self {
-        let grid = Arc::new(Mutex::new(Grid::with_scrollback(cols, rows, scrollback_lines)));
+        Self::with_theme(cols, rows, font_size, scrollback_lines, &TerminalTheme::default(), cx)
+    }
+
+    pub fn with_theme(
+        cols: usize,
+        rows: usize,
+        font_size: f32,
+        scrollback_lines: usize,
+        theme: &TerminalTheme,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let grid = Arc::new(Mutex::new(Grid::with_theme(cols, rows, scrollback_lines, theme)));
         let pty = Pty::spawn(PtySize {
             rows: rows as u16,
             cols: cols as u16,
@@ -137,6 +159,7 @@ impl TerminalView {
                         drop(parser);
                         // Send any pending responses (DA, DSR) back to PTY
                         let responses = grid.drain_responses();
+                        let current_input = grid.current_input();
                         drop(grid);
                         if !responses.is_empty() {
                             let mut pty = pty_for_io.lock();
@@ -144,7 +167,17 @@ impl TerminalView {
                                 let _ = pty.write(&response);
                             }
                         }
-                        this.update(cx, |_, cx| cx.notify()).ok();
+                        this.update(cx, |view, cx| {
+                            // Emit input change for suggestion engine
+                            let changed = view.last_suggestion_input != current_input;
+                            if changed {
+                                view.last_suggestion_input = current_input.clone();
+                                // Clear stale suggestion when input changes
+                                view.suggestion = None;
+                                cx.emit(InputChanged { input: current_input });
+                            }
+                            cx.notify();
+                        }).ok();
                     }
                     Ok(PtyEvent::Exit(_)) => break,
                     Err(crossbeam_channel::TryRecvError::Empty) => {
@@ -186,6 +219,8 @@ impl TerminalView {
             cursor_blink_epoch: std::time::Instant::now(),
             hovered_row: None,
             last_resized_dims: Arc::new(Mutex::new((cols, rows))),
+            suggestion: None,
+            last_suggestion_input: None,
         }
     }
 
@@ -264,6 +299,13 @@ impl TerminalView {
         let mut pty = self.pty.lock();
         let _ = pty.write(data);
     }
+
+    /// Set a ghost text suggestion to display after the cursor.
+    /// Pass None to clear.
+    pub fn set_suggestion(&mut self, suggestion: Option<String>, cx: &mut Context<Self>) {
+        self.suggestion = suggestion;
+        cx.notify();
+    }
 }
 
 impl Focusable for TerminalView {
@@ -305,7 +347,7 @@ impl Render for TerminalView {
             dim: bool,
         }
 
-        let default_bg = con_terminal::Style::default().bg.to_u32();
+        let default_bg = grid.default_style().bg.to_u32();
         let mut cells: Vec<CellInfo> = Vec::new();
         let cursor_row = grid.cursor.row;
         let cursor_col = grid.cursor.col;
@@ -339,7 +381,14 @@ impl Render for TerminalView {
         let scrollback_offset = grid.scrollback_offset;
         let in_scrollback = scrollback_offset > 0;
         let visible_blocks = grid.visible_command_blocks();
+        let at_prompt = grid.at_shell_prompt();
         drop(grid);
+
+        let suggestion_text = if at_prompt && !in_scrollback {
+            self.suggestion.clone()
+        } else {
+            None
+        };
 
         // Build text overlays using GPUI text engine
         let mut text_divs: Vec<Div> = Vec::new();
@@ -597,6 +646,26 @@ impl Render for TerminalView {
                     return;
                 }
 
+                // Tab with active suggestion: accept the ghost text
+                if event.keystroke.key == "tab"
+                    && !event.keystroke.modifiers.shift
+                    && !event.keystroke.modifiers.control
+                    && !event.keystroke.modifiers.alt
+                {
+                    if let Some(suggestion) = this.suggestion.take() {
+                        this.last_suggestion_input = None;
+                        this.write_to_pty(suggestion.as_bytes());
+                        cx.notify();
+                        return;
+                    }
+                }
+
+                // Clear ghost text on any key that isn't Tab-accept
+                if this.suggestion.is_some() {
+                    this.suggestion = None;
+                    this.last_suggestion_input = None;
+                }
+
                 let mods = con_terminal::input::Modifiers {
                     shift: event.keystroke.modifiers.shift,
                     ctrl: event.keystroke.modifiers.control,
@@ -724,6 +793,22 @@ impl Render for TerminalView {
             )
             // Text overlays
             .children(text_divs);
+
+        // Ghost text suggestion — dim text after cursor, Tab to accept
+        if let Some(ref suggestion) = suggestion_text {
+            if cursor_row < render_rows && cursor_col < render_cols {
+                let ghost = div()
+                    .absolute()
+                    .top(px(cursor_row as f32 * cell_h))
+                    .left(px(cursor_col as f32 * cell_w))
+                    .font_family("Ioskeley Mono")
+                    .text_size(px(font_sz))
+                    .line_height(px(cell_h))
+                    .text_color(cx.theme().muted_foreground.opacity(0.4))
+                    .child(suggestion.clone());
+                terminal = terminal.child(ghost);
+            }
+        }
 
         // Command block action bar — appears when hovering near a command block
         if let Some(hovered_row) = self.hovered_row {

@@ -300,10 +300,15 @@ impl SettingsPanel {
             )
     }
 
-    fn render_appearance(&self, theme: &gpui_component::Theme) -> Div {
-        section_content("Appearance", "Customize the look and feel.", theme)
+    fn render_appearance(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let current_theme = &self.config.terminal.theme;
+        let available = con_terminal::TerminalTheme::available();
+        let selected_idx = available.iter().position(|t| t == current_theme).unwrap_or(0);
+
+        section_content("Appearance", "Customize the look and feel.", &theme)
             .child(
-                card(theme)
+                card(&theme)
                     .child(
                         div()
                             .flex()
@@ -311,12 +316,47 @@ impl SettingsPanel {
                             .justify_between()
                             .px(px(16.0))
                             .h(px(44.0))
-                            .child(
-                                div().text_sm().child("Theme"),
-                            )
-                            .child(
-                                segmented_control("theme-sel", &["Dark", "Light"], 0, theme),
-                            ),
+                            .child(div().text_sm().child("Terminal Theme"))
+                            .child({
+                                let mut row = div()
+                                    .flex()
+                                    .items_center()
+                                    .h(px(28.0))
+                                    .rounded(px(6.0))
+                                    .bg(theme.muted.opacity(0.12))
+                                    .p(px(2.0))
+                                    .gap(px(1.0));
+
+                                for (i, name) in available.iter().enumerate() {
+                                    let is_sel = i == selected_idx;
+                                    let theme_name = name.to_string();
+                                    row = row.child(
+                                        div()
+                                            .id(SharedString::from(format!("term-theme-{i}")))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .h(px(24.0))
+                                            .px(px(10.0))
+                                            .rounded(px(4.0))
+                                            .text_size(px(11.0))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .cursor_pointer()
+                                            .bg(if is_sel { theme.background } else { theme.transparent })
+                                            .text_color(if is_sel { theme.foreground } else { theme.muted_foreground })
+                                            .when(is_sel, |s: Stateful<Div>| s.shadow_sm())
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, _, cx| {
+                                                    this.config.terminal.theme = theme_name.clone();
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .child(display_theme_name(name)),
+                                    );
+                                }
+                                row
+                            }),
                     ),
             )
     }
@@ -635,8 +675,7 @@ impl Render for SettingsPanel {
         let content = match active {
             SettingsSection::General => self.render_general(cx),
             SettingsSection::Appearance => {
-                let theme = cx.theme();
-                self.render_appearance(theme)
+                self.render_appearance(cx)
             }
             SettingsSection::AI => self.render_ai(cx),
             SettingsSection::Keys => {
@@ -877,44 +916,6 @@ fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
         )
 }
 
-fn segmented_control(
-    id: &str,
-    options: &[&str],
-    selected: usize,
-    theme: &gpui_component::Theme,
-) -> Div {
-    let mut row = div()
-        .flex()
-        .items_center()
-        .h(px(28.0))
-        .rounded(px(6.0))
-        .bg(theme.muted.opacity(0.12))
-        .p(px(2.0))
-        .gap(px(1.0));
-
-    for (i, option) in options.iter().enumerate() {
-        let is_sel = i == selected;
-        row = row.child(
-            div()
-                .id(SharedString::from(format!("{id}-{i}")))
-                .flex()
-                .items_center()
-                .justify_center()
-                .h(px(24.0))
-                .px(px(14.0))
-                .rounded(px(4.0))
-                .text_size(px(12.0))
-                .font_weight(FontWeight::MEDIUM)
-                .cursor_pointer()
-                .bg(if is_sel { theme.background } else { theme.transparent })
-                .text_color(if is_sel { theme.foreground } else { theme.muted_foreground })
-                .when(is_sel, |s: Stateful<Div>| s.shadow_sm())
-                .child(option.to_string()),
-        );
-    }
-    row
-}
-
 fn provider_label(provider: &ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Anthropic => "Anthropic",
@@ -985,5 +986,15 @@ fn provider_models(provider: &ProviderKind) -> &'static [&'static str] {
         ],
         // OpenAICompatible, Ollama, OpenRouter, Together — user provides custom model
         _ => &[],
+    }
+}
+
+fn display_theme_name(name: &str) -> String {
+    match name {
+        "flexoki-dark" => "Flexoki Dark".into(),
+        "flexoki-light" => "Flexoki Light".into(),
+        "catppuccin-mocha" => "Catppuccin".into(),
+        "tokyonight" => "Tokyo Night".into(),
+        other => other.to_string(),
     }
 }

@@ -7,12 +7,14 @@ use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
 use crate::pane_tree::{PaneTree, SplitDirection};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
-use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, TerminalView};
+use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, InputChanged, TerminalView};
+use con_terminal::TerminalTheme;
 use crate::{CloseTab, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
 use con_core::config::Config;
 use con_agent::{TerminalExecRequest, TerminalExecResponse};
 use con_core::harness::{AgentHarness, HarnessEvent, InputKind};
 use con_core::session::Session;
+use con_core::suggestions::SuggestionEngine;
 
 struct Tab {
     pane_tree: PaneTree,
@@ -42,6 +44,12 @@ pub struct ConWorkspace {
     pending_drag_init: std::sync::Arc<std::sync::Mutex<Option<(usize, f32)>>>,
     /// Agent panel drag state: start X position and start width when drag began.
     agent_panel_drag: Option<(f32, f32)>,
+    /// Shell command suggestion engine (debounced AI completions)
+    suggestion_engine: SuggestionEngine,
+    /// Channel for sending suggestion results from the async engine back to GPUI
+    suggestion_tx: crossbeam_channel::Sender<(gpui::EntityId, String)>,
+    /// Current terminal color theme
+    terminal_theme: TerminalTheme,
 }
 
 impl ConWorkspace {
@@ -49,6 +57,8 @@ impl ConWorkspace {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
         let font_size = config.terminal.font_size;
         let scrollback_lines = config.terminal.scrollback_lines;
+        let terminal_theme = TerminalTheme::by_name(&config.terminal.theme)
+            .unwrap_or_default();
         let session = Session::load().unwrap_or_default();
 
         let mut tabs: Vec<Tab> = session
@@ -56,7 +66,8 @@ impl ConWorkspace {
             .iter()
             .enumerate()
             .map(|(i, tab_state)| {
-                let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
+                let theme = &terminal_theme;
+                let terminal = cx.new(|cx| TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx));
                 Tab {
                     pane_tree: PaneTree::new(terminal),
                     title: if tab_state.title.is_empty() {
@@ -69,7 +80,7 @@ impl ConWorkspace {
             })
             .collect();
         if tabs.is_empty() {
-            let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
+            let terminal = cx.new(|cx| TerminalView::with_theme(80, 24, font_size, scrollback_lines, &terminal_theme, cx));
             tabs.push(Tab {
                 pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),
@@ -85,6 +96,8 @@ impl ConWorkspace {
                     .detach();
                 cx.subscribe_in(terminal, window, Self::on_focus_changed)
                     .detach();
+                cx.subscribe_in(terminal, window, Self::on_input_changed)
+                    .detach();
             }
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
@@ -95,6 +108,8 @@ impl ConWorkspace {
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
         let mut harness = AgentHarness::new(&config);
+        let suggestion_engine = harness.suggestion_engine(300);
+        let (suggestion_tx, suggestion_rx) = crossbeam_channel::unbounded();
 
         // Restore previous conversation if saved in session
         if let Some(conv_id) = &session.conversation_id {
@@ -120,9 +135,10 @@ impl ConWorkspace {
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
             .detach();
 
-        // Poll harness events and terminal exec requests periodically
+        // Poll harness events, terminal exec requests, and suggestions
         let events_rx = harness.events().clone();
         let terminal_exec_rx = harness.terminal_exec_requests().clone();
+        let suggestion_rx_for_poll = suggestion_rx.clone();
         cx.spawn(async move |this, cx| {
             loop {
                 let mut got_event = false;
@@ -140,6 +156,15 @@ impl ConWorkspace {
                     got_event = true;
                     this.update(cx, |workspace, cx| {
                         workspace.handle_terminal_exec_request(req, cx);
+                    })
+                    .ok();
+                }
+
+                // Apply suggestion results from the async engine
+                while let Ok((entity_id, suggestion)) = suggestion_rx_for_poll.try_recv() {
+                    got_event = true;
+                    this.update(cx, |workspace, cx| {
+                        workspace.apply_suggestion(entity_id, suggestion, cx);
                     })
                     .ok();
                 }
@@ -173,6 +198,9 @@ impl ConWorkspace {
             modal_was_open: false,
             pending_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
             agent_panel_drag: None,
+            suggestion_engine,
+            suggestion_tx,
+            terminal_theme,
         }
     }
 
@@ -369,6 +397,21 @@ impl ConWorkspace {
         let term_config = settings.read(cx).terminal_config().clone();
         self.font_size = term_config.font_size;
         self.scrollback_lines = term_config.scrollback_lines;
+
+        // Apply terminal theme if changed
+        if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
+            if new_theme.name != self.terminal_theme.name {
+                self.terminal_theme = new_theme.clone();
+                // Update all existing terminal grids
+                for tab in &self.tabs {
+                    for terminal in tab.pane_tree.all_terminals() {
+                        terminal.update(cx, |view, _cx| {
+                            view.grid().lock().set_theme(&new_theme);
+                        });
+                    }
+                }
+            }
+        }
 
         // Settings panel closes on save — restore terminal focus
         self.focus_terminal(window, cx);
@@ -626,12 +669,15 @@ impl ConWorkspace {
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let font_size = self.font_size;
         let scrollback_lines = self.scrollback_lines;
-        let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
+        let theme = &self.terminal_theme;
+        let terminal = cx.new(|cx| TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx));
         cx.subscribe_in(&terminal, window, Self::on_explain_command)
             .detach();
         cx.subscribe_in(&terminal, window, Self::on_close_pane_request)
             .detach();
         cx.subscribe_in(&terminal, window, Self::on_focus_changed)
+            .detach();
+        cx.subscribe_in(&terminal, window, Self::on_input_changed)
             .detach();
         let tab_number = self.tabs.len() + 1;
         self.tabs.push(Tab {
@@ -705,12 +751,15 @@ impl ConWorkspace {
     ) {
         let font_size = self.font_size;
         let scrollback_lines = self.scrollback_lines;
-        let terminal = cx.new(|cx| TerminalView::new(80, 24, font_size, scrollback_lines, cx));
+        let theme = &self.terminal_theme;
+        let terminal = cx.new(|cx| TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx));
         cx.subscribe_in(&terminal, window, Self::on_explain_command)
             .detach();
         cx.subscribe_in(&terminal, window, Self::on_close_pane_request)
             .detach();
         cx.subscribe_in(&terminal, window, Self::on_focus_changed)
+            .detach();
+        cx.subscribe_in(&terminal, window, Self::on_input_changed)
             .detach();
         self.tabs[self.active_tab]
             .pane_tree
@@ -771,6 +820,50 @@ impl ConWorkspace {
             terminal.focus_handle(cx).focus(window, cx);
         }
         cx.notify();
+    }
+
+    fn apply_suggestion(
+        &mut self,
+        entity_id: gpui::EntityId,
+        suggestion: String,
+        cx: &mut Context<Self>,
+    ) {
+        // Find the terminal with this entity_id across all tabs
+        for tab in &self.tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                if terminal.entity_id() == entity_id {
+                    terminal.update(cx, |view, cx| {
+                        view.set_suggestion(Some(suggestion), cx);
+                    });
+                    return;
+                }
+            }
+        }
+    }
+
+    fn on_input_changed(
+        &mut self,
+        terminal: &Entity<TerminalView>,
+        event: &InputChanged,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match &event.input {
+            Some(input) if input.len() >= 2 => {
+                let entity_id = terminal.entity_id();
+                let tx = self.suggestion_tx.clone();
+                self.suggestion_engine.request(input, move |suggestion| {
+                    let _ = tx.send((entity_id, suggestion));
+                });
+            }
+            _ => {
+                self.suggestion_engine.cancel();
+                // Clear any existing suggestion
+                terminal.update(cx, |view, cx| {
+                    view.set_suggestion(None, cx);
+                });
+            }
+        }
     }
 
     fn on_explain_command(

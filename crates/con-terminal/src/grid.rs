@@ -19,47 +19,172 @@ impl Color {
     }
 }
 
-/// Default terminal palette (ANSI 256)
-fn default_palette() -> [Color; 256] {
-    let mut palette = [Color::rgb(0, 0, 0); 256];
+/// Terminal color theme — the 16 ANSI colors plus default fg/bg.
+/// The 216-color cube and 24-step grayscale ramp are computed algorithmically.
+#[derive(Debug, Clone)]
+pub struct TerminalTheme {
+    pub name: String,
+    pub foreground: Color,
+    pub background: Color,
+    pub ansi: [Color; 16],
+}
 
-    // Standard 16 colors — Flexoki dark palette
-    palette[0] = Color::rgb(0x10, 0x0F, 0x0F); // black (Flexoki base)
-    palette[1] = Color::rgb(0xD1, 0x4D, 0x41); // red
-    palette[2] = Color::rgb(0x87, 0x9A, 0x39); // green
-    palette[3] = Color::rgb(0xD0, 0xA2, 0x15); // yellow
-    palette[4] = Color::rgb(0x43, 0x85, 0xBE); // blue
-    palette[5] = Color::rgb(0x8B, 0x7E, 0xC8); // magenta
-    palette[6] = Color::rgb(0x3A, 0xA9, 0x9F); // cyan
-    palette[7] = Color::rgb(0xCE, 0xCD, 0xC3); // white (Flexoki tx)
-    palette[8] = Color::rgb(0x57, 0x56, 0x53); // bright black (Flexoki tx-3)
-    palette[9] = Color::rgb(0xD1, 0x4D, 0x41); // bright red
-    palette[10] = Color::rgb(0x87, 0x9A, 0x39); // bright green
-    palette[11] = Color::rgb(0xD0, 0xA2, 0x15); // bright yellow
-    palette[12] = Color::rgb(0x43, 0x85, 0xBE); // bright blue
-    palette[13] = Color::rgb(0xCE, 0x5D, 0x97); // bright magenta
-    palette[14] = Color::rgb(0x3A, 0xA9, 0x9F); // bright cyan
-    palette[15] = Color::rgb(0xCE, 0xCD, 0xC3); // bright white
+impl TerminalTheme {
+    /// Build a full 256-color palette from this theme.
+    pub fn palette(&self) -> [Color; 256] {
+        let mut palette = [Color::rgb(0, 0, 0); 256];
+        palette[..16].copy_from_slice(&self.ansi);
 
-    // 216 color cube (indices 16-231)
-    for i in 0..216 {
-        let r = (i / 36) as u8;
-        let g = ((i / 6) % 6) as u8;
-        let b = (i % 6) as u8;
-        palette[16 + i] = Color::rgb(
-            if r > 0 { 55 + r * 40 } else { 0 },
-            if g > 0 { 55 + g * 40 } else { 0 },
-            if b > 0 { 55 + b * 40 } else { 0 },
-        );
+        // 216 color cube (indices 16-231)
+        for i in 0..216 {
+            let r = (i / 36) as u8;
+            let g = ((i / 6) % 6) as u8;
+            let b = (i % 6) as u8;
+            palette[16 + i] = Color::rgb(
+                if r > 0 { 55 + r * 40 } else { 0 },
+                if g > 0 { 55 + g * 40 } else { 0 },
+                if b > 0 { 55 + b * 40 } else { 0 },
+            );
+        }
+
+        // Grayscale ramp (indices 232-255)
+        for i in 0..24 {
+            let v = (8 + i * 10) as u8;
+            palette[232 + i] = Color::rgb(v, v, v);
+        }
+
+        palette
     }
 
-    // Grayscale ramp (indices 232-255)
-    for i in 0..24 {
-        let v = (8 + i * 10) as u8;
-        palette[232 + i] = Color::rgb(v, v, v);
+    /// Flexoki dark — the default con theme.
+    pub fn flexoki_dark() -> Self {
+        Self {
+            name: "flexoki-dark".into(),
+            foreground: Color::rgb(0xCE, 0xCD, 0xC3),
+            background: Color::rgb(0x10, 0x0F, 0x0F),
+            ansi: [
+                Color::rgb(0x10, 0x0F, 0x0F), // black
+                Color::rgb(0xD1, 0x4D, 0x41), // red
+                Color::rgb(0x87, 0x9A, 0x39), // green
+                Color::rgb(0xD0, 0xA2, 0x15), // yellow
+                Color::rgb(0x43, 0x85, 0xBE), // blue
+                Color::rgb(0x8B, 0x7E, 0xC8), // magenta
+                Color::rgb(0x3A, 0xA9, 0x9F), // cyan
+                Color::rgb(0xCE, 0xCD, 0xC3), // white
+                Color::rgb(0x57, 0x56, 0x53), // bright black
+                Color::rgb(0xD1, 0x4D, 0x41), // bright red
+                Color::rgb(0x87, 0x9A, 0x39), // bright green
+                Color::rgb(0xD0, 0xA2, 0x15), // bright yellow
+                Color::rgb(0x43, 0x85, 0xBE), // bright blue
+                Color::rgb(0xCE, 0x5D, 0x97), // bright magenta
+                Color::rgb(0x3A, 0xA9, 0x9F), // bright cyan
+                Color::rgb(0xCE, 0xCD, 0xC3), // bright white
+            ],
+        }
     }
 
-    palette
+    /// Flexoki light.
+    pub fn flexoki_light() -> Self {
+        Self {
+            name: "flexoki-light".into(),
+            foreground: Color::rgb(0x10, 0x0F, 0x0F),
+            background: Color::rgb(0xFF, 0xFC, 0xF0),
+            ansi: [
+                Color::rgb(0x10, 0x0F, 0x0F), // black
+                Color::rgb(0xAF, 0x30, 0x29), // red
+                Color::rgb(0x66, 0x80, 0x0B), // green
+                Color::rgb(0xAD, 0x8A, 0x01), // yellow
+                Color::rgb(0x20, 0x5E, 0xA6), // blue
+                Color::rgb(0x5E, 0x40, 0x9D), // magenta
+                Color::rgb(0x24, 0x83, 0x7B), // cyan
+                Color::rgb(0xCE, 0xCD, 0xC3), // white
+                Color::rgb(0x87, 0x85, 0x80), // bright black
+                Color::rgb(0xD1, 0x4D, 0x41), // bright red
+                Color::rgb(0x87, 0x9A, 0x39), // bright green
+                Color::rgb(0xD0, 0xA2, 0x15), // bright yellow
+                Color::rgb(0x43, 0x85, 0xBE), // bright blue
+                Color::rgb(0xCE, 0x5D, 0x97), // bright magenta
+                Color::rgb(0x3A, 0xA9, 0x9F), // bright cyan
+                Color::rgb(0xFF, 0xFC, 0xF0), // bright white
+            ],
+        }
+    }
+
+    /// Catppuccin Mocha.
+    pub fn catppuccin_mocha() -> Self {
+        Self {
+            name: "catppuccin-mocha".into(),
+            foreground: Color::rgb(0xCD, 0xD6, 0xF4),
+            background: Color::rgb(0x1E, 0x1E, 0x2E),
+            ansi: [
+                Color::rgb(0x45, 0x47, 0x5A), // black (surface1)
+                Color::rgb(0xF3, 0x8B, 0xA8), // red
+                Color::rgb(0xA6, 0xE3, 0xA1), // green
+                Color::rgb(0xF9, 0xE2, 0xAF), // yellow
+                Color::rgb(0x89, 0xB4, 0xFA), // blue
+                Color::rgb(0xCB, 0xA6, 0xF7), // magenta (mauve)
+                Color::rgb(0x94, 0xE2, 0xD5), // cyan (teal)
+                Color::rgb(0xBA, 0xC2, 0xDE), // white (subtext1)
+                Color::rgb(0x58, 0x5B, 0x70), // bright black (surface2)
+                Color::rgb(0xF3, 0x8B, 0xA8), // bright red
+                Color::rgb(0xA6, 0xE3, 0xA1), // bright green
+                Color::rgb(0xF9, 0xE2, 0xAF), // bright yellow
+                Color::rgb(0x89, 0xB4, 0xFA), // bright blue
+                Color::rgb(0xCB, 0xA6, 0xF7), // bright magenta
+                Color::rgb(0x94, 0xE2, 0xD5), // bright cyan
+                Color::rgb(0xCD, 0xD6, 0xF4), // bright white (text)
+            ],
+        }
+    }
+
+    /// Tokyo Night.
+    pub fn tokyonight() -> Self {
+        Self {
+            name: "tokyonight".into(),
+            foreground: Color::rgb(0xC0, 0xCA, 0xF5),
+            background: Color::rgb(0x1A, 0x1B, 0x26),
+            ansi: [
+                Color::rgb(0x15, 0x16, 0x1E), // black
+                Color::rgb(0xF7, 0x76, 0x8E), // red
+                Color::rgb(0x9E, 0xCE, 0x6A), // green
+                Color::rgb(0xE0, 0xAF, 0x68), // yellow
+                Color::rgb(0x7A, 0xA2, 0xF7), // blue
+                Color::rgb(0xBB, 0x9A, 0xF7), // magenta
+                Color::rgb(0x7D, 0xCF, 0xFF), // cyan
+                Color::rgb(0xA9, 0xB1, 0xD6), // white
+                Color::rgb(0x41, 0x48, 0x68), // bright black
+                Color::rgb(0xF7, 0x76, 0x8E), // bright red
+                Color::rgb(0x9E, 0xCE, 0x6A), // bright green
+                Color::rgb(0xE0, 0xAF, 0x68), // bright yellow
+                Color::rgb(0x7A, 0xA2, 0xF7), // bright blue
+                Color::rgb(0xBB, 0x9A, 0xF7), // bright magenta
+                Color::rgb(0x7D, 0xCF, 0xFF), // bright cyan
+                Color::rgb(0xC0, 0xCA, 0xF5), // bright white
+            ],
+        }
+    }
+
+    /// Look up a built-in theme by name. Case-insensitive.
+    pub fn by_name(name: &str) -> Option<Self> {
+        match name.to_lowercase().as_str() {
+            "flexoki-dark" | "flexoki" => Some(Self::flexoki_dark()),
+            "flexoki-light" => Some(Self::flexoki_light()),
+            "catppuccin-mocha" | "catppuccin" => Some(Self::catppuccin_mocha()),
+            "tokyonight" | "tokyo-night" => Some(Self::tokyonight()),
+            _ => None,
+        }
+    }
+
+    /// All available built-in theme names.
+    pub fn available() -> &'static [&'static str] {
+        &["flexoki-dark", "flexoki-light", "catppuccin-mocha", "tokyonight"]
+    }
+}
+
+impl Default for TerminalTheme {
+    fn default() -> Self {
+        Self::flexoki_dark()
+    }
 }
 
 /// Text style attributes
@@ -153,6 +278,8 @@ pub struct Grid {
     pub scrollback_offset: usize,
     pub cursor: Cursor,
     style: Style,
+    /// The default style used when resetting cells (fg/bg from the active theme)
+    default_style: Style,
     saved_cursor: Option<Cursor>,
     palette: [Color; 256],
     alternate_screen: Option<Vec<Vec<Cell>>>,
@@ -200,7 +327,26 @@ impl Grid {
     }
 
     pub fn with_scrollback(cols: usize, rows: usize, max_scrollback: usize) -> Self {
-        let cells = vec![vec![Cell::default(); cols]; rows];
+        Self::with_theme(cols, rows, max_scrollback, &TerminalTheme::default())
+    }
+
+    pub fn with_theme(
+        cols: usize,
+        rows: usize,
+        max_scrollback: usize,
+        theme: &TerminalTheme,
+    ) -> Self {
+        let default_style = Style {
+            fg: theme.foreground,
+            bg: theme.background,
+            ..Style::default()
+        };
+        let default_cell = Cell {
+            c: ' ',
+            style: default_style,
+            wide: false,
+        };
+        let cells = vec![vec![default_cell; cols]; rows];
         let dirty = vec![true; rows];
         let mut tab_stops = vec![false; cols];
         for i in (0..cols).step_by(8) {
@@ -218,9 +364,10 @@ impl Grid {
                 shape: CursorShape::Block,
                 visible: true,
             },
-            style: Style::default(),
+            style: default_style,
+            default_style,
             saved_cursor: None,
-            palette: default_palette(),
+            palette: theme.palette(),
             alternate_screen: None,
             dirty,
             last_prompt_row: None,
@@ -260,6 +407,79 @@ impl Grid {
 
     pub fn is_dirty(&self, row: usize) -> bool {
         self.dirty[row]
+    }
+
+    /// The default style (fg/bg) for this grid's theme.
+    pub fn default_style(&self) -> &Style {
+        &self.default_style
+    }
+
+    /// A blank cell using this grid's theme colors.
+    fn blank_cell(&self) -> Cell {
+        Cell {
+            c: ' ',
+            style: self.default_style,
+            wide: false,
+        }
+    }
+
+    /// A blank row of cells using this grid's theme colors.
+    fn blank_row(&self) -> Vec<Cell> {
+        vec![self.blank_cell(); self.cols]
+    }
+
+    /// Apply a new terminal theme, updating the palette and default colors.
+    pub fn set_theme(&mut self, theme: &TerminalTheme) {
+        self.default_style = Style {
+            fg: theme.foreground,
+            bg: theme.background,
+            ..Style::default()
+        };
+        self.palette = theme.palette();
+        // Reset the current style to match the new theme defaults
+        self.style = self.default_style;
+        // Re-render all cells with default bg/fg to match the new theme
+        for row in &mut self.cells {
+            for cell in row.iter_mut() {
+                // Only update cells that were using the old default colors
+                cell.style.fg = theme.foreground;
+                cell.style.bg = theme.background;
+            }
+        }
+        self.dirty = vec![true; self.rows];
+    }
+
+    /// Whether the cursor is at a shell prompt (not in alternate screen / TUI,
+    /// and OSC 133 has marked a prompt row). Useful for ghost text suggestions.
+    pub fn at_shell_prompt(&self) -> bool {
+        self.alternate_screen.is_none()
+            && self.last_prompt_row.is_some()
+            && self.scrollback_offset == 0
+    }
+
+    /// The text the user has typed on the current cursor line, from the start
+    /// of the prompt command area to the cursor position.
+    /// Returns None if not at a shell prompt.
+    pub fn current_input(&self) -> Option<String> {
+        if !self.at_shell_prompt() {
+            return None;
+        }
+        let row = self.cursor.row;
+        if row >= self.rows {
+            return None;
+        }
+        // Gather text from start of line to cursor column
+        let text: String = self.cells[row]
+            .iter()
+            .take(self.cursor.col)
+            .map(|c| c.c)
+            .collect();
+        let trimmed = text.trim_end().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     }
 
     /// Extract the text content of a single row, trimming trailing whitespace.
@@ -352,7 +572,7 @@ impl Grid {
             for i in 0..save_count {
                 // Rewidth the row to new_cols for consistency
                 let mut row = self.cells[i].clone();
-                row.resize(new_cols, Cell::default());
+                row.resize(new_cols, self.blank_cell());
                 self.scrollback.push(row);
             }
             while self.scrollback.len() > self.max_scrollback {
@@ -360,7 +580,7 @@ impl Grid {
             }
 
             // Build new cells from remaining rows (starting after saved rows)
-            let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
+            let mut new_cells = vec![vec![self.blank_cell(); new_cols]; new_rows];
             for row in 0..new_rows {
                 let src_row = save_count + row;
                 if src_row < self.rows {
@@ -377,7 +597,7 @@ impl Grid {
             let extra = new_rows - self.rows;
             let pull = extra.min(self.scrollback.len());
 
-            let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
+            let mut new_cells = vec![vec![self.blank_cell(); new_cols]; new_rows];
 
             // Pull scrollback lines into top of new grid
             for i in 0..pull {
@@ -402,7 +622,7 @@ impl Grid {
             self.cells = new_cells;
         } else {
             // Same row count — just adjust columns
-            let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
+            let mut new_cells = vec![vec![self.blank_cell(); new_cols]; new_rows];
             for row in 0..new_rows {
                 let copy_cols = new_cols.min(self.cells[row].len());
                 for col in 0..copy_cols {
@@ -528,7 +748,7 @@ impl Grid {
             self.cells[i] = self.cells[i + 1].clone();
             self.dirty[i] = true;
         }
-        self.cells[self.scroll_bottom] = vec![Cell::default(); self.cols];
+        self.cells[self.scroll_bottom] = self.blank_row();
         self.dirty[self.scroll_bottom] = true;
     }
 
@@ -537,7 +757,7 @@ impl Grid {
             self.cells[i] = self.cells[i - 1].clone();
             self.dirty[i] = true;
         }
-        self.cells[self.scroll_top] = vec![Cell::default(); self.cols];
+        self.cells[self.scroll_top] = self.blank_row();
         self.dirty[self.scroll_top] = true;
     }
 
@@ -570,29 +790,29 @@ impl Grid {
             0 => {
                 // Erase from cursor to end
                 for col in self.cursor.col..self.cols {
-                    self.cells[self.cursor.row][col] = Cell::default();
+                    self.cells[self.cursor.row][col] = self.blank_cell();
                 }
                 self.dirty[self.cursor.row] = true;
                 for row in (self.cursor.row + 1)..self.rows {
-                    self.cells[row] = vec![Cell::default(); self.cols];
+                    self.cells[row] = self.blank_row();
                     self.dirty[row] = true;
                 }
             }
             1 => {
                 // Erase from start to cursor
                 for row in 0..self.cursor.row {
-                    self.cells[row] = vec![Cell::default(); self.cols];
+                    self.cells[row] = self.blank_row();
                     self.dirty[row] = true;
                 }
                 for col in 0..=self.cursor.col.min(self.cols - 1) {
-                    self.cells[self.cursor.row][col] = Cell::default();
+                    self.cells[self.cursor.row][col] = self.blank_cell();
                 }
                 self.dirty[self.cursor.row] = true;
             }
             2 | 3 => {
                 // Erase entire display
                 for row in 0..self.rows {
-                    self.cells[row] = vec![Cell::default(); self.cols];
+                    self.cells[row] = self.blank_row();
                     self.dirty[row] = true;
                 }
             }
@@ -605,16 +825,16 @@ impl Grid {
         match mode {
             0 => {
                 for col in self.cursor.col..self.cols {
-                    self.cells[row][col] = Cell::default();
+                    self.cells[row][col] = self.blank_cell();
                 }
             }
             1 => {
                 for col in 0..=self.cursor.col.min(self.cols - 1) {
-                    self.cells[row][col] = Cell::default();
+                    self.cells[row][col] = self.blank_cell();
                 }
             }
             2 => {
-                self.cells[row] = vec![Cell::default(); self.cols];
+                self.cells[row] = self.blank_row();
             }
             _ => {}
         }
@@ -630,7 +850,7 @@ impl Grid {
             };
             let code = param[0] as u16;
             match code {
-                0 => self.style = Style::default(),
+                0 => self.style = self.default_style,
                 1 => self.style.bold = true,
                 2 => self.style.dim = true,
                 3 => self.style.italic = true,
@@ -666,7 +886,7 @@ impl Grid {
                         }
                     }
                 }
-                39 => self.style.fg = Style::default().fg,
+                39 => self.style.fg = self.default_style.fg,
                 40..=47 => self.style.bg = self.palette[(code - 40) as usize],
                 48 => {
                     // Extended background
@@ -688,7 +908,7 @@ impl Grid {
                         }
                     }
                 }
-                49 => self.style.bg = Style::default().bg,
+                49 => self.style.bg = self.default_style.bg,
                 90..=97 => self.style.fg = self.palette[(code - 90 + 8) as usize],
                 100..=107 => self.style.bg = self.palette[(code - 100 + 8) as usize],
                 _ => {}
@@ -908,7 +1128,7 @@ impl Perform for Grid {
                     if i + n < self.cols {
                         self.cells[row][i] = self.cells[row][i + n].clone();
                     } else {
-                        self.cells[row][i] = Cell::default();
+                        self.cells[row][i] = self.blank_cell();
                     }
                 }
                 self.dirty[row] = true;
@@ -937,7 +1157,7 @@ impl Perform for Grid {
                     }
                 }
                 for i in col..(col + n).min(self.cols) {
-                    self.cells[row][i] = Cell::default();
+                    self.cells[row][i] = self.blank_cell();
                 }
                 self.dirty[row] = true;
             }
@@ -946,7 +1166,7 @@ impl Perform for Grid {
                 let n = p(0, 1) as usize;
                 let row = self.cursor.row;
                 for i in self.cursor.col..(self.cursor.col + n).min(self.cols) {
-                    self.cells[row][i] = Cell::default();
+                    self.cells[row][i] = self.blank_cell();
                 }
                 self.dirty[row] = true;
             }
@@ -1032,14 +1252,14 @@ impl Perform for Grid {
                         47 | 1047 => {
                             // Alternate screen (no save/restore cursor)
                             self.alternate_screen = Some(self.cells.clone());
-                            self.cells = vec![vec![Cell::default(); self.cols]; self.rows];
+                            self.cells = vec![self.blank_row(); self.rows];
                             self.mark_all_dirty();
                         }
                         1049 => {
                             // Alternate screen buffer (with save/restore cursor)
                             self.saved_cursor = Some(self.cursor);
                             self.alternate_screen = Some(self.cells.clone());
-                            self.cells = vec![vec![Cell::default(); self.cols]; self.rows];
+                            self.cells = vec![self.blank_row(); self.rows];
                             self.mark_all_dirty();
                         }
                         2004 => self.bracketed_paste = true,

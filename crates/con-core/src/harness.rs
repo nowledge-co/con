@@ -129,6 +129,15 @@ impl AgentHarness {
         &self.event_rx
     }
 
+    /// Create a SuggestionEngine that shares the harness tokio runtime.
+    pub fn suggestion_engine(&self, debounce_ms: u64) -> crate::suggestions::SuggestionEngine {
+        crate::suggestions::SuggestionEngine::new(
+            self.config.clone(),
+            self.runtime.clone(),
+            debounce_ms,
+        )
+    }
+
     /// Channel for terminal exec requests — the workspace polls this to
     /// execute agent commands in the visible terminal.
     pub fn terminal_exec_requests(&self) -> &Receiver<TerminalExecRequest> {
