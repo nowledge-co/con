@@ -261,9 +261,9 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Directory listing tool (list_files — .gitignore-aware)
 - [x] Streaming cancellation (Stop button, partial response preserved)
 - [x] Resizable agent panel (drag divider, width persisted in session)
-- [ ] Inline suggestions ghost text (Tab to accept)
+- [x] Inline suggestions ghost text (Tab to accept, debounced AI completions)
 - [x] Extended thinking display (collapsible sections in agent panel)
-- [ ] Theme configurability (load external palettes, light mode)
+- [x] Theme configurability (4 built-in themes, live switching, settings picker)
 
 ---
 

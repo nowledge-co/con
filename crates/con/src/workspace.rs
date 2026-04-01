@@ -1,6 +1,10 @@
 use gpui::*;
 use gpui_component::ActiveTheme;
 
+const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
+const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
+const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
+
 use crate::agent_panel::{AgentPanel, CancelRequest, LoadConversation, NewConversation};
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
@@ -102,7 +106,7 @@ impl ConWorkspace {
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
         let agent_panel_open = session.agent_panel_open;
-        let agent_panel_width = session.agent_panel_width.unwrap_or(400.0);
+        let agent_panel_width = session.agent_panel_width.unwrap_or(AGENT_PANEL_DEFAULT_WIDTH);
         let agent_panel = cx.new(|cx| AgentPanel::new(cx));
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
@@ -1158,7 +1162,7 @@ impl Render for ConWorkspace {
                     // Agent panel resize drag
                     if let Some((start_x, start_width)) = this.agent_panel_drag {
                         let delta = start_x - f32::from(event.position.x);
-                        let new_width = (start_width + delta).clamp(200.0, 800.0);
+                        let new_width = (start_width + delta).clamp(AGENT_PANEL_MIN_WIDTH, AGENT_PANEL_MAX_WIDTH);
                         if (this.agent_panel_width - new_width).abs() > 1.0 {
                             this.agent_panel_width = new_width;
                             // Notify all terminals so they detect new available space

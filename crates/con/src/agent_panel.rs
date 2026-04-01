@@ -3,6 +3,11 @@ use gpui::*;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::ActiveTheme;
 
+/// Max characters to show for tool result summaries
+const TOOL_RESULT_DISPLAY_LEN: usize = 200;
+/// Max characters to show in expanded thinking section
+const THINKING_DISPLAY_LEN: usize = 2000;
+
 use con_agent::{ConversationSummary, ToolApprovalDecision};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -244,7 +249,7 @@ impl AgentPanel {
         }
         for tc in self.tool_calls.drain(..) {
             let step = if let Some(result) = &tc.result {
-                let truncated = truncate_str(result, 200);
+                let truncated = truncate_str(result, TOOL_RESULT_DISPLAY_LEN);
                 format!("[{}] {} → {}", tc.tool_name, tc.args, truncated)
             } else {
                 format!("[{}] {}", tc.tool_name, tc.args)
@@ -477,7 +482,7 @@ impl Render for AgentPanel {
                         if !thinking_collapsed {
                             // Truncate display to first 2000 chars for render performance
                             let display_text = if thinking.len() > 2000 {
-                                format!("{}…", &thinking[..thinking.floor_char_boundary(2000)])
+                                format!("{}…", &thinking[..thinking.floor_char_boundary(THINKING_DISPLAY_LEN)])
                             } else {
                                 thinking.clone()
                             };

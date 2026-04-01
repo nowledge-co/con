@@ -1,8 +1,11 @@
 use con_agent::AgentConfig;
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
+
+const SUGGESTION_MAX_LEN: usize = 200;
 
 /// Debounced shell command suggestion engine.
 ///
@@ -39,14 +42,14 @@ impl SuggestionEngine {
         }
 
         // Check cache
-        if let Some(cached) = self.cache.lock().unwrap().get(trimmed) {
+        if let Some(cached) = self.cache.lock().get(trimmed) {
             callback(cached.clone());
             return;
         }
 
         // Update pending request
-        *self.pending.lock().unwrap() = Some(trimmed.to_string());
-        *self.last_request.lock().unwrap() = Some(Instant::now());
+        *self.pending.lock() = Some(trimmed.to_string());
+        *self.last_request.lock() = Some(Instant::now());
 
         let debounce = Duration::from_millis(self.debounce_ms);
         let pending = self.pending.clone();
@@ -59,7 +62,7 @@ impl SuggestionEngine {
             tokio::time::sleep(debounce).await;
 
             // Check if this is still the latest request
-            let current_pending = pending.lock().unwrap().clone();
+            let current_pending = pending.lock().clone();
             if current_pending.as_deref() != Some(&prefix_owned) {
                 return;
             }
@@ -67,7 +70,6 @@ impl SuggestionEngine {
             // Check if enough time has passed since last request
             let elapsed = last_request
                 .lock()
-                .unwrap()
                 .map(|t| t.elapsed())
                 .unwrap_or(Duration::ZERO);
             if elapsed < debounce {
@@ -79,7 +81,6 @@ impl SuggestionEngine {
                 if !completion.is_empty() {
                     cache
                         .lock()
-                        .unwrap()
                         .insert(prefix_owned.clone(), completion.clone());
                     callback(completion);
                 }
@@ -89,12 +90,12 @@ impl SuggestionEngine {
 
     /// Clear the suggestion cache
     pub fn clear_cache(&self) {
-        self.cache.lock().unwrap().clear();
+        self.cache.lock().clear();
     }
 
     /// Cancel any pending request
     pub fn cancel(&self) {
-        *self.pending.lock().unwrap() = None;
+        *self.pending.lock() = None;
     }
 }
 
@@ -111,8 +112,7 @@ async fn request_completion(config: &AgentConfig, prefix: &str) -> Option<String
     match provider.complete(&prompt).await {
         Ok(completion) => {
             let trimmed = completion.trim().to_string();
-            // Sanity check: completion should be short and not contain newlines
-            if trimmed.len() <= 200 && !trimmed.contains('\n') {
+            if trimmed.len() <= SUGGESTION_MAX_LEN && !trimmed.contains('\n') {
                 Some(trimmed)
             } else {
                 None

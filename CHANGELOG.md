@@ -34,5 +34,6 @@ All notable changes to con are documented here.
 - Agent panel (Cmd+L) with structured tool call cards, inline approval dialogs, code block rendering, and a resizable width you can drag to adjust
 - Settings panel (Cmd+,) to configure your provider, model, and preferences
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
+- Inline suggestions — type at a shell prompt and ghost text appears with AI-powered completions. Tab to accept, keep typing to dismiss.
 - Session sidebar showing your open tabs
-- Flexoki dark theme with carefully matched ANSI colors
+- Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

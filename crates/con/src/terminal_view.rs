@@ -114,6 +114,7 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
+    #[allow(dead_code)]
     pub fn new(
         cols: usize,
         rows: usize,
