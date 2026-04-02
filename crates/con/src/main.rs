@@ -110,7 +110,10 @@ fn main() {
                     gpui_component::Root::new(view, window, cx).bg(cx.theme().background)
                 })
             })
-            .expect("Failed to open window");
+            .unwrap_or_else(|e| {
+                    eprintln!("Fatal: failed to open window: {}", e);
+                    std::process::exit(1);
+                });
         })
         .detach();
     });

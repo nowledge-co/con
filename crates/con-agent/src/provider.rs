@@ -408,17 +408,18 @@ pub enum AgentEvent {
 macro_rules! build_and_stream {
     ($client:expr, $cfg:expr, $kind:expr, $system_prompt:expr, $prompt:expr,
      $history:expr, $hook:expr, $terminal_exec_tx:expr,
-     $event_tx:expr, $cancelled:expr) => {{
+     $event_tx:expr, $cancelled:expr, $workspace_root:expr) => {{
+        let root: std::path::PathBuf = $workspace_root;
         let mut builder = $client
             .agent($cfg.effective_model(&$kind))
             .preamble($system_prompt)
             .tool(TerminalExecTool::new($terminal_exec_tx))
             .tool(ShellExecTool)
-            .tool(FileReadTool)
-            .tool(FileWriteTool)
-            .tool(EditFileTool)
-            .tool(ListFilesTool)
-            .tool(SearchTool)
+            .tool(FileReadTool::new(root.clone()))
+            .tool(FileWriteTool::new(root.clone()))
+            .tool(EditFileTool::new(root.clone()))
+            .tool(ListFilesTool::new(root.clone()))
+            .tool(SearchTool::new(root))
             .default_max_turns($cfg.max_turns);
 
         if let Some(max_tokens) = $cfg.effective_max_tokens(&$kind) {
@@ -488,11 +489,21 @@ impl AgentProvider {
 
         // Each provider dispatches to its native Rig client — exhaustive match
         // prevents silent misrouting.
+        // Derive workspace root from terminal context cwd, falling back to $HOME or /tmp
+        let workspace_root = context
+            .cwd
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_dir())
+            .or_else(|| dirs::home_dir())
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+
         macro_rules! stream_with {
             ($client:expr) => {
                 build_and_stream!(
                     $client, self.config, kind, &system_prompt, &last_user_msg,
-                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled
+                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled,
+                    workspace_root.clone()
                 )?
             };
         }

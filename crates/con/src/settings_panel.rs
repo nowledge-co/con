@@ -65,6 +65,7 @@ pub struct SettingsPanel {
 
     font_size_input: Entity<InputState>,
     scrollback_input: Entity<InputState>,
+    save_error: Option<String>,
 }
 
 const ALL_PROVIDERS: &[ProviderKind] = &[
@@ -168,6 +169,7 @@ impl SettingsPanel {
             suggestion_model_input,
             font_size_input,
             scrollback_input,
+            save_error: None,
         }
     }
 
@@ -252,11 +254,17 @@ impl SettingsPanel {
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
         self.config.terminal.scrollback_lines = scrollback_text.parse().unwrap_or(10_000);
 
-        if let Err(e) = self.persist_config() {
-            log::error!("Failed to save config: {}", e);
+        match self.persist_config() {
+            Ok(()) => {
+                self.save_error = None;
+                self.visible = false;
+                cx.emit(SaveSettings);
+            }
+            Err(e) => {
+                log::error!("Failed to save config: {}", e);
+                self.save_error = Some(e.to_string());
+            }
         }
-        self.visible = false;
-        cx.emit(SaveSettings);
         cx.notify();
     }
 
@@ -269,7 +277,12 @@ impl SettingsPanel {
             std::fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(&self.config)?;
-        std::fs::write(&path, content)?;
+        std::fs::write(&path, &content)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
         Ok(())
     }
 
@@ -828,6 +841,19 @@ impl Render for SettingsPanel {
                                     .child("⌘↵ save · Esc close"),
                             ),
                     )
+                    // Error banner
+                    .children(self.save_error.as_ref().map(|err| {
+                        div()
+                            .px_4()
+                            .py_2()
+                            .mx_4()
+                            .mt_2()
+                            .rounded_md()
+                            .bg(gpui::red())
+                            .text_color(gpui::white())
+                            .text_xs()
+                            .child(format!("Save failed: {}", err))
+                    }))
                     // Body
                     .child(
                         div()

@@ -146,11 +146,21 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let grid = Arc::new(Mutex::new(Grid::with_theme(cols, rows, scrollback_lines, theme)));
-        let pty = Pty::spawn_in(PtySize {
+        let pty_size = PtySize {
             rows: rows as u16,
             cols: cols as u16,
-        }, cwd)
-        .expect("Failed to spawn PTY");
+        };
+        // Try spawning with requested cwd; fall back to default ($HOME) if it fails
+        let pty = match Pty::spawn_in(pty_size, cwd) {
+            Ok(pty) => pty,
+            Err(e) if cwd.is_some() => {
+                log::warn!("PTY spawn failed in {:?}, falling back to $HOME: {}", cwd, e);
+                Pty::spawn(pty_size).unwrap_or_else(|e2| {
+                    panic!("Fatal: PTY spawn failed even with default cwd: {}", e2);
+                })
+            }
+            Err(e) => panic!("Fatal: PTY spawn failed: {}", e),
+        };
         let pty_events = pty.events().clone();
         let pty = Arc::new(Mutex::new(pty));
         let parser = Arc::new(Mutex::new(Parser::new()));

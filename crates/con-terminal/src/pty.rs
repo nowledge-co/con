@@ -139,3 +139,9 @@ impl Pty {
             .is_none()
     }
 }
+
+impl Drop for Pty {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}

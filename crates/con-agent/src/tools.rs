@@ -2,7 +2,7 @@ use crossbeam_channel::Sender;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Error type for agent tool execution
 #[derive(Debug, thiserror::Error)]
@@ -11,6 +11,60 @@ pub enum ToolError {
     CommandFailed(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+// ── Path validation ─────────────────────────────────────────────────
+
+/// Validate and canonicalize a path, ensuring it stays within the allowed root.
+/// Used by all file tools to prevent path traversal attacks.
+fn validate_path(raw: &str, allowed_root: &Path) -> Result<PathBuf, ToolError> {
+    let path = if Path::new(raw).is_absolute() {
+        PathBuf::from(raw)
+    } else {
+        allowed_root.join(raw)
+    };
+    let canonical = path.canonicalize().map_err(|e| {
+        ToolError::CommandFailed(format!("path '{}': {}", raw, e))
+    })?;
+    if !canonical.starts_with(allowed_root) {
+        return Err(ToolError::CommandFailed(format!(
+            "path '{}' is outside the allowed directory '{}'",
+            raw,
+            allowed_root.display()
+        )));
+    }
+    Ok(canonical)
+}
+
+/// Validate a path for write operations where the file may not exist yet.
+/// Canonicalizes the parent directory and verifies it's within the allowed root.
+fn validate_path_for_write(raw: &str, allowed_root: &Path) -> Result<PathBuf, ToolError> {
+    let path = if Path::new(raw).is_absolute() {
+        PathBuf::from(raw)
+    } else {
+        allowed_root.join(raw)
+    };
+    let parent = path.parent().ok_or_else(|| {
+        ToolError::CommandFailed("invalid path: no parent directory".into())
+    })?;
+    // Create parent if needed, then canonicalize
+    if !parent.exists() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let canonical_parent = parent.canonicalize().map_err(|e| {
+        ToolError::CommandFailed(format!("parent of '{}': {}", raw, e))
+    })?;
+    if !canonical_parent.starts_with(allowed_root) {
+        return Err(ToolError::CommandFailed(format!(
+            "path '{}' is outside the allowed directory '{}'",
+            raw,
+            allowed_root.display()
+        )));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        ToolError::CommandFailed("invalid path: no filename".into())
+    })?;
+    Ok(canonical_parent.join(file_name))
 }
 
 // ── terminal_exec (visible) ─────────────────────────────────────────
@@ -181,7 +235,15 @@ pub struct FileReadArgs {
     pub end_line: Option<usize>,
 }
 
-pub struct FileReadTool;
+pub struct FileReadTool {
+    allowed_root: PathBuf,
+}
+
+impl FileReadTool {
+    pub fn new(allowed_root: PathBuf) -> Self {
+        Self { allowed_root }
+    }
+}
 
 impl Tool for FileReadTool {
     const NAME: &'static str = "file_read";
@@ -215,10 +277,11 @@ impl Tool for FileReadTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let content = std::fs::read_to_string(&args.path)?;
+        let path = validate_path(&args.path, &self.allowed_root)?;
+        let content = std::fs::read_to_string(&path)?;
         let lines: Vec<&str> = content.lines().collect();
-        let start = args.start_line.unwrap_or(1).saturating_sub(1);
-        let end = args.end_line.unwrap_or(lines.len()).min(lines.len());
+        let start = args.start_line.unwrap_or(1).saturating_sub(1).min(lines.len());
+        let end = args.end_line.unwrap_or(lines.len()).min(lines.len()).max(start);
         Ok(lines[start..end].join("\n"))
     }
 }
@@ -231,7 +294,15 @@ pub struct FileWriteArgs {
     pub content: String,
 }
 
-pub struct FileWriteTool;
+pub struct FileWriteTool {
+    allowed_root: PathBuf,
+}
+
+impl FileWriteTool {
+    pub fn new(allowed_root: PathBuf) -> Self {
+        Self { allowed_root }
+    }
+}
 
 impl Tool for FileWriteTool {
     const NAME: &'static str = "file_write";
@@ -261,10 +332,8 @@ impl Tool for FileWriteTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if let Some(parent) = Path::new(&args.path).parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&args.path, &args.content)?;
+        let path = validate_path_for_write(&args.path, &self.allowed_root)?;
+        std::fs::write(&path, &args.content)?;
         Ok(format!("Wrote {} bytes to {}", args.content.len(), args.path))
     }
 }
@@ -280,7 +349,15 @@ pub struct EditFileArgs {
 
 /// Surgical file editing: finds `old_text` in the file and replaces it with `new_text`.
 /// Much safer than file_write (which overwrites the entire file).
-pub struct EditFileTool;
+pub struct EditFileTool {
+    allowed_root: PathBuf,
+}
+
+impl EditFileTool {
+    pub fn new(allowed_root: PathBuf) -> Self {
+        Self { allowed_root }
+    }
+}
 
 impl Tool for EditFileTool {
     const NAME: &'static str = "edit_file";
@@ -314,7 +391,8 @@ impl Tool for EditFileTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let content = std::fs::read_to_string(&args.path)?;
+        let path = validate_path(&args.path, &self.allowed_root)?;
+        let content = std::fs::read_to_string(&path)?;
 
         let count = content.matches(&args.old_text).count();
         if count == 0 {
@@ -331,9 +409,8 @@ impl Tool for EditFileTool {
         }
 
         let new_content = content.replacen(&args.old_text, &args.new_text, 1);
-        std::fs::write(&args.path, &new_content)?;
+        std::fs::write(&path, &new_content)?;
 
-        // Generate a simple diff summary
         let old_lines = args.old_text.lines().count();
         let new_lines = args.new_text.lines().count();
         Ok(format!(
@@ -353,7 +430,15 @@ pub struct ListFilesArgs {
 }
 
 /// List files in a directory, optionally filtered by glob pattern.
-pub struct ListFilesTool;
+pub struct ListFilesTool {
+    allowed_root: PathBuf,
+}
+
+impl ListFilesTool {
+    pub fn new(allowed_root: PathBuf) -> Self {
+        Self { allowed_root }
+    }
+}
 
 impl Tool for ListFilesTool {
     const NAME: &'static str = "list_files";
@@ -386,13 +471,16 @@ impl Tool for ListFilesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let dir = args.path.as_deref().unwrap_or(".");
+        let dir = match &args.path {
+            Some(p) => validate_path(p, &self.allowed_root)?,
+            None => self.allowed_root.clone(),
+        };
         let max_depth = args.max_depth.unwrap_or(3);
 
         // Try git ls-files first (respects .gitignore, fast)
         let git_listing = std::process::Command::new("git")
             .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-            .current_dir(dir)
+            .current_dir(&dir)
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -402,16 +490,13 @@ impl Tool for ListFilesTool {
         // Fall back to find for non-git directories
         let stdout = match git_listing {
             Some(listing) => {
-                // Apply pattern and max_depth filters that git ls-files doesn't handle
                 let filtered: Vec<&str> = listing
                     .lines()
                     .filter(|path| {
-                        // Respect max_depth: count path separators
                         let depth = path.chars().filter(|c| *c == '/').count();
                         if depth >= max_depth {
                             return false;
                         }
-                        // Respect glob pattern: match against filename
                         if let Some(ref pattern) = args.pattern {
                             let filename = path.rsplit('/').next().unwrap_or(path);
                             glob_match(pattern, filename)
@@ -424,7 +509,7 @@ impl Tool for ListFilesTool {
             }
             None => {
                 let mut cmd = std::process::Command::new("find");
-                cmd.arg(dir);
+                cmd.arg(&dir);
                 cmd.args(["-maxdepth", &max_depth.to_string()]);
                 cmd.args(["-not", "-path", "*/.git/*"]);
                 if let Some(ref pattern) = args.pattern {
@@ -472,7 +557,15 @@ pub struct SearchMatch {
     pub text: String,
 }
 
-pub struct SearchTool;
+pub struct SearchTool {
+    allowed_root: PathBuf,
+}
+
+impl SearchTool {
+    pub fn new(allowed_root: PathBuf) -> Self {
+        Self { allowed_root }
+    }
+}
 
 impl Tool for SearchTool {
     const NAME: &'static str = "search";
@@ -506,13 +599,18 @@ impl Tool for SearchTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let search_dir = match &args.path {
+            Some(p) => validate_path(p, &self.allowed_root)?,
+            None => self.allowed_root.clone(),
+        };
+
         let mut cmd = std::process::Command::new("grep");
         cmd.args(["-rn", "--max-count=100"]);
         if let Some(ref fp) = args.file_pattern {
             cmd.args(["--include", fp]);
         }
-        cmd.arg(&args.pattern);
-        cmd.arg(args.path.as_deref().unwrap_or("."));
+        cmd.arg("--").arg(&args.pattern);
+        cmd.arg(&search_dir);
 
         let output = cmd.output()?;
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -551,14 +649,12 @@ fn glob_match(pattern: &str, text: &str) -> bool {
             match pc {
                 '*' => {
                     p.next();
-                    // Skip consecutive stars
                     while p.peek() == Some(&'*') {
                         p.next();
                     }
                     if p.peek().is_none() {
-                        return true; // trailing * matches everything
+                        return true;
                     }
-                    // Try matching * against 0, 1, 2, ... chars
                     let mut t_clone = t.clone();
                     let p_save = p.clone();
                     loop {

@@ -5,8 +5,9 @@ use con_agent::{
 use con_terminal::Grid;
 use crossbeam_channel::{Receiver, Sender};
 use std::path::Path;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 use crate::config::Config;
@@ -99,7 +100,7 @@ pub struct AgentHarness {
 }
 
 impl AgentHarness {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config) -> anyhow::Result<Self> {
         let skills = SkillRegistry::new();
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
         let (terminal_exec_tx, terminal_exec_rx) = crossbeam_channel::unbounded();
@@ -108,11 +109,10 @@ impl AgentHarness {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
-                .build()
-                .expect("Failed to create tokio runtime for agent harness"),
+                .build()?,
         );
 
-        Self {
+        Ok(Self {
             config: config.agent.clone(),
             conversation: Arc::new(Mutex::new(Conversation::new())),
             skills,
@@ -122,7 +122,7 @@ impl AgentHarness {
             terminal_exec_tx,
             terminal_exec_rx,
             cancel_flag: Arc::new(AtomicBool::new(false)),
-        }
+        })
     }
 
     pub fn events(&self) -> &Receiver<HarnessEvent> {
@@ -324,7 +324,6 @@ impl AgentHarness {
         let user_msg = Message::user(&content);
         self.conversation
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
             .add_message(user_msg);
 
         // Reset cancellation flag for new request
@@ -392,10 +391,7 @@ impl AgentHarness {
                 }
             });
 
-            let conv_snapshot = conversation
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
+            let conv_snapshot = conversation.lock().clone();
 
             let provider = AgentProvider::new(agent_config);
 
@@ -404,9 +400,7 @@ impl AgentHarness {
                 .await
             {
                 Ok(assistant_msg) => {
-                    let mut conv = conversation
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut conv = conversation.lock();
                     conv.add_message(assistant_msg);
                     if let Err(e) = conv.save() {
                         log::warn!("Failed to auto-save conversation: {}", e);
@@ -458,7 +452,7 @@ impl AgentHarness {
 
     /// Start a new conversation, saving the current one first
     pub fn new_conversation(&mut self) {
-        let conv = self.conversation.lock().unwrap_or_else(|e| e.into_inner());
+        let conv = self.conversation.lock();
         if let Err(e) = conv.save() {
             log::warn!("Failed to save conversation: {}", e);
         }
@@ -471,7 +465,7 @@ impl AgentHarness {
         match Conversation::load(id) {
             Ok(conv) => {
                 // Save current first
-                let current = self.conversation.lock().unwrap_or_else(|e| e.into_inner());
+                let current = self.conversation.lock();
                 let _ = current.save();
                 drop(current);
                 self.conversation = Arc::new(Mutex::new(conv));
@@ -488,7 +482,6 @@ impl AgentHarness {
     pub fn conversation_id(&self) -> String {
         self.conversation
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
             .id
             .clone()
     }

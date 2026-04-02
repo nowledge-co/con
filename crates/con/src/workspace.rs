@@ -112,7 +112,10 @@ impl ConWorkspace {
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
-        let mut harness = AgentHarness::new(&config);
+        let mut harness = AgentHarness::new(&config).unwrap_or_else(|e| {
+            log::error!("Failed to create agent harness: {}. Agent features disabled.", e);
+            panic!("Fatal: agent harness initialization failed: {}", e);
+        });
         let suggestion_engine = harness.suggestion_engine(300);
         let (suggestion_tx, suggestion_rx) = crossbeam_channel::unbounded();
 
@@ -267,7 +270,7 @@ impl ConWorkspace {
             self.agent_panel.update(cx, |panel, cx| {
                 panel.clear_messages(cx);
                 let conv = self.harness.conversation();
-                let conv = conv.lock().unwrap_or_else(|e| e.into_inner());
+                let conv = conv.lock();
                 for msg in &conv.messages {
                     let role = match msg.role {
                         con_agent::MessageRole::User => "user",
