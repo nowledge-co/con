@@ -71,7 +71,8 @@ impl ConWorkspace {
             .enumerate()
             .map(|(i, tab_state)| {
                 let theme = &terminal_theme;
-                let terminal = cx.new(|cx| TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx));
+                let cwd = tab_state.cwd.as_deref();
+                let terminal = cx.new(|cx| TerminalView::with_options(80, 24, font_size, scrollback_lines, theme, cwd, cx));
                 Tab {
                     pane_tree: PaneTree::new(terminal),
                     title: if tab_state.title.is_empty() {
@@ -84,7 +85,7 @@ impl ConWorkspace {
             })
             .collect();
         if tabs.is_empty() {
-            let terminal = cx.new(|cx| TerminalView::with_theme(80, 24, font_size, scrollback_lines, &terminal_theme, cx));
+            let terminal = cx.new(|cx| TerminalView::with_options(80, 24, font_size, scrollback_lines, &terminal_theme, None, cx));
             tabs.push(Tab {
                 pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),

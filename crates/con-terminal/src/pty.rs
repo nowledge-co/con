@@ -38,6 +38,10 @@ pub struct Pty {
 
 impl Pty {
     pub fn spawn(size: PtySize) -> Result<Self> {
+        Self::spawn_in(size, None)
+    }
+
+    pub fn spawn_in(size: PtySize, cwd: Option<&str>) -> Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtyPtySize {
             rows: size.rows,
@@ -50,9 +54,15 @@ impl Pty {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
         cmd.arg("-l"); // login shell
-        cmd.cwd(
-            std::env::var("HOME").unwrap_or_else(|_| "/".to_string()),
-        );
+        let working_dir = cwd
+            .filter(|d| std::path::Path::new(d).is_dir())
+            .unwrap_or_else(|| {
+                // Cannot return a &str from env::var, so fall back to "/"
+                // The HOME default is handled below
+                "/"
+            });
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+        cmd.cwd(if working_dir == "/" { &home } else { working_dir });
 
         let child = pair.slave.spawn_command(cmd)?;
         drop(pair.slave); // Close slave side in parent

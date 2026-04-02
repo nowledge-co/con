@@ -122,7 +122,7 @@ impl TerminalView {
         scrollback_lines: usize,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::with_theme(cols, rows, font_size, scrollback_lines, &TerminalTheme::default(), cx)
+        Self::with_options(cols, rows, font_size, scrollback_lines, &TerminalTheme::default(), None, cx)
     }
 
     pub fn with_theme(
@@ -133,11 +133,23 @@ impl TerminalView {
         theme: &TerminalTheme,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::with_options(cols, rows, font_size, scrollback_lines, theme, None, cx)
+    }
+
+    pub fn with_options(
+        cols: usize,
+        rows: usize,
+        font_size: f32,
+        scrollback_lines: usize,
+        theme: &TerminalTheme,
+        cwd: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let grid = Arc::new(Mutex::new(Grid::with_theme(cols, rows, scrollback_lines, theme)));
-        let pty = Pty::spawn(PtySize {
+        let pty = Pty::spawn_in(PtySize {
             rows: rows as u16,
             cols: cols as u16,
-        })
+        }, cwd)
         .expect("Failed to spawn PTY");
         let pty_events = pty.events().clone();
         let pty = Arc::new(Mutex::new(pty));

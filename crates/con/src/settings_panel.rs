@@ -1,4 +1,4 @@
-use con_agent::{AgentConfig, ProviderKind, SuggestionModelConfig};
+use con_agent::{AgentConfig, ProviderConfig, ProviderKind, SuggestionModelConfig};
 use con_core::Config;
 use gpui::*;
 use gpui::prelude::FluentBuilder;
@@ -54,7 +54,7 @@ pub struct SettingsPanel {
 
     selected_provider: ProviderKind,
     model_input: Entity<InputState>,
-    api_key_env_input: Entity<InputState>,
+    api_key_input: Entity<InputState>,
     base_url_input: Entity<InputState>,
     max_tokens_input: Entity<InputState>,
     max_turns_input: Entity<InputState>,
@@ -85,30 +85,32 @@ const ALL_PROVIDERS: &[ProviderKind] = &[
 
 impl SettingsPanel {
     pub fn new(config: &Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let agent = config.agent.clone();
+        let agent = &config.agent;
+        let pc = agent.providers.get_or_default(&agent.provider);
 
         let model_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Provider default", window, cx);
-            s.set_value(&agent.model.clone().unwrap_or_default(), window, cx);
+            s.set_value(&pc.model.clone().unwrap_or_default(), window, cx);
             s
         });
-        let api_key_env_input = cx.new(|cx| {
+        let api_key_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
-            s.set_placeholder("e.g. ANTHROPIC_API_KEY", window, cx);
-            s.set_value(&agent.api_key_env.clone().unwrap_or_default(), window, cx);
+            s.set_placeholder("sk-... or env var like ANTHROPIC_API_KEY", window, cx);
+            let val = pc.api_key.clone().or_else(|| pc.api_key_env.clone()).unwrap_or_default();
+            s.set_value(&val, window, cx);
             s
         });
         let base_url_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Default endpoint", window, cx);
-            s.set_value(&agent.base_url.clone().unwrap_or_default(), window, cx);
+            s.set_value(&pc.base_url.clone().unwrap_or_default(), window, cx);
             s
         });
         let max_tokens_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
-            s.set_placeholder("4096", window, cx);
-            s.set_value(&agent.max_tokens.to_string(), window, cx);
+            s.set_placeholder("Provider default", window, cx);
+            s.set_value(&pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(), window, cx);
             s
         });
         let max_turns_input = cx.new(|cx| {
@@ -121,10 +123,7 @@ impl SettingsPanel {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Provider default", window, cx);
             s.set_value(
-                &agent
-                    .temperature
-                    .map(|t| t.to_string())
-                    .unwrap_or_default(),
+                &agent.temperature.map(|t| t.to_string()).unwrap_or_default(),
                 window,
                 cx,
             );
@@ -160,7 +159,7 @@ impl SettingsPanel {
             active_section: SettingsSection::General,
             selected_provider: config.agent.provider.clone(),
             model_input,
-            api_key_env_input,
+            api_key_input,
             base_url_input,
             max_tokens_input,
             max_turns_input,
@@ -175,12 +174,10 @@ impl SettingsPanel {
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = !self.visible;
         if self.visible {
-            let agent = self.config.agent.clone();
+            let agent = &self.config.agent;
             self.selected_provider = agent.provider.clone();
-            self.model_input.update(cx, |s, cx| s.set_value(&agent.model.clone().unwrap_or_default(), window, cx));
-            self.api_key_env_input.update(cx, |s, cx| s.set_value(&agent.api_key_env.unwrap_or_default(), window, cx));
-            self.base_url_input.update(cx, |s, cx| s.set_value(&agent.base_url.unwrap_or_default(), window, cx));
-            self.max_tokens_input.update(cx, |s, cx| s.set_value(&agent.max_tokens.to_string(), window, cx));
+            let pc = agent.providers.get_or_default(&self.selected_provider);
+            self.load_provider_inputs(&pc, window, cx);
             self.max_turns_input.update(cx, |s, cx| s.set_value(&agent.max_turns.to_string(), window, cx));
             self.temperature_input.update(cx, |s, cx| s.set_value(&agent.temperature.map(|t| t.to_string()).unwrap_or_default(), window, cx));
             self.suggestion_model_input.update(cx, |s, cx| s.set_value(&agent.suggestion_model.model.clone().unwrap_or_default(), window, cx));
@@ -192,37 +189,65 @@ impl SettingsPanel {
         cx.notify();
     }
 
+    /// Load a provider's config into the per-provider input fields.
+    fn load_provider_inputs(&self, pc: &ProviderConfig, window: &mut Window, cx: &mut Context<Self>) {
+        self.model_input.update(cx, |s, cx| s.set_value(&pc.model.clone().unwrap_or_default(), window, cx));
+        let key_val = pc.api_key.clone().or_else(|| pc.api_key_env.clone()).unwrap_or_default();
+        self.api_key_input.update(cx, |s, cx| s.set_value(&key_val, window, cx));
+        self.base_url_input.update(cx, |s, cx| s.set_value(&pc.base_url.clone().unwrap_or_default(), window, cx));
+        self.max_tokens_input.update(cx, |s, cx| s.set_value(&pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(), window, cx));
+    }
+
+    /// Read current per-provider input fields into a ProviderConfig.
+    fn read_provider_inputs(&self, cx: &App) -> ProviderConfig {
+        let key_text = self.api_key_input.read(cx).value().to_string();
+        let is_env_var = !key_text.is_empty()
+            && key_text.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
+
+        let (api_key, api_key_env) = if key_text.is_empty() {
+            (None, None)
+        } else if is_env_var {
+            (None, Some(key_text))
+        } else {
+            (Some(key_text), None)
+        };
+
+        let model_text = self.model_input.read(cx).value().to_string();
+        let base_url_text = self.base_url_input.read(cx).value().to_string();
+        let max_tokens_text = self.max_tokens_input.read(cx).value().to_string();
+
+        ProviderConfig {
+            model: if model_text.is_empty() { None } else { Some(model_text) },
+            api_key,
+            api_key_env,
+            base_url: if base_url_text.is_empty() { None } else { Some(base_url_text) },
+            max_tokens: if max_tokens_text.is_empty() { None } else { max_tokens_text.parse().ok() },
+        }
+    }
+
     pub fn is_visible(&self) -> bool {
         self.visible
     }
 
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let model_text = self.model_input.read(cx).value().to_string();
-        let api_key_text = self.api_key_env_input.read(cx).value().to_string();
-        let base_url_text = self.base_url_input.read(cx).value().to_string();
-        let max_tokens_text = self.max_tokens_input.read(cx).value().to_string();
         let max_turns_text = self.max_turns_input.read(cx).value().to_string();
         let temperature_text = self.temperature_input.read(cx).value().to_string();
         let suggestion_model_text = self.suggestion_model_input.read(cx).value().to_string();
         let font_size_text = self.font_size_input.read(cx).value().to_string();
         let scrollback_text = self.scrollback_input.read(cx).value().to_string();
 
-        self.config.agent = AgentConfig {
-            provider: self.selected_provider.clone(),
-            model: if model_text.is_empty() { None } else { Some(model_text) },
-            api_key_env: if api_key_text.is_empty() { None } else { Some(api_key_text) },
-            base_url: if base_url_text.is_empty() { None } else { Some(base_url_text) },
-            max_tokens: max_tokens_text.parse().unwrap_or(4096),
-            max_turns: max_turns_text.parse().unwrap_or(10),
-            temperature: if temperature_text.is_empty() { None } else { temperature_text.parse().ok() },
-            auto_context: self.config.agent.auto_context,
-            auto_approve_tools: self.auto_approve,
-            suggestion_model: SuggestionModelConfig {
-                provider: None,
-                model: if suggestion_model_text.is_empty() { None } else { Some(suggestion_model_text) },
-                api_key_env: None,
-                base_url: None,
-            },
+        // Save current provider's per-provider fields into the map
+        let pc = self.read_provider_inputs(cx);
+        self.config.agent.providers.set(&self.selected_provider, pc);
+
+        // Update global fields
+        self.config.agent.provider = self.selected_provider.clone();
+        self.config.agent.max_turns = max_turns_text.parse().unwrap_or(10);
+        self.config.agent.temperature = if temperature_text.is_empty() { None } else { temperature_text.parse().ok() };
+        self.config.agent.auto_approve_tools = self.auto_approve;
+        self.config.agent.suggestion_model = SuggestionModelConfig {
+            provider: None,
+            model: if suggestion_model_text.is_empty() { None } else { Some(suggestion_model_text) },
         };
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
         self.config.terminal.scrollback_lines = scrollback_text.parse().unwrap_or(10_000);
@@ -254,15 +279,16 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let models = provider_models(&provider);
-        let default_model = if models.is_empty() {
-            String::new()
-        } else {
-            models[0].to_string()
-        };
-        self.model_input
-            .update(cx, |s, cx| s.set_value(&default_model, window, cx));
-        self.selected_provider = provider;
+        // Save current provider's inputs into the providers map
+        let current_pc = self.read_provider_inputs(cx);
+        self.config.agent.providers.set(&self.selected_provider, current_pc);
+
+        // Switch to new provider
+        self.selected_provider = provider.clone();
+
+        // Load new provider's saved config (or defaults)
+        let pc = self.config.agent.providers.get_or_default(&provider);
+        self.load_provider_inputs(&pc, window, cx);
         cx.notify();
     }
 
@@ -401,7 +427,7 @@ impl SettingsPanel {
     fn render_ai(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let model_input = self.model_input.clone();
-        let api_key_env_input = self.api_key_env_input.clone();
+        let api_key_input = self.api_key_input.clone();
         let base_url_input = self.base_url_input.clone();
         let max_tokens_input = self.max_tokens_input.clone();
         let max_turns_input = self.max_turns_input.clone();
@@ -461,44 +487,46 @@ impl SettingsPanel {
             }
         }
 
-        // Model: text input (user can type any model ID) + clickable suggestions
+        // Model: text input + clickable suggestion chips
         let models = provider_models(&self.selected_provider);
+        let current_model = self.model_input.read(cx).value().to_string();
 
-        let mut model_section = div()
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .child(group_label("MODEL"))
+        let mut model_card_content = card(theme)
             .child(
                 div()
-                    .w_full()
+                    .px(px(12.0))
+                    .py(px(10.0))
                     .child(Input::new(&model_input)),
             );
 
-        // Show clickable suggestion chips for providers with known models
+        // Clickable suggestion chips for providers with known models
         if !models.is_empty() {
             let mut chips = div()
                 .flex()
                 .flex_wrap()
-                .gap(px(4.0))
-                .mt(px(4.0));
+                .gap(px(5.0))
+                .px(px(12.0))
+                .pb(px(10.0));
 
             for model in models {
                 let model_name = model.to_string();
                 let model_clone = model_name.clone();
+                let is_active = current_model == model_name;
                 chips = chips.child(
                     div()
                         .id(SharedString::from(format!("model-{model_name}")))
                         .px(px(8.0))
-                        .h(px(24.0))
+                        .h(px(26.0))
                         .flex()
                         .items_center()
-                        .rounded(px(4.0))
+                        .rounded(px(5.0))
                         .text_size(px(11.0))
                         .cursor_pointer()
-                        .bg(theme.muted.opacity(0.1))
-                        .text_color(theme.muted_foreground)
-                        .hover(|s| s.bg(theme.muted.opacity(0.2)).text_color(theme.foreground))
+                        .bg(if is_active { theme.primary.opacity(0.15) } else { theme.muted.opacity(0.08) })
+                        .border_1()
+                        .border_color(if is_active { theme.primary.opacity(0.4) } else { theme.transparent })
+                        .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
+                        .hover(|s| s.bg(theme.muted.opacity(0.18)).text_color(theme.foreground))
                         .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                             this.model_input.update(cx, |s, cx| {
                                 s.set_value(&model_clone, window, cx);
@@ -508,8 +536,15 @@ impl SettingsPanel {
                         .child(model_name),
                 );
             }
-            model_section = model_section.child(chips);
+            model_card_content = model_card_content.child(chips);
         };
+
+        let model_section = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(group_label("MODEL"))
+            .child(model_card_content);
 
         // Right column — model + config + advanced
         let right_col = div()
@@ -526,7 +561,7 @@ impl SettingsPanel {
                     .child(group_label("CONFIGURATION"))
                     .child(
                         card(theme)
-                            .child(row_field("API Key Env", &api_key_env_input))
+                            .child(row_field("API Key", &api_key_input))
                             .child(row_separator(theme))
                             .child(row_field("Base URL", &base_url_input)),
                     ),
@@ -741,8 +776,12 @@ impl Render for SettingsPanel {
             .justify_center()
             .child(
                 div()
-                    .w(px(800.0))
-                    .h(px(560.0))
+                    .w(relative(0.70))
+                    .min_w(px(600.0))
+                    .max_w(px(960.0))
+                    .h(relative(0.75))
+                    .min_h(px(400.0))
+                    .max_h(px(720.0))
                     .rounded(px(12.0))
                     .bg(theme.title_bar)
                     .border_1()
@@ -865,13 +904,14 @@ fn row_field(label: &str, input: &Entity<InputState>) -> Div {
         .flex()
         .items_center()
         .justify_between()
+        .gap(px(12.0))
         .px(px(16.0))
         .h(px(44.0))
         .child(
             div().text_sm().flex_shrink_0().child(label.to_string()),
         )
         .child(
-            div().w(px(180.0)).child(Input::new(input)),
+            div().flex_1().min_w(px(160.0)).child(Input::new(input)),
         )
 }
 

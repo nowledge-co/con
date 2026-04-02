@@ -75,7 +75,8 @@ impl Config {
         let config_path = Self::config_path();
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
-            let config: Config = toml::from_str(&content)?;
+            let mut config: Config = toml::from_str(&content)?;
+            config.agent.migrate_legacy();
             Ok(config)
         } else {
             Ok(Config::default())

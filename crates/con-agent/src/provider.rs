@@ -3,8 +3,8 @@ use crossbeam_channel::Sender;
 use futures::StreamExt;
 use rig::agent::{MultiTurnStreamItem, StreamingResult};
 use rig::client::CompletionClient;
-use rig::completion::CompletionModel as _;
 use rig::client::Nothing;
+use rig::completion::CompletionModel as _;
 use rig::providers::{
     anthropic, cohere, deepseek, gemini, groq, mistral, ollama, openai, openrouter, perplexity,
     together, xai,
@@ -71,7 +71,7 @@ impl std::fmt::Display for ProviderKind {
 }
 
 impl ProviderKind {
-    fn default_api_key_env(&self) -> &str {
+    pub fn default_api_key_env(&self) -> &str {
         match self {
             Self::Anthropic => "ANTHROPIC_API_KEY",
             Self::OpenAICompatible => "OPENAI_API_KEY",
@@ -89,7 +89,7 @@ impl ProviderKind {
         }
     }
 
-    fn default_model(&self) -> &str {
+    pub fn default_model(&self) -> &str {
         match self {
             Self::Anthropic => "claude-sonnet-4-6",
             Self::OpenAICompatible => "gpt-4o",
@@ -108,17 +108,108 @@ impl ProviderKind {
     }
 }
 
+// ── Per-provider config ─────────────────────────────────────────────
+
+/// Settings specific to a single provider — model, credentials, endpoint.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderConfig {
+    pub model: Option<String>,
+    /// Direct API key value.
+    pub api_key: Option<String>,
+    /// Environment variable name containing the API key.
+    pub api_key_env: Option<String>,
+    /// Custom base URL override (most providers have sensible defaults in Rig).
+    pub base_url: Option<String>,
+    /// Max output tokens (provider-specific limits apply).
+    pub max_tokens: Option<u64>,
+}
+
+/// Map of per-provider configurations.
+/// Explicit fields (not HashMap) for clean TOML serialization.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderMap {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anthropic: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openai: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "openai-compatible")]
+    pub openaicompatible: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deepseek: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groq: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cohere: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gemini: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ollama: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openrouter: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub perplexity: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mistral: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub together: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xai: Option<ProviderConfig>,
+}
+
+impl ProviderMap {
+    pub fn get(&self, kind: &ProviderKind) -> Option<&ProviderConfig> {
+        match kind {
+            ProviderKind::Anthropic => self.anthropic.as_ref(),
+            ProviderKind::OpenAI => self.openai.as_ref(),
+            ProviderKind::OpenAICompatible => self.openaicompatible.as_ref(),
+            ProviderKind::DeepSeek => self.deepseek.as_ref(),
+            ProviderKind::Groq => self.groq.as_ref(),
+            ProviderKind::Cohere => self.cohere.as_ref(),
+            ProviderKind::Gemini => self.gemini.as_ref(),
+            ProviderKind::Ollama => self.ollama.as_ref(),
+            ProviderKind::OpenRouter => self.openrouter.as_ref(),
+            ProviderKind::Perplexity => self.perplexity.as_ref(),
+            ProviderKind::Mistral => self.mistral.as_ref(),
+            ProviderKind::Together => self.together.as_ref(),
+            ProviderKind::XAI => self.xai.as_ref(),
+        }
+    }
+
+    pub fn get_or_default(&self, kind: &ProviderKind) -> ProviderConfig {
+        self.get(kind).cloned().unwrap_or_default()
+    }
+
+    pub fn set(&mut self, kind: &ProviderKind, config: ProviderConfig) {
+        let slot = match kind {
+            ProviderKind::Anthropic => &mut self.anthropic,
+            ProviderKind::OpenAI => &mut self.openai,
+            ProviderKind::OpenAICompatible => &mut self.openaicompatible,
+            ProviderKind::DeepSeek => &mut self.deepseek,
+            ProviderKind::Groq => &mut self.groq,
+            ProviderKind::Cohere => &mut self.cohere,
+            ProviderKind::Gemini => &mut self.gemini,
+            ProviderKind::Ollama => &mut self.ollama,
+            ProviderKind::OpenRouter => &mut self.openrouter,
+            ProviderKind::Perplexity => &mut self.perplexity,
+            ProviderKind::Mistral => &mut self.mistral,
+            ProviderKind::Together => &mut self.together,
+            ProviderKind::XAI => &mut self.xai,
+        };
+        *slot = Some(config);
+    }
+}
+
 // ── Config ──────────────────────────────────────────────────────────
 
 /// Optional overrides for the inline suggestion model.
-/// Any field left `None` inherits from the parent `AgentConfig`.
+/// API key and base_url are inherited from the provider's entry in `providers`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SuggestionModelConfig {
     pub provider: Option<ProviderKind>,
     pub model: Option<String>,
-    pub api_key_env: Option<String>,
-    pub base_url: Option<String>,
 }
 
 /// Agent configuration from config.toml
@@ -126,92 +217,159 @@ pub struct SuggestionModelConfig {
 /// ```toml
 /// [agent]
 /// provider = "anthropic"
-/// model = "claude-sonnet-4-0"
-/// api_key_env = "ANTHROPIC_API_KEY"
-/// base_url = "https://my-proxy.example.com/v1"
-/// max_tokens = 4096
 /// max_turns = 10
 /// temperature = 0.7
-/// auto_approve_tools = false
+///
+/// [agent.providers.anthropic]
+/// model = "claude-sonnet-4-6"
+/// api_key = "sk-ant-..."
+/// max_tokens = 8192
+///
+/// [agent.providers.groq]
+/// model = "llama-3.3-70b-versatile"
+/// api_key_env = "GROQ_API_KEY"
+/// max_tokens = 16384
 ///
 /// [agent.suggestion_model]
-/// model = "claude-3-5-haiku-20241022"
+/// provider = "groq"
+/// model = "llama-3.1-8b-instant"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentConfig {
+    /// Active provider selection.
     pub provider: ProviderKind,
-    pub model: Option<String>,
-    pub api_key_env: Option<String>,
-    pub base_url: Option<String>,
-    pub max_tokens: u64,
+    /// Per-provider settings (model, key, endpoint, max_tokens).
+    pub providers: ProviderMap,
+    /// Global: max agent turns per request.
     pub max_turns: usize,
+    /// Global: sampling temperature (applied to all providers).
     pub temperature: Option<f64>,
     pub auto_context: bool,
     pub auto_approve_tools: bool,
     pub suggestion_model: SuggestionModelConfig,
+
+    // Legacy flat fields — deserialize from old configs, never written back.
+    #[serde(default, skip_serializing)]
+    model: Option<String>,
+    #[serde(default, skip_serializing)]
+    api_key: Option<String>,
+    #[serde(default, skip_serializing)]
+    api_key_env: Option<String>,
+    #[serde(default, skip_serializing)]
+    base_url: Option<String>,
+    #[serde(default, skip_serializing)]
+    max_tokens: Option<u64>,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             provider: ProviderKind::default(),
-            model: None,
-            api_key_env: None,
-            base_url: None,
-            max_tokens: 4096,
+            providers: ProviderMap::default(),
             max_turns: 10,
             temperature: None,
             auto_context: true,
             auto_approve_tools: false,
             suggestion_model: SuggestionModelConfig::default(),
+            // Legacy
+            model: None,
+            api_key: None,
+            api_key_env: None,
+            base_url: None,
+            max_tokens: None,
         }
     }
 }
 
 impl AgentConfig {
-    fn effective_model(&self) -> &str {
-        self.model
-            .as_deref()
-            .unwrap_or_else(|| self.provider.default_model())
+    /// Migrate legacy flat fields into the per-provider map.
+    /// Called once after deserialization. Safe to call multiple times.
+    pub fn migrate_legacy(&mut self) {
+        let has_legacy = self.model.is_some()
+            || self.api_key.is_some()
+            || self.api_key_env.is_some()
+            || self.base_url.is_some()
+            || self.max_tokens.is_some();
+
+        if has_legacy && self.providers.get(&self.provider).is_none() {
+            self.providers.set(
+                &self.provider,
+                ProviderConfig {
+                    model: self.model.take(),
+                    api_key: self.api_key.take(),
+                    api_key_env: self.api_key_env.take(),
+                    base_url: self.base_url.take(),
+                    max_tokens: self.max_tokens.take(),
+                },
+            );
+        }
     }
 
-    fn effective_api_key_env(&self) -> &str {
-        self.api_key_env
-            .as_deref()
-            .unwrap_or_else(|| self.provider.default_api_key_env())
+    /// Effective model for the given provider.
+    pub fn effective_model<'a>(&'a self, kind: &'a ProviderKind) -> &'a str {
+        self.providers
+            .get(kind)
+            .and_then(|p| p.model.as_deref())
+            .unwrap_or_else(move || kind.default_model())
+    }
+
+    /// Effective base URL override for the given provider.
+    pub fn effective_base_url(&self, kind: &ProviderKind) -> Option<&str> {
+        self.providers
+            .get(kind)
+            .and_then(|p| p.base_url.as_deref())
+    }
+
+    /// Effective max tokens for the given provider.
+    pub fn effective_max_tokens(&self, kind: &ProviderKind) -> Option<u64> {
+        self.providers.get(kind).and_then(|p| p.max_tokens)
     }
 
     /// Build a lightweight config for inline suggestions.
-    /// Falls back to the main config for any field not overridden in `suggestion_model`.
+    /// Uses the suggestion provider's credentials from the providers map.
     pub fn suggestion_agent_config(&self) -> AgentConfig {
+        let suggestion_provider = self
+            .suggestion_model
+            .provider
+            .clone()
+            .unwrap_or_else(|| self.provider.clone());
+
+        // Build a minimal providers map with just the suggestion provider's config
+        let mut providers = ProviderMap::default();
+        if let Some(pc) = self.providers.get(&suggestion_provider) {
+            let mut pc = pc.clone();
+            // Override model if suggestion_model specifies one
+            if let Some(ref model) = self.suggestion_model.model {
+                pc.model = Some(model.clone());
+            }
+            pc.max_tokens = Some(100);
+            providers.set(&suggestion_provider, pc);
+        } else if let Some(ref model) = self.suggestion_model.model {
+            providers.set(
+                &suggestion_provider,
+                ProviderConfig {
+                    model: Some(model.clone()),
+                    max_tokens: Some(100),
+                    ..Default::default()
+                },
+            );
+        }
+
         AgentConfig {
-            provider: self
-                .suggestion_model
-                .provider
-                .clone()
-                .unwrap_or_else(|| self.provider.clone()),
-            model: self
-                .suggestion_model
-                .model
-                .clone()
-                .or_else(|| self.model.clone()),
-            api_key_env: self
-                .suggestion_model
-                .api_key_env
-                .clone()
-                .or_else(|| self.api_key_env.clone()),
-            base_url: self
-                .suggestion_model
-                .base_url
-                .clone()
-                .or_else(|| self.base_url.clone()),
-            max_tokens: 100,
+            provider: suggestion_provider,
+            providers,
             max_turns: 1,
             temperature: Some(0.0),
             auto_context: false,
             auto_approve_tools: false,
             suggestion_model: SuggestionModelConfig::default(),
+            // No legacy
+            model: None,
+            api_key: None,
+            api_key_env: None,
+            base_url: None,
+            max_tokens: None,
         }
     }
 }
@@ -248,11 +406,11 @@ pub enum AgentEvent {
 /// This macro expands identically at each call site, giving the compiler
 /// concrete types while keeping tool registration in one place.
 macro_rules! build_and_stream {
-    ($client:expr, $cfg:expr, $system_prompt:expr, $prompt:expr,
+    ($client:expr, $cfg:expr, $kind:expr, $system_prompt:expr, $prompt:expr,
      $history:expr, $hook:expr, $terminal_exec_tx:expr,
      $event_tx:expr, $cancelled:expr) => {{
         let mut builder = $client
-            .agent($cfg.effective_model())
+            .agent($cfg.effective_model(&$kind))
             .preamble($system_prompt)
             .tool(TerminalExecTool::new($terminal_exec_tx))
             .tool(ShellExecTool)
@@ -261,9 +419,11 @@ macro_rules! build_and_stream {
             .tool(EditFileTool)
             .tool(ListFilesTool)
             .tool(SearchTool)
-            .max_tokens($cfg.max_tokens)
             .default_max_turns($cfg.max_turns);
 
+        if let Some(max_tokens) = $cfg.effective_max_tokens(&$kind) {
+            builder = builder.max_tokens(max_tokens);
+        }
         if let Some(temp) = $cfg.temperature {
             builder = builder.temperature(temp);
         }
@@ -305,6 +465,7 @@ impl AgentProvider {
         cancelled: Arc<AtomicBool>,
     ) -> Result<Message> {
         let _ = event_tx.send(AgentEvent::Thinking);
+        let kind = &self.config.provider;
 
         let system_prompt = context.to_system_prompt();
         let chat_history = conversation.to_rig_history();
@@ -315,8 +476,8 @@ impl AgentProvider {
 
         let _ = event_tx.send(AgentEvent::Step(AgentStep::Thinking(format!(
             "{}:{}",
-            self.config.provider,
-            self.config.effective_model(),
+            kind,
+            self.config.effective_model(kind),
         ))));
 
         let hook = ConHook::new(
@@ -330,13 +491,13 @@ impl AgentProvider {
         macro_rules! stream_with {
             ($client:expr) => {
                 build_and_stream!(
-                    $client, self.config, &system_prompt, &last_user_msg,
+                    $client, self.config, kind, &system_prompt, &last_user_msg,
                     chat_history, hook, terminal_exec_tx, &event_tx, &cancelled
                 )?
             };
         }
 
-        let response = match self.config.provider {
+        let response = match *kind {
             ProviderKind::Anthropic => stream_with!(self.build_anthropic_client()?),
             ProviderKind::OpenAI | ProviderKind::OpenAICompatible => {
                 stream_with!(self.build_openai_client()?)
@@ -361,17 +522,14 @@ impl AgentProvider {
 
     // ── Client builders ──────────────────────────────────────────
     //
-    // Each provider uses its native Rig client. Tool registration is
-    // centralized via the `build_and_stream!` macro above. A generic
-    // `stream_agent(impl CompletionClient, ...)` approach doesn't work
-    // because Rig's CompletionClient trait has associated types with
-    // complex lifetime bounds. The macro achieves the same deduplication
-    // without fighting the type system.
+    // Each provider uses its native Rig client with per-provider config
+    // from the providers map. Tool registration is centralized via the
+    // `build_and_stream!` macro above.
 
     fn build_anthropic_client(&self) -> Result<anthropic::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::Anthropic)?;
         let mut builder = anthropic::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::Anthropic) {
             builder = builder.base_url(url);
         }
         builder
@@ -380,9 +538,10 @@ impl AgentProvider {
     }
 
     fn build_openai_client(&self) -> Result<openai::Client> {
-        let api_key = self.resolve_api_key()?;
+        let kind = &self.config.provider; // OpenAI or OpenAICompatible
+        let api_key = self.resolve_api_key(kind)?;
         let mut builder = openai::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(kind) {
             builder = builder.base_url(url);
         }
         builder
@@ -391,9 +550,9 @@ impl AgentProvider {
     }
 
     fn build_deepseek_client(&self) -> Result<deepseek::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::DeepSeek)?;
         let mut builder = deepseek::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::DeepSeek) {
             builder = builder.base_url(url);
         }
         builder
@@ -402,9 +561,9 @@ impl AgentProvider {
     }
 
     fn build_groq_client(&self) -> Result<groq::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::Groq)?;
         let mut builder = groq::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::Groq) {
             builder = builder.base_url(url);
         }
         builder
@@ -413,9 +572,9 @@ impl AgentProvider {
     }
 
     fn build_cohere_client(&self) -> Result<cohere::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::Cohere)?;
         let mut builder = cohere::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::Cohere) {
             builder = builder.base_url(url);
         }
         builder
@@ -424,9 +583,9 @@ impl AgentProvider {
     }
 
     fn build_gemini_client(&self) -> Result<gemini::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::Gemini)?;
         let mut builder = gemini::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::Gemini) {
             builder = builder.base_url(url);
         }
         builder
@@ -436,7 +595,7 @@ impl AgentProvider {
 
     fn build_ollama_client(&self) -> Result<ollama::Client> {
         let mut builder = ollama::Client::builder().api_key(Nothing);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::Ollama) {
             builder = builder.base_url(url);
         }
         builder
@@ -445,9 +604,9 @@ impl AgentProvider {
     }
 
     fn build_openrouter_client(&self) -> Result<openrouter::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::OpenRouter)?;
         let mut builder = openrouter::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::OpenRouter) {
             builder = builder.base_url(url);
         }
         builder
@@ -456,9 +615,9 @@ impl AgentProvider {
     }
 
     fn build_perplexity_client(&self) -> Result<perplexity::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::Perplexity)?;
         let mut builder = perplexity::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::Perplexity) {
             builder = builder.base_url(url);
         }
         builder
@@ -467,9 +626,9 @@ impl AgentProvider {
     }
 
     fn build_mistral_client(&self) -> Result<mistral::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::Mistral)?;
         let mut builder = mistral::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::Mistral) {
             builder = builder.base_url(url);
         }
         builder
@@ -478,9 +637,9 @@ impl AgentProvider {
     }
 
     fn build_together_client(&self) -> Result<together::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::Together)?;
         let mut builder = together::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::Together) {
             builder = builder.base_url(url);
         }
         builder
@@ -489,9 +648,9 @@ impl AgentProvider {
     }
 
     fn build_xai_client(&self) -> Result<xai::Client> {
-        let api_key = self.resolve_api_key()?;
+        let api_key = self.resolve_api_key(&ProviderKind::XAI)?;
         let mut builder = xai::Client::builder().api_key(&api_key);
-        if let Some(ref url) = self.config.base_url {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::XAI) {
             builder = builder.base_url(url);
         }
         builder
@@ -504,11 +663,12 @@ impl AgentProvider {
     pub async fn complete(&self, prompt: &str) -> Result<String> {
         use rig::completion::AssistantContent;
 
+        let kind = &self.config.provider;
         let preamble = "You are a shell command completion assistant. Be extremely concise.";
 
         macro_rules! do_complete {
             ($client:expr) => {{
-                let model = $client.completion_model(self.config.effective_model());
+                let model = $client.completion_model(self.config.effective_model(kind));
                 let response = model
                     .completion_request(prompt)
                     .preamble(preamble.to_string())
@@ -523,7 +683,7 @@ impl AgentProvider {
             }};
         }
 
-        match self.config.provider {
+        match *kind {
             ProviderKind::Anthropic => do_complete!(self.build_anthropic_client()?),
             ProviderKind::OpenAI | ProviderKind::OpenAICompatible => {
                 do_complete!(self.build_openai_client()?)
@@ -541,15 +701,42 @@ impl AgentProvider {
         }
     }
 
-    fn resolve_api_key(&self) -> Result<String> {
-        let env_var = self.config.effective_api_key_env();
-        if self.config.provider == ProviderKind::Ollama {
-            return Ok(std::env::var(env_var).unwrap_or_else(|_| "ollama".into()));
+    /// Resolve API key for a specific provider from the providers map.
+    fn resolve_api_key(&self, kind: &ProviderKind) -> Result<String> {
+        let pc = self.config.providers.get(kind);
+
+        // 1. Direct api_key from provider config
+        if let Some(key) = pc.and_then(|p| p.api_key.as_ref()).filter(|k| !k.is_empty()) {
+            return Ok(key.clone());
         }
-        std::env::var(env_var).map_err(|_| {
+
+        // 2. api_key_env — could be env var name or direct key (legacy compat)
+        if let Some(key_or_env) = pc
+            .and_then(|p| p.api_key_env.as_ref())
+            .filter(|k| !k.is_empty())
+        {
+            let is_env_var_name = key_or_env
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
+            if is_env_var_name {
+                if let Ok(val) = std::env::var(key_or_env) {
+                    return Ok(val);
+                }
+            } else {
+                return Ok(key_or_env.clone());
+            }
+        }
+
+        // 3. Fall back to provider's default env var
+        let default_env = kind.default_api_key_env();
+        if *kind == ProviderKind::Ollama {
+            return Ok(std::env::var(default_env).unwrap_or_else(|_| "ollama".into()));
+        }
+        std::env::var(default_env).map_err(|_| {
             anyhow::anyhow!(
-                "No API key found. Set the {} environment variable.",
-                env_var
+                "No API key found for {}. Set {} or configure api_key in settings.",
+                kind,
+                default_env
             )
         })
     }
