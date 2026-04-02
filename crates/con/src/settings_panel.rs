@@ -53,8 +53,7 @@ pub struct SettingsPanel {
     active_section: SettingsSection,
 
     selected_provider: ProviderKind,
-    selected_model: String,
-    model_dropdown_open: bool,
+    model_input: Entity<InputState>,
     api_key_env_input: Entity<InputState>,
     base_url_input: Entity<InputState>,
     max_tokens_input: Entity<InputState>,
@@ -88,6 +87,12 @@ impl SettingsPanel {
     pub fn new(config: &Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let agent = config.agent.clone();
 
+        let model_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("Provider default", window, cx);
+            s.set_value(&agent.model.clone().unwrap_or_default(), window, cx);
+            s
+        });
         let api_key_env_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("e.g. ANTHROPIC_API_KEY", window, cx);
@@ -148,16 +153,13 @@ impl SettingsPanel {
             s
         });
 
-        let selected_model = agent.model.clone().unwrap_or_default();
-
         Self {
             visible: false,
             config: config.clone(),
             focus_handle: cx.focus_handle(),
             active_section: SettingsSection::General,
             selected_provider: config.agent.provider.clone(),
-            selected_model,
-            model_dropdown_open: false,
+            model_input,
             api_key_env_input,
             base_url_input,
             max_tokens_input,
@@ -175,7 +177,7 @@ impl SettingsPanel {
         if self.visible {
             let agent = self.config.agent.clone();
             self.selected_provider = agent.provider.clone();
-            self.selected_model = agent.model.unwrap_or_default();
+            self.model_input.update(cx, |s, cx| s.set_value(&agent.model.clone().unwrap_or_default(), window, cx));
             self.api_key_env_input.update(cx, |s, cx| s.set_value(&agent.api_key_env.unwrap_or_default(), window, cx));
             self.base_url_input.update(cx, |s, cx| s.set_value(&agent.base_url.unwrap_or_default(), window, cx));
             self.max_tokens_input.update(cx, |s, cx| s.set_value(&agent.max_tokens.to_string(), window, cx));
@@ -195,6 +197,7 @@ impl SettingsPanel {
     }
 
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let model_text = self.model_input.read(cx).value().to_string();
         let api_key_text = self.api_key_env_input.read(cx).value().to_string();
         let base_url_text = self.base_url_input.read(cx).value().to_string();
         let max_tokens_text = self.max_tokens_input.read(cx).value().to_string();
@@ -206,7 +209,7 @@ impl SettingsPanel {
 
         self.config.agent = AgentConfig {
             provider: self.selected_provider.clone(),
-            model: if self.selected_model.is_empty() { None } else { Some(self.selected_model.clone()) },
+            model: if model_text.is_empty() { None } else { Some(model_text) },
             api_key_env: if api_key_text.is_empty() { None } else { Some(api_key_text) },
             base_url: if base_url_text.is_empty() { None } else { Some(base_url_text) },
             max_tokens: max_tokens_text.parse().unwrap_or(4096),
@@ -245,26 +248,21 @@ impl SettingsPanel {
         Ok(())
     }
 
-    fn select_provider(&mut self, provider: ProviderKind, cx: &mut Context<Self>) {
+    fn select_provider(
+        &mut self,
+        provider: ProviderKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let models = provider_models(&provider);
-        self.selected_model = if models.is_empty() {
+        let default_model = if models.is_empty() {
             String::new()
         } else {
             models[0].to_string()
         };
+        self.model_input
+            .update(cx, |s, cx| s.set_value(&default_model, window, cx));
         self.selected_provider = provider;
-        self.model_dropdown_open = false;
-        cx.notify();
-    }
-
-    fn select_model(&mut self, model: &str, cx: &mut Context<Self>) {
-        self.selected_model = model.to_string();
-        self.model_dropdown_open = false;
-        cx.notify();
-    }
-
-    fn toggle_model_dropdown(&mut self, cx: &mut Context<Self>) {
-        self.model_dropdown_open = !self.model_dropdown_open;
         cx.notify();
     }
 
@@ -402,6 +400,7 @@ impl SettingsPanel {
 
     fn render_ai(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
+        let model_input = self.model_input.clone();
         let api_key_env_input = self.api_key_env_input.clone();
         let base_url_input = self.base_url_input.clone();
         let max_tokens_input = self.max_tokens_input.clone();
@@ -444,8 +443,8 @@ impl SettingsPanel {
                 .cursor_pointer()
                 .bg(if is_selected { theme.primary.opacity(0.08) } else { theme.transparent })
                 .hover(|s| s.bg(theme.muted.opacity(0.1)))
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                    this.select_provider(provider_clone.clone(), cx);
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                    this.select_provider(provider_clone.clone(), window, cx);
                 }))
                 .child(indicator)
                 .child(
@@ -462,125 +461,54 @@ impl SettingsPanel {
             }
         }
 
-        // Model dropdown for the selected provider
+        // Model: text input (user can type any model ID) + clickable suggestions
         let models = provider_models(&self.selected_provider);
-        let has_models = !models.is_empty();
-        let display_model = if self.selected_model.is_empty() {
-            "Provider default".to_string()
-        } else {
-            self.selected_model.clone()
-        };
-        let dropdown_open = self.model_dropdown_open && has_models;
 
-        // Dropdown trigger button — Apple-style popup button
-        let model_trigger = div()
-            .id("model-dropdown-trigger")
-            .h(px(36.0))
-            .px(px(12.0))
+        let mut model_section = div()
             .flex()
-            .items_center()
-            .justify_between()
-            .rounded(px(8.0))
-            .cursor_pointer()
-            .bg(theme.muted.opacity(0.08))
-            .hover(|s| s.bg(theme.muted.opacity(0.14)))
-            .border_1()
-            .border_color(if dropdown_open { theme.primary.opacity(0.4) } else { theme.border.opacity(0.3) })
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                this.toggle_model_dropdown(cx);
-            }))
+            .flex_col()
+            .gap(px(4.0))
+            .child(group_label("MODEL"))
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(if has_models { theme.foreground } else { theme.muted_foreground })
-                    .child(display_model),
-            )
-            .child(
-                svg()
-                    .path(if dropdown_open { "phosphor/caret-up.svg" } else { "phosphor/caret-down.svg" })
-                    .size(px(12.0))
-                    .text_color(theme.muted_foreground),
+                    .w_full()
+                    .child(Input::new(&model_input)),
             );
 
-        // Dropdown menu — appears below trigger when open
-        let model_section = if dropdown_open {
-            let mut menu = div()
+        // Show clickable suggestion chips for providers with known models
+        if !models.is_empty() {
+            let mut chips = div()
                 .flex()
-                .flex_col()
-                .mt(px(4.0))
-                .rounded(px(8.0))
-                .bg(theme.title_bar)
-                .border_1()
-                .border_color(theme.border)
-                .shadow_md()
-                .py(px(4.0))
-                .overflow_y_hidden();
+                .flex_wrap()
+                .gap(px(4.0))
+                .mt(px(4.0));
 
             for model in models {
-                let is_selected = self.selected_model == *model;
                 let model_name = model.to_string();
                 let model_clone = model_name.clone();
-
-                let row = div()
-                    .id(SharedString::from(format!("model-{model_name}")))
-                    .h(px(30.0))
-                    .px(px(12.0))
-                    .mx(px(4.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .cursor_pointer()
-                    .rounded(px(6.0))
-                    .bg(if is_selected { theme.primary.opacity(0.1) } else { theme.transparent })
-                    .hover(|s| s.bg(theme.muted.opacity(0.12)))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                        this.select_model(&model_clone, cx);
-                    }))
-                    .child(
-                        div()
-                            .size(px(14.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .flex_shrink_0()
-                            .child(if is_selected {
-                                svg()
-                                    .path("phosphor/check.svg")
-                                    .size(px(12.0))
-                                    .text_color(theme.primary)
-                            } else {
-                                svg()
-                                    .path("phosphor/check.svg")
-                                    .size(px(12.0))
-                                    .text_color(theme.transparent)
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .font_weight(if is_selected { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                            .text_color(theme.foreground)
-                            .child(model_name),
-                    );
-
-                menu = menu.child(row);
+                chips = chips.child(
+                    div()
+                        .id(SharedString::from(format!("model-{model_name}")))
+                        .px(px(8.0))
+                        .h(px(24.0))
+                        .flex()
+                        .items_center()
+                        .rounded(px(4.0))
+                        .text_size(px(11.0))
+                        .cursor_pointer()
+                        .bg(theme.muted.opacity(0.1))
+                        .text_color(theme.muted_foreground)
+                        .hover(|s| s.bg(theme.muted.opacity(0.2)).text_color(theme.foreground))
+                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                            this.model_input.update(cx, |s, cx| {
+                                s.set_value(&model_clone, window, cx);
+                            });
+                            cx.notify();
+                        }))
+                        .child(model_name),
+                );
             }
-
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(group_label("MODEL"))
-                .child(model_trigger)
-                .child(menu)
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(group_label("MODEL"))
-                .child(model_trigger)
+            model_section = model_section.child(chips);
         };
 
         // Right column — model + config + advanced
@@ -786,8 +714,9 @@ impl Render for SettingsPanel {
         }
 
         let content_scroll = div()
+            .id("settings-content-scroll")
             .flex_1()
-            .overflow_y_hidden()
+            .overflow_y_scroll()
             .p(px(24.0))
             .child(content);
 
