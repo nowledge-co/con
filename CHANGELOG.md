@@ -18,7 +18,7 @@ All notable changes to con are documented here.
 - Full compatibility with terminal applications like vim, htop, and tmux (alternate screen, application cursor keys, DEC private modes, Kitty keyboard protocol)
 
 **AI Agent**
-- Built-in AI assistant that works with 13 providers — Anthropic, OpenAI, DeepSeek, Groq, Gemini, Ollama, OpenRouter, Mistral, Together, Cohere, Perplexity, xAI, and any OpenAI-compatible endpoint
+- Built-in AI assistant that works with 13 providers — Anthropic, OpenAI, DeepSeek, Groq, Gemini, Ollama, OpenRouter, Mistral, Together, Cohere, Perplexity, xAI, and any OpenAI-compatible endpoint. Each provider uses its native Rig client for correct API routing and auth.
 - Transparent execution — when the agent runs a command, it executes right in your terminal. You see every keystroke, every output, in real time. No hidden processes.
 - Deep context awareness — the agent sees your working directory, recent output, command history, git branch, uncommitted changes, and project structure. It reasons about what you're actually doing.
 - Seven tools at the agent's disposal: run commands (visibly or in the background), read files, write files, surgically edit specific sections of a file, list project files, and search your codebase
@@ -28,6 +28,8 @@ All notable changes to con are documented here.
 - Multi-turn conversations with full context carried across messages
 - Built-in skills: type /explain, /fix, /commit, /test, or /review to trigger purpose-built agent workflows
 - Custom skills via AGENTS.md files in your project
+- Temperature control — set `temperature` in config.toml or the Settings panel to tune model creativity
+- Separate suggestion model — configure `[agent.suggestion_model]` to use a fast, cheap model for inline completions while keeping a powerful model for agent chat
 
 **Interface**
 - Smart input bar that auto-detects intent — shell commands go to the terminal, questions go to the agent, /skills invoke workflows

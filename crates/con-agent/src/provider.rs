@@ -4,7 +4,11 @@ use futures::StreamExt;
 use rig::agent::{MultiTurnStreamItem, StreamingResult};
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel as _;
-use rig::providers::{anthropic, openai};
+use rig::client::Nothing;
+use rig::providers::{
+    anthropic, cohere, deepseek, gemini, groq, mistral, ollama, openai, openrouter, perplexity,
+    together, xai,
+};
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,7 +73,8 @@ impl std::fmt::Display for ProviderKind {
 impl ProviderKind {
     fn default_api_key_env(&self) -> &str {
         match self {
-            Self::Anthropic | Self::OpenAICompatible => "ANTHROPIC_API_KEY",
+            Self::Anthropic => "ANTHROPIC_API_KEY",
+            Self::OpenAICompatible => "OPENAI_API_KEY",
             Self::OpenAI => "OPENAI_API_KEY",
             Self::DeepSeek => "DEEPSEEK_API_KEY",
             Self::Groq => "GROQ_API_KEY",
@@ -86,23 +91,35 @@ impl ProviderKind {
 
     fn default_model(&self) -> &str {
         match self {
-            Self::Anthropic | Self::OpenAICompatible => "claude-sonnet-4-0",
+            Self::Anthropic => "claude-sonnet-4-6",
+            Self::OpenAICompatible => "gpt-4o",
             Self::OpenAI => "gpt-4o",
             Self::DeepSeek => "deepseek-chat",
             Self::Groq => "llama-3.3-70b-versatile",
-            Self::Cohere => "command-r-plus",
-            Self::Gemini => "gemini-2.0-flash",
+            Self::Cohere => "command-a-03-2025",
+            Self::Gemini => "gemini-2.5-flash",
             Self::Ollama => "llama3.2",
-            Self::OpenRouter => "anthropic/claude-sonnet-4",
+            Self::OpenRouter => "anthropic/claude-sonnet-4-6",
             Self::Perplexity => "sonar-pro",
             Self::Mistral => "mistral-large-latest",
-            Self::Together => "meta-llama/Llama-3-70b-chat-hf",
+            Self::Together => "meta-llama/Llama-3.3-70B-Instruct-Turbo",
             Self::XAI => "grok-3",
         }
     }
 }
 
 // ── Config ──────────────────────────────────────────────────────────
+
+/// Optional overrides for the inline suggestion model.
+/// Any field left `None` inherits from the parent `AgentConfig`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SuggestionModelConfig {
+    pub provider: Option<ProviderKind>,
+    pub model: Option<String>,
+    pub api_key_env: Option<String>,
+    pub base_url: Option<String>,
+}
 
 /// Agent configuration from config.toml
 ///
@@ -114,7 +131,11 @@ impl ProviderKind {
 /// base_url = "https://my-proxy.example.com/v1"
 /// max_tokens = 4096
 /// max_turns = 10
+/// temperature = 0.7
 /// auto_approve_tools = false
+///
+/// [agent.suggestion_model]
+/// model = "claude-3-5-haiku-20241022"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -125,8 +146,10 @@ pub struct AgentConfig {
     pub base_url: Option<String>,
     pub max_tokens: u64,
     pub max_turns: usize,
+    pub temperature: Option<f64>,
     pub auto_context: bool,
     pub auto_approve_tools: bool,
+    pub suggestion_model: SuggestionModelConfig,
 }
 
 impl Default for AgentConfig {
@@ -138,8 +161,10 @@ impl Default for AgentConfig {
             base_url: None,
             max_tokens: 4096,
             max_turns: 10,
+            temperature: None,
             auto_context: true,
             auto_approve_tools: false,
+            suggestion_model: SuggestionModelConfig::default(),
         }
     }
 }
@@ -155,6 +180,39 @@ impl AgentConfig {
         self.api_key_env
             .as_deref()
             .unwrap_or_else(|| self.provider.default_api_key_env())
+    }
+
+    /// Build a lightweight config for inline suggestions.
+    /// Falls back to the main config for any field not overridden in `suggestion_model`.
+    pub fn suggestion_agent_config(&self) -> AgentConfig {
+        AgentConfig {
+            provider: self
+                .suggestion_model
+                .provider
+                .clone()
+                .unwrap_or_else(|| self.provider.clone()),
+            model: self
+                .suggestion_model
+                .model
+                .clone()
+                .or_else(|| self.model.clone()),
+            api_key_env: self
+                .suggestion_model
+                .api_key_env
+                .clone()
+                .or_else(|| self.api_key_env.clone()),
+            base_url: self
+                .suggestion_model
+                .base_url
+                .clone()
+                .or_else(|| self.base_url.clone()),
+            max_tokens: 100,
+            max_turns: 1,
+            temperature: Some(0.0),
+            auto_context: false,
+            auto_approve_tools: false,
+            suggestion_model: SuggestionModelConfig::default(),
+        }
     }
 }
 
@@ -193,7 +251,7 @@ macro_rules! build_and_stream {
     ($client:expr, $cfg:expr, $system_prompt:expr, $prompt:expr,
      $history:expr, $hook:expr, $terminal_exec_tx:expr,
      $event_tx:expr, $cancelled:expr) => {{
-        let agent = $client
+        let mut builder = $client
             .agent($cfg.effective_model())
             .preamble($system_prompt)
             .tool(TerminalExecTool::new($terminal_exec_tx))
@@ -204,8 +262,13 @@ macro_rules! build_and_stream {
             .tool(ListFilesTool)
             .tool(SearchTool)
             .max_tokens($cfg.max_tokens)
-            .default_max_turns($cfg.max_turns)
-            .build();
+            .default_max_turns($cfg.max_turns);
+
+        if let Some(temp) = $cfg.temperature {
+            builder = builder.temperature(temp);
+        }
+
+        let agent = builder.build();
 
         let stream = agent
             .stream_prompt($prompt)
@@ -262,36 +325,32 @@ impl AgentProvider {
             self.config.auto_approve_tools,
         );
 
+        // Each provider dispatches to its native Rig client — exhaustive match
+        // prevents silent misrouting.
+        macro_rules! stream_with {
+            ($client:expr) => {
+                build_and_stream!(
+                    $client, self.config, &system_prompt, &last_user_msg,
+                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled
+                )?
+            };
+        }
+
         let response = match self.config.provider {
-            ProviderKind::Anthropic | ProviderKind::OpenAICompatible => {
-                let client = self.build_anthropic_client()?;
-                build_and_stream!(
-                    client, self.config, &system_prompt, &last_user_msg,
-                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled
-                )?
+            ProviderKind::Anthropic => stream_with!(self.build_anthropic_client()?),
+            ProviderKind::OpenAI | ProviderKind::OpenAICompatible => {
+                stream_with!(self.build_openai_client()?)
             }
-            ProviderKind::OpenAI => {
-                let client = self.build_openai_client(None)?;
-                build_and_stream!(
-                    client, self.config, &system_prompt, &last_user_msg,
-                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled
-                )?
-            }
-            _ => {
-                let base_url = self
-                    .default_base_url()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "No base_url configured for provider {:?}. Set [agent] base_url in config.toml.",
-                            self.config.provider
-                        )
-                    })?;
-                let client = self.build_openai_client(Some(&base_url))?;
-                build_and_stream!(
-                    client, self.config, &system_prompt, &last_user_msg,
-                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled
-                )?
-            }
+            ProviderKind::DeepSeek => stream_with!(self.build_deepseek_client()?),
+            ProviderKind::Groq => stream_with!(self.build_groq_client()?),
+            ProviderKind::Cohere => stream_with!(self.build_cohere_client()?),
+            ProviderKind::Gemini => stream_with!(self.build_gemini_client()?),
+            ProviderKind::Ollama => stream_with!(self.build_ollama_client()?),
+            ProviderKind::OpenRouter => stream_with!(self.build_openrouter_client()?),
+            ProviderKind::Perplexity => stream_with!(self.build_perplexity_client()?),
+            ProviderKind::Mistral => stream_with!(self.build_mistral_client()?),
+            ProviderKind::Together => stream_with!(self.build_together_client()?),
+            ProviderKind::XAI => stream_with!(self.build_xai_client()?),
         };
 
         let message = Message::assistant(&response);
@@ -300,27 +359,30 @@ impl AgentProvider {
         Ok(message)
     }
 
-    // Note: Tool registration is centralized via the `build_and_stream!` macro below.
-    // A generic `stream_agent(client: impl CompletionClient, ...)` approach doesn't work
-    // because Rig's CompletionClient has associated types with complex lifetime bounds
-    // that can't be easily expressed in a generic context. The macro achieves the same
-    // deduplication without fighting the type system.
+    // ── Client builders ──────────────────────────────────────────
+    //
+    // Each provider uses its native Rig client. Tool registration is
+    // centralized via the `build_and_stream!` macro above. A generic
+    // `stream_agent(impl CompletionClient, ...)` approach doesn't work
+    // because Rig's CompletionClient trait has associated types with
+    // complex lifetime bounds. The macro achieves the same deduplication
+    // without fighting the type system.
 
     fn build_anthropic_client(&self) -> Result<anthropic::Client> {
         let api_key = self.resolve_api_key()?;
         let mut builder = anthropic::Client::builder().api_key(&api_key);
-        if let Some(ref base_url) = self.config.base_url {
-            builder = builder.base_url(base_url);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
         }
         builder
             .build()
             .map_err(|e| anyhow::anyhow!("Anthropic client error: {e}"))
     }
 
-    fn build_openai_client(&self, base_url: Option<&str>) -> Result<openai::Client> {
+    fn build_openai_client(&self) -> Result<openai::Client> {
         let api_key = self.resolve_api_key()?;
         let mut builder = openai::Client::builder().api_key(&api_key);
-        if let Some(url) = base_url.or(self.config.base_url.as_deref()) {
+        if let Some(ref url) = self.config.base_url {
             builder = builder.base_url(url);
         }
         builder
@@ -328,18 +390,113 @@ impl AgentProvider {
             .map_err(|e| anyhow::anyhow!("OpenAI client error: {e}"))
     }
 
-    fn default_base_url(&self) -> Option<String> {
-        match self.config.provider {
-            ProviderKind::DeepSeek => Some("https://api.deepseek.com".into()),
-            ProviderKind::Groq => Some("https://api.groq.com/openai".into()),
-            ProviderKind::Together => Some("https://api.together.xyz".into()),
-            ProviderKind::Perplexity => Some("https://api.perplexity.ai".into()),
-            ProviderKind::Mistral => Some("https://api.mistral.ai".into()),
-            ProviderKind::XAI => Some("https://api.x.ai".into()),
-            ProviderKind::Ollama => Some("http://localhost:11434".into()),
-            ProviderKind::OpenRouter => Some("https://openrouter.ai/api".into()),
-            _ => None,
+    fn build_deepseek_client(&self) -> Result<deepseek::Client> {
+        let api_key = self.resolve_api_key()?;
+        let mut builder = deepseek::Client::builder().api_key(&api_key);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
         }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("DeepSeek client error: {e}"))
+    }
+
+    fn build_groq_client(&self) -> Result<groq::Client> {
+        let api_key = self.resolve_api_key()?;
+        let mut builder = groq::Client::builder().api_key(&api_key);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Groq client error: {e}"))
+    }
+
+    fn build_cohere_client(&self) -> Result<cohere::Client> {
+        let api_key = self.resolve_api_key()?;
+        let mut builder = cohere::Client::builder().api_key(&api_key);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Cohere client error: {e}"))
+    }
+
+    fn build_gemini_client(&self) -> Result<gemini::Client> {
+        let api_key = self.resolve_api_key()?;
+        let mut builder = gemini::Client::builder().api_key(&api_key);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Gemini client error: {e}"))
+    }
+
+    fn build_ollama_client(&self) -> Result<ollama::Client> {
+        let mut builder = ollama::Client::builder().api_key(Nothing);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Ollama client error: {e}"))
+    }
+
+    fn build_openrouter_client(&self) -> Result<openrouter::Client> {
+        let api_key = self.resolve_api_key()?;
+        let mut builder = openrouter::Client::builder().api_key(&api_key);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("OpenRouter client error: {e}"))
+    }
+
+    fn build_perplexity_client(&self) -> Result<perplexity::Client> {
+        let api_key = self.resolve_api_key()?;
+        let mut builder = perplexity::Client::builder().api_key(&api_key);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Perplexity client error: {e}"))
+    }
+
+    fn build_mistral_client(&self) -> Result<mistral::Client> {
+        let api_key = self.resolve_api_key()?;
+        let mut builder = mistral::Client::builder().api_key(&api_key);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Mistral client error: {e}"))
+    }
+
+    fn build_together_client(&self) -> Result<together::Client> {
+        let api_key = self.resolve_api_key()?;
+        let mut builder = together::Client::builder().api_key(&api_key);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Together client error: {e}"))
+    }
+
+    fn build_xai_client(&self) -> Result<xai::Client> {
+        let api_key = self.resolve_api_key()?;
+        let mut builder = xai::Client::builder().api_key(&api_key);
+        if let Some(ref url) = self.config.base_url {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("xAI client error: {e}"))
     }
 
     /// Lightweight completion — no tools, no history, just a simple prompt→response.
@@ -347,61 +504,40 @@ impl AgentProvider {
     pub async fn complete(&self, prompt: &str) -> Result<String> {
         use rig::completion::AssistantContent;
 
-        let api_key = self.resolve_api_key()?;
         let preamble = "You are a shell command completion assistant. Be extremely concise.";
 
+        macro_rules! do_complete {
+            ($client:expr) => {{
+                let model = $client.completion_model(self.config.effective_model());
+                let response = model
+                    .completion_request(prompt)
+                    .preamble(preamble.to_string())
+                    .max_tokens(100)
+                    .send()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))?;
+                match response.choice.first() {
+                    AssistantContent::Text(t) => Ok(t.text.clone()),
+                    _ => Ok(String::new()),
+                }
+            }};
+        }
+
         match self.config.provider {
-            ProviderKind::Anthropic | ProviderKind::OpenAICompatible => {
-                let mut builder = anthropic::Client::builder().api_key(&api_key);
-                if let Some(ref base_url) = self.config.base_url {
-                    builder = builder.base_url(base_url);
-                }
-                let client = builder
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Client error: {e}"))?;
-
-                let model = client.completion_model(self.config.effective_model());
-                let response = model
-                    .completion_request(prompt)
-                    .preamble(preamble.to_string())
-                    .max_tokens(100)
-                    .send()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))?;
-
-                match response.choice.first() {
-                    AssistantContent::Text(t) => Ok(t.text.clone()),
-                    _ => Ok(String::new()),
-                }
+            ProviderKind::Anthropic => do_complete!(self.build_anthropic_client()?),
+            ProviderKind::OpenAI | ProviderKind::OpenAICompatible => {
+                do_complete!(self.build_openai_client()?)
             }
-            _ => {
-                let base_url = self
-                    .config
-                    .base_url
-                    .clone()
-                    .or_else(|| self.default_base_url())
-                    .unwrap_or_else(|| "https://api.openai.com/v1".into());
-
-                let client = openai::Client::builder()
-                    .api_key(&api_key)
-                    .base_url(&base_url)
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Client error: {e}"))?;
-
-                let model = client.completion_model(self.config.effective_model());
-                let response = model
-                    .completion_request(prompt)
-                    .preamble(preamble.to_string())
-                    .max_tokens(100)
-                    .send()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))?;
-
-                match response.choice.first() {
-                    AssistantContent::Text(t) => Ok(t.text.clone()),
-                    _ => Ok(String::new()),
-                }
-            }
+            ProviderKind::DeepSeek => do_complete!(self.build_deepseek_client()?),
+            ProviderKind::Groq => do_complete!(self.build_groq_client()?),
+            ProviderKind::Cohere => do_complete!(self.build_cohere_client()?),
+            ProviderKind::Gemini => do_complete!(self.build_gemini_client()?),
+            ProviderKind::Ollama => do_complete!(self.build_ollama_client()?),
+            ProviderKind::OpenRouter => do_complete!(self.build_openrouter_client()?),
+            ProviderKind::Perplexity => do_complete!(self.build_perplexity_client()?),
+            ProviderKind::Mistral => do_complete!(self.build_mistral_client()?),
+            ProviderKind::Together => do_complete!(self.build_together_client()?),
+            ProviderKind::XAI => do_complete!(self.build_xai_client()?),
         }
     }
 

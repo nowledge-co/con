@@ -1,4 +1,4 @@
-use con_agent::{AgentConfig, ProviderKind};
+use con_agent::{AgentConfig, ProviderKind, SuggestionModelConfig};
 use con_core::Config;
 use gpui::*;
 use gpui::prelude::FluentBuilder;
@@ -59,7 +59,10 @@ pub struct SettingsPanel {
     base_url_input: Entity<InputState>,
     max_tokens_input: Entity<InputState>,
     max_turns_input: Entity<InputState>,
+    temperature_input: Entity<InputState>,
     auto_approve: bool,
+
+    suggestion_model_input: Entity<InputState>,
 
     font_size_input: Entity<InputState>,
     scrollback_input: Entity<InputState>,
@@ -109,6 +112,29 @@ impl SettingsPanel {
             s.set_value(&agent.max_turns.to_string(), window, cx);
             s
         });
+        let temperature_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("Provider default", window, cx);
+            s.set_value(
+                &agent
+                    .temperature
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+            s
+        });
+        let suggestion_model_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("Same as agent model", window, cx);
+            s.set_value(
+                &agent.suggestion_model.model.clone().unwrap_or_default(),
+                window,
+                cx,
+            );
+            s
+        });
         let font_size_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("14.0", window, cx);
@@ -136,7 +162,9 @@ impl SettingsPanel {
             base_url_input,
             max_tokens_input,
             max_turns_input,
+            temperature_input,
             auto_approve: config.agent.auto_approve_tools,
+            suggestion_model_input,
             font_size_input,
             scrollback_input,
         }
@@ -152,6 +180,8 @@ impl SettingsPanel {
             self.base_url_input.update(cx, |s, cx| s.set_value(&agent.base_url.unwrap_or_default(), window, cx));
             self.max_tokens_input.update(cx, |s, cx| s.set_value(&agent.max_tokens.to_string(), window, cx));
             self.max_turns_input.update(cx, |s, cx| s.set_value(&agent.max_turns.to_string(), window, cx));
+            self.temperature_input.update(cx, |s, cx| s.set_value(&agent.temperature.map(|t| t.to_string()).unwrap_or_default(), window, cx));
+            self.suggestion_model_input.update(cx, |s, cx| s.set_value(&agent.suggestion_model.model.clone().unwrap_or_default(), window, cx));
             self.auto_approve = agent.auto_approve_tools;
             self.font_size_input.update(cx, |s, cx| s.set_value(&self.config.terminal.font_size.to_string(), window, cx));
             self.scrollback_input.update(cx, |s, cx| s.set_value(&self.config.terminal.scrollback_lines.to_string(), window, cx));
@@ -169,6 +199,8 @@ impl SettingsPanel {
         let base_url_text = self.base_url_input.read(cx).value().to_string();
         let max_tokens_text = self.max_tokens_input.read(cx).value().to_string();
         let max_turns_text = self.max_turns_input.read(cx).value().to_string();
+        let temperature_text = self.temperature_input.read(cx).value().to_string();
+        let suggestion_model_text = self.suggestion_model_input.read(cx).value().to_string();
         let font_size_text = self.font_size_input.read(cx).value().to_string();
         let scrollback_text = self.scrollback_input.read(cx).value().to_string();
 
@@ -179,8 +211,15 @@ impl SettingsPanel {
             base_url: if base_url_text.is_empty() { None } else { Some(base_url_text) },
             max_tokens: max_tokens_text.parse().unwrap_or(4096),
             max_turns: max_turns_text.parse().unwrap_or(10),
+            temperature: if temperature_text.is_empty() { None } else { temperature_text.parse().ok() },
             auto_context: self.config.agent.auto_context,
             auto_approve_tools: self.auto_approve,
+            suggestion_model: SuggestionModelConfig {
+                provider: None,
+                model: if suggestion_model_text.is_empty() { None } else { Some(suggestion_model_text) },
+                api_key_env: None,
+                base_url: None,
+            },
         };
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
         self.config.terminal.scrollback_lines = scrollback_text.parse().unwrap_or(10_000);
@@ -367,6 +406,8 @@ impl SettingsPanel {
         let base_url_input = self.base_url_input.clone();
         let max_tokens_input = self.max_tokens_input.clone();
         let max_turns_input = self.max_turns_input.clone();
+        let temperature_input = self.temperature_input.clone();
+        let suggestion_model_input = self.suggestion_model_input.clone();
 
         // Provider list — compact rows
         let mut provider_list = card(theme);
@@ -572,7 +613,20 @@ impl SettingsPanel {
                         card(theme)
                             .child(row_field("Max Tokens", &max_tokens_input))
                             .child(row_separator(theme))
-                            .child(row_field("Max Turns", &max_turns_input)),
+                            .child(row_field("Max Turns", &max_turns_input))
+                            .child(row_separator(theme))
+                            .child(row_field("Temperature", &temperature_input)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("SUGGESTIONS"))
+                    .child(
+                        card(theme)
+                            .child(row_field("Model", &suggestion_model_input)),
                     ),
             );
 
@@ -934,21 +988,32 @@ fn provider_label(provider: &ProviderKind) -> &'static str {
     }
 }
 
+/// Model lists sourced from models.dev (3pp/models.dev/providers/*/models/).
 fn provider_models(provider: &ProviderKind) -> &'static [&'static str] {
     match provider {
         ProviderKind::Anthropic => &[
-            "claude-sonnet-4-20250514",
-            "claude-haiku-4-20250414",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+            "claude-opus-4-1",
+            "claude-sonnet-4-0",
             "claude-3-5-sonnet-20241022",
             "claude-3-5-haiku-20241022",
         ],
         ProviderKind::OpenAI => &[
+            "o4-mini",
+            "o3",
+            "o3-pro",
+            "o3-mini",
             "gpt-4o",
             "gpt-4o-mini",
-            "gpt-4-turbo",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
             "o1",
-            "o1-mini",
-            "o3-mini",
+            "o1-pro",
         ],
         ProviderKind::DeepSeek => &[
             "deepseek-chat",
@@ -957,34 +1022,58 @@ fn provider_models(provider: &ProviderKind) -> &'static [&'static str] {
         ProviderKind::Groq => &[
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
-            "mixtral-8x7b-32768",
+            "deepseek-r1-distill-llama-70b",
+            "qwen-qwq-32b",
+            "mistral-saba-24b",
+            "gemma2-9b-it",
+            "llama3-70b-8192",
         ],
         ProviderKind::Gemini => &[
             "gemini-2.5-pro",
             "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
             "gemini-2.0-flash",
+            "gemini-1.5-pro",
+            "gemini-1.5-flash",
         ],
         ProviderKind::Mistral => &[
             "mistral-large-latest",
             "mistral-medium-latest",
             "mistral-small-latest",
             "codestral-latest",
+            "devstral-small-2505",
+            "mistral-nemo",
         ],
         ProviderKind::Cohere => &[
-            "command-r-plus",
-            "command-r",
+            "command-a-03-2025",
+            "command-a-reasoning-08-2025",
+            "command-r-plus-08-2024",
+            "command-r-08-2024",
         ],
         ProviderKind::Perplexity => &[
             "sonar-pro",
-            "sonar",
             "sonar-reasoning-pro",
+            "sonar-deep-research",
+            "sonar",
         ],
         ProviderKind::XAI => &[
+            "grok-4",
+            "grok-4-fast",
             "grok-3",
+            "grok-3-fast",
             "grok-3-mini",
             "grok-2",
         ],
-        // OpenAICompatible, Ollama, OpenRouter, Together — user provides custom model
+        ProviderKind::Ollama => &[
+            "llama3.2",
+            "llama3.1",
+            "qwen2.5-coder",
+            "deepseek-v3",
+            "mistral",
+            "gemma3",
+            "codellama",
+        ],
+        // OpenAICompatible, OpenRouter, Together — user provides custom model
         _ => &[],
     }
 }

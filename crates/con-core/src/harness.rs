@@ -132,7 +132,7 @@ impl AgentHarness {
     /// Create a SuggestionEngine that shares the harness tokio runtime.
     pub fn suggestion_engine(&self, debounce_ms: u64) -> crate::suggestions::SuggestionEngine {
         crate::suggestions::SuggestionEngine::new(
-            self.config.clone(),
+            self.config.suggestion_agent_config(),
             self.runtime.clone(),
             debounce_ms,
         )
