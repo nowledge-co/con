@@ -197,8 +197,12 @@ impl AgentHarness {
         )
     }
 
-    /// Classify user input: NLP, command, or skill
-    pub fn classify_input(&self, input: &str) -> InputKind {
+    /// Classify user input: NLP, command, or skill.
+    ///
+    /// `is_remote` should be true when the focused pane is an SSH session,
+    /// enabling more permissive command detection for remote executables
+    /// that aren't on the local $PATH.
+    pub fn classify_input(&self, input: &str, is_remote: bool) -> InputKind {
         let trimmed = input.trim();
 
         if trimmed.starts_with('/') {
@@ -210,7 +214,7 @@ impl AgentHarness {
             }
         }
 
-        if looks_like_command(trimmed) {
+        if looks_like_command(trimmed, is_remote) {
             return InputKind::ShellCommand(trimmed.to_string());
         }
 
@@ -223,6 +227,8 @@ impl AgentHarness {
         &self,
         grid: &Grid,
         cwd: Option<&str>,
+        focused_pane_index: usize,
+        focused_hostname: Option<String>,
         other_panes: Vec<con_agent::context::PaneSummary>,
     ) -> TerminalContext {
         let recent_output = grid.content_lines(50);
@@ -357,6 +363,8 @@ impl AgentHarness {
         });
 
         TerminalContext {
+            focused_pane_index,
+            focused_hostname,
             cwd,
             recent_output,
             last_command: grid.last_command.clone(),
@@ -561,21 +569,45 @@ fn path_executables() -> &'static HashSet<String> {
     })
 }
 
+/// Returns true if a token looks like a valid command name:
+/// lowercase alphanumeric, hyphens, underscores, dots — no spaces.
+fn is_command_shaped(word: &str) -> bool {
+    !word.is_empty()
+        && word.len() <= 40
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_' || b == b'.')
+}
+
 /// Detect whether input is a shell command or natural language.
 ///
-/// Uses three signals (no static word list):
+/// Uses structural signals — no static word list:
 /// 1. First token is an executable on $PATH or a shell builtin
 /// 2. First token is a path (`./`, `/`, `~/`)
 /// 3. Input contains shell operators (`|`, `>`, `>>`, `&&`, `;`)
-fn looks_like_command(input: &str) -> bool {
-    let first_word = input.split_whitespace().next().unwrap_or("");
+/// 4. Input contains flag-like arguments (`-x`, `--foo`) with a command-shaped first word
+/// 5. First token is an env var assignment (`VAR=value`)
+/// 6. Input contains subshell/expansion syntax (`$(...)`, backticks)
+///
+/// When `is_remote` is true (focused pane is an SSH session), the classification
+/// is more permissive: a command-shaped first word alone is enough, since remote
+/// executables aren't on the local $PATH. Natural-language signals (question words,
+/// articles, pronouns) override this to prevent false positives.
+fn looks_like_command(input: &str, is_remote: bool) -> bool {
+    let mut words = input.split_whitespace();
+    let first_word = match words.next() {
+        Some(w) => w,
+        None => return false,
+    };
+
+    // --- Definitive structural signals (always apply) ---
 
     // Shell builtins
     if SHELL_BUILTINS.contains(&first_word) {
         return true;
     }
 
-    // Executable on $PATH
+    // Executable on local $PATH
     if path_executables().contains(first_word) {
         return true;
     }
@@ -588,6 +620,14 @@ fn looks_like_command(input: &str) -> bool {
         return true;
     }
 
+    // Env var assignment: VAR=value or VAR=value command
+    if first_word.contains('=') {
+        let (name, _) = first_word.split_once('=').unwrap();
+        if !name.is_empty() && name.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_') {
+            return true;
+        }
+    }
+
     // Shell operators indicate a pipeline/compound command
     if input.contains(" | ")
         || input.contains(" > ")
@@ -595,6 +635,62 @@ fn looks_like_command(input: &str) -> bool {
         || input.contains(" && ")
         || input.contains(" ; ")
     {
+        return true;
+    }
+
+    // Subshell / expansion syntax
+    if input.contains("$(") || input.contains('`') {
+        return true;
+    }
+
+    // Flag arguments with a command-shaped first word:
+    // "free -g", "docker --version" — NL never uses -flags
+    if is_command_shaped(first_word) {
+        let has_flags = words.clone().any(|w| w.starts_with('-'));
+        if has_flags {
+            return true;
+        }
+    }
+
+    // --- Remote-aware classification ---
+    // On SSH sessions, remote executables aren't on local $PATH.
+    // A command-shaped first word is likely a remote command — unless
+    // the input reads like natural language.
+    if is_remote && is_command_shaped(first_word) {
+        if !has_natural_language_signals(input) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Detects natural-language signals that distinguish NL from short commands.
+/// Used as a negative signal: if these are present, the input is likely NL
+/// even if the first word looks command-shaped.
+fn has_natural_language_signals(input: &str) -> bool {
+    let lower = input.to_ascii_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+
+    // Question patterns (first word or second word after a command-like word)
+    const QUESTION_WORDS: &[&str] = &[
+        "what", "how", "why", "when", "where", "which", "who", "is", "are", "can",
+        "could", "would", "should", "does", "do", "will", "explain", "describe",
+        "tell", "show", "help", "please",
+    ];
+    if let Some(first) = words.first() {
+        if QUESTION_WORDS.contains(first) {
+            return true;
+        }
+    }
+
+    // Articles and pronouns — strong NL signal when present anywhere
+    const NL_MARKERS: &[&str] = &[
+        "the", "a", "an", "this", "that", "these", "those",
+        "i", "me", "my", "you", "your", "we", "our",
+        "about", "with", "from", "into",
+    ];
+    if words.iter().any(|w| NL_MARKERS.contains(w)) {
         return true;
     }
 

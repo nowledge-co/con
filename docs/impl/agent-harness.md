@@ -216,21 +216,31 @@ max_turns = 10              # max tool-use turns per request
 
 ## Input Classification
 
-`classify_input()` determines whether user input is a skill invocation, a shell command, or a natural language query (for the AI agent). The order is:
+`classify_input(input, is_remote)` determines whether user input is a skill invocation, a shell command, or a natural language query. The `is_remote` flag is derived from the focused pane's `detected_remote_host()`.
 
 1. **Skill** — starts with `/` and matches a registered skill name
-2. **Shell command** — first token is a known executable or has shell syntax
+2. **Shell command** — structural analysis (see below)
 3. **Natural language** — everything else → sent to the agent
 
 ### Command detection (`looks_like_command`)
 
-Uses three signals — no static word list:
+Uses structural signals — no static word list:
 
 | Signal | Example | How |
 |--------|---------|-----|
-| Shell builtin | `cd`, `export`, `alias` | Checked against `SHELL_BUILTINS` constant (POSIX + bash/zsh) |
-| PATH executable | `hostname`, `git`, `docker` | `$PATH` directories scanned once at startup, cached in `OnceLock<HashSet>` |
-| Path invocation | `./script.sh`, `/usr/bin/env` | Prefix match: `./`, `/`, `~/` |
-| Shell operators | `cat foo \| grep bar` | Contains ` \| `, ` > `, ` >> `, ` && `, ` ; ` |
+| Shell builtin | `cd`, `export`, `alias` | `SHELL_BUILTINS` constant (POSIX + bash/zsh) |
+| PATH executable | `hostname`, `git`, `docker` | `$PATH` scanned once, cached in `OnceLock<HashSet>` |
+| Path invocation | `./script.sh`, `/usr/bin/env` | Prefix: `./`, `/`, `~/` |
+| Env var assignment | `LANG=C sort file` | `VAR=value` pattern (uppercase name + `=`) |
+| Shell operators | `cat foo \| grep bar` | ` \| `, ` > `, ` >> `, ` && `, ` ; ` |
+| Subshell syntax | `echo $(date)` | `$(` or backticks |
+| Flag arguments | `free -g`, `docker --version` | Any token starts with `-` + command-shaped first word |
+| Remote commands | `systemctl status` (via SSH) | When `is_remote=true`, command-shaped first word is accepted unless NL signals are present |
 
-The PATH scan happens on first call and caches ~2000+ executable names. This eliminates the maintenance burden of a static command list and correctly classifies any installed program.
+### Remote-aware classification
+
+When the focused pane is an SSH session, remote executables aren't on the local `$PATH`. The classifier accepts any command-shaped first word (lowercase, alphanumeric, hyphens) as a shell command — unless natural-language signals are detected (question words, articles, pronouns). This covers remote commands like `free`, `systemctl`, `apt` without maintaining a word list.
+
+### Multi-pane agent context
+
+When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, and busy status. This lets the agent target the right pane(s) immediately — using `terminal_exec` with `pane_index` or `batch_exec` for parallel execution — without needing to call `list_panes` first.

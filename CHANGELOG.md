@@ -14,6 +14,11 @@ All notable changes to con are documented here.
 
 **Smart Input**
 - Command detection now scans your `$PATH` at startup instead of using a static word list. Any installed program — `hostname`, `terraform`, `kubectl`, or a custom script in `/usr/local/bin` — is correctly recognized as a shell command without manual configuration.
+- Commands with flags (`free -g`, `docker --version`) are now recognized by their syntax — even when the executable isn't on your local PATH.
+- SSH-aware classification — when you're in a remote session, commands like `systemctl`, `apt`, or `free` are correctly routed to the terminal instead of the AI agent.
+
+**AI Agent**
+- The agent now sees your full pane layout (hostname, directory, busy status) directly in its context. When you have multiple panes open — especially SSH sessions to different machines — the agent targets the right pane without extra steps.
 
 ### Fixed
 

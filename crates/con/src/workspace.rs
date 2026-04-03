@@ -262,10 +262,23 @@ impl ConWorkspace {
         let focused = self.active_terminal();
         let focused_grid = focused.read(cx).grid();
 
+        // Determine focused pane's 1-based index and hostname
+        let all_terminals = pane_tree.all_terminals();
+        let focused_pid = pane_tree.focused_pane_id();
+        let focused_pane_index = all_terminals
+            .iter()
+            .enumerate()
+            .find(|(_, t)| pane_tree.pane_id_for_terminal(t) == Some(focused_pid))
+            .map(|(i, _)| i + 1)
+            .unwrap_or(1);
+        let focused_hostname = {
+            let g = focused_grid.lock();
+            g.detected_remote_host()
+        };
+
         let mut other_pane_summaries = Vec::new();
         if pane_tree.pane_count() > 1 {
-            let focused_pid = pane_tree.focused_pane_id();
-            for (idx, terminal) in pane_tree.all_terminals().iter().enumerate() {
+            for (idx, terminal) in all_terminals.iter().enumerate() {
                 if let Some(pid) = pane_tree.pane_id_for_terminal(terminal) {
                     if pid == focused_pid {
                         continue;
@@ -274,9 +287,11 @@ impl ConWorkspace {
                     let g = grid.lock();
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
+                        hostname: g.detected_remote_host(),
                         cwd: g.current_dir.clone(),
                         last_command: g.last_command.clone(),
                         last_exit_code: g.last_exit_code,
+                        is_busy: g.is_busy(),
                         recent_output: g.content_lines(10),
                     });
                 }
@@ -284,7 +299,7 @@ impl ConWorkspace {
         }
 
         self.harness
-            .build_context(&focused_grid.lock(), None, other_pane_summaries)
+            .build_context(&focused_grid.lock(), None, focused_pane_index, focused_hostname, other_pane_summaries)
     }
 
     fn save_session(&self, cx: &App) {
@@ -535,7 +550,12 @@ impl ConWorkspace {
                 self.send_to_agent(&content, cx);
             }
             InputMode::Smart => {
-                match self.harness.classify_input(&content) {
+                let is_remote = {
+                    let grid = self.active_terminal().read(cx).grid();
+                    let g = grid.lock();
+                    g.detected_remote_host().is_some()
+                };
+                match self.harness.classify_input(&content, is_remote) {
                     InputKind::ShellCommand(cmd) => {
                         self.execute_shell(&cmd, window, cx);
                     }

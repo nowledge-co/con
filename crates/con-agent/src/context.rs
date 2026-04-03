@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 /// it always knows what the user is doing in their terminal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalContext {
+    /// 1-based index of the focused pane
+    pub focused_pane_index: usize,
+    /// Remote hostname of the focused pane (None if local)
+    pub focused_hostname: Option<String>,
     /// Current working directory (from OSC 7 or manual detection)
     pub cwd: Option<String>,
     /// Last N lines of terminal output
@@ -46,9 +50,12 @@ pub struct CommandBlockInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaneSummary {
     pub pane_index: usize,
+    /// Remote hostname if this is an SSH session, None if local.
+    pub hostname: Option<String>,
     pub cwd: Option<String>,
     pub last_command: Option<String>,
     pub last_exit_code: Option<i32>,
+    pub is_busy: bool,
     /// Last ~10 lines of visible output
     pub recent_output: Vec<String>,
 }
@@ -56,6 +63,8 @@ pub struct PaneSummary {
 impl TerminalContext {
     pub fn empty() -> Self {
         Self {
+            focused_pane_index: 1,
+            focused_hostname: None,
             cwd: None,
             recent_output: Vec::new(),
             last_command: None,
@@ -93,8 +102,10 @@ impl TerminalContext {
              - file_read, file_write, edit_file: Read/write/edit files\n\
              - list_files, search: Browse and search the filesystem\n\n\
              IMPORTANT: You have access to ALL terminal panes, not just the focused one. \
-             When users ask about multiple panes, SSH sessions, or multiple machines, \
-             call list_panes first, then use batch_exec to run commands on all panes simultaneously.\n\n\
+             The <panes> section in your context shows every open pane with its index, hostname, and cwd. \
+             Use pane_index to target specific panes with terminal_exec, or use batch_exec to run on multiple panes in parallel. \
+             When the user's request is relevant to multiple panes (e.g., checking system status, running diagnostics), \
+             use batch_exec to cover all relevant panes — don't limit yourself to the focused one.\n\n\
              SAFETY: Before executing on panes, check list_panes output:\n\
              - is_alive: false means the PTY exited — commands will fail\n\
              - is_busy: true means a command is running — wait or use a different pane\n\
@@ -104,11 +115,33 @@ impl TerminalContext {
         prompt.push_str("<terminal_context>\n");
 
         let total_panes = 1 + self.other_panes.len();
-        if total_panes > 1 {
-            prompt.push_str(&format!("<panes_open>{}</panes_open>\n", total_panes));
-        }
 
-        if let Some(cwd) = &self.cwd {
+        // When multiple panes are open, embed a full pane layout so the agent
+        // can target the right pane(s) without needing to call list_panes first.
+        if total_panes > 1 {
+            prompt.push_str("<panes>\n");
+            // Focused pane
+            let host_label = self
+                .focused_hostname
+                .as_deref()
+                .unwrap_or("local");
+            let cwd_label = self.cwd.as_deref().unwrap_or("?");
+            prompt.push_str(&format!(
+                "  <pane index=\"{}\" focused=\"true\" host=\"{}\" cwd=\"{}\"/>\n",
+                self.focused_pane_index, host_label, cwd_label
+            ));
+            // Other panes
+            for pane in &self.other_panes {
+                let host = pane.hostname.as_deref().unwrap_or("local");
+                let cwd = pane.cwd.as_deref().unwrap_or("?");
+                let busy = if pane.is_busy { " busy=\"true\"" } else { "" };
+                prompt.push_str(&format!(
+                    "  <pane index=\"{}\" host=\"{}\" cwd=\"{}\"{}/>\n",
+                    pane.pane_index, host, cwd, busy
+                ));
+            }
+            prompt.push_str("</panes>\n");
+        } else if let Some(cwd) = &self.cwd {
             prompt.push_str(&format!("<cwd>{}</cwd>\n", cwd));
         }
 
