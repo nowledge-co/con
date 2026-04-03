@@ -306,6 +306,7 @@ impl PaneTree {
         }
     }
 
+    /// Returns `true` if the target was found and split.
     fn split_node(
         node: &mut PaneNode,
         target_id: PaneId,
@@ -313,7 +314,7 @@ impl PaneTree {
         new_id: PaneId,
         new_terminal: TerminalPane,
         new_split_id: SplitId,
-    ) {
+    ) -> bool {
         match node {
             PaneNode::Leaf { id, .. } if *id == target_id => {
                 let old_node = std::mem::replace(
@@ -334,14 +335,9 @@ impl PaneTree {
                     second: Box::new(new_leaf),
                     ratio: 0.5,
                 };
+                true
             }
-            PaneNode::Split {
-                first,
-                second,
-                split_id,
-                ..
-            } => {
-                let _ = split_id;
+            PaneNode::Split { first, second, .. } => {
                 Self::split_node(
                     first,
                     target_id,
@@ -349,10 +345,16 @@ impl PaneTree {
                     new_id,
                     new_terminal.clone(),
                     new_split_id,
-                );
-                Self::split_node(second, target_id, direction, new_id, new_terminal, new_split_id);
+                ) || Self::split_node(
+                    second,
+                    target_id,
+                    direction,
+                    new_id,
+                    new_terminal,
+                    new_split_id,
+                )
             }
-            _ => {}
+            _ => false,
         }
     }
 

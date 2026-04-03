@@ -1246,6 +1246,9 @@ impl ConWorkspace {
             terminal.focus(window, cx);
         } else if self.tabs.len() > 1 {
             self.close_tab(&CloseTab, window, cx);
+        } else {
+            // Last pane in last tab — quit the app
+            cx.quit();
         }
         cx.notify();
     }
@@ -1401,6 +1404,9 @@ impl ConWorkspace {
             pane_tree.focused_terminal().focus(window, cx);
         } else if self.tabs.len() > 1 {
             self.close_tab(&CloseTab, window, cx);
+        } else {
+            // Last pane in last tab — quit the app
+            cx.quit();
         }
         cx.notify();
     }

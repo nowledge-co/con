@@ -457,14 +457,20 @@ impl Render for GhosttyView {
                     if let Some(ref terminal) = this.terminal {
                         let delta = match event.delta {
                             ScrollDelta::Lines(d) => (f64::from(d.x), f64::from(d.y)),
-                            ScrollDelta::Pixels(d) => (f64::from(d.x), f64::from(d.y)),
+                            ScrollDelta::Pixels(d) => {
+                                // GPUI gives physical pixel deltas on Retina;
+                                // normalize to logical coordinates for ghostty.
+                                let scale = this.scale_factor as f64;
+                                (f64::from(d.x) / scale, f64::from(d.y) / scale)
+                            }
                         };
                         terminal.send_mouse_scroll(delta.0, delta.1, 0);
                     }
                 },
             ))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, _cx| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 this.handle_key_down(event);
+                cx.emit(GhosttyFocusChanged);
             }))
             .child(
                 canvas(
