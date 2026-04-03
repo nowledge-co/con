@@ -1,7 +1,7 @@
 use crossbeam_channel::Sender;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::text::TextView;
+use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::ActiveTheme;
 
 /// Max lines to show for tool result previews in collapsed steps
@@ -495,6 +495,21 @@ impl AgentPanel {
     }
 }
 
+/// Markdown style for chat messages — compact headings, tight paragraphs.
+fn chat_markdown_style() -> TextViewStyle {
+    TextViewStyle::default()
+        .paragraph_gap(rems(0.5))
+        .heading_font_size(|level, _base| {
+            // Chat-appropriate heading sizes (much smaller than default)
+            match level {
+                1 => px(15.0),
+                2 => px(14.0),
+                3 => px(13.0),
+                _ => px(13.0),
+            }
+        })
+}
+
 fn tool_icon(tool_name: &str) -> &'static str {
     match tool_name {
         "terminal_exec" | "batch_exec" => "phosphor/play.svg",
@@ -778,26 +793,29 @@ impl Render for AgentPanel {
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .vertical_scrollbar(&self.scroll_handle)
-            .px(px(14.0))
-            .pt(px(14.0))
-            .pb(px(14.0))
-            .gap(px(16.0));
+            .px(px(16.0))
+            .pt(px(16.0))
+            .pb(px(20.0))
+            .gap(px(20.0));
 
         for (msg_idx, msg) in self.state.messages.iter().enumerate() {
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
 
-            let mut msg_el = div().flex().flex_col().gap(px(4.0));
+            let mut msg_el = div().flex().flex_col().gap(px(6.0));
 
             if is_system {
+                // System greeting — quiet, centered feel
                 msg_el = msg_el.child(
                     div()
+                        .px(px(4.0))
                         .text_size(px(12.0))
-                        .text_color(theme.muted_foreground.opacity(0.7))
+                        .text_color(theme.muted_foreground.opacity(0.6))
                         .line_height(px(18.0))
                         .child(msg.content.clone()),
                 );
             } else if is_user {
+                // User message — right-aligned bubble with warm primary tint
                 msg_el = msg_el.child(
                     div()
                         .flex()
@@ -807,9 +825,9 @@ impl Render for AgentPanel {
                                 .max_w(rems(18.0))
                                 .px(px(12.0))
                                 .py(px(8.0))
-                                .rounded(px(14.0))
+                                .rounded(px(16.0))
                                 .rounded_tr(px(4.0))
-                                .bg(theme.primary.opacity(0.10))
+                                .bg(theme.primary.opacity(0.08))
                                 .child(
                                     div()
                                         .text_size(px(13.0))
@@ -826,18 +844,18 @@ impl Render for AgentPanel {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(5.0))
+                            .gap(px(4.0))
                             .child(
                                 svg()
                                     .path("phosphor/oven.svg")
-                                    .size(px(12.0))
-                                    .text_color(theme.primary.opacity(0.7)),
+                                    .size(px(13.0))
+                                    .text_color(theme.primary),
                             )
                             .child(
                                 div()
                                     .text_size(px(11.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.primary.opacity(0.7))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.primary)
                                     .child("Con"),
                             ),
                     );
@@ -904,6 +922,7 @@ impl Render for AgentPanel {
                                                     ElementId::Name(format!("thinking-md-{msg_idx}").into()),
                                                     display_text,
                                                 )
+                                                .style(chat_markdown_style())
                                                 .text_xs()
                                             ),
                                     ),
@@ -918,13 +937,16 @@ impl Render for AgentPanel {
                     msg_el = msg_el.child(
                         div()
                             .pl(px(18.0))
+                            .pr(px(4.0))
                             .text_size(px(13.0))
                             .line_height(px(20.0))
+                            .text_color(theme.foreground)
                             .child(
                                 TextView::markdown(
                                     ElementId::Name(format!("msg-md-{msg_idx}").into()),
                                     content,
                                 )
+                                .style(chat_markdown_style())
                                 .text_size(px(13.0))
                             ),
                     );
@@ -1042,7 +1064,7 @@ impl Render for AgentPanel {
                                 step_header
                                     .id(SharedString::from(format!("step-detail-{msg_idx}-{step_idx}")))
                                     .cursor_pointer()
-                                    .hover(|s| s.bg(theme.muted.opacity(0.06)))
+                                    .hover(|s| s.bg(theme.secondary_hover))
                                     .rounded(px(4.0))
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -1072,7 +1094,7 @@ impl Render for AgentPanel {
                                         .mt(px(2.0))
                                         .mb(px(4.0))
                                         .rounded(px(6.0))
-                                        .bg(theme.muted.opacity(0.06))
+                                        .bg(theme.secondary)
                                         .overflow_x_hidden()
                                         .child(
                                             div()
@@ -1085,6 +1107,7 @@ impl Render for AgentPanel {
                                                         ),
                                                         md,
                                                     )
+                                                    .style(chat_markdown_style())
                                                     .text_xs()
                                                 ),
                                         ),
@@ -1117,8 +1140,8 @@ impl Render for AgentPanel {
                 .mx(px(2.0))
                 .px(px(10.0))
                 .py(px(8.0))
-                .rounded(px(8.0))
-                .bg(theme.muted.opacity(0.04))
+                .rounded(px(6.0))
+                .bg(theme.secondary)
                 // Header
                 .child(
                     div()
@@ -1135,7 +1158,7 @@ impl Render for AgentPanel {
                             svg()
                                 .path(icon)
                                 .size(px(12.0))
-                                .text_color(theme.muted_foreground.opacity(0.7)),
+                                .text_color(theme.muted_foreground),
                         )
                         .child(
                             div()
@@ -1149,7 +1172,7 @@ impl Render for AgentPanel {
                 .child(
                     div()
                         .text_size(px(11.0))
-                        .text_color(theme.muted_foreground.opacity(0.8))
+                        .text_color(theme.muted_foreground)
                         .overflow_x_hidden()
                         .font_family("Ioskeley Mono")
                         .child(truncate_str(&args_display, 60)),
@@ -1165,7 +1188,7 @@ impl Render for AgentPanel {
                     div()
                         .mt(px(2.0))
                         .rounded(px(6.0))
-                        .bg(theme.muted.opacity(0.06))
+                        .bg(theme.secondary)
                         .overflow_x_hidden()
                         .child(
                             div()
@@ -1178,6 +1201,7 @@ impl Render for AgentPanel {
                                         ),
                                         md,
                                     )
+                                    .style(chat_markdown_style())
                                     .text_xs()
                                 ),
                         ),
@@ -1200,8 +1224,8 @@ impl Render for AgentPanel {
                 .mx(px(2.0))
                 .px(px(10.0))
                 .py(px(10.0))
-                .rounded(px(8.0))
-                .bg(theme.warning.opacity(0.05))
+                .rounded(px(6.0))
+                .bg(theme.warning.opacity(0.06))
                 // Header
                 .child(
                     div()
@@ -1368,12 +1392,12 @@ impl Render for AgentPanel {
                 div()
                     .text_size(px(13.0))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.foreground)
+                    .text_color(theme.foreground.opacity(0.8))
                     .child("Agent"),
             )
             .child(
                 div()
-                    .size(px(6.0))
+                    .size(px(5.0))
                     .rounded_full()
                     .bg(status_dot_color),
             );
@@ -1451,6 +1475,7 @@ impl Render for AgentPanel {
             .flex_col()
             .size_full()
             .bg(theme.title_bar)
+            .font_family("Ioskeley Mono")
             .child(header);
 
         if self.showing_history {

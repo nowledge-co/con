@@ -7,31 +7,31 @@
       "mode": "light",
       "is_default": false,
       "font.size": 14,
-      "font.family": ".SystemUIFont",
+      "font.family": "Ioskeley Mono",
       "mono_font.family": "Ioskeley Mono",
       "mono_font.size": 14,
-      "radius": 8,
-      "radius_lg": 12,
-      "shadow": true,
+      "radius": 6,
+      "radius_lg": 10,
+      "shadow": false,
       "colors": {
         "background": "#FFFCF0",
         "foreground": "#100F0F",
         "border": "#E6E4D9",
-        "input.border": "#E6E4D9",
+        "input.border": "#DAD8CE",
         "caret": "#24837B",
         "ring": "#24837B",
 
         "primary.background": "#24837B",
         "primary.foreground": "#FFFCF0",
-        "primary.hover.background": "#3AA99F",
-        "primary.active.background": "#1A6560",
+        "primary.hover.background": "#1A6560",
+        "primary.active.background": "#164F4A",
 
         "secondary.background": "#F2F0E5",
         "secondary.foreground": "#100F0F",
         "secondary.hover.background": "#E6E4D9",
         "secondary.active.background": "#DAD8CE",
 
-        "muted.background": "#F2F0E5",
+        "muted.background": "#E6E4D9",
         "muted.foreground": "#6F6E69",
 
         "accent.background": "#E6E4D9",
@@ -51,19 +51,19 @@
         "info.background": "#205EA6",
         "info.foreground": "#FFFCF0",
 
-        "title_bar.background": "#F2F0E5",
+        "title_bar.background": "#F9F6EA",
         "title_bar.border": "#E6E4D9",
 
-        "sidebar.background": "#F2F0E5",
-        "sidebar.foreground": "#100F0F",
+        "sidebar.background": "#F9F6EA",
+        "sidebar.foreground": "#343331",
         "sidebar.border": "#E6E4D9",
 
-        "list.active.background": "#24837B22",
+        "list.active.background": "#24837B18",
 
-        "selection.background": "#24837B30",
+        "selection.background": "#24837B28",
 
-        "scrollbar.thumb.background": "#E6E4D980",
-        "scrollbar.thumb.hover.background": "#DAD8CE",
+        "scrollbar.thumb.background": "#DAD8CE80",
+        "scrollbar.thumb.hover.background": "#CECCC2",
 
         "base.red": "#AF3029",
         "base.orange": "#BC5215",
@@ -123,7 +123,7 @@
           "type": { "color": "#AD8A01" },
           "variable": { "color": "#205EA6" },
           "variable.special": { "color": "#205EA6" },
-          "variant": { "color": "#24837B" }
+          "variant": { "color": "#3AA99F" }
         }
       }
     }

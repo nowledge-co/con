@@ -179,23 +179,29 @@ impl Render for InputBar {
         let cwd = self.cwd.clone();
 
         // All interactive controls share this height
-        let control_h = 28.0;
+        let control_h = 26.0;
 
-        // Mode pill — compact, well-defined
+        // Mode pill — compact, quiet
         let mode_pill = div()
             .id("mode-pill")
             .flex()
             .items_center()
             .justify_center()
             .h(px(control_h))
-            .px(px(10.0))
-            .rounded(px(6.0))
+            .px(px(8.0))
+            .rounded(px(5.0))
             .cursor_pointer()
-            .bg(mode_color.opacity(0.08))
+            .bg(mode_color.opacity(0.10))
             .text_size(px(11.0))
-            .font_weight(FontWeight::SEMIBOLD)
+            .font_weight(FontWeight::MEDIUM)
             .text_color(mode_color)
-            .hover(|s| s.bg(mode_color.opacity(0.16)))
+            .hover(|s| s.bg(mode_color.opacity(0.18)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.cycle_mode(window, cx);
+                }),
+            )
             .child(mode_label);
 
         // Pane selector — status-aware pills with broadcast toggle
@@ -351,6 +357,8 @@ impl Render for InputBar {
             .flex()
             .flex_col()
             .bg(theme.title_bar)
+            .font_family("Ioskeley Mono")
+            .text_size(px(13.0))
             .on_key_down(cx.listener(|_this, event: &KeyDownEvent, _window, cx| {
                 if event.keystroke.key == "escape" {
                     cx.emit(EscapeInput);
@@ -361,9 +369,9 @@ impl Render for InputBar {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(44.0))
-                    .px(px(12.0))
-                    .gap(px(8.0))
+                    .h(px(40.0))
+                    .px(px(10.0))
+                    .gap(px(6.0))
                     .child(mode_pill)
                     .child(
                         div().flex_1().child(
@@ -375,25 +383,25 @@ impl Render for InputBar {
                     .children(pane_area)
                     .child(send_button),
             )
-            // Status row — subtle, tighter
+            // Status row
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .h(px(16.0))
+                    .h(px(20.0))
                     .px(px(14.0))
-                    .pb(px(4.0))
+                    .pb(px(6.0))
                     .child(
                         div()
-                            .text_size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.35))
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground.opacity(0.5))
                             .child(cwd),
                     )
                     .child(div().flex_1())
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.25))
+                            .text_color(theme.muted_foreground.opacity(0.35))
                             .child("↵ send"),
                     ),
             )

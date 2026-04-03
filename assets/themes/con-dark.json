@@ -7,7 +7,7 @@
       "mode": "dark",
       "is_default": false,
       "font.size": 14,
-      "font.family": ".SystemUIFont",
+      "font.family": "Ioskeley Mono",
       "mono_font.family": "Ioskeley Mono",
       "mono_font.size": 14,
       "radius": 8,
