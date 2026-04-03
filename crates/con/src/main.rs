@@ -1,6 +1,7 @@
 mod agent_panel;
 mod assets;
 mod command_palette;
+mod ghostty_view;
 mod input_bar;
 mod pane_tree;
 mod settings_panel;
