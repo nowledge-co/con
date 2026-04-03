@@ -1,48 +1,200 @@
+//! Safe wrapper around ghostty's embedded C API.
+//!
+//! Uses the macOS platform: creates an NSView for ghostty to render into
+//! via its GPU-accelerated Metal renderer. State (title, pwd) is received
+//! through action callbacks, not polling.
+
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use crate::ffi;
 
-/// A ghostty terminal surface for headless rendering.
-///
-/// Wraps the ghostty C API surface and provides safe Rust access
-/// to terminal state, rendering, and input.
-pub struct GhosttyTerminal {
-    surface: ffi::ghostty_surface_t,
-    _userdata: Box<Userdata>,
+// ── Shared state updated by action callbacks ────────────────
+
+/// Terminal state received via ghostty action callbacks.
+#[derive(Default)]
+pub struct TerminalState {
+    pub title: Option<String>,
+    pub pwd: Option<String>,
+    pub needs_render: bool,
+    pub child_exited: bool,
 }
 
-struct Userdata {
-    wakeup_callback: Option<Box<dyn Fn() + Send + Sync>>,
+type StateRef = Arc<Mutex<TerminalState>>;
+
+// ── GhosttyApp — singleton managing all surfaces ────────────
+
+/// Global ghostty application context. One per process.
+pub struct GhosttyApp {
+    app: ffi::ghostty_app_t,
+    state: StateRef,
+    // Box prevents the runtime_config from being moved while ghostty holds a pointer
+    _runtime_config: Box<ffi::ghostty_runtime_config_s>,
+}
+
+impl GhosttyApp {
+    /// Create a new ghostty app with default config.
+    pub fn new() -> Result<Self, String> {
+        // Initialize ghostty
+        let ret = unsafe { ffi::ghostty_init(0, std::ptr::null_mut()) };
+        if ret != 0 {
+            return Err(format!("ghostty_init failed with code {}", ret));
+        }
+
+        // Create and finalize config
+        let config = unsafe { ffi::ghostty_config_new() };
+        if config.is_null() {
+            return Err("ghostty_config_new returned null".into());
+        }
+        unsafe {
+            ffi::ghostty_config_load_default_files(config);
+            ffi::ghostty_config_finalize(config);
+        }
+
+        let state: StateRef = Arc::new(Mutex::new(TerminalState::default()));
+
+        // Allocate userdata on heap — the pointer is passed to C callbacks
+        let userdata = Box::into_raw(Box::new(state.clone())) as *mut c_void;
+
+        let runtime_config = Box::new(ffi::ghostty_runtime_config_s {
+            userdata,
+            supports_selection_clipboard: false,
+            wakeup_cb: Some(wakeup_callback),
+            action_cb: Some(action_callback),
+            read_clipboard_cb: None,
+            confirm_read_clipboard_cb: None,
+            write_clipboard_cb: None,
+            close_surface_cb: Some(close_surface_callback),
+        });
+
+        let app =
+            unsafe { ffi::ghostty_app_new(&*runtime_config as *const _, config) };
+        if app.is_null() {
+            // Clean up
+            unsafe {
+                ffi::ghostty_config_free(config);
+                drop(Box::from_raw(userdata as *mut StateRef));
+            }
+            return Err("ghostty_app_new returned null".into());
+        }
+
+        // Config ownership transferred to app — don't free it
+        Ok(Self {
+            app,
+            state,
+            _runtime_config: runtime_config,
+        })
+    }
+
+    /// Drive the ghostty event loop. Call this from your main loop / timer.
+    pub fn tick(&self) {
+        unsafe { ffi::ghostty_app_tick(self.app) }
+    }
+
+    /// Set the global color scheme.
+    pub fn set_color_scheme(&self, dark: bool) {
+        let scheme = if dark {
+            ffi::ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_DARK
+        } else {
+            ffi::ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_LIGHT
+        };
+        unsafe { ffi::ghostty_app_set_color_scheme(self.app, scheme) }
+    }
+
+    /// Create a new terminal surface. The `nsview` must be a valid NSView pointer
+    /// that ghostty will attach its Metal IOSurfaceLayer to.
+    #[cfg(target_os = "macos")]
+    pub fn new_surface(
+        &self,
+        nsview: *mut c_void,
+        scale_factor: f64,
+        cwd: Option<&str>,
+    ) -> Result<GhosttyTerminal, String> {
+        let mut config = unsafe { ffi::ghostty_surface_config_new() };
+        config.platform_tag = ffi::ghostty_platform_e::GHOSTTY_PLATFORM_MACOS as i32;
+        config.platform = ffi::ghostty_platform_u {
+            macos: ffi::ghostty_platform_macos_s { nsview },
+        };
+        config.scale_factor = scale_factor;
+        config.context = ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_TAB;
+
+        let cwd_cstr = cwd.and_then(|s| CString::new(s).ok());
+        if let Some(ref s) = cwd_cstr {
+            config.working_directory = s.as_ptr();
+        }
+
+        let surface = unsafe {
+            ffi::ghostty_surface_new(self.app, &config as *const _)
+        };
+        if surface.is_null() {
+            return Err("ghostty_surface_new returned null".into());
+        }
+
+        Ok(GhosttyTerminal {
+            surface,
+            state: self.state.clone(),
+        })
+    }
+
+    /// Get shared terminal state.
+    pub fn state(&self) -> &StateRef {
+        &self.state
+    }
+
+    /// Raw app handle.
+    pub fn raw(&self) -> ffi::ghostty_app_t {
+        self.app
+    }
+}
+
+impl Drop for GhosttyApp {
+    fn drop(&mut self) {
+        // Recover the userdata Box to free it
+        let userdata = unsafe { ffi::ghostty_app_userdata(self.app) };
+        if !userdata.is_null() {
+            unsafe { drop(Box::from_raw(userdata as *mut StateRef)) };
+        }
+        unsafe { ffi::ghostty_app_free(self.app) }
+    }
+}
+
+// SAFETY: GhosttyApp's internal state is protected by mutex.
+// The ghostty C library handles its own thread safety.
+unsafe impl Send for GhosttyApp {}
+unsafe impl Sync for GhosttyApp {}
+
+// ── GhosttyTerminal — a single terminal surface ─────────────
+
+/// A single ghostty terminal surface backed by GPU-accelerated Metal rendering.
+///
+/// Ghostty renders directly into the NSView provided at creation time.
+/// Input is forwarded via the ghostty_surface_* APIs. State updates
+/// (title, pwd) arrive via the action callback.
+pub struct GhosttyTerminal {
+    surface: ffi::ghostty_surface_t,
+    state: StateRef,
 }
 
 impl GhosttyTerminal {
-    /// Get the IOSurfaceRef from the last-presented render target.
-    /// Returns None if no frame has been presented yet.
-    ///
-    /// The returned pointer is an IOSurfaceRef (macOS) — caller must NOT release it.
-    /// It remains valid until the next draw() call.
-    #[cfg(target_os = "macos")]
-    pub fn iosurface(&self) -> Option<*mut c_void> {
-        let ptr = unsafe { ffi::ghostty_surface_iosurface(self.surface) };
-        if ptr.is_null() {
-            None
-        } else {
-            Some(ptr)
-        }
-    }
-
-    /// Trigger a render. The result is available via iosurface().
+    /// Trigger a draw (ghostty renders into its Metal layer).
     pub fn draw(&self) {
         unsafe { ffi::ghostty_surface_draw(self.surface) }
     }
 
-    /// Set the size in pixels.
+    /// Request a refresh (marks the surface as needing redraw).
+    pub fn refresh(&self) {
+        unsafe { ffi::ghostty_surface_refresh(self.surface) }
+    }
+
+    /// Set the surface size in pixels.
     pub fn set_size(&self, width_px: u32, height_px: u32) {
         unsafe { ffi::ghostty_surface_set_size(self.surface, width_px, height_px) }
     }
 
-    /// Get the current size (columns, rows, pixel dimensions, cell dimensions).
+    /// Get the current size (columns, rows, pixel dimensions, cell size).
     pub fn size(&self) -> SurfaceSize {
         let s = unsafe { ffi::ghostty_surface_size(self.surface) };
         SurfaceSize {
@@ -55,16 +207,19 @@ impl GhosttyTerminal {
         }
     }
 
-    /// Send UTF-8 text input to the terminal.
-    pub fn send_text(&self, text: &str) {
-        if let Ok(cstr) = CString::new(text) {
-            unsafe { ffi::ghostty_surface_text(self.surface, cstr.as_ptr()) }
-        }
+    /// Set content scale (e.g., 2.0 for Retina).
+    pub fn set_content_scale(&self, scale: f64) {
+        unsafe { ffi::ghostty_surface_set_content_scale(self.surface, scale, scale) }
     }
 
     /// Set focus state.
     pub fn set_focus(&self, focused: bool) {
         unsafe { ffi::ghostty_surface_set_focus(self.surface, focused) }
+    }
+
+    /// Set occlusion state (hidden behind other windows).
+    pub fn set_occlusion(&self, occluded: bool) {
+        unsafe { ffi::ghostty_surface_set_occlusion(self.surface, occluded) }
     }
 
     /// Set color scheme (light/dark).
@@ -77,104 +232,129 @@ impl GhosttyTerminal {
         unsafe { ffi::ghostty_surface_set_color_scheme(self.surface, scheme) }
     }
 
-    /// Set content scale (e.g., 2.0 for Retina).
-    pub fn set_content_scale(&self, scale: f64) {
-        unsafe { ffi::ghostty_surface_set_content_scale(self.surface, scale, scale) }
+    /// Send a key event to the terminal. Returns true if ghostty consumed it.
+    pub fn send_key(&self, key: ffi::ghostty_input_key_s) -> bool {
+        unsafe { ffi::ghostty_surface_key(self.surface, key) }
     }
 
-    // ── Agent State APIs ──────────────────────────────────────
-
-    /// Get the terminal title (from OSC 0/1/2).
-    pub fn title(&self) -> Option<String> {
-        let ptr = unsafe { ffi::ghostty_surface_get_title(self.surface) };
-        if ptr.is_null() {
-            return None;
-        }
-        unsafe { CStr::from_ptr(ptr) }
-            .to_str()
-            .ok()
-            .map(String::from)
+    /// Send UTF-8 text input to the terminal.
+    pub fn send_text(&self, text: &str) {
+        let len = text.len();
+        let cstr = CString::new(text).unwrap_or_default();
+        unsafe { ffi::ghostty_surface_text(self.surface, cstr.as_ptr(), len) }
     }
 
-    /// Get the working directory (from OSC 7).
-    pub fn current_dir(&self) -> Option<String> {
-        let ptr = unsafe { ffi::ghostty_surface_get_pwd(self.surface) };
-        let len = unsafe { ffi::ghostty_surface_get_pwd_len(self.surface) };
-        if ptr.is_null() || len == 0 {
-            return None;
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
-        std::str::from_utf8(bytes).ok().map(String::from)
-    }
-
-    /// Returns true if the terminal is in alternate screen mode (TUI apps like vim, btop).
-    pub fn is_alt_screen(&self) -> bool {
-        unsafe { ffi::ghostty_surface_is_alt_screen(self.surface) }
-    }
-
-    /// Get cursor position (column, row) in the active screen.
-    pub fn cursor_pos(&self) -> (u16, u16) {
-        let mut col: u16 = 0;
-        let mut row: u16 = 0;
-        unsafe { ffi::ghostty_surface_cursor_pos(self.surface, &mut col, &mut row) }
-        (col, row)
-    }
-
-    /// Dump the visible screen text.
-    pub fn screen_text(&self) -> String {
-        // First call with null buf to get size
-        let needed = unsafe { ffi::ghostty_surface_screen_text(self.surface, std::ptr::null_mut(), 0) };
-        if needed == 0 {
-            return String::new();
-        }
-        let mut buf = vec![0u8; needed as usize];
-        let written = unsafe {
-            ffi::ghostty_surface_screen_text(
-                self.surface,
-                buf.as_mut_ptr() as *mut _,
-                needed,
-            )
-        };
-        buf.truncate(written as usize);
-        String::from_utf8_lossy(&buf).into_owned()
-    }
-
-    /// Returns true if the child process has exited.
-    pub fn is_alive(&self) -> bool {
-        !unsafe { ffi::ghostty_surface_process_exited(self.surface) }
-    }
-
-    /// Mouse button event.
+    /// Send a mouse button event.
     pub fn send_mouse_button(
         &self,
         pressed: bool,
         button: MouseButton,
         mods: i32,
-    ) {
-        let action = if pressed {
-            ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS
+    ) -> bool {
+        let state = if pressed {
+            ffi::ghostty_input_mouse_state_e::GHOSTTY_MOUSE_PRESS
         } else {
-            ffi::ghostty_input_action_e::GHOSTTY_ACTION_RELEASE
+            ffi::ghostty_input_mouse_state_e::GHOSTTY_MOUSE_RELEASE
         };
         let btn = match button {
-            MouseButton::Left => ffi::ghostty_mouse_button_e::GHOSTTY_MOUSE_LEFT,
-            MouseButton::Right => ffi::ghostty_mouse_button_e::GHOSTTY_MOUSE_RIGHT,
-            MouseButton::Middle => ffi::ghostty_mouse_button_e::GHOSTTY_MOUSE_MIDDLE,
+            MouseButton::Left => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_LEFT,
+            MouseButton::Right => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_RIGHT,
+            MouseButton::Middle => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_MIDDLE,
         };
-        unsafe { ffi::ghostty_surface_mouse_button(self.surface, action, btn, mods) }
+        unsafe { ffi::ghostty_surface_mouse_button(self.surface, state, btn, mods) }
     }
 
-    /// Mouse position event.
-    pub fn send_mouse_pos(&self, x: f64, y: f64) {
-        unsafe { ffi::ghostty_surface_mouse_pos(self.surface, x, y) }
+    /// Send mouse position event.
+    pub fn send_mouse_pos(&self, x: f64, y: f64, mods: i32) {
+        unsafe { ffi::ghostty_surface_mouse_pos(self.surface, x, y, mods) }
     }
 
-    /// Mouse scroll event.
+    /// Send mouse scroll event.
     pub fn send_mouse_scroll(&self, x: f64, y: f64, mods: i32) {
         unsafe { ffi::ghostty_surface_mouse_scroll(self.surface, x, y, mods) }
     }
 
-    /// Get the raw FFI surface handle (for advanced use).
+    /// Request close (sends signal to child process).
+    pub fn request_close(&self) {
+        unsafe { ffi::ghostty_surface_request_close(self.surface) }
+    }
+
+    // ── State queries ───────────────────────────────────────
+
+    /// Terminal title (from action callback, set by OSC 0/1/2).
+    pub fn title(&self) -> Option<String> {
+        self.state.lock().title.clone()
+    }
+
+    /// Working directory (from action callback, set by OSC 7).
+    pub fn current_dir(&self) -> Option<String> {
+        self.state.lock().pwd.clone()
+    }
+
+    /// Whether the child process has exited.
+    pub fn is_alive(&self) -> bool {
+        !unsafe { ffi::ghostty_surface_process_exited(self.surface) }
+    }
+
+    /// Whether the terminal has a text selection.
+    pub fn has_selection(&self) -> bool {
+        unsafe { ffi::ghostty_surface_has_selection(self.surface) }
+    }
+
+    /// Read the current selection text. Returns None if no selection.
+    pub fn selection_text(&self) -> Option<String> {
+        let mut text = ffi::ghostty_text_s {
+            tl_px_x: 0.0,
+            tl_px_y: 0.0,
+            offset_start: 0,
+            offset_len: 0,
+            text: std::ptr::null(),
+            text_len: 0,
+        };
+        let ok = unsafe { ffi::ghostty_surface_read_selection(self.surface, &mut text) };
+        if !ok || text.text.is_null() || text.text_len == 0 {
+            return None;
+        }
+        let result = unsafe {
+            let bytes = std::slice::from_raw_parts(text.text as *const u8, text.text_len);
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        unsafe { ffi::ghostty_surface_free_text(self.surface, &mut text) };
+        Some(result)
+    }
+
+    /// Read text from a specific screen region.
+    pub fn read_text(&self, selection: ffi::ghostty_selection_s) -> Option<String> {
+        let mut text = ffi::ghostty_text_s {
+            tl_px_x: 0.0,
+            tl_px_y: 0.0,
+            offset_start: 0,
+            offset_len: 0,
+            text: std::ptr::null(),
+            text_len: 0,
+        };
+        let ok =
+            unsafe { ffi::ghostty_surface_read_text(self.surface, selection, &mut text) };
+        if !ok || text.text.is_null() || text.text_len == 0 {
+            return None;
+        }
+        let result = unsafe {
+            let bytes = std::slice::from_raw_parts(text.text as *const u8, text.text_len);
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        unsafe { ffi::ghostty_surface_free_text(self.surface, &mut text) };
+        Some(result)
+    }
+
+    /// Check and clear the needs_render flag.
+    pub fn take_needs_render(&self) -> bool {
+        let mut state = self.state.lock();
+        let r = state.needs_render;
+        state.needs_render = false;
+        r
+    }
+
+    /// Raw FFI surface handle.
     pub fn raw_surface(&self) -> ffi::ghostty_surface_t {
         self.surface
     }
@@ -189,6 +369,8 @@ impl Drop for GhosttyTerminal {
 // SAFETY: The ghostty surface is thread-safe — all state access is mutex-protected.
 unsafe impl Send for GhosttyTerminal {}
 unsafe impl Sync for GhosttyTerminal {}
+
+// ── Public types ────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 pub struct SurfaceSize {
@@ -205,4 +387,60 @@ pub enum MouseButton {
     Left,
     Right,
     Middle,
+}
+
+// ── C callback implementations ──────────────────────────────
+
+unsafe extern "C" fn wakeup_callback(_userdata: *mut c_void) {
+    // The wakeup callback signals that ghostty has work to do.
+    // In our GPUI integration, we'll trigger a cx.notify() from the
+    // GPUI side by polling take_needs_render() on a timer.
+}
+
+unsafe extern "C" fn action_callback(
+    _app: ffi::ghostty_app_t,
+    _target: ffi::ghostty_target_s,
+    action: ffi::ghostty_action_s,
+) -> bool {
+    unsafe {
+        // Extract userdata from app to get our state
+        let userdata = ffi::ghostty_app_userdata(_app);
+        if userdata.is_null() {
+            return false;
+        }
+        let state = &*(userdata as *const StateRef);
+
+        match action.tag {
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SET_TITLE => {
+                let title_ptr = action.action.set_title.title;
+                if !title_ptr.is_null() {
+                    let title = CStr::from_ptr(title_ptr).to_string_lossy().into_owned();
+                    state.lock().title = Some(title);
+                }
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_PWD => {
+                let pwd_ptr = action.action.pwd.pwd;
+                if !pwd_ptr.is_null() {
+                    let pwd = CStr::from_ptr(pwd_ptr).to_string_lossy().into_owned();
+                    state.lock().pwd = Some(pwd);
+                }
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_RENDER => {
+                state.lock().needs_render = true;
+                true
+            }
+            // Actions we don't handle — return false so ghostty knows
+            _ => false,
+        }
+    }
+}
+
+unsafe extern "C" fn close_surface_callback(userdata: *mut c_void, _process_alive: bool) {
+    if userdata.is_null() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const StateRef) };
+    state.lock().child_exited = true;
 }

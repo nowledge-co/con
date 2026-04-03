@@ -1,4 +1,4 @@
 pub mod ffi;
 pub mod terminal;
 
-pub use terminal::{GhosttyTerminal, MouseButton, SurfaceSize};
+pub use terminal::{GhosttyApp, GhosttyTerminal, MouseButton, SurfaceSize, TerminalState};

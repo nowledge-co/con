@@ -1170,6 +1170,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "con-ghostty"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "core-foundation 0.10.0",
+ "log",
+ "parking_lot",
+]
+
+[[package]]
 name = "con-terminal"
 version = "0.1.0"
 dependencies = [
