@@ -714,7 +714,7 @@ impl Render for TerminalView {
             // Background + cursor canvas (also handles resize detection)
             .child(
                 canvas(
-                    move |bounds, _window, cx| {
+                    move |bounds, window, cx| {
                         // Store the terminal origin for mouse coordinate conversion
                         *terminal_origin_for_canvas.lock() = (
                             f32::from(bounds.origin.x),
@@ -748,8 +748,13 @@ impl Render for TerminalView {
                             });
                             drop(pty);
 
-                            // Trigger re-render on next frame with new dimensions
-                            cx.notify(entity_id);
+                            // Schedule re-render on next frame. During the draw phase,
+                            // cx.notify() is lost because dirty_views is cleared at
+                            // draw end. on_next_frame runs after draw completes.
+                            let _ = cx;
+                            window.on_next_frame(move |_window, cx| {
+                                cx.notify(entity_id);
+                            });
                         }
                     },
                     move |bounds, _, window, _cx| {
@@ -869,9 +874,6 @@ impl Render for TerminalView {
                         .py(px(2.0))
                         .rounded(px(6.0))
                         .bg(theme.title_bar.opacity(0.95))
-                        .border_1()
-                        .border_color(theme.border)
-                        .shadow_sm()
                         // Exit code dot
                         .child(
                             div()
@@ -991,9 +993,6 @@ impl Render for TerminalView {
                             .py(px(5.0))
                             .rounded(px(14.0))
                             .bg(theme.title_bar.opacity(0.95))
-                            .border_1()
-                            .border_color(theme.border)
-                            .shadow_sm()
                             .text_size(px(11.0))
                             .text_color(theme.muted_foreground)
                             .child(format!("{} lines up", scrollback_offset)),

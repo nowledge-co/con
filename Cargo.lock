@@ -1098,6 +1098,7 @@ name = "con"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cocoa 0.26.0",
  "con-agent",
  "con-core",
  "con-terminal",
@@ -1110,6 +1111,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "log",
+ "objc",
  "parking_lot",
  "rust-embed",
  "serde",

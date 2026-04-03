@@ -63,7 +63,7 @@ kingston/
 │   │       ├── pane_tree.rs    # split pane layout tree
 │   │       ├── settings_panel.rs # provider config UI (Cmd+,)
 │   │       ├── sidebar.rs      # session sidebar
-│   │       └── theme.rs        # Flexoki dark theme
+│   │       └── theme.rs        # Flexoki themes (Light default, Dark available)
 │   │
 │   ├── con-core/              # shared logic, no UI dependency
 │   │   └── src/

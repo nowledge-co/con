@@ -3,9 +3,9 @@ use con_agent::AgentConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-fn default_font_family() -> String { "JetBrains Mono".into() }
+fn default_font_family() -> String { "Ioskeley Mono".into() }
 fn default_font_size() -> f32 { 14.0 }
-fn default_theme() -> String { "flexoki-dark".into() }
+fn default_theme() -> String { "flexoki-light".into() }
 fn default_scrollback() -> usize { 10_000 }
 fn default_cursor_style() -> String { "block".into() }
 

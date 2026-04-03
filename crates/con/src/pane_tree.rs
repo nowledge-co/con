@@ -395,19 +395,10 @@ impl PaneTree {
         let theme = cx.theme();
 
         match node {
-            PaneNode::Leaf { id, terminal } => {
-                // Leaf returns just the terminal with a focus border.
-                // No flex sizing here — the parent Split handles all sizing.
-                let is_focused = *id == focused_id && has_splits;
-                let border = if is_focused {
-                    theme.primary.opacity(0.3)
-                } else {
-                    theme.transparent
-                };
+            PaneNode::Leaf { id: _, terminal } => {
+                // Leaf — no flex sizing here, parent Split handles sizing.
                 div()
                     .size_full()
-                    .border_1()
-                    .border_color(border)
                     .child(terminal.clone())
                     .into_any_element()
             }

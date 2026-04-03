@@ -44,6 +44,18 @@ cargo test --workspace # test
 # GPUI needs runtime_shaders feature (already set) — no Xcode.app needed for dev
 ```
 
+## Design Language
+
+- **Font**: IoskeleyMono (embedded, all weights). Use `font_family("Ioskeley Mono")` in code.
+- **Default theme**: Flexoki Light. Dark available as Flexoki Dark.
+- **Icons**: Phosphor Icons (phosphoricons.com). SVGs in `assets/phosphor/`.
+- **Borderless**: No `border_1()`, `border_r_1()`, etc. Use opacity-based fills for surface separation.
+- **Shadowless**: No `shadow_sm()`, `shadow_lg()`, etc. Use bg opacity for elevation.
+- **Color by meaning only**: Monochrome surfaces by default. Accent color for semantic states (focus, active, warning, error).
+- **Typography as hierarchy**: Size, weight, and opacity create structure — not boxes and borders.
+
+See `docs/design/con-design-language.md` for full design system.
+
 ## Key Conventions
 
 - **Crate boundaries matter.** con-terminal has zero UI deps. con-agent has zero terminal deps. con-core glues them.

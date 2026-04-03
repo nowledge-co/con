@@ -778,10 +778,10 @@ impl Render for AgentPanel {
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .vertical_scrollbar(&self.scroll_handle)
-            .px(px(16.0))
-            .pt(px(16.0))
-            .pb(px(16.0))
-            .gap(px(20.0));
+            .px(px(14.0))
+            .pt(px(14.0))
+            .pb(px(14.0))
+            .gap(px(16.0));
 
         for (msg_idx, msg) in self.state.messages.iter().enumerate() {
             let is_user = msg.role == "user";
@@ -792,8 +792,8 @@ impl Render for AgentPanel {
             if is_system {
                 msg_el = msg_el.child(
                     div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
+                        .text_size(px(12.0))
+                        .text_color(theme.muted_foreground.opacity(0.7))
                         .line_height(px(18.0))
                         .child(msg.content.clone()),
                 );
@@ -804,15 +804,15 @@ impl Render for AgentPanel {
                         .justify_end()
                         .child(
                             div()
-                                .max_w(rems(20.0))
+                                .max_w(rems(18.0))
                                 .px(px(12.0))
                                 .py(px(8.0))
-                                .rounded(px(16.0))
+                                .rounded(px(14.0))
                                 .rounded_tr(px(4.0))
-                                .bg(theme.primary.opacity(0.12))
+                                .bg(theme.primary.opacity(0.10))
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_size(px(13.0))
                                         .line_height(px(20.0))
                                         .text_color(theme.foreground)
                                         .child(msg.content.clone()),
@@ -826,19 +826,19 @@ impl Render for AgentPanel {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(px(5.0))
                             .child(
                                 svg()
                                     .path("phosphor/oven.svg")
                                     .size(px(12.0))
-                                    .text_color(theme.primary),
+                                    .text_color(theme.primary.opacity(0.7)),
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.primary)
-                                    .child("Con Agent"),
+                                    .text_size(px(11.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.primary.opacity(0.7))
+                                    .child("Con"),
                             ),
                     );
 
@@ -892,8 +892,6 @@ impl Render for AgentPanel {
                                 div()
                                     .pl(px(24.0))
                                     .ml(px(4.0))
-                                    .border_l_1()
-                                    .border_color(theme.muted.opacity(0.15))
                                     .child(
                                         div()
                                             .pl(px(8.0))
@@ -919,14 +917,15 @@ impl Render for AgentPanel {
                     let content: SharedString = msg.content.clone().into();
                     msg_el = msg_el.child(
                         div()
-                            .pl(px(20.0))
-                            .text_sm()
+                            .pl(px(18.0))
+                            .text_size(px(13.0))
+                            .line_height(px(20.0))
                             .child(
                                 TextView::markdown(
                                     ElementId::Name(format!("msg-md-{msg_idx}").into()),
                                     content,
                                 )
-                                .text_sm()
+                                .text_size(px(13.0))
                             ),
                     );
                 }
@@ -948,10 +947,10 @@ impl Render for AgentPanel {
                         .flex()
                         .items_center()
                         .gap(px(4.0))
-                        .pl(px(20.0))
+                        .pl(px(18.0))
                         .cursor_pointer()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
+                        .text_size(px(11.0))
+                        .text_color(theme.muted_foreground.opacity(0.7))
                         .hover(|s| s.text_color(theme.foreground))
                         .on_mouse_down(
                             MouseButton::Left,
@@ -979,11 +978,9 @@ impl Render for AgentPanel {
                     let mut steps_el = div()
                         .flex()
                         .flex_col()
-                        .gap(px(1.0))
-                        .pl(px(24.0))
-                        .ml(px(4.0))
-                        .border_l_1()
-                        .border_color(theme.muted.opacity(0.15));
+                        .gap(px(0.0))
+                        .pl(px(22.0))
+                        .ml(px(4.0));
 
                     for (step_idx, step) in msg.steps.iter().enumerate() {
                         let status_color = match step.status {
@@ -999,7 +996,7 @@ impl Render for AgentPanel {
                         let mut step_header = div()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(px(5.0))
                             .pl(px(8.0))
                             .py(px(3.0))
                             .child(
@@ -1011,15 +1008,16 @@ impl Render for AgentPanel {
                             .child(
                                 svg()
                                     .path(step.icon)
-                                    .size(px(12.0))
-                                    .text_color(theme.muted_foreground),
+                                    .size(px(11.0))
+                                    .flex_shrink_0()
+                                    .text_color(theme.muted_foreground.opacity(0.7)),
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
+                                    .text_size(px(11.0))
+                                    .text_color(theme.muted_foreground.opacity(0.8))
                                     .overflow_x_hidden()
-                                    .child(truncate_str(&step.label, 80)),
+                                    .child(truncate_str(&step.label, 60)),
                             );
 
                         // Expand/collapse chevron for details
@@ -1116,19 +1114,17 @@ impl Render for AgentPanel {
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .mx(px(4.0))
-                .px(px(12.0))
+                .mx(px(2.0))
+                .px(px(10.0))
                 .py(px(8.0))
                 .rounded(px(8.0))
-                .border_1()
-                .border_color(status_color.opacity(0.12))
                 .bg(theme.muted.opacity(0.04))
                 // Header
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(px(5.0))
                         .child(
                             div()
                                 .size(px(5.0))
@@ -1138,12 +1134,12 @@ impl Render for AgentPanel {
                         .child(
                             svg()
                                 .path(icon)
-                                .size(px(13.0))
-                                .text_color(theme.muted_foreground),
+                                .size(px(12.0))
+                                .text_color(theme.muted_foreground.opacity(0.7)),
                         )
                         .child(
                             div()
-                                .text_xs()
+                                .text_size(px(12.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.foreground)
                                 .child(human_name),
@@ -1152,11 +1148,11 @@ impl Render for AgentPanel {
                 // Args
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
+                        .text_size(px(11.0))
+                        .text_color(theme.muted_foreground.opacity(0.8))
                         .overflow_x_hidden()
-                        .font_family("Berkeley Mono")
-                        .child(truncate_str(&args_display, 80)),
+                        .font_family("Ioskeley Mono")
+                        .child(truncate_str(&args_display, 60)),
                 );
 
             // Result — rendered as formatted code block
@@ -1201,13 +1197,11 @@ impl Render for AgentPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .mx(px(4.0))
-                .px(px(12.0))
+                .mx(px(2.0))
+                .px(px(10.0))
                 .py(px(10.0))
                 .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.warning.opacity(0.2))
-                .bg(theme.warning.opacity(0.04))
+                .bg(theme.warning.opacity(0.05))
                 // Header
                 .child(
                     div()
@@ -1243,7 +1237,7 @@ impl Render for AgentPanel {
                         .child(
                             div()
                                 .text_xs()
-                                .font_family("Berkeley Mono")
+                                .font_family("Ioskeley Mono")
                                 .text_color(theme.foreground)
                                 .overflow_x_hidden()
                                 .child(truncate_str(&args_display, 80)),
@@ -1263,13 +1257,13 @@ impl Render for AgentPanel {
                                 .px(px(10.0))
                                 .flex()
                                 .items_center()
-                                .rounded(px(6.0))
-                                .text_xs()
+                                .rounded(px(5.0))
+                                .text_size(px(11.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .cursor_pointer()
-                                .bg(theme.muted.opacity(0.12))
+                                .bg(theme.muted.opacity(0.10))
                                 .text_color(theme.muted_foreground)
-                                .hover(|s| s.bg(theme.danger.opacity(0.15)).text_color(theme.danger))
+                                .hover(|s| s.bg(theme.danger.opacity(0.12)).text_color(theme.danger))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -1286,13 +1280,13 @@ impl Render for AgentPanel {
                                 .px(px(10.0))
                                 .flex()
                                 .items_center()
-                                .rounded(px(6.0))
-                                .text_xs()
+                                .rounded(px(5.0))
+                                .text_size(px(11.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .cursor_pointer()
-                                .bg(theme.primary.opacity(0.15))
+                                .bg(theme.primary.opacity(0.12))
                                 .text_color(theme.primary)
-                                .hover(|s| s.bg(theme.primary.opacity(0.25)))
+                                .hover(|s| s.bg(theme.primary.opacity(0.20)))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -1309,8 +1303,8 @@ impl Render for AgentPanel {
                                 .px(px(10.0))
                                 .flex()
                                 .items_center()
-                                .rounded(px(6.0))
-                                .text_xs()
+                                .rounded(px(5.0))
+                                .text_size(px(11.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .cursor_pointer()
                                 .bg(theme.primary)
@@ -1331,7 +1325,7 @@ impl Render for AgentPanel {
             messages_area = messages_area.child(approval_el);
         }
 
-        // ── Status indicator (replaces "typing…") ───────────────
+        // ── Status indicator ──────────────────────────────────────
         if let Some((icon, label)) = self.status_text() {
             let status_color = match self.state.status {
                 AgentStatus::Thinking => theme.warning,
@@ -1340,20 +1334,20 @@ impl Render for AgentPanel {
             };
             messages_area = messages_area.child(
                 div()
-                    .pl(px(20.0))
+                    .pl(px(18.0))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(5.0))
                     .child(
                         svg()
                             .path(icon)
-                            .size(px(12.0))
-                            .text_color(status_color.opacity(0.7)),
+                            .size(px(11.0))
+                            .text_color(status_color.opacity(0.6)),
                     )
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground.opacity(0.7))
                             .child(label),
                     ),
             );
@@ -1369,10 +1363,10 @@ impl Render for AgentPanel {
         let mut header_left = div()
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(px(6.0))
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(13.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.foreground)
                     .child("Agent"),
@@ -1391,10 +1385,10 @@ impl Render for AgentPanel {
                     .px(px(6.0))
                     .py(px(1.0))
                     .rounded(px(4.0))
-                    .bg(theme.warning.opacity(0.15))
+                    .bg(theme.warning.opacity(0.12))
                     .text_color(theme.warning)
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::BOLD)
                     .child("YOLO"),
             );
         }
@@ -1403,17 +1397,15 @@ impl Render for AgentPanel {
             .flex()
             .items_center()
             .justify_between()
-            .h(px(40.0))
-            .px(px(16.0))
-            .border_b_1()
-            .border_color(theme.border)
+            .h(px(38.0))
+            .px(px(14.0))
             .flex_shrink_0()
             .child(header_left)
             .child({
                 let mut actions = div()
                     .flex()
                     .items_center()
-                    .gap(px(2.0));
+                    .gap(px(1.0));
 
                 // Stop button — visible when agent is working
                 if self.state.status != AgentStatus::Idle {
@@ -1548,14 +1540,14 @@ fn icon_button(
         .flex()
         .items_center()
         .justify_center()
-        .size(px(28.0))
-        .rounded(px(6.0))
+        .size(px(26.0))
+        .rounded(px(5.0))
         .cursor_pointer()
-        .hover(|s| s.bg(theme.muted.opacity(0.12)))
+        .hover(|s| s.bg(theme.muted.opacity(0.10)))
         .child(
             svg()
                 .path(icon_path)
-                .size(px(14.0))
+                .size(px(13.0))
                 .text_color(theme.muted_foreground),
         )
 }

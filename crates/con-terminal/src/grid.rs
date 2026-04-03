@@ -324,6 +324,11 @@ pub struct Grid {
     /// Used by the visible terminal tool to capture command output.
     /// Takes the output text and optional exit code.
     on_command_complete: Option<Box<dyn FnOnce(String, Option<i32>) + Send>>,
+    /// Persistent SSH target — set when an SSH command is detected, cleared
+    /// when we return to local (OSC 7 with local hostname or `exit` command).
+    ssh_target: Option<String>,
+    /// A blank cell for bounds-safe fallback in cell()
+    default_cell: Cell,
 }
 
 impl Grid {
@@ -397,6 +402,8 @@ impl Grid {
             kitty_keyboard_flags: 0,
             kitty_flags_stack: Vec::new(),
             on_command_complete: None,
+            ssh_target: None,
+            default_cell: Cell { c: ' ', style: default_style, wide: false },
         }
     }
 
@@ -411,7 +418,11 @@ impl Grid {
     }
 
     pub fn cell(&self, row: usize, col: usize) -> &Cell {
-        &self.cells[row][col]
+        if row < self.cells.len() && col < self.cells[row].len() {
+            &self.cells[row][col]
+        } else {
+            &self.default_cell
+        }
     }
 
     pub fn is_dirty(&self, row: usize) -> bool {
@@ -465,10 +476,11 @@ impl Grid {
     }
 
     /// Detect a remote hostname if this pane is an SSH session.
-    /// Uses three signals (checked in priority order):
+    /// Uses four signals (checked in priority order):
     /// 1. OSC 7 hostname differs from local hostname
     /// 2. Terminal title matches `user@host` pattern (set by many SSH configs)
-    /// 3. Last command starts with `ssh`
+    /// 3. Persistent SSH target (set when SSH command detected, survives subsequent commands)
+    /// 4. Last command starts with `ssh` (initial detection, then stored persistently)
     pub fn detected_remote_host(&self) -> Option<String> {
         // 1. OSC 7 hostname differs from local
         if let Some(h) = &self.hostname {
@@ -492,7 +504,12 @@ impl Grid {
             }
         }
 
-        // 3. Command text contains "ssh " (may have prompt prefix like "❯ ssh host")
+        // 3. Persistent SSH target (survives after running commands on remote)
+        if let Some(target) = &self.ssh_target {
+            return Some(target.clone());
+        }
+
+        // 4. Current command is SSH (initial detection — will be persisted by track_ssh_state)
         if let Some(cmd) = &self.last_command {
             if let Some(host) = extract_ssh_target(cmd) {
                 return Some(host);
@@ -500,6 +517,32 @@ impl Grid {
         }
 
         None
+    }
+
+    /// Track SSH session state based on command execution.
+    /// Called when a command starts (OSC 133;C) to persist SSH target
+    /// and detect when the user exits back to local.
+    fn track_ssh_state(&mut self) {
+        if let Some(cmd) = &self.last_command {
+            let trimmed = cmd.trim();
+            // Detect SSH command → persist the target
+            if let Some(host) = extract_ssh_target(trimmed) {
+                self.ssh_target = Some(host);
+            }
+            // Detect exit/logout/disconnect → clear SSH state
+            if self.ssh_target.is_some() {
+                let first_word = trimmed.split_whitespace().next().unwrap_or("");
+                if first_word == "exit" || first_word == "logout" || first_word == "disconnect" {
+                    self.ssh_target = None;
+                }
+            }
+        }
+        // Also clear SSH state if OSC 7 reports local hostname
+        if let Some(h) = &self.hostname {
+            if h.eq_ignore_ascii_case(&self.local_hostname) && self.ssh_target.is_some() {
+                self.ssh_target = None;
+            }
+        }
     }
 
     /// Whether the cursor is at a shell prompt (not in alternate screen / TUI,
@@ -696,6 +739,32 @@ impl Grid {
         for i in (0..new_cols).step_by(8) {
             self.tab_stops[i] = true;
         }
+    }
+
+    /// Restore cells from alternate screen, adapting to current dimensions.
+    /// The saved buffer may have different rows/cols than current grid if
+    /// the terminal was resized while in alternate screen mode.
+    fn restore_from_alternate(&mut self, saved: Vec<Vec<Cell>>) {
+        let saved_rows = saved.len();
+        let saved_cols = saved.first().map_or(self.cols, |r| r.len());
+
+        if saved_rows == self.rows && saved_cols == self.cols {
+            self.cells = saved;
+        } else {
+            // Adapt saved buffer to current dimensions
+            let mut new_cells = vec![vec![self.blank_cell(); self.cols]; self.rows];
+            let copy_rows = self.rows.min(saved_rows);
+            for row in 0..copy_rows {
+                let copy_cols = self.cols.min(saved[row].len());
+                for col in 0..copy_cols {
+                    new_cells[row][col] = saved[row][col].clone();
+                }
+            }
+            self.cells = new_cells;
+        }
+        self.dirty = vec![true; self.rows];
+        self.cursor.row = self.cursor.row.min(self.rows.saturating_sub(1));
+        self.cursor.col = self.cursor.col.min(self.cols.saturating_sub(1));
     }
 
     /// Clear scrollback buffer and reset scroll offset
@@ -1100,6 +1169,10 @@ impl Perform for Grid {
                             let host = &rest[..slash_pos];
                             if !host.is_empty() {
                                 self.hostname = Some(host.to_string());
+                                // OSC 7 from local host means we're back from SSH
+                                if host.eq_ignore_ascii_case(&self.local_hostname) {
+                                    self.ssh_target = None;
+                                }
                             }
                             self.current_dir = Some(rest[slash_pos..].to_string());
                         }
@@ -1122,6 +1195,7 @@ impl Perform for Grid {
                                     self.last_command = Some(cmd);
                                 }
                             }
+                            self.track_ssh_state();
                             self.command_start_row = Some(self.cursor.row);
                         }
                         b"D" => {
@@ -1401,18 +1475,18 @@ impl Perform for Grid {
                         25 => self.cursor.visible = false,
                         47 | 1047 => {
                             if let Some(saved) = self.alternate_screen.take() {
-                                self.cells = saved;
-                                self.mark_all_dirty();
+                                self.restore_from_alternate(saved);
                             }
                         }
                         1049 => {
                             // Restore from alternate screen buffer
                             if let Some(saved) = self.alternate_screen.take() {
-                                self.cells = saved;
-                                self.mark_all_dirty();
+                                self.restore_from_alternate(saved);
                             }
                             if let Some(saved) = self.saved_cursor {
                                 self.cursor = saved;
+                                self.cursor.row = self.cursor.row.min(self.rows.saturating_sub(1));
+                                self.cursor.col = self.cursor.col.min(self.cols.saturating_sub(1));
                             }
                         }
                         2004 => self.bracketed_paste = false,

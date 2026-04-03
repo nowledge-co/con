@@ -1,0 +1,131 @@
+{
+  "name": "Con Light",
+  "author": "con",
+  "themes": [
+    {
+      "name": "Con Light",
+      "mode": "light",
+      "is_default": false,
+      "font.size": 14,
+      "font.family": ".SystemUIFont",
+      "mono_font.family": "Ioskeley Mono",
+      "mono_font.size": 14,
+      "radius": 8,
+      "radius_lg": 12,
+      "shadow": true,
+      "colors": {
+        "background": "#FFFCF0",
+        "foreground": "#100F0F",
+        "border": "#E6E4D9",
+        "input.border": "#E6E4D9",
+        "caret": "#24837B",
+        "ring": "#24837B",
+
+        "primary.background": "#24837B",
+        "primary.foreground": "#FFFCF0",
+        "primary.hover.background": "#3AA99F",
+        "primary.active.background": "#1A6560",
+
+        "secondary.background": "#F2F0E5",
+        "secondary.foreground": "#100F0F",
+        "secondary.hover.background": "#E6E4D9",
+        "secondary.active.background": "#DAD8CE",
+
+        "muted.background": "#F2F0E5",
+        "muted.foreground": "#6F6E69",
+
+        "accent.background": "#E6E4D9",
+        "accent.foreground": "#100F0F",
+
+        "success.background": "#66800B",
+        "success.foreground": "#FFFCF0",
+
+        "danger.background": "#AF3029",
+        "danger.foreground": "#FFFCF0",
+        "danger.hover.background": "#D14D41",
+        "danger.active.background": "#8A2520",
+
+        "warning.background": "#AD8A01",
+        "warning.foreground": "#FFFCF0",
+
+        "info.background": "#205EA6",
+        "info.foreground": "#FFFCF0",
+
+        "title_bar.background": "#F2F0E5",
+        "title_bar.border": "#E6E4D9",
+
+        "sidebar.background": "#F2F0E5",
+        "sidebar.foreground": "#100F0F",
+        "sidebar.border": "#E6E4D9",
+
+        "list.active.background": "#24837B22",
+
+        "selection.background": "#24837B30",
+
+        "scrollbar.thumb.background": "#E6E4D980",
+        "scrollbar.thumb.hover.background": "#DAD8CE",
+
+        "base.red": "#AF3029",
+        "base.orange": "#BC5215",
+        "base.yellow": "#AD8A01",
+        "base.green": "#66800B",
+        "base.cyan": "#24837B",
+        "base.blue": "#205EA6",
+        "base.purple": "#5E409D",
+        "base.magenta": "#A02F6F"
+      },
+      "highlight": {
+        "editor.foreground": "#100F0F",
+        "editor.background": "#FFFCF0",
+        "editor.active_line.background": "#F2F0E5",
+        "editor.line_number": "#878580",
+        "editor.active_line_number": "#24837B",
+        "editor.invisible": "#87858066",
+        "conflict": "#AD8A01",
+        "created": "#66800B",
+        "hidden": "#878580",
+        "hint": "#6F6E69",
+        "modified": "#BC5215",
+        "predictive": "#6F6E69",
+        "warning": "#AD8A01",
+        "syntax": {
+          "attribute": { "color": "#205EA6" },
+          "boolean": { "color": "#AD8A01" },
+          "comment": { "color": "#878580" },
+          "comment.doc": { "color": "#878580" },
+          "constant": { "color": "#BC5215" },
+          "constructor": { "color": "#205EA6" },
+          "emphasis": { "color": "#24837B", "font_style": "italic" },
+          "emphasis.strong": { "color": "#24837B", "font_weight": 700 },
+          "enum": { "color": "#AD8A01" },
+          "function": { "color": "#BC5215" },
+          "hint": { "color": "#878580" },
+          "keyword": { "color": "#66800B" },
+          "label": { "color": "#205EA6" },
+          "link_text": { "color": "#24837B" },
+          "link_uri": { "color": "#24837B" },
+          "number": { "color": "#5E409D" },
+          "operator": { "color": "#6F6E69" },
+          "predictive": { "color": "#6F6E69" },
+          "preproc": { "color": "#A02F6F" },
+          "primary": { "color": "#24837B" },
+          "property": { "color": "#BC5215" },
+          "punctuation": { "color": "#6F6E69" },
+          "punctuation.bracket": { "color": "#6F6E69" },
+          "punctuation.delimiter": { "color": "#6F6E69" },
+          "string": { "color": "#24837B" },
+          "string.escape": { "color": "#24837B" },
+          "string.regex": { "color": "#24837B" },
+          "string.special": { "color": "#24837B" },
+          "tag": { "color": "#205EA6" },
+          "text.literal": { "color": "#24837B" },
+          "title": { "color": "#AD8A01" },
+          "type": { "color": "#AD8A01" },
+          "variable": { "color": "#205EA6" },
+          "variable.special": { "color": "#205EA6" },
+          "variant": { "color": "#24837B" }
+        }
+      }
+    }
+  ]
+}

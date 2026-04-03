@@ -61,32 +61,28 @@ impl Render for SessionSidebar {
 
         if self.collapsed {
             return div()
-                .w(px(48.0))
+                .w(px(44.0))
                 .h_full()
                 .bg(theme.sidebar)
-                .border_r_1()
-                .border_color(theme.sidebar_border)
                 .flex()
                 .flex_col()
                 .items_center()
-                .pt(px(8.0))
+                .pt(px(44.0)) // align below traffic lights
                 // Expand button
                 .child(
                     div()
                         .id("sidebar-expand")
-                        .size(px(32.0))
+                        .size(px(28.0))
                         .flex()
                         .items_center()
                         .justify_center()
                         .rounded(px(6.0))
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.secondary))
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
                         .child(
                             svg()
                                 .path("phosphor/caret-right.svg")
-                                .size_4()
+                                .size(px(14.0))
                                 .text_color(theme.muted_foreground),
                         )
                         .on_mouse_down(
@@ -100,9 +96,9 @@ impl Render for SessionSidebar {
             .flex()
             .flex_col()
             .flex_1()
-            .px(px(8.0))
-            .pt(px(8.0))
-            .gap(px(2.0));
+            .px(px(6.0))
+            .pt(px(4.0))
+            .gap(px(1.0));
 
         for (i, session) in self.sessions.iter().enumerate() {
             let is_active = i == self.active_session;
@@ -112,6 +108,13 @@ impl Render for SessionSidebar {
                 "phosphor/terminal.svg"
             };
 
+            // Truncate long session names
+            let display_name = if session.name.len() > 20 {
+                format!("{}…", &session.name[..session.name.floor_char_boundary(18)])
+            } else {
+                session.name.clone()
+            };
+
             session_list = session_list.child(
                 div()
                     .id(SharedString::from(format!("session-{i}")))
@@ -119,10 +122,11 @@ impl Render for SessionSidebar {
                     .items_center()
                     .gap(px(8.0))
                     .px(px(8.0))
-                    .py(px(6.0))
+                    .h(px(32.0))
                     .rounded(px(6.0))
                     .cursor_pointer()
-                    .text_sm()
+                    .text_size(px(12.0))
+                    .overflow_x_hidden()
                     .bg(if is_active {
                         theme.list_active
                     } else {
@@ -149,26 +153,25 @@ impl Render for SessionSidebar {
                     .child(
                         svg()
                             .path(icon_path)
-                            .size(px(16.0))
+                            .size(px(14.0))
+                            .flex_shrink_0()
                             .text_color(if is_active {
                                 theme.primary
                             } else {
                                 theme.muted_foreground
                             }),
                     )
-                    .child(session.name.clone()),
+                    .child(display_name),
             );
         }
 
         div()
-            .w(px(208.0))
+            .w(px(200.0))
             .h_full()
             .bg(theme.sidebar)
-            .border_r_1()
-            .border_color(theme.sidebar_border)
             .flex()
             .flex_col()
-            // Header
+            // Header — aligns with tab bar height
             .child(
                 div()
                     .flex()
@@ -176,19 +179,17 @@ impl Render for SessionSidebar {
                     .justify_between()
                     .h(px(38.0))
                     .px(px(12.0))
-                    .border_b_1()
-                    .border_color(theme.sidebar_border)
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(11.0))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.muted_foreground)
+                            .text_color(theme.muted_foreground.opacity(0.6))
                             .child("SESSIONS"),
                     )
                     .child(
                         div()
                             .flex()
-                            .gap(px(4.0))
+                            .gap(px(2.0))
                             // New session button
                             .child(
                                 div()
@@ -197,12 +198,15 @@ impl Render for SessionSidebar {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(px(4.0))
+                                    .rounded(px(5.0))
                                     .cursor_pointer()
                                     .hover(|s| s.bg(theme.secondary))
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("+")
+                                    .child(
+                                        svg()
+                                            .path("phosphor/plus.svg")
+                                            .size(px(13.0))
+                                            .text_color(theme.muted_foreground),
+                                    )
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|_this, _, _, cx| {
@@ -218,13 +222,13 @@ impl Render for SessionSidebar {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(px(4.0))
+                                    .rounded(px(5.0))
                                     .cursor_pointer()
                                     .hover(|s| s.bg(theme.secondary))
                                     .child(
                                         svg()
                                             .path("phosphor/arrows-in-simple.svg")
-                                            .size(px(14.0))
+                                            .size(px(13.0))
                                             .text_color(theme.muted_foreground),
                                     )
                                     .on_mouse_down(

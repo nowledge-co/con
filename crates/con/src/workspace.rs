@@ -414,15 +414,16 @@ impl ConWorkspace {
         let sessions: Vec<SessionEntry> = self
             .tabs
             .iter()
-            .map(|tab| {
+            .enumerate()
+            .map(|(i, tab)| {
                 let terminal = tab.pane_tree.focused_terminal();
                 let tv = terminal.read(cx);
-                let title = tv.title().unwrap_or_else(|| tab.title.clone());
-                let is_ssh = tv.grid().lock().detected_remote_host().is_some();
-                SessionEntry {
-                    name: title,
-                    is_ssh,
-                }
+                let grid = tv.grid().lock();
+                let hostname = grid.detected_remote_host();
+                let is_ssh = hostname.is_some();
+                let name = pane_display_name(&hostname, &grid.title, &grid.current_dir, i);
+                drop(grid);
+                SessionEntry { name, is_ssh }
             })
             .collect();
         self.sidebar.update(cx, |sidebar, cx| {
@@ -512,6 +513,8 @@ impl ConWorkspace {
                         });
                     }
                 }
+                // Sync GPUI UI theme (dark/light) with terminal theme
+                crate::theme::sync_gpui_mode(&new_theme.name, window, cx);
             }
         }
 
@@ -523,7 +526,7 @@ impl ConWorkspace {
         &mut self,
         _settings: &Entity<SettingsPanel>,
         event: &ThemePreview,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(new_theme) = TerminalTheme::by_name(&event.0) {
@@ -536,6 +539,8 @@ impl ConWorkspace {
                         });
                     }
                 }
+                // Sync GPUI UI theme (dark/light) with terminal theme
+                crate::theme::sync_gpui_mode(&new_theme.name, window, cx);
                 cx.notify();
             }
         }
@@ -1287,40 +1292,7 @@ impl Render for ConWorkspace {
                 let tv = terminal.read(cx);
                 let grid = tv.grid().lock();
                 let hostname = grid.detected_remote_host();
-                // Pane naming priority:
-                // 1. Remote hostname (from OSC 7, title, or ssh command detection)
-                // 2. Terminal title (set by shell via OSC 0/1/2 — often user@host)
-                // 3. CWD basename (last resort, but skip home dir names to avoid showing username)
-                // 4. Fallback "Pane N"
-                let name = if let Some(ref host) = hostname {
-                    host.clone()
-                } else if let Some(ref title) = grid.title {
-                    // Use the title but clean it — many shells set "user@host: /path"
-                    // Extract the meaningful part
-                    if let Some(colon) = title.find(':') {
-                        title[..colon].trim().to_string()
-                    } else {
-                        title.clone()
-                    }
-                } else {
-                    grid.current_dir.as_ref()
-                        .and_then(|d| {
-                            let base = std::path::Path::new(d)
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())?;
-                            // Skip home directory names — they just show the username
-                            // which is confusing as a pane name
-                            let is_home = d.starts_with("/home/") || d.starts_with("/Users/");
-                            if is_home && std::path::Path::new(d).parent()
-                                .map_or(false, |p| p.file_name().map_or(false, |n| n == "home" || n == "Users"))
-                            {
-                                None
-                            } else {
-                                Some(base)
-                            }
-                        })
-                        .unwrap_or_else(|| format!("Pane {}", id + 1))
-                };
+                let name = pane_display_name(&hostname, &grid.title, &grid.current_dir, id);
                 let is_busy = grid.is_busy();
                 let is_alive = tv.pty().lock().is_alive();
                 PaneInfo { id, name, hostname, is_busy, is_alive }
@@ -1381,14 +1353,14 @@ impl Render for ConWorkspace {
                 .child(
                     div()
                         .id("agent-panel-divider")
-                        .w(px(7.0))
+                        .w(px(5.0))
                         .h_full()
                         .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_col_resize()
-                        .hover(|s| s.bg(theme.primary.opacity(0.15)))
+                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
@@ -1396,7 +1368,7 @@ impl Render for ConWorkspace {
                                     Some((f32::from(event.position.x), this.agent_panel_width));
                             }),
                         )
-                        .child(div().w(px(1.0)).h_full().bg(theme.border)),
+                        .child(div().w(px(1.0)).h_full().bg(theme.border.opacity(0.6))),
                 )
                 .child(
                     div()
@@ -1414,11 +1386,9 @@ impl Render for ConWorkspace {
             .h(px(38.0))
             .bg(theme.title_bar)
             .items_end()
-            .pl(px(80.0)) // leave room for traffic lights
-            .pr(px(16.0))
-            .gap(px(1.0))
-            .border_b_1()
-            .border_color(theme.border);
+            .pl(px(78.0)) // leave room for traffic lights
+            .pr(px(12.0))
+            .gap(px(0.0));
 
         for (index, tab) in self.tabs.iter().enumerate() {
             let is_active = index == self.active_tab;
@@ -1452,8 +1422,8 @@ impl Render for ConWorkspace {
                         .ml(px(6.0))
                         .text_size(px(10.0))
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.muted.opacity(0.3)))
-                        .text_color(theme.muted_foreground)
+                        .hover(|s| s.bg(theme.muted.opacity(0.20)))
+                        .text_color(theme.muted_foreground.opacity(0.5))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, window, cx| {
@@ -1499,11 +1469,11 @@ impl Render for ConWorkspace {
                 .group("tab")
                 .flex()
                 .items_center()
-                .px(px(12.0))
+                .px(px(14.0))
                 .py(px(6.0))
-                .rounded_t(px(8.0))
+                .rounded_t(px(6.0))
                 .text_size(px(12.0))
-                .max_w(px(200.0))
+                .max_w(px(180.0))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.activate_tab(index, window, cx);
@@ -1516,8 +1486,8 @@ impl Render for ConWorkspace {
                     .font_weight(FontWeight::MEDIUM);
             } else {
                 tab_el = tab_el
-                    .text_color(theme.muted_foreground)
-                    .hover(|s| s.bg(theme.secondary.opacity(0.5)));
+                    .text_color(theme.muted_foreground.opacity(0.7))
+                    .hover(|s| s.bg(theme.secondary.opacity(0.4)));
             }
 
             let mut tab_content = div()
@@ -1552,17 +1522,21 @@ impl Render for ConWorkspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(24.0))
-                .mb(px(4.0))
-                .rounded(px(6.0))
-                .text_size(px(14.0))
-                .text_color(theme.muted_foreground)
+                .size(px(22.0))
+                .mb(px(5.0))
+                .ml(px(4.0))
+                .rounded(px(5.0))
                 .cursor_pointer()
-                .hover(|s| s.bg(theme.secondary.opacity(0.5)))
+                .text_color(theme.muted_foreground.opacity(0.5))
+                .hover(|s| s.bg(theme.secondary.opacity(0.4)).text_color(theme.muted_foreground))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
-                .child("+"),
+                .child(
+                    svg()
+                        .path("phosphor/plus.svg")
+                        .size(px(12.0)),
+                ),
         );
 
         let mut root = div()
@@ -1701,12 +1675,7 @@ impl Render for ConWorkspace {
             }))
             .child(tab_bar)
             .child(main_area)
-            .child(
-                div()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .child(self.input_bar.clone()),
-            );
+            .child(self.input_bar.clone());
 
         let settings_visible = self.settings_panel.read(cx).is_visible();
         if settings_visible {
@@ -1720,4 +1689,79 @@ impl Render for ConWorkspace {
 
         root
     }
+}
+
+/// Derive a display name for a pane from available signals.
+///
+/// Priority:
+/// 1. Remote hostname (SSH session detected via OSC 7, title, or persistent tracking)
+/// 2. Terminal title — cleaned: strip `user@host:` prefix for local sessions,
+///    use the path part if it's a typical `user@host: /path` pattern
+/// 3. CWD directory name (skip bare home directories like `/Users/name`)
+/// 4. Fallback "Pane N"
+fn pane_display_name(
+    hostname: &Option<String>,
+    title: &Option<String>,
+    current_dir: &Option<String>,
+    pane_id: usize,
+) -> String {
+    // SSH session → show hostname
+    if let Some(host) = hostname {
+        return host.clone();
+    }
+
+    // Terminal title set by shell
+    if let Some(title) = title {
+        // Many shells set title to "user@host: /path" or "dirname — user@host"
+        // For local sessions, extract the meaningful part
+        let cleaned = if let Some(colon_pos) = title.find(':') {
+            let before = title[..colon_pos].trim();
+            let after = title[colon_pos + 1..].trim();
+            // If before-colon contains @, it's user@host — use the path after colon
+            if before.contains('@') {
+                if after.is_empty() { before.to_string() } else { shorten_path(after) }
+            } else {
+                before.to_string()
+            }
+        } else if title.contains('@') {
+            // Just "user@host" without path — use as-is
+            title.clone()
+        } else {
+            title.clone()
+        };
+        if !cleaned.is_empty() {
+            return cleaned;
+        }
+    }
+
+    // CWD basename
+    if let Some(dir) = current_dir {
+        let path = std::path::Path::new(dir);
+        // Skip bare home directories (e.g., /Users/weyl → "weyl" is confusing)
+        let is_bare_home = matches!(
+            path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
+            Some(ref name) if name == "home" || name == "Users"
+        ) && path.parent().and_then(|p| p.parent()).map_or(false, |pp| pp.parent().is_none());
+
+        if !is_bare_home {
+            if let Some(base) = path.file_name() {
+                return base.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    format!("Pane {}", pane_id + 1)
+}
+
+/// Shorten a path for display: ~/foo/bar → bar, /long/deep/path → path
+fn shorten_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed == "~" || trimmed == "/" {
+        return trimmed.to_string();
+    }
+    // Use the last path component
+    std::path::Path::new(trimmed)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| trimmed.to_string())
 }

@@ -181,7 +181,7 @@ impl Render for InputBar {
         // All interactive controls share this height
         let control_h = 28.0;
 
-        // Mode pill
+        // Mode pill — compact, well-defined
         let mode_pill = div()
             .id("mode-pill")
             .flex()
@@ -191,11 +191,11 @@ impl Render for InputBar {
             .px(px(10.0))
             .rounded(px(6.0))
             .cursor_pointer()
-            .bg(mode_color.opacity(0.10))
-            .text_size(px(12.0))
-            .font_weight(FontWeight::MEDIUM)
+            .bg(mode_color.opacity(0.08))
+            .text_size(px(11.0))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(mode_color)
-            .hover(|s| s.bg(mode_color.opacity(0.18)))
+            .hover(|s| s.bg(mode_color.opacity(0.16)))
             .child(mode_label);
 
         // Pane selector — status-aware pills with broadcast toggle
@@ -322,7 +322,7 @@ impl Render for InputBar {
             None
         };
 
-        // Send button — same height as controls
+        // Send button — circular, prominent
         let send_button = div()
             .id("send-button")
             .flex()
@@ -330,7 +330,7 @@ impl Render for InputBar {
             .justify_center()
             .h(px(control_h))
             .w(px(control_h))
-            .rounded(px(6.0))
+            .rounded(px(control_h / 2.0))
             .cursor_pointer()
             .bg(theme.primary)
             .hover(|s| s.bg(theme.primary_hover))
@@ -361,7 +361,7 @@ impl Render for InputBar {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(48.0))
+                    .h(px(44.0))
                     .px(px(12.0))
                     .gap(px(8.0))
                     .child(mode_pill)
@@ -375,25 +375,25 @@ impl Render for InputBar {
                     .children(pane_area)
                     .child(send_button),
             )
-            // Status row — subtle
+            // Status row — subtle, tighter
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .h(px(18.0))
+                    .h(px(16.0))
                     .px(px(14.0))
                     .pb(px(4.0))
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.4))
+                            .text_color(theme.muted_foreground.opacity(0.35))
                             .child(cwd),
                     )
                     .child(div().flex_1())
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.35))
+                            .text_color(theme.muted_foreground.opacity(0.25))
                             .child("↵ send"),
                     ),
             )

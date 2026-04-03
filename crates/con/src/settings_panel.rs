@@ -1,7 +1,6 @@
 use con_agent::{AgentConfig, ProviderConfig, ProviderKind, SuggestionModelConfig};
 use con_core::Config;
 use gpui::*;
-use gpui::prelude::FluentBuilder;
 
 use gpui_component::input::InputState;
 use gpui_component::{ActiveTheme, input::Input};
@@ -383,47 +382,77 @@ impl SettingsPanel {
         let theme = cx.theme();
         let current_theme = &self.config.terminal.theme;
         let available = con_terminal::TerminalTheme::available();
-        let selected_idx = available.iter().position(|t| t == current_theme).unwrap_or(0);
 
         section_content("Appearance", "Customize the look and feel.", &theme)
             .child(
                 card(&theme)
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
                             .px(px(16.0))
-                            .h(px(44.0))
-                            .child(div().text_sm().child("Terminal Theme"))
+                            .py(px(12.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .mb(px(12.0))
+                                    .child("Terminal Theme"),
+                            )
                             .child({
-                                let mut row = div()
+                                let mut grid = div()
                                     .flex()
-                                    .items_center()
-                                    .h(px(28.0))
-                                    .rounded(px(6.0))
-                                    .bg(theme.muted.opacity(0.12))
-                                    .p(px(2.0))
-                                    .gap(px(1.0));
+                                    .flex_wrap()
+                                    .gap(px(10.0));
 
-                                for (i, name) in available.iter().enumerate() {
-                                    let is_sel = i == selected_idx;
+                                for name in available.iter() {
+                                    let is_sel = *name == current_theme.as_str();
+                                    let term_theme = con_terminal::TerminalTheme::by_name(name)
+                                        .unwrap_or_default();
                                     let theme_name = name.to_string();
-                                    row = row.child(
+
+                                    // Color swatch card: bg + 8 bright ANSI color bars
+                                    let bg = term_theme.background;
+                                    let fg = term_theme.foreground;
+                                    let bg_gpui = gpui::rgb(bg.to_u32());
+                                    let fg_gpui = gpui::rgb(fg.to_u32());
+
+                                    // Build color bars from the 8 bright ANSI colors (indices 8-15)
+                                    let mut bars = div()
+                                        .flex()
+                                        .items_end()
+                                        .gap(px(3.0))
+                                        .h(px(32.0))
+                                        .px(px(8.0))
+                                        .pt(px(6.0));
+
+                                    for idx in 8..16 {
+                                        let c = term_theme.ansi[idx];
+                                        // Vary bar heights for visual interest
+                                        let heights = [20.0, 26.0, 18.0, 24.0, 22.0, 28.0, 16.0, 24.0];
+                                        let h = heights[idx - 8];
+                                        bars = bars.child(
+                                            div()
+                                                .w(px(6.0))
+                                                .h(px(h))
+                                                .rounded(px(2.0))
+                                                .bg(gpui::rgb(c.to_u32())),
+                                        );
+                                    }
+
+                                    let border_color = if is_sel {
+                                        theme.primary
+                                    } else {
+                                        theme.border
+                                    };
+
+                                    grid = grid.child(
                                         div()
-                                            .id(SharedString::from(format!("term-theme-{i}")))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .h(px(24.0))
-                                            .px(px(10.0))
-                                            .rounded(px(4.0))
-                                            .text_size(px(11.0))
-                                            .font_weight(FontWeight::MEDIUM)
+                                            .id(SharedString::from(format!("term-theme-{name}")))
                                             .cursor_pointer()
-                                            .bg(if is_sel { theme.background } else { theme.transparent })
-                                            .text_color(if is_sel { theme.foreground } else { theme.muted_foreground })
-                                            .when(is_sel, |s: Stateful<Div>| s.shadow_sm())
+                                            .w(px(100.0))
+                                            .rounded(px(8.0))
+                                            .border_2()
+                                            .border_color(border_color)
+                                            .overflow_hidden()
+                                            .hover(|s| s.border_color(theme.primary.opacity(0.6)))
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, _, cx| {
@@ -432,10 +461,28 @@ impl SettingsPanel {
                                                     cx.notify();
                                                 }),
                                             )
-                                            .child(display_theme_name(name)),
+                                            // Preview area: terminal bg + color bars
+                                            .child(
+                                                div()
+                                                    .bg(bg_gpui)
+                                                    .child(bars),
+                                            )
+                                            // Label area
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .h(px(24.0))
+                                                    .bg(bg_gpui)
+                                                    .text_size(px(10.0))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(fg_gpui)
+                                                    .child(display_theme_name(name)),
+                                            ),
                                     );
                                 }
-                                row
+                                grid
                             }),
                     ),
             )
@@ -463,9 +510,7 @@ impl SettingsPanel {
                 .size(px(14.0))
                 .rounded_full()
                 .flex_shrink_0()
-                .border_1()
-                .border_color(if is_selected { theme.primary } else { theme.muted.opacity(0.3) })
-                .bg(if is_selected { theme.primary } else { theme.transparent })
+                .bg(if is_selected { theme.primary } else { theme.muted.opacity(0.12) })
                 .flex()
                 .items_center()
                 .justify_center()
@@ -539,9 +584,7 @@ impl SettingsPanel {
                         .rounded(px(5.0))
                         .text_size(px(11.0))
                         .cursor_pointer()
-                        .bg(if is_active { theme.primary.opacity(0.15) } else { theme.muted.opacity(0.08) })
-                        .border_1()
-                        .border_color(if is_active { theme.primary.opacity(0.4) } else { theme.transparent })
+                        .bg(if is_active { theme.primary.opacity(0.15) } else { theme.muted.opacity(0.06) })
                         .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
                         .hover(|s| s.bg(theme.muted.opacity(0.18)).text_color(theme.foreground))
                         .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
@@ -730,8 +773,6 @@ impl Render for SettingsPanel {
             .pb(px(12.0))
             .px(px(8.0))
             .gap(px(1.0))
-            .border_r_1()
-            .border_color(theme.border)
             .flex_shrink_0();
 
         for section in ALL_SECTIONS {
@@ -802,9 +843,6 @@ impl Render for SettingsPanel {
                     .max_h(px(720.0))
                     .rounded(px(12.0))
                     .bg(theme.title_bar)
-                    .border_1()
-                    .border_color(theme.border)
-                    .shadow_lg()
                     .overflow_hidden()
                     .flex()
                     .flex_col()
@@ -830,8 +868,6 @@ impl Render for SettingsPanel {
                             .justify_between()
                             .h(px(44.0))
                             .px(px(16.0))
-                            .border_b_1()
-                            .border_color(theme.border)
                             .flex_shrink_0()
                             .child(
                                 div()

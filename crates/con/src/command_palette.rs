@@ -293,9 +293,6 @@ impl Render for CommandPalette {
             .w(px(520.0))
             .rounded(px(12.0))
             .bg(theme.title_bar)
-            .border_1()
-            .border_color(theme.border)
-            .shadow_lg()
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -331,8 +328,6 @@ impl Render for CommandPalette {
             .child(
                 div()
                     .p(px(12.0))
-                    .border_b_1()
-                    .border_color(theme.border)
                     .child(Input::new(&self.query)),
             )
             .child(list);

@@ -15,6 +15,30 @@ use workspace::ConWorkspace;
 
 actions!(con, [Quit, NewTab, ToggleAgentPanel, CloseTab, SplitRight, SplitDown, Undo, Redo, Cut, Copy, Paste, SelectAll]);
 
+/// Set the macOS dock icon at runtime (for `cargo run` — bundled apps use Info.plist).
+#[cfg(target_os = "macos")]
+fn set_dock_icon() {
+    use cocoa::appkit::{NSApp, NSApplication, NSImage};
+    use cocoa::base::nil;
+    use cocoa::foundation::NSData;
+    use objc::rc::autoreleasepool;
+
+    const ICON_PNG: &[u8] = include_bytes!("../../../assets/Con-macOS-Dark-256x256@2x.png");
+
+    autoreleasepool(|| unsafe {
+        let data = NSData::dataWithBytes_length_(
+            nil,
+            ICON_PNG.as_ptr() as *const std::ffi::c_void,
+            ICON_PNG.len() as u64,
+        );
+        let icon = NSImage::initWithData_(NSImage::alloc(nil), data);
+        NSApp().setApplicationIconImage_(icon);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_dock_icon() {}
+
 fn main() {
     env_logger::init();
 
@@ -22,11 +46,14 @@ fn main() {
 
     let app = gpui_platform::application().with_assets(assets::ConAssets);
     app.run(move |cx: &mut App| {
+        // Set dock icon for development (cargo run)
+        set_dock_icon();
+
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)
         gpui_component::init(cx);
 
-        // Load and activate con's design theme
-        theme::init_theme(cx);
+        // Load and activate con's design theme (synced to terminal theme)
+        theme::init_theme(cx, &config.terminal.theme);
 
         // Register global keybindings from user config
         let kb = &config.keybindings;
