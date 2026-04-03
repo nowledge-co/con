@@ -31,6 +31,7 @@ fn main() {
     // macOS frameworks required by libghostty
     if cfg!(target_os = "macos") {
         for framework in &[
+            "AppKit",
             "Metal",
             "CoreGraphics",
             "CoreText",

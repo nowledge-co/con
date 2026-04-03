@@ -1,4 +1,9 @@
-use crate::grid::{CommandBlock, TerminalTheme, VisibleCommandBlock};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+
+use crate::grid::{CommandBlock, Grid, TerminalTheme, VisibleCommandBlock};
+use crate::pty::{Pty, PtySize};
 
 /// Abstraction over terminal backends (legacy Grid+vte or ghostty GPU renderer).
 ///
@@ -71,4 +76,115 @@ pub trait TerminalBackend: Send + Sync {
 
     /// Clear scrollback buffer.
     fn clear_scrollback(&self);
+}
+
+/// TerminalBackend implementation for the legacy Grid+vte+Pty pipeline.
+pub struct GridBackend {
+    grid: Arc<Mutex<Grid>>,
+    pty: Arc<Mutex<Pty>>,
+}
+
+impl GridBackend {
+    pub fn new(grid: Arc<Mutex<Grid>>, pty: Arc<Mutex<Pty>>) -> Self {
+        Self { grid, pty }
+    }
+
+    pub fn grid(&self) -> &Arc<Mutex<Grid>> {
+        &self.grid
+    }
+
+    pub fn pty(&self) -> &Arc<Mutex<Pty>> {
+        &self.pty
+    }
+}
+
+impl TerminalBackend for GridBackend {
+    fn title(&self) -> Option<String> {
+        self.grid.lock().title.clone()
+    }
+
+    fn current_dir(&self) -> Option<String> {
+        self.grid.lock().current_dir.clone()
+    }
+
+    fn detected_remote_host(&self) -> Option<String> {
+        self.grid.lock().detected_remote_host()
+    }
+
+    fn is_busy(&self) -> bool {
+        self.grid.lock().is_busy()
+    }
+
+    fn at_shell_prompt(&self) -> bool {
+        self.grid.lock().at_shell_prompt()
+    }
+
+    fn current_input(&self) -> Option<String> {
+        self.grid.lock().current_input()
+    }
+
+    fn content_lines(&self, n: usize) -> Vec<String> {
+        self.grid.lock().content_lines(n)
+    }
+
+    fn recent_lines(&self, n: usize) -> Vec<String> {
+        self.grid.lock().recent_lines(n)
+    }
+
+    fn command_blocks(&self) -> Vec<CommandBlock> {
+        self.grid.lock().command_blocks.clone()
+    }
+
+    fn visible_command_blocks(&self) -> Vec<VisibleCommandBlock> {
+        self.grid.lock().visible_command_blocks()
+    }
+
+    fn command_block_output(&self, start_row: usize, end_row: usize) -> String {
+        self.grid.lock().command_block_output(start_row, end_row)
+    }
+
+    fn last_command(&self) -> Option<String> {
+        self.grid.lock().last_command.clone()
+    }
+
+    fn last_exit_code(&self) -> Option<i32> {
+        self.grid.lock().last_exit_code
+    }
+
+    fn search_text(&self, pattern: &str, limit: usize) -> Vec<(usize, String)> {
+        self.grid.lock().search_text(pattern, limit)
+    }
+
+    fn grid_size(&self) -> (usize, usize) {
+        let g = self.grid.lock();
+        (g.cols, g.rows)
+    }
+
+    fn is_alive(&self) -> bool {
+        self.pty.lock().is_alive()
+    }
+
+    fn is_alt_screen(&self) -> bool {
+        self.grid.lock().is_alt_screen()
+    }
+
+    fn write(&self, data: &[u8]) {
+        let _ = self.pty.lock().write(data);
+    }
+
+    fn resize(&self, cols: usize, rows: usize) {
+        self.grid.lock().resize(cols, rows);
+        let _ = self.pty.lock().resize(PtySize {
+            rows: rows as u16,
+            cols: cols as u16,
+        });
+    }
+
+    fn set_theme(&self, theme: &TerminalTheme) {
+        self.grid.lock().set_theme(theme);
+    }
+
+    fn clear_scrollback(&self) {
+        self.grid.lock().clear_scrollback();
+    }
 }

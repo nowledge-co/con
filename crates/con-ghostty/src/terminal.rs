@@ -3,18 +3,25 @@
 //! Uses the macOS platform: creates an NSView for ghostty to render into
 //! via its GPU-accelerated Metal renderer. State (title, pwd) is received
 //! through action callbacks, not polling.
+//!
+//! Design invariants:
+//! - `ghostty_init` is called exactly once per process (via `std::sync::Once`)
+//! - Each `GhosttyTerminal` has its own `TerminalState` via per-surface userdata
+//! - Clipboard callbacks are always set (ghostty dereferences them without null checks)
+//! - The GhosttyApp must be ticked from the main thread (Metal rendering)
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use parking_lot::Mutex;
 
 use crate::ffi;
 
-// ── Shared state updated by action callbacks ────────────────
+// ── Per-surface state updated by action callbacks ───────────
 
 /// Terminal state received via ghostty action callbacks.
+/// Each GhosttyTerminal has its own instance, stored as surface userdata.
 #[derive(Default)]
 pub struct TerminalState {
     pub title: Option<String>,
@@ -23,26 +30,42 @@ pub struct TerminalState {
     pub child_exited: bool,
 }
 
-type StateRef = Arc<Mutex<TerminalState>>;
+pub type StateRef = Arc<Mutex<TerminalState>>;
+
+// ── One-time global init ────────────────────────────────────
+
+static GHOSTTY_INIT: Once = Once::new();
+static mut GHOSTTY_INIT_RESULT: i32 = -1;
+
+fn ensure_ghostty_init() -> Result<(), String> {
+    GHOSTTY_INIT.call_once(|| {
+        let ret = unsafe { ffi::ghostty_init(0, std::ptr::null_mut()) };
+        unsafe { GHOSTTY_INIT_RESULT = ret };
+    });
+    let ret = unsafe { GHOSTTY_INIT_RESULT };
+    if ret != 0 {
+        Err(format!("ghostty_init failed with code {}", ret))
+    } else {
+        Ok(())
+    }
+}
 
 // ── GhosttyApp — singleton managing all surfaces ────────────
 
 /// Global ghostty application context. One per process.
+///
+/// Must be ticked from the main thread — ghostty's Metal renderer
+/// requires main thread access on macOS.
 pub struct GhosttyApp {
     app: ffi::ghostty_app_t,
-    state: StateRef,
-    // Box prevents the runtime_config from being moved while ghostty holds a pointer
+    // Box prevents the runtime_config from being moved while ghostty holds a pointer.
     _runtime_config: Box<ffi::ghostty_runtime_config_s>,
 }
 
 impl GhosttyApp {
     /// Create a new ghostty app with default config.
     pub fn new() -> Result<Self, String> {
-        // Initialize ghostty
-        let ret = unsafe { ffi::ghostty_init(0, std::ptr::null_mut()) };
-        if ret != 0 {
-            return Err(format!("ghostty_init failed with code {}", ret));
-        }
+        ensure_ghostty_init()?;
 
         // Create and finalize config
         let config = unsafe { ffi::ghostty_config_new() };
@@ -54,42 +77,40 @@ impl GhosttyApp {
             ffi::ghostty_config_finalize(config);
         }
 
-        let state: StateRef = Arc::new(Mutex::new(TerminalState::default()));
-
-        // Allocate userdata on heap — the pointer is passed to C callbacks
-        let userdata = Box::into_raw(Box::new(state.clone())) as *mut c_void;
-
+        // App-level userdata is not used for per-surface state.
+        // We keep it null — per-surface state is on surface userdata.
         let runtime_config = Box::new(ffi::ghostty_runtime_config_s {
-            userdata,
+            userdata: std::ptr::null_mut(),
             supports_selection_clipboard: false,
             wakeup_cb: Some(wakeup_callback),
             action_cb: Some(action_callback),
-            read_clipboard_cb: None,
-            confirm_read_clipboard_cb: None,
-            write_clipboard_cb: None,
+            // These MUST be Some — ghostty dereferences them without null checks.
+            read_clipboard_cb: Some(read_clipboard_callback),
+            confirm_read_clipboard_cb: Some(confirm_read_clipboard_callback),
+            write_clipboard_cb: Some(write_clipboard_callback),
             close_surface_cb: Some(close_surface_callback),
         });
 
         let app =
             unsafe { ffi::ghostty_app_new(&*runtime_config as *const _, config) };
+
+        // Ghostty clones the config — we must free the original.
+        unsafe { ffi::ghostty_config_free(config) };
+
         if app.is_null() {
-            // Clean up
-            unsafe {
-                ffi::ghostty_config_free(config);
-                drop(Box::from_raw(userdata as *mut StateRef));
-            }
             return Err("ghostty_app_new returned null".into());
         }
 
-        // Config ownership transferred to app — don't free it
         Ok(Self {
             app,
-            state,
             _runtime_config: runtime_config,
         })
     }
 
-    /// Drive the ghostty event loop. Call this from your main loop / timer.
+    /// Drive the ghostty event loop.
+    ///
+    /// **Must be called from the main thread** — ghostty's Metal renderer
+    /// and AppKit operations require it.
     pub fn tick(&self) {
         unsafe { ffi::ghostty_app_tick(self.app) }
     }
@@ -106,6 +127,8 @@ impl GhosttyApp {
 
     /// Create a new terminal surface. The `nsview` must be a valid NSView pointer
     /// that ghostty will attach its Metal IOSurfaceLayer to.
+    ///
+    /// Each surface gets its own `TerminalState` for independent title/pwd tracking.
     #[cfg(target_os = "macos")]
     pub fn new_surface(
         &self,
@@ -113,11 +136,18 @@ impl GhosttyApp {
         scale_factor: f64,
         cwd: Option<&str>,
     ) -> Result<GhosttyTerminal, String> {
+        // Per-surface state — stored as surface userdata so callbacks can
+        // update the correct terminal's state.
+        let state: StateRef = Arc::new(Mutex::new(TerminalState::default()));
+        let surface_userdata = Box::into_raw(Box::new(state.clone())) as *mut c_void;
+
         let mut config = unsafe { ffi::ghostty_surface_config_new() };
-        config.platform_tag = ffi::ghostty_platform_e::GHOSTTY_PLATFORM_MACOS as i32;
+        config.platform_tag =
+            ffi::ghostty_platform_e::GHOSTTY_PLATFORM_MACOS as std::os::raw::c_int;
         config.platform = ffi::ghostty_platform_u {
             macos: ffi::ghostty_platform_macos_s { nsview },
         };
+        config.userdata = surface_userdata;
         config.scale_factor = scale_factor;
         config.context = ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_TAB;
 
@@ -126,22 +156,19 @@ impl GhosttyApp {
             config.working_directory = s.as_ptr();
         }
 
-        let surface = unsafe {
-            ffi::ghostty_surface_new(self.app, &config as *const _)
-        };
+        let surface =
+            unsafe { ffi::ghostty_surface_new(self.app, &config as *const _) };
         if surface.is_null() {
+            // Clean up the userdata we allocated
+            unsafe { drop(Box::from_raw(surface_userdata as *mut StateRef)) };
             return Err("ghostty_surface_new returned null".into());
         }
 
         Ok(GhosttyTerminal {
             surface,
-            state: self.state.clone(),
+            state,
+            userdata_ptr: surface_userdata,
         })
-    }
-
-    /// Get shared terminal state.
-    pub fn state(&self) -> &StateRef {
-        &self.state
     }
 
     /// Raw app handle.
@@ -152,17 +179,14 @@ impl GhosttyApp {
 
 impl Drop for GhosttyApp {
     fn drop(&mut self) {
-        // Recover the userdata Box to free it
-        let userdata = unsafe { ffi::ghostty_app_userdata(self.app) };
-        if !userdata.is_null() {
-            unsafe { drop(Box::from_raw(userdata as *mut StateRef)) };
-        }
+        // Free the app first — this allows ghostty to run any final cleanup
+        // and fire callbacks while userdata is still valid.
         unsafe { ffi::ghostty_app_free(self.app) }
     }
 }
 
-// SAFETY: GhosttyApp's internal state is protected by mutex.
-// The ghostty C library handles its own thread safety.
+// SAFETY: GhosttyApp's C-side state is protected by ghostty's internal
+// synchronization. The Rust-side runtime_config is heap-pinned and read-only.
 unsafe impl Send for GhosttyApp {}
 unsafe impl Sync for GhosttyApp {}
 
@@ -172,10 +196,13 @@ unsafe impl Sync for GhosttyApp {}
 ///
 /// Ghostty renders directly into the NSView provided at creation time.
 /// Input is forwarded via the ghostty_surface_* APIs. State updates
-/// (title, pwd) arrive via the action callback.
+/// (title, pwd) arrive via the per-surface action callback.
 pub struct GhosttyTerminal {
     surface: ffi::ghostty_surface_t,
     state: StateRef,
+    /// Raw pointer to the Box<StateRef> we allocated for surface userdata.
+    /// Must be recovered and freed when the terminal is dropped.
+    userdata_ptr: *mut c_void,
 }
 
 impl GhosttyTerminal {
@@ -237,11 +264,14 @@ impl GhosttyTerminal {
         unsafe { ffi::ghostty_surface_key(self.surface, key) }
     }
 
-    /// Send UTF-8 text input to the terminal.
+    /// Send UTF-8 text input to the terminal (for composed/IME text).
     pub fn send_text(&self, text: &str) {
-        let len = text.len();
-        let cstr = CString::new(text).unwrap_or_default();
-        unsafe { ffi::ghostty_surface_text(self.surface, cstr.as_ptr(), len) }
+        if let Ok(cstr) = CString::new(text) {
+            let len = cstr.as_bytes().len(); // excludes NUL, matches original text
+            unsafe { ffi::ghostty_surface_text(self.surface, cstr.as_ptr(), len) }
+        }
+        // If text contains NUL bytes, we silently drop it — this matches
+        // terminal semantics where NUL in text input is meaningless.
     }
 
     /// Send a mouse button event.
@@ -258,8 +288,12 @@ impl GhosttyTerminal {
         };
         let btn = match button {
             MouseButton::Left => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_LEFT,
-            MouseButton::Right => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_RIGHT,
-            MouseButton::Middle => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_MIDDLE,
+            MouseButton::Right => {
+                ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_RIGHT
+            }
+            MouseButton::Middle => {
+                ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_MIDDLE
+            }
         };
         unsafe { ffi::ghostty_surface_mouse_button(self.surface, state, btn, mods) }
     }
@@ -281,12 +315,12 @@ impl GhosttyTerminal {
 
     // ── State queries ───────────────────────────────────────
 
-    /// Terminal title (from action callback, set by OSC 0/1/2).
+    /// Terminal title (from per-surface action callback, set by OSC 0/1/2).
     pub fn title(&self) -> Option<String> {
         self.state.lock().title.clone()
     }
 
-    /// Working directory (from action callback, set by OSC 7).
+    /// Working directory (from per-surface action callback, set by OSC 7).
     pub fn current_dir(&self) -> Option<String> {
         self.state.lock().pwd.clone()
     }
@@ -311,12 +345,14 @@ impl GhosttyTerminal {
             text: std::ptr::null(),
             text_len: 0,
         };
-        let ok = unsafe { ffi::ghostty_surface_read_selection(self.surface, &mut text) };
+        let ok =
+            unsafe { ffi::ghostty_surface_read_selection(self.surface, &mut text) };
         if !ok || text.text.is_null() || text.text_len == 0 {
             return None;
         }
         let result = unsafe {
-            let bytes = std::slice::from_raw_parts(text.text as *const u8, text.text_len);
+            let bytes =
+                std::slice::from_raw_parts(text.text as *const u8, text.text_len);
             String::from_utf8_lossy(bytes).into_owned()
         };
         unsafe { ffi::ghostty_surface_free_text(self.surface, &mut text) };
@@ -333,13 +369,15 @@ impl GhosttyTerminal {
             text: std::ptr::null(),
             text_len: 0,
         };
-        let ok =
-            unsafe { ffi::ghostty_surface_read_text(self.surface, selection, &mut text) };
+        let ok = unsafe {
+            ffi::ghostty_surface_read_text(self.surface, selection, &mut text)
+        };
         if !ok || text.text.is_null() || text.text_len == 0 {
             return None;
         }
         let result = unsafe {
-            let bytes = std::slice::from_raw_parts(text.text as *const u8, text.text_len);
+            let bytes =
+                std::slice::from_raw_parts(text.text as *const u8, text.text_len);
             String::from_utf8_lossy(bytes).into_owned()
         };
         unsafe { ffi::ghostty_surface_free_text(self.surface, &mut text) };
@@ -354,6 +392,11 @@ impl GhosttyTerminal {
         r
     }
 
+    /// Access the per-surface state.
+    pub fn state(&self) -> &StateRef {
+        &self.state
+    }
+
     /// Raw FFI surface handle.
     pub fn raw_surface(&self) -> ffi::ghostty_surface_t {
         self.surface
@@ -362,7 +405,14 @@ impl GhosttyTerminal {
 
 impl Drop for GhosttyTerminal {
     fn drop(&mut self) {
-        unsafe { ffi::ghostty_surface_free(self.surface) }
+        // Free the surface first — ghostty may fire callbacks during cleanup
+        // while userdata is still valid.
+        unsafe { ffi::ghostty_surface_free(self.surface) };
+        // Recover the Box<StateRef> we allocated in new_surface.
+        // After surface_free, ghostty no longer references this pointer.
+        if !self.userdata_ptr.is_null() {
+            unsafe { drop(Box::from_raw(self.userdata_ptr as *mut StateRef)) };
+        }
     }
 }
 
@@ -391,30 +441,56 @@ pub enum MouseButton {
 
 // ── C callback implementations ──────────────────────────────
 
+/// Resolve per-surface state from a ghostty_target_s.
+/// For SURFACE-targeted actions, reads the surface's userdata.
+/// Returns None if the target is app-level or has no userdata.
+unsafe fn resolve_surface_state(
+    target: &ffi::ghostty_target_s,
+) -> Option<StateRef> {
+    unsafe {
+        if target.tag != ffi::ghostty_target_tag_e::GHOSTTY_TARGET_SURFACE {
+            return None;
+        }
+        let surface = target.target.surface;
+        if surface.is_null() {
+            return None;
+        }
+        let userdata = ffi::ghostty_surface_userdata(surface);
+        if userdata.is_null() {
+            return None;
+        }
+        let state_ref = &*(userdata as *const StateRef);
+        Some(state_ref.clone())
+    }
+}
+
 unsafe extern "C" fn wakeup_callback(_userdata: *mut c_void) {
     // The wakeup callback signals that ghostty has work to do.
-    // In our GPUI integration, we'll trigger a cx.notify() from the
-    // GPUI side by polling take_needs_render() on a timer.
+    // The GPUI integration layer (ghostty_view.rs) uses on_next_frame
+    // to call tick() on the main thread. This callback is a signal
+    // that we should schedule that tick sooner rather than later.
+    //
+    // TODO: integrate with GPUI's event loop for lower-latency wakeup.
+    // For now, the 8ms timer in ghostty_view.rs provides adequate refresh.
 }
 
 unsafe extern "C" fn action_callback(
     _app: ffi::ghostty_app_t,
-    _target: ffi::ghostty_target_s,
+    target: ffi::ghostty_target_s,
     action: ffi::ghostty_action_s,
 ) -> bool {
     unsafe {
-        // Extract userdata from app to get our state
-        let userdata = ffi::ghostty_app_userdata(_app);
-        if userdata.is_null() {
-            return false;
-        }
-        let state = &*(userdata as *const StateRef);
+        let state = match resolve_surface_state(&target) {
+            Some(s) => s,
+            None => return false,
+        };
 
         match action.tag {
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SET_TITLE => {
                 let title_ptr = action.action.set_title.title;
                 if !title_ptr.is_null() {
-                    let title = CStr::from_ptr(title_ptr).to_string_lossy().into_owned();
+                    let title =
+                        CStr::from_ptr(title_ptr).to_string_lossy().into_owned();
                     state.lock().title = Some(title);
                 }
                 true
@@ -422,7 +498,8 @@ unsafe extern "C" fn action_callback(
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_PWD => {
                 let pwd_ptr = action.action.pwd.pwd;
                 if !pwd_ptr.is_null() {
-                    let pwd = CStr::from_ptr(pwd_ptr).to_string_lossy().into_owned();
+                    let pwd =
+                        CStr::from_ptr(pwd_ptr).to_string_lossy().into_owned();
                     state.lock().pwd = Some(pwd);
                 }
                 true
@@ -431,13 +508,50 @@ unsafe extern "C" fn action_callback(
                 state.lock().needs_render = true;
                 true
             }
-            // Actions we don't handle — return false so ghostty knows
             _ => false,
         }
     }
 }
 
-unsafe extern "C" fn close_surface_callback(userdata: *mut c_void, _process_alive: bool) {
+/// Clipboard read stub — returns false (clipboard not available).
+/// Ghostty calls this without null-checking, so it must always be set.
+unsafe extern "C" fn read_clipboard_callback(
+    _userdata: *mut c_void,
+    _clipboard: ffi::ghostty_clipboard_e,
+    _request: *mut c_void,
+) -> bool {
+    // TODO: integrate with GPUI/macOS clipboard for paste support
+    false
+}
+
+/// Clipboard confirmation stub — does nothing.
+/// Ghostty calls this without null-checking, so it must always be set.
+unsafe extern "C" fn confirm_read_clipboard_callback(
+    _userdata: *mut c_void,
+    _text: *const std::os::raw::c_char,
+    _request: *mut c_void,
+    _request_type: ffi::ghostty_clipboard_request_e,
+) {
+    // TODO: implement clipboard confirmation UI
+}
+
+/// Clipboard write stub — does nothing.
+/// Ghostty calls this without null-checking, so it must always be set.
+unsafe extern "C" fn write_clipboard_callback(
+    _userdata: *mut c_void,
+    _clipboard: ffi::ghostty_clipboard_e,
+    _content: *const ffi::ghostty_clipboard_content_s,
+    _content_count: usize,
+    _confirm: bool,
+) {
+    // TODO: integrate with GPUI/macOS clipboard for copy support
+}
+
+unsafe extern "C" fn close_surface_callback(
+    userdata: *mut c_void,
+    _process_alive: bool,
+) {
+    // userdata here is the surface's userdata (per-surface StateRef)
     if userdata.is_null() {
         return;
     }

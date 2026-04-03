@@ -11,8 +11,12 @@ use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
 use crate::pane_tree::{PaneTree, SplitDirection};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
+use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, InputChanged, TerminalView};
 use con_terminal::TerminalTheme;
+
+#[cfg(target_os = "macos")]
+use crate::ghostty_view::{GhosttyFocusChanged, GhosttyProcessExited, GhosttyTitleChanged, GhosttyView};
 use crate::{CloseTab, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
 use con_core::config::Config;
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
@@ -56,6 +60,11 @@ pub struct ConWorkspace {
     suggestion_tx: crossbeam_channel::Sender<(gpui::EntityId, String)>,
     /// Current terminal color theme
     terminal_theme: TerminalTheme,
+    /// Whether to use ghostty backend for new terminals
+    use_ghostty: bool,
+    /// Shared ghostty app instance (macOS only, lazy-initialized)
+    #[cfg(target_os = "macos")]
+    ghostty_app: Option<std::sync::Arc<con_ghostty::GhosttyApp>>,
 }
 
 impl ConWorkspace {
@@ -74,7 +83,8 @@ impl ConWorkspace {
             .map(|(i, tab_state)| {
                 let theme = &terminal_theme;
                 let cwd = tab_state.cwd.as_deref();
-                let terminal = cx.new(|cx| TerminalView::with_options(80, 24, font_size, scrollback_lines, theme, cwd, cx));
+                let terminal_view = cx.new(|cx| TerminalView::with_options(80, 24, font_size, scrollback_lines, theme, cwd, cx));
+                let terminal = TerminalPane::Legacy(terminal_view);
                 // Restore per-tab conversation, with migration from global conversation_id
                 let agent_session = if let Some(conv_id) = &tab_state.conversation_id {
                     match Conversation::load(conv_id) {
@@ -113,7 +123,8 @@ impl ConWorkspace {
             })
             .collect();
         if tabs.is_empty() {
-            let terminal = cx.new(|cx| TerminalView::with_options(80, 24, font_size, scrollback_lines, &terminal_theme, None, cx));
+            let terminal_view = cx.new(|cx| TerminalView::with_options(80, 24, font_size, scrollback_lines, &terminal_theme, None, cx));
+            let terminal = TerminalPane::Legacy(terminal_view);
             tabs.push(Tab {
                 pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),
@@ -125,14 +136,7 @@ impl ConWorkspace {
         // Subscribe to events from all terminals
         for tab in &tabs {
             for terminal in tab.pane_tree.all_terminals() {
-                cx.subscribe_in(terminal, window, Self::on_explain_command)
-                    .detach();
-                cx.subscribe_in(terminal, window, Self::on_close_pane_request)
-                    .detach();
-                cx.subscribe_in(terminal, window, Self::on_focus_changed)
-                    .detach();
-                cx.subscribe_in(terminal, window, Self::on_input_changed)
-                    .detach();
+                subscribe_terminal_pane(terminal, window, cx);
             }
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
@@ -229,8 +233,8 @@ impl ConWorkspace {
         .detach();
 
         // Focus the initial terminal so the user can start typing immediately
-        let initial_terminal = tabs[active_tab].pane_tree.focused_terminal().clone();
-        initial_terminal.focus_handle(cx).focus(window, cx);
+        let initial_terminal = tabs[active_tab].pane_tree.focused_terminal();
+        initial_terminal.focus(window, cx);
 
         Self {
             sidebar,
@@ -251,10 +255,59 @@ impl ConWorkspace {
             suggestion_engine,
             suggestion_tx,
             terminal_theme,
+            use_ghostty: config.terminal.use_ghostty(),
+            #[cfg(target_os = "macos")]
+            ghostty_app: None,
         }
     }
 
-    fn active_terminal(&self) -> &Entity<TerminalView> {
+    /// Create a new TerminalPane using the configured backend.
+    fn create_terminal(
+        &mut self,
+        cwd: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TerminalPane {
+        #[cfg(target_os = "macos")]
+        if self.use_ghostty {
+            // Lazy-init the shared ghostty app
+            if self.ghostty_app.is_none() {
+                match con_ghostty::GhosttyApp::new() {
+                    Ok(app) => {
+                        self.ghostty_app = Some(std::sync::Arc::new(app));
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create ghostty app: {}. Falling back to grid.", e);
+                        self.use_ghostty = false;
+                    }
+                }
+            }
+            if let Some(ref app) = self.ghostty_app {
+                let app = app.clone();
+                let view = cx.new(|cx| {
+                    crate::ghostty_view::GhosttyView::new(app, cx)
+                });
+                let pane = TerminalPane::Ghostty(view);
+                subscribe_terminal_pane(&pane, window, cx);
+                return pane;
+            }
+        }
+        let font_size = self.font_size;
+        let scrollback_lines = self.scrollback_lines;
+        let theme = &self.terminal_theme;
+        let terminal_view = cx.new(|cx| {
+            if let Some(cwd) = cwd {
+                TerminalView::with_options(80, 24, font_size, scrollback_lines, theme, Some(cwd), cx)
+            } else {
+                TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx)
+            }
+        });
+        let pane = TerminalPane::Legacy(terminal_view);
+        subscribe_terminal_pane(&pane, window, cx);
+        pane
+    }
+
+    fn active_terminal(&self) -> &TerminalPane {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
     }
 
@@ -262,7 +315,6 @@ impl ConWorkspace {
     fn build_agent_context(&self, cx: &App) -> con_agent::TerminalContext {
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
         let focused = self.active_terminal();
-        let focused_grid = focused.read(cx).grid();
 
         // Determine focused pane's 1-based index and hostname
         let all_terminals = pane_tree.all_terminals();
@@ -273,10 +325,7 @@ impl ConWorkspace {
             .find(|(_, t)| pane_tree.pane_id_for_terminal(t) == Some(focused_pid))
             .map(|(i, _)| i + 1)
             .unwrap_or(1);
-        let focused_hostname = {
-            let g = focused_grid.lock();
-            g.detected_remote_host()
-        };
+        let focused_hostname = focused.detected_remote_host(cx);
 
         let mut other_pane_summaries = Vec::new();
         if pane_tree.pane_count() > 1 {
@@ -285,23 +334,37 @@ impl ConWorkspace {
                     if pid == focused_pid {
                         continue;
                     }
-                    let grid = terminal.read(cx).grid();
-                    let g = grid.lock();
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
-                        hostname: g.detected_remote_host(),
-                        cwd: g.current_dir.clone(),
-                        last_command: g.last_command.clone(),
-                        last_exit_code: g.last_exit_code,
-                        is_busy: g.is_busy(),
-                        recent_output: g.content_lines(10),
+                        hostname: terminal.detected_remote_host(cx),
+                        cwd: terminal.current_dir(cx),
+                        last_command: terminal.last_command(cx),
+                        last_exit_code: terminal.last_exit_code(cx),
+                        is_busy: terminal.is_busy(cx),
+                        recent_output: terminal.content_lines(10, cx),
                     });
                 }
             }
         }
 
-        self.harness
-            .build_context(&focused_grid.lock(), None, focused_pane_index, focused_hostname, other_pane_summaries)
+        // Build context via Grid if available (legacy), otherwise construct manually
+        if let Some(focused_grid) = focused.as_grid(cx) {
+            self.harness
+                .build_context(&focused_grid.lock(), None, focused_pane_index, focused_hostname, other_pane_summaries)
+        } else {
+            // Ghostty: build context without Grid access
+            self.harness
+                .build_context_from_snapshot(
+                    &focused.content_lines(50, cx),
+                    focused.current_dir(cx),
+                    focused.last_command(cx),
+                    focused.last_exit_code(cx),
+                    focused.is_busy(cx),
+                    focused_pane_index,
+                    focused_hostname,
+                    other_pane_summaries,
+                )
+        }
     }
 
     fn save_session(&self, cx: &App) {
@@ -310,10 +373,9 @@ impl ConWorkspace {
             .iter()
             .map(|tab| {
                 let terminal = tab.pane_tree.focused_terminal();
-                let cwd = terminal.read(cx).grid().lock().current_dir.clone();
+                let cwd = terminal.current_dir(cx);
                 let title = terminal
-                    .read(cx)
-                    .title()
+                    .title(cx)
                     .unwrap_or_else(|| tab.title.clone());
                 con_core::session::TabState {
                     title,
@@ -417,12 +479,11 @@ impl ConWorkspace {
             .enumerate()
             .map(|(i, tab)| {
                 let terminal = tab.pane_tree.focused_terminal();
-                let tv = terminal.read(cx);
-                let grid = tv.grid().lock();
-                let hostname = grid.detected_remote_host();
+                let hostname = terminal.detected_remote_host(cx);
                 let is_ssh = hostname.is_some();
-                let name = pane_display_name(&hostname, &grid.title, &grid.current_dir, i);
-                drop(grid);
+                let title = terminal.title(cx);
+                let current_dir = terminal.current_dir(cx);
+                let name = pane_display_name(&hostname, &title, &current_dir, i);
                 SessionEntry { name, is_ssh }
             })
             .collect();
@@ -460,14 +521,10 @@ impl ConWorkspace {
                 self.split_pane(SplitDirection::Vertical, window, cx);
             }
             "clear-terminal" => {
-                let terminal = self.active_terminal().clone();
-                terminal.update(cx, |tv, _| {
-                    tv.grid().lock().clear_scrollback();
-                });
+                self.active_terminal().clear_scrollback(cx);
             }
             "focus-terminal" => {
-                let terminal = self.active_terminal().clone();
-                terminal.focus_handle(cx).focus(window, cx);
+                self.active_terminal().focus(window, cx);
             }
             "toggle-sidebar" => {
                 self.sidebar.update(cx, |sidebar, cx| {
@@ -505,12 +562,10 @@ impl ConWorkspace {
         if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
             if new_theme.name != self.terminal_theme.name {
                 self.terminal_theme = new_theme.clone();
-                // Update all existing terminal grids
+                // Update all existing terminal panes
                 for tab in &self.tabs {
                     for terminal in tab.pane_tree.all_terminals() {
-                        terminal.update(cx, |view, _cx| {
-                            view.grid().lock().set_theme(&new_theme);
-                        });
+                        terminal.set_theme(&new_theme, cx);
                     }
                 }
                 // Sync GPUI UI theme (dark/light) with terminal theme
@@ -534,9 +589,7 @@ impl ConWorkspace {
                 self.terminal_theme = new_theme.clone();
                 for tab in &self.tabs {
                     for terminal in tab.pane_tree.all_terminals() {
-                        terminal.update(cx, |view, _cx| {
-                            view.grid().lock().set_theme(&new_theme);
-                        });
+                        terminal.set_theme(&new_theme, cx);
                     }
                 }
                 // Sync GPUI UI theme (dark/light) with terminal theme
@@ -578,11 +631,7 @@ impl ConWorkspace {
                 self.send_to_agent(&content, cx);
             }
             InputMode::Smart => {
-                let is_remote = {
-                    let grid = self.active_terminal().read(cx).grid();
-                    let g = grid.lock();
-                    g.detected_remote_host().is_some()
-                };
+                let is_remote = self.active_terminal().detected_remote_host(cx).is_some();
                 match self.harness.classify_input(&content, is_remote) {
                     InputKind::ShellCommand(cmd) => {
                         self.execute_shell(&cmd, window, cx);
@@ -696,7 +745,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         // Use the specified pane, or fall back to the focused pane.
-        let terminal = if let Some(pane_index) = req.pane_index {
+        let pane = if let Some(pane_index) = req.pane_index {
             let pane_tree = &self.tabs[tab_idx].pane_tree;
             let all_terminals = pane_tree.all_terminals();
             if pane_index == 0 || pane_index > all_terminals.len() {
@@ -714,10 +763,9 @@ impl ConWorkspace {
         } else {
             self.tabs[tab_idx].pane_tree.focused_terminal().clone()
         };
-        let tv = terminal.read(cx);
 
         // Safety: refuse to execute on a dead PTY.
-        if !tv.pty().lock().is_alive() {
+        if !pane.is_alive(cx) {
             let _ = req.response_tx.send(TerminalExecResponse {
                 output: "Pane PTY process has exited — cannot execute command.".to_string(),
                 exit_code: Some(1),
@@ -725,34 +773,33 @@ impl ConWorkspace {
             return;
         }
 
-        // Safety: warn if pane is busy (command in progress). We don't hard-block
-        // because the agent might intentionally want to chain commands, but logging
-        // helps diagnose issues when OSC 133 tracking gets confused.
-        if tv.grid().lock().is_busy() {
+        // Safety: warn if pane is busy (command in progress).
+        if pane.is_busy(cx) {
             log::warn!(
                 "[workspace] Executing on busy pane — a command is already in progress. \
                  OSC 133 tracking may produce unexpected results."
             );
         }
 
-        // Register the completion callback BEFORE writing the command.
-        // When OSC 133 D fires, the grid captures output and sends it back.
-        let response_tx = req.response_tx.clone();
-        tv.grid().lock().set_command_complete_callback(Box::new(
-            move |output, exit_code| {
-                let _ = response_tx.send(TerminalExecResponse { output, exit_code });
-            },
-        ));
+        // For legacy terminals, register the OSC 133 completion callback.
+        // Ghostty doesn't support OSC 133 callbacks, so we rely solely on the fallback.
+        if let Some(grid) = pane.as_grid(cx) {
+            let response_tx = req.response_tx.clone();
+            grid.lock().set_command_complete_callback(Box::new(
+                move |output, exit_code| {
+                    let _ = response_tx.send(TerminalExecResponse { output, exit_code });
+                },
+            ));
+        }
 
         // Write the command to the PTY — user sees it execute in real time
         let cmd_with_newline = format!("{}\n", req.command);
-        tv.write_to_pty(cmd_with_newline.as_bytes());
+        pane.write(cmd_with_newline.as_bytes(), cx);
 
-        // Fallback: if OSC 133 never fires (no shell integration, e.g. SSH),
-        // detect completion via cursor stability — when cursor position stops
-        // changing for ~1s, the command has likely finished and returned to prompt.
+        // Fallback: if OSC 133 never fires (no shell integration, e.g. SSH or ghostty),
+        // detect completion via cursor stability or timeout.
         let fallback_response_tx = req.response_tx;
-        let grid = tv.grid().clone();
+        let grid = pane.as_grid(cx);
         cx.spawn(async move |_this, cx| {
             // Wait for the command to start producing output
             cx.background_executor()
@@ -769,27 +816,35 @@ impl ConWorkspace {
                     return;
                 }
 
-                let (done_osc, cursor_pos) = {
-                    let g = grid.lock();
-                    let osc_done = !g.is_busy() && g.last_prompt_row.is_some();
-                    let pos = (g.cursor.row, g.cursor.col);
-                    (osc_done, pos)
-                };
+                if let Some(ref grid) = grid {
+                    let (done_osc, cursor_pos) = {
+                        let g = grid.lock();
+                        let osc_done = !g.is_busy() && g.last_prompt_row.is_some();
+                        let pos = (g.cursor.row, g.cursor.col);
+                        (osc_done, pos)
+                    };
 
-                // Fast path: shell integration detected completion
-                if done_osc {
-                    break;
-                }
-
-                // Slow path: cursor stability (for sessions without shell integration)
-                if cursor_pos == last_cursor {
-                    stable_count += 1;
-                    if stable_count >= required_stable {
+                    // Fast path: shell integration detected completion
+                    if done_osc {
                         break;
                     }
+
+                    // Slow path: cursor stability (for sessions without shell integration)
+                    if cursor_pos == last_cursor {
+                        stable_count += 1;
+                        if stable_count >= required_stable {
+                            break;
+                        }
+                    } else {
+                        stable_count = 0;
+                        last_cursor = cursor_pos;
+                    }
                 } else {
-                    stable_count = 0;
-                    last_cursor = cursor_pos;
+                    // Ghostty: no Grid access, just wait via timeout
+                    stable_count += 1;
+                    if stable_count >= 6 { // 6 × 500ms = 3s timeout
+                        break;
+                    }
                 }
 
                 cx.background_executor()
@@ -798,9 +853,12 @@ impl ConWorkspace {
             }
 
             // If the callback already fired, try_send will fail (channel closed).
-            let output = {
+            let output = if let Some(ref grid) = grid {
                 let g = grid.lock();
                 g.recent_lines(50).join("\n")
+            } else {
+                // Ghostty: no text extraction available
+                "(output capture not available for ghostty backend)".to_string()
             };
             let _ = fallback_response_tx.try_send(TerminalExecResponse {
                 output,
@@ -832,30 +890,25 @@ impl ConWorkspace {
                         let pid = pane_tree
                             .pane_id_for_terminal(terminal)
                             .unwrap_or(idx);
-                        let tv = terminal.read(cx);
-                        let grid = tv.grid();
-                        let g = grid.lock();
-                        // Read title from the locked grid directly — do NOT call
-                        // terminal.title() here as it would re-lock the mutex (deadlock).
-                        let title = g
-                            .title
-                            .clone()
+                        let title = terminal.title(cx)
                             .unwrap_or_else(|| format!("Pane {}", idx + 1));
-                        let is_alive = tv.pty().lock().is_alive();
-                        let has_shell_integration = g.last_prompt_row.is_some();
+                        let (cols, rows) = terminal.grid_size(cx);
+                        let has_shell_integration = terminal.as_grid(cx)
+                            .map(|g| g.lock().last_prompt_row.is_some())
+                            .unwrap_or(false);
                         PaneInfo {
                             index: idx + 1,
                             title,
-                            cwd: g.current_dir.clone(),
+                            cwd: terminal.current_dir(cx),
                             is_focused: pid == focused_pid,
-                            rows: g.rows,
-                            cols: g.cols,
-                            is_alive,
-                            hostname: g.detected_remote_host(),
+                            rows,
+                            cols,
+                            is_alive: terminal.is_alive(cx),
+                            hostname: terminal.detected_remote_host(cx),
                             has_shell_integration,
-                            last_command: g.last_command.clone(),
-                            last_exit_code: g.last_exit_code,
-                            is_busy: g.is_busy(),
+                            last_command: terminal.last_command(cx),
+                            last_exit_code: terminal.last_exit_code(cx),
+                            is_busy: terminal.is_busy(cx),
                         }
                     })
                     .collect();
@@ -870,9 +923,7 @@ impl ConWorkspace {
                     ))
                 } else {
                     let terminal = &all_terminals[pane_index - 1];
-                    let grid = terminal.read(cx).grid();
-                    let g = grid.lock();
-                    let content = g.recent_lines(lines).join("\n");
+                    let content = terminal.recent_lines(lines, cx).join("\n");
                     PaneResponse::Content(content)
                 }
             }
@@ -885,7 +936,7 @@ impl ConWorkspace {
                     ))
                 } else {
                     let terminal = &all_terminals[pane_index - 1];
-                    terminal.read(cx).write_to_pty(keys.as_bytes());
+                    terminal.write(keys.as_bytes(), cx);
                     PaneResponse::KeysSent
                 }
             }
@@ -894,9 +945,9 @@ impl ConWorkspace {
                 pattern,
                 max_matches,
             } => {
-                let targets: Vec<(usize, &Entity<TerminalView>)> = match pane_index {
+                let targets: Vec<(usize, &TerminalPane)> = match pane_index {
                     Some(idx) if idx >= 1 && idx <= all_terminals.len() => {
-                        vec![(idx, &all_terminals[idx - 1])]
+                        vec![(idx, all_terminals[idx - 1])]
                     }
                     Some(idx) => {
                         return {
@@ -917,13 +968,11 @@ impl ConWorkspace {
                 let mut results = Vec::new();
                 let remaining = max_matches;
                 for (idx, terminal) in &targets {
-                    let grid = terminal.read(cx).grid();
-                    let g = grid.lock();
                     let per_pane = remaining.saturating_sub(results.len());
                     if per_pane == 0 {
                         break;
                     }
-                    for (line_num, text) in g.search_text(&pattern, per_pane) {
+                    for (line_num, text) in terminal.search_text(&pattern, per_pane, cx) {
                         results.push((*idx, line_num, text));
                     }
                 }
@@ -995,18 +1044,7 @@ impl ConWorkspace {
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
-        let font_size = self.font_size;
-        let scrollback_lines = self.scrollback_lines;
-        let theme = &self.terminal_theme;
-        let terminal = cx.new(|cx| TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx));
-        cx.subscribe_in(&terminal, window, Self::on_explain_command)
-            .detach();
-        cx.subscribe_in(&terminal, window, Self::on_close_pane_request)
-            .detach();
-        cx.subscribe_in(&terminal, window, Self::on_focus_changed)
-            .detach();
-        cx.subscribe_in(&terminal, window, Self::on_input_changed)
-            .detach();
+        let terminal = self.create_terminal(None, window, cx);
         let tab_number = self.tabs.len() + 1;
         let old_active = self.active_tab;
 
@@ -1029,7 +1067,7 @@ impl ConWorkspace {
         });
         self.tabs[old_active].panel_state = outgoing;
 
-        terminal.focus_handle(cx).focus(window, cx);
+        terminal.focus(window, cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -1070,19 +1108,14 @@ impl ConWorkspace {
             if all_terminals.len() == 1 || target_ids.iter().any(|&tid| {
                 pane_tree.terminal_has_pane_id(terminal, tid)
             }) {
-                terminal.update(cx, |tv, _| {
-                    tv.write_to_pty(format!("{}\n", cmd).as_bytes());
-                });
+                terminal.write(format!("{}\n", cmd).as_bytes(), cx);
             }
         }
 
         if is_broadcast {
-            // After broadcast, keep focus on input bar so user can type another command
             self.input_bar.focus_handle(cx).focus(window, cx);
         } else {
-            // Single-pane send: focus the target terminal
-            let focused = self.active_terminal().clone();
-            focused.focus_handle(cx).focus(window, cx);
+            self.active_terminal().focus(window, cx);
         }
     }
 
@@ -1104,22 +1137,11 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let font_size = self.font_size;
-        let scrollback_lines = self.scrollback_lines;
-        let theme = &self.terminal_theme;
-        let terminal = cx.new(|cx| TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx));
-        cx.subscribe_in(&terminal, window, Self::on_explain_command)
-            .detach();
-        cx.subscribe_in(&terminal, window, Self::on_close_pane_request)
-            .detach();
-        cx.subscribe_in(&terminal, window, Self::on_focus_changed)
-            .detach();
-        cx.subscribe_in(&terminal, window, Self::on_input_changed)
-            .detach();
+        let terminal = self.create_terminal(None, window, cx);
         self.tabs[self.active_tab]
             .pane_tree
             .split(direction, terminal.clone());
-        terminal.focus_handle(cx).focus(window, cx);
+        terminal.focus(window, cx);
         cx.notify();
     }
 
@@ -1141,7 +1163,7 @@ impl ConWorkspace {
         self.split_pane(SplitDirection::Vertical, window, cx);
     }
 
-    fn on_close_pane_request(
+    pub(crate) fn on_close_pane_request(
         &mut self,
         _terminal: &Entity<TerminalView>,
         _event: &ClosePaneRequest,
@@ -1151,27 +1173,25 @@ impl ConWorkspace {
         let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
         if pane_tree.pane_count() > 1 {
             pane_tree.close_focused();
-            // Focus the new focused terminal
-            let terminal = pane_tree.focused_terminal().clone();
-            terminal.focus_handle(cx).focus(window, cx);
+            let terminal = pane_tree.focused_terminal();
+            terminal.focus(window, cx);
         } else if self.tabs.len() > 1 {
             self.close_tab(&CloseTab, window, cx);
         }
         cx.notify();
     }
 
-    fn on_focus_changed(
+    pub(crate) fn on_focus_changed(
         &mut self,
         terminal: &Entity<TerminalView>,
         _event: &FocusChanged,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Terminal gained focus — directly update pane tracking and ensure focus sticks
+        let entity_id = terminal.entity_id();
         let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
-        if let Some(pane_id) = pane_tree.pane_id_for_terminal(terminal) {
+        if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
             pane_tree.focus(pane_id);
-            // Re-assert focus on the terminal to ensure nothing steals it
             terminal.focus_handle(cx).focus(window, cx);
         }
         cx.notify();
@@ -1187,25 +1207,23 @@ impl ConWorkspace {
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_terminals() {
                 if terminal.entity_id() == entity_id {
-                    terminal.update(cx, |view, cx| {
-                        view.set_suggestion(Some(suggestion), cx);
-                    });
+                    terminal.set_suggestion(Some(suggestion), cx);
                     return;
                 }
             }
         }
     }
 
-    fn on_input_changed(
+    pub(crate) fn on_input_changed(
         &mut self,
         terminal: &Entity<TerminalView>,
         event: &InputChanged,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let entity_id = terminal.entity_id();
         match &event.input {
             Some(input) if input.len() >= 2 => {
-                let entity_id = terminal.entity_id();
                 let tx = self.suggestion_tx.clone();
                 self.suggestion_engine.request(input, move |suggestion| {
                     let _ = tx.send((entity_id, suggestion));
@@ -1213,15 +1231,20 @@ impl ConWorkspace {
             }
             _ => {
                 self.suggestion_engine.cancel();
-                // Clear any existing suggestion
-                terminal.update(cx, |view, cx| {
-                    view.set_suggestion(None, cx);
-                });
+                // Clear any existing suggestion — find the pane and use TerminalPane API
+                for tab in &self.tabs {
+                    for pane in tab.pane_tree.all_terminals() {
+                        if pane.entity_id() == entity_id {
+                            pane.set_suggestion(None, cx);
+                            return;
+                        }
+                    }
+                }
             }
         }
     }
 
-    fn on_explain_command(
+    pub(crate) fn on_explain_command(
         &mut self,
         _terminal: &Entity<TerminalView>,
         event: &ExplainCommand,
@@ -1255,16 +1278,65 @@ impl ConWorkspace {
 
         self.active_tab = index;
         self.tabs[index].needs_attention = false;
-        let terminal = self.tabs[index].pane_tree.focused_terminal().clone();
-        terminal.focus_handle(cx).focus(window, cx);
+        self.tabs[index].pane_tree.focused_terminal().focus(window, cx);
         self.save_session(cx);
         cx.notify();
     }
 
     /// Focus the active terminal (used after modal close, etc.)
     fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
-        let terminal = self.active_terminal().clone();
-        terminal.focus_handle(cx).focus(window, cx);
+        self.active_terminal().focus(window, cx);
+    }
+
+    // ── Ghostty event handlers ──────────────────────────────
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn on_ghostty_focus_changed(
+        &mut self,
+        entity: &Entity<GhosttyView>,
+        _event: &GhosttyFocusChanged,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entity_id = entity.entity_id();
+        let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
+        if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
+            pane_tree.focus(pane_id);
+            entity.focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn on_ghostty_process_exited(
+        &mut self,
+        _entity: &Entity<GhosttyView>,
+        _event: &GhosttyProcessExited,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Treat like close-pane request
+        let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
+        if pane_tree.pane_count() > 1 {
+            pane_tree.close_focused();
+            pane_tree.focused_terminal().focus(window, cx);
+        } else if self.tabs.len() > 1 {
+            self.close_tab(&CloseTab, window, cx);
+        }
+        cx.notify();
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn on_ghostty_title_changed(
+        &mut self,
+        _entity: &Entity<GhosttyView>,
+        _event: &GhosttyTitleChanged,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Title changed — sync sidebar and tab bar
+        self.sync_sidebar(cx);
+        cx.notify();
     }
 }
 
@@ -1289,17 +1361,17 @@ impl Render for ConWorkspace {
             .pane_terminals()
             .into_iter()
             .map(|(id, terminal)| {
-                let tv = terminal.read(cx);
-                let grid = tv.grid().lock();
-                let hostname = grid.detected_remote_host();
-                let name = pane_display_name(&hostname, &grid.title, &grid.current_dir, id);
-                let is_busy = grid.is_busy();
-                let is_alive = tv.pty().lock().is_alive();
+                let hostname = terminal.detected_remote_host(cx);
+                let title = terminal.title(cx);
+                let current_dir = terminal.current_dir(cx);
+                let name = pane_display_name(&hostname, &title, &current_dir, id);
+                let is_busy = terminal.is_busy(cx);
+                let is_alive = terminal.is_alive(cx);
                 PaneInfo { id, name, hostname, is_busy, is_alive }
             })
             .collect();
 
-        let cwd = active_terminal.read(cx).grid().lock().current_dir.clone();
+        let cwd = active_terminal.current_dir(cx);
         let display_cwd = cwd
             .map(|cwd| match dirs::home_dir() {
                 Some(home) => {
@@ -1394,8 +1466,7 @@ impl Render for ConWorkspace {
             let needs_attention = tab.needs_attention && !is_active;
             let terminal = tab.pane_tree.focused_terminal();
             let title = terminal
-                .read(cx)
-                .title()
+                .title(cx)
                 .unwrap_or_else(|| tab.title.clone());
 
             // Truncate long titles
@@ -1573,7 +1644,7 @@ impl Render for ConWorkspace {
                             this.agent_panel_width = new_width;
                             // Notify all terminals so they detect new available space
                             for terminal in this.tabs[this.active_tab].pane_tree.all_terminals() {
-                                terminal.update(cx, |_, cx| cx.notify());
+                                terminal.notify(cx);
                             }
                             cx.notify();
                         }
@@ -1616,7 +1687,7 @@ impl Render for ConWorkspace {
                         // Notify all terminals in the active tab so they
                         // re-render and detect new bounds during canvas prepaint
                         for terminal in pane_tree.all_terminals() {
-                            terminal.update(cx, |_, cx| cx.notify());
+                            terminal.notify(cx);
                         }
                         cx.notify();
                     }

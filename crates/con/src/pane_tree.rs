@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-use crate::terminal_view::TerminalView;
+use crate::terminal_pane::TerminalPane;
 
 /// Split direction for pane layout
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -20,7 +20,7 @@ pub type SplitId = usize;
 enum PaneNode {
     Leaf {
         id: PaneId,
-        terminal: Entity<TerminalView>,
+        terminal: TerminalPane,
     },
     Split {
         split_id: SplitId,
@@ -53,7 +53,7 @@ pub struct PaneTree {
 }
 
 impl PaneTree {
-    pub fn new(terminal: Entity<TerminalView>) -> Self {
+    pub fn new(terminal: TerminalPane) -> Self {
         Self {
             root: PaneNode::Leaf { id: 0, terminal },
             focused_pane_id: 0,
@@ -64,20 +64,20 @@ impl PaneTree {
     }
 
     /// Get the focused terminal
-    pub fn focused_terminal(&self) -> &Entity<TerminalView> {
+    pub fn focused_terminal(&self) -> &TerminalPane {
         Self::find_terminal(&self.root, self.focused_pane_id)
             .unwrap_or_else(|| Self::first_terminal(&self.root))
     }
 
     /// Get all terminals in the tree
-    pub fn all_terminals(&self) -> Vec<&Entity<TerminalView>> {
+    pub fn all_terminals(&self) -> Vec<&TerminalPane> {
         let mut result = Vec::new();
         Self::collect_terminals(&self.root, &mut result);
         result
     }
 
     /// Split the focused pane
-    pub fn split(&mut self, direction: SplitDirection, new_terminal: Entity<TerminalView>) {
+    pub fn split(&mut self, direction: SplitDirection, new_terminal: TerminalPane) {
         let new_id = self.next_id;
         self.next_id += 1;
         let new_split_id = self.next_split_id;
@@ -123,15 +123,14 @@ impl PaneTree {
     }
 
     /// Update focused pane based on which terminal currently has window focus.
-    /// Call this from the workspace render to keep pane focus in sync with clicks.
     pub fn sync_focus(&mut self, window: &Window, cx: &App) {
         if let Some(id) = Self::find_focused_pane(&self.root, window, cx) {
             self.focused_pane_id = id;
         }
     }
 
-    /// Get all pane IDs with their terminal entities
-    pub fn pane_terminals(&self) -> Vec<(PaneId, Entity<TerminalView>)> {
+    /// Get all pane IDs with their terminal panes
+    pub fn pane_terminals(&self) -> Vec<(PaneId, TerminalPane)> {
         let mut result = Vec::new();
         Self::collect_pane_terminals(&self.root, &mut result);
         result
@@ -141,14 +140,19 @@ impl PaneTree {
         self.focused_pane_id
     }
 
-    /// Find the pane ID for a given terminal entity
-    pub fn pane_id_for_terminal(&self, terminal: &Entity<TerminalView>) -> Option<PaneId> {
-        Self::find_pane_id_by_entity(&self.root, terminal)
+    /// Find the pane ID for a given terminal by entity ID
+    pub fn pane_id_for_entity(&self, entity_id: EntityId) -> Option<PaneId> {
+        Self::find_pane_id_by_entity_id(&self.root, entity_id)
     }
 
-    /// Check if a given terminal entity belongs to a specific pane ID
-    pub fn terminal_has_pane_id(&self, terminal: &Entity<TerminalView>, pane_id: PaneId) -> bool {
-        Self::check_terminal_pane_id(&self.root, terminal, pane_id)
+    /// Find the pane ID for a given terminal pane
+    pub fn pane_id_for_terminal(&self, terminal: &TerminalPane) -> Option<PaneId> {
+        self.pane_id_for_entity(terminal.entity_id())
+    }
+
+    /// Check if a given terminal belongs to a specific pane ID
+    pub fn terminal_has_pane_id(&self, terminal: &TerminalPane, pane_id: PaneId) -> bool {
+        Self::check_terminal_pane_id(&self.root, terminal.entity_id(), pane_id)
     }
 
     /// Number of panes
@@ -157,7 +161,6 @@ impl PaneTree {
     }
 
     /// Start a drag on the given split divider.
-    /// `start_pos` is the cursor coordinate along the split axis (x for horizontal, y for vertical).
     pub fn begin_drag(&mut self, split_id: SplitId, start_pos: f32) {
         if let Some((ratio, _dir)) = Self::find_split_ratio(&self.root, split_id) {
             self.dragging = Some(DragState {
@@ -169,7 +172,6 @@ impl PaneTree {
     }
 
     /// Update the drag: move the divider based on new cursor position and total container size.
-    /// Returns true if a ratio changed and a redraw is needed.
     pub fn update_drag(&mut self, current_pos: f32, total_size: f32) -> bool {
         let drag = match &self.dragging {
             Some(d) => d.clone(),
@@ -200,7 +202,6 @@ impl PaneTree {
     }
 
     /// Render the pane tree as a GPUI element.
-    /// `begin_drag_cb` is called with `(split_id, start_pos)` when the user mouse-downs on a divider.
     pub fn render(
         &self,
         begin_drag_cb: impl Fn(SplitId, f32) + 'static,
@@ -217,7 +218,7 @@ impl PaneTree {
 
     // --- Private helpers ---
 
-    fn find_terminal(node: &PaneNode, target_id: PaneId) -> Option<&Entity<TerminalView>> {
+    fn find_terminal(node: &PaneNode, target_id: PaneId) -> Option<&TerminalPane> {
         match node {
             PaneNode::Leaf { id, terminal } if *id == target_id => Some(terminal),
             PaneNode::Leaf { .. } => None,
@@ -226,7 +227,7 @@ impl PaneTree {
         }
     }
 
-    fn first_terminal(node: &PaneNode) -> &Entity<TerminalView> {
+    fn first_terminal(node: &PaneNode) -> &TerminalPane {
         match node {
             PaneNode::Leaf { terminal, .. } => terminal,
             PaneNode::Split { first, .. } => Self::first_terminal(first),
@@ -241,7 +242,7 @@ impl PaneTree {
         }
     }
 
-    fn collect_terminals<'a>(node: &'a PaneNode, result: &mut Vec<&'a Entity<TerminalView>>) {
+    fn collect_terminals<'a>(node: &'a PaneNode, result: &mut Vec<&'a TerminalPane>) {
         match node {
             PaneNode::Leaf { terminal, .. } => result.push(terminal),
             PaneNode::Split { first, second, .. } => {
@@ -260,7 +261,6 @@ impl PaneTree {
         }
     }
 
-    /// Find the ratio and direction of a split by ID
     fn find_split_ratio(node: &PaneNode, target_id: SplitId) -> Option<(f32, SplitDirection)> {
         match node {
             PaneNode::Leaf { .. } => None,
@@ -281,7 +281,6 @@ impl PaneTree {
         }
     }
 
-    /// Set the ratio of a split by ID. Returns true if found and changed.
     fn set_split_ratio(node: &mut PaneNode, target_id: SplitId, new_ratio: f32) -> bool {
         match node {
             PaneNode::Leaf { .. } => false,
@@ -312,7 +311,7 @@ impl PaneTree {
         target_id: PaneId,
         direction: SplitDirection,
         new_id: PaneId,
-        new_terminal: Entity<TerminalView>,
+        new_terminal: TerminalPane,
         new_split_id: SplitId,
     ) {
         match node {
@@ -396,12 +395,10 @@ impl PaneTree {
 
         match node {
             PaneNode::Leaf { id: _, terminal } => {
-                // Leaf — no flex sizing here, parent Split handles sizing.
-                // Add small left inset so terminal text doesn't touch the edge.
                 div()
                     .size_full()
                     .pl(px(4.0))
-                    .child(terminal.clone())
+                    .child(terminal.render_child())
                     .into_any_element()
             }
             PaneNode::Split {
@@ -455,9 +452,6 @@ impl PaneTree {
                         }),
                 };
 
-                // Pattern from Zed's split_editor_view: each pane child gets
-                // flex_basis for the main axis, explicit full size for cross axis,
-                // min_w/h_0 to allow shrinking, overflow_hidden to clip content.
                 let make_pane = |child: AnyElement, basis: f32| -> Div {
                     let mut d = div()
                         .flex_shrink()
@@ -473,7 +467,6 @@ impl PaneTree {
                 let first_sized = make_pane(first_el, ratio);
                 let second_sized = make_pane(second_el, 1.0 - ratio);
 
-                // Container: flex row/col filling all available space (size_full)
                 let mut container = div().flex().size_full();
                 container = match dir {
                     SplitDirection::Horizontal => container.flex_row(),
@@ -492,7 +485,7 @@ impl PaneTree {
     fn find_focused_pane(node: &PaneNode, window: &Window, cx: &App) -> Option<PaneId> {
         match node {
             PaneNode::Leaf { id, terminal } => {
-                if terminal.focus_handle(cx).is_focused(window) {
+                if terminal.is_focused(window, cx) {
                     Some(*id)
                 } else {
                     None
@@ -507,37 +500,37 @@ impl PaneTree {
 
     fn check_terminal_pane_id(
         node: &PaneNode,
-        terminal: &Entity<TerminalView>,
+        entity_id: EntityId,
         pane_id: PaneId,
     ) -> bool {
         match node {
-            PaneNode::Leaf { id, terminal: t } => {
-                *id == pane_id && t.entity_id() == terminal.entity_id()
+            PaneNode::Leaf { id, terminal } => {
+                *id == pane_id && terminal.entity_id() == entity_id
             }
             PaneNode::Split { first, second, .. } => {
-                Self::check_terminal_pane_id(first, terminal, pane_id)
-                    || Self::check_terminal_pane_id(second, terminal, pane_id)
+                Self::check_terminal_pane_id(first, entity_id, pane_id)
+                    || Self::check_terminal_pane_id(second, entity_id, pane_id)
             }
         }
     }
 
-    fn find_pane_id_by_entity(node: &PaneNode, terminal: &Entity<TerminalView>) -> Option<PaneId> {
+    fn find_pane_id_by_entity_id(node: &PaneNode, entity_id: EntityId) -> Option<PaneId> {
         match node {
-            PaneNode::Leaf { id, terminal: t } => {
-                if t.entity_id() == terminal.entity_id() {
+            PaneNode::Leaf { id, terminal } => {
+                if terminal.entity_id() == entity_id {
                     Some(*id)
                 } else {
                     None
                 }
             }
             PaneNode::Split { first, second, .. } => {
-                Self::find_pane_id_by_entity(first, terminal)
-                    .or_else(|| Self::find_pane_id_by_entity(second, terminal))
+                Self::find_pane_id_by_entity_id(first, entity_id)
+                    .or_else(|| Self::find_pane_id_by_entity_id(second, entity_id))
             }
         }
     }
 
-    fn collect_pane_terminals(node: &PaneNode, result: &mut Vec<(PaneId, Entity<TerminalView>)>) {
+    fn collect_pane_terminals(node: &PaneNode, result: &mut Vec<(PaneId, TerminalPane)>) {
         match node {
             PaneNode::Leaf { id, terminal } => {
                 result.push((*id, terminal.clone()));

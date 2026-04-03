@@ -381,6 +381,141 @@ impl AgentHarness {
         }
     }
 
+    /// Build agent context from pre-extracted terminal state (for non-Grid backends like ghostty).
+    pub fn build_context_from_snapshot(
+        &self,
+        recent_output: &[String],
+        cwd: Option<String>,
+        last_command: Option<String>,
+        last_exit_code: Option<i32>,
+        is_busy: bool,
+        focused_pane_index: usize,
+        focused_hostname: Option<String>,
+        other_panes: Vec<con_agent::context::PaneSummary>,
+    ) -> TerminalContext {
+        let _ = is_busy; // available for future use
+
+        let agents_md = cwd.as_ref().and_then(|dir| {
+            let agents_path = Path::new(dir).join("AGENTS.md");
+            std::fs::read_to_string(&agents_path).ok()
+        });
+
+        let ssh_host = std::env::var("SSH_CONNECTION")
+            .ok()
+            .and_then(|val| val.split_whitespace().next().map(|s| s.to_string()));
+
+        let tmux_session = std::env::var("TMUX").ok().and_then(|val| {
+            std::process::Command::new("tmux")
+                .args(["display-message", "-p", "#S"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .or_else(|| {
+                    val.split(',').next().and_then(|path| {
+                        std::path::Path::new(path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                    })
+                })
+        });
+
+        let git_branch = cwd.as_ref().and_then(|dir| {
+            std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(dir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        });
+
+        let git_diff = cwd.as_ref().and_then(|dir| {
+            let stat = std::process::Command::new("git")
+                .args(["diff", "--stat"])
+                .current_dir(dir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+
+            if stat.trim().is_empty() {
+                return None;
+            }
+
+            let diff = std::process::Command::new("git")
+                .args(["diff"])
+                .current_dir(dir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+
+            let diff_lines: Vec<&str> = diff.lines().collect();
+            let was_truncated = diff_lines.len() > 2000;
+            let mut result = stat;
+            result.push('\n');
+            result.push_str(&diff_lines[..diff_lines.len().min(2000)].join("\n"));
+            if was_truncated {
+                result.push_str("\n... (truncated)");
+            }
+            Some(result)
+        });
+
+        let project_structure = cwd.as_ref().and_then(|dir| {
+            let output = std::process::Command::new("git")
+                .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+                .current_dir(dir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+
+            let listing = output.or_else(|| {
+                std::process::Command::new("find")
+                    .args([".", "-maxdepth", "3", "-type", "f", "-not", "-path", "./.git/*"])
+                    .current_dir(dir)
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            })?;
+
+            if listing.trim().is_empty() {
+                return None;
+            }
+
+            let file_lines: Vec<&str> = listing.lines().collect();
+            let total = file_lines.len();
+            if total > 200 {
+                let truncated = file_lines[..200].join("\n");
+                Some(format!("{}\n... ({} more files)", truncated, total - 200))
+            } else {
+                Some(file_lines.join("\n"))
+            }
+        });
+
+        TerminalContext {
+            focused_pane_index,
+            focused_hostname,
+            cwd,
+            recent_output: recent_output.to_vec(),
+            last_command,
+            last_exit_code,
+            git_branch,
+            ssh_host,
+            tmux_session,
+            agents_md,
+            skills: self.skills.names(),
+            command_history: Vec::new(), // ghostty doesn't track command blocks
+            other_panes,
+            git_diff,
+            project_structure,
+        }
+    }
+
     /// Send a natural language message to the agent using a specific tab's session.
     ///
     /// The session provides the conversation and channels;

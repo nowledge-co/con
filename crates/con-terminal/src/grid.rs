@@ -561,6 +561,11 @@ impl Grid {
         }
     }
 
+    /// Whether the terminal is in alternate screen mode (e.g., vim, less, htop).
+    pub fn is_alt_screen(&self) -> bool {
+        self.alternate_screen.is_some()
+    }
+
     /// Whether the cursor is at a shell prompt (not in alternate screen / TUI,
     /// and OSC 133 has marked a prompt row). Useful for ghost text suggestions.
     pub fn at_shell_prompt(&self) -> bool {

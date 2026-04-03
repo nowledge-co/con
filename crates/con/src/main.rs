@@ -5,6 +5,7 @@ mod ghostty_view;
 mod input_bar;
 mod pane_tree;
 mod settings_panel;
+mod terminal_pane;
 mod sidebar;
 mod terminal_view;
 mod theme;
