@@ -115,6 +115,11 @@ impl Conversation {
     /// Convert our conversation history to Rig's Vec<Message> for the Chat trait.
     /// Excludes the last user message (which becomes the prompt) and system messages
     /// (which go into the preamble).
+    ///
+    /// Limits history to the most recent messages to avoid context pollution —
+    /// stale assistant responses can override tool definitions and system prompts.
+    const MAX_HISTORY_MESSAGES: usize = 20;
+
     pub fn to_rig_history(&self) -> Vec<RigMessage> {
         let mut history = Vec::new();
         // Skip the last user message — it will be sent as the prompt
@@ -127,6 +132,10 @@ impl Conversation {
         } else {
             &self.messages
         };
+
+        // Take only the most recent messages to keep history manageable
+        let start = msgs.len().saturating_sub(Self::MAX_HISTORY_MESSAGES);
+        let msgs = &msgs[start..];
 
         for msg in msgs {
             match msg.role {

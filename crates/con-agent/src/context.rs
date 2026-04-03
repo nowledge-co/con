@@ -25,6 +25,9 @@ pub struct TerminalContext {
     pub skills: Vec<String>,
     /// Recent command blocks from OSC 133 shell integration
     pub command_history: Vec<CommandBlockInfo>,
+    /// Other (non-focused) panes in the current tab.
+    /// Empty when there is only one pane.
+    pub other_panes: Vec<PaneSummary>,
     /// Git diff output (from `git diff --stat` + `git diff`, truncated)
     pub git_diff: Option<String>,
     /// Project file structure (truncated directory listing)
@@ -36,6 +39,18 @@ pub struct TerminalContext {
 pub struct CommandBlockInfo {
     pub command: String,
     pub exit_code: Option<i32>,
+}
+
+/// Summary of a non-focused terminal pane's state.
+/// Kept intentionally small to avoid bloating the system prompt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaneSummary {
+    pub pane_index: usize,
+    pub cwd: Option<String>,
+    pub last_command: Option<String>,
+    pub last_exit_code: Option<i32>,
+    /// Last ~10 lines of visible output
+    pub recent_output: Vec<String>,
 }
 
 impl TerminalContext {
@@ -51,6 +66,7 @@ impl TerminalContext {
             agents_md: None,
             skills: Vec::new(),
             command_history: Vec::new(),
+            other_panes: Vec::new(),
             git_diff: None,
             project_structure: None,
         }
@@ -65,14 +81,32 @@ impl TerminalContext {
         let mut prompt = String::with_capacity(4096);
 
         prompt.push_str(
-            "You are con, a terminal AI assistant. You help users with their terminal tasks.\n\
-             You can execute shell commands, read/write files, and reason about the user's environment.\n\n\
-             When executing commands, prefer terminal_exec over shell_exec. terminal_exec runs commands \
-             visibly in the user's terminal so they can see what you're doing. Use shell_exec only for \
-             background operations or when you need to suppress output.\n\n",
+            "You are con, a terminal AI assistant with full access to the user's terminal environment.\n\n\
+             You have these tools available — USE THEM:\n\
+             - terminal_exec: Run a command visibly in any pane (use pane_index to target)\n\
+             - batch_exec: Run commands on MULTIPLE panes in PARALLEL (fastest for multi-pane tasks)\n\
+             - shell_exec: Run commands in a hidden subprocess (for background ops)\n\
+             - list_panes: List all open terminal panes (index, title, cwd, dimensions)\n\
+             - read_pane: Read recent output from any pane (includes scrollback history)\n\
+             - send_keys: Send keystrokes to any pane (for TUI interaction, Ctrl-C, etc.)\n\
+             - search_panes: Search scrollback history across all panes (find previous output, errors, etc.)\n\
+             - file_read, file_write, edit_file: Read/write/edit files\n\
+             - list_files, search: Browse and search the filesystem\n\n\
+             IMPORTANT: You have access to ALL terminal panes, not just the focused one. \
+             When users ask about multiple panes, SSH sessions, or multiple machines, \
+             call list_panes first, then use batch_exec to run commands on all panes simultaneously.\n\n\
+             SAFETY: Before executing on panes, check list_panes output:\n\
+             - is_alive: false means the PTY exited — commands will fail\n\
+             - is_busy: true means a command is running — wait or use a different pane\n\
+             - hostname: identifies SSH sessions — if it changed, the connection state changed\n\n",
         );
 
         prompt.push_str("<terminal_context>\n");
+
+        let total_panes = 1 + self.other_panes.len();
+        if total_panes > 1 {
+            prompt.push_str(&format!("<panes_open>{}</panes_open>\n", total_panes));
+        }
 
         if let Some(cwd) = &self.cwd {
             prompt.push_str(&format!("<cwd>{}</cwd>\n", cwd));
@@ -160,4 +194,5 @@ impl TerminalContext {
 
         prompt
     }
+
 }

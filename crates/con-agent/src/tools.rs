@@ -69,12 +69,13 @@ fn validate_path_for_write(raw: &str, allowed_root: &Path) -> Result<PathBuf, To
 
 // ── terminal_exec (visible) ─────────────────────────────────────────
 
-/// Request to execute a command in the visible terminal.
-/// The workspace polls for these and writes the command to the focused PTY.
+/// Request to execute a command in a visible terminal pane.
+/// When `pane_index` is None, targets the focused pane.
 #[derive(Debug)]
 pub struct TerminalExecRequest {
     pub command: String,
     pub working_dir: Option<String>,
+    pub pane_index: Option<usize>,
     pub response_tx: Sender<TerminalExecResponse>,
 }
 
@@ -88,6 +89,7 @@ pub struct TerminalExecResponse {
 #[derive(Deserialize)]
 pub struct TerminalExecArgs {
     pub command: String,
+    pub pane_index: Option<usize>,
 }
 
 /// Tool that executes commands in the user's visible terminal.
@@ -121,13 +123,17 @@ impl Tool for TerminalExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute a command in the user's visible terminal. The user sees the command run in real time. Prefer this over shell_exec for transparency.".to_string(),
+            description: "Execute a command in a terminal pane. The user sees the command run in real time. Use pane_index to target a specific pane (from list_panes), or omit to use the focused pane.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The shell command to execute in the visible terminal"
+                        "description": "The shell command to execute"
+                    },
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target pane index (from list_panes). Omit to use the focused pane."
                     }
                 },
                 "required": ["command"]
@@ -142,6 +148,7 @@ impl Tool for TerminalExecTool {
             .send(TerminalExecRequest {
                 command: args.command,
                 working_dir: None,
+                pane_index: args.pane_index,
                 response_tx,
             })
             .map_err(|_| ToolError::CommandFailed("Terminal exec channel closed".into()))?;
@@ -633,6 +640,554 @@ impl Tool for SearchTool {
 
         Ok(SearchOutput { matches, truncated })
     }
+}
+
+// ── Pane interaction layer ──────────────────────────────────────────
+//
+// Panes are first-class addressable entities. The agent discovers them
+// via `list_panes`, reads content via `read_pane`, and sends input via
+// `send_keys`. This abstraction supports shell, TUI, and future
+// agent-in-pane scenarios uniformly.
+//
+// Communication follows the same channel pattern as TerminalExecTool:
+// Tool → PaneRequest → Workspace → PaneResponse → Tool
+
+/// Metadata about a single terminal pane.
+///
+/// Includes connection state to prevent executing commands on the wrong
+/// host (e.g., running a remote command locally after SSH disconnects).
+#[derive(Debug, Clone, Serialize)]
+pub struct PaneInfo {
+    pub index: usize,
+    pub title: String,
+    pub cwd: Option<String>,
+    pub is_focused: bool,
+    pub rows: usize,
+    pub cols: usize,
+    /// Whether the PTY child process is still running.
+    pub is_alive: bool,
+    /// Hostname from OSC 7 URI — differs from local hostname for SSH sessions.
+    pub hostname: Option<String>,
+    /// Whether shell integration (OSC 133) is active.
+    pub has_shell_integration: bool,
+    /// Last command executed (from OSC 133 tracking).
+    pub last_command: Option<String>,
+    /// Exit code of the last command.
+    pub last_exit_code: Option<i32>,
+    /// A command is currently executing (between OSC 133 C and D).
+    /// Only reliable when has_shell_integration is true.
+    pub is_busy: bool,
+}
+
+/// A request from a pane tool to the workspace.
+#[derive(Debug)]
+pub struct PaneRequest {
+    pub query: PaneQuery,
+    pub response_tx: Sender<PaneResponse>,
+}
+
+/// Pane query types — the workspace interprets these against PaneTree/Grid.
+#[derive(Debug)]
+pub enum PaneQuery {
+    /// List all panes with metadata.
+    List,
+    /// Read recent output from a specific pane.
+    ReadContent { pane_index: usize, lines: usize },
+    /// Send raw keystrokes to a specific pane (for TUI interaction, Ctrl-C, etc.).
+    SendKeys { pane_index: usize, keys: String },
+    /// Search scrollback + visible screen for a text pattern.
+    SearchText {
+        pane_index: Option<usize>,
+        pattern: String,
+        max_matches: usize,
+    },
+}
+
+/// Response from the workspace to a pane tool.
+#[derive(Debug, Clone)]
+pub enum PaneResponse {
+    PaneList(Vec<PaneInfo>),
+    Content(String),
+    KeysSent,
+    /// Search results: Vec of (pane_index, line_number, line_text).
+    SearchResults(Vec<(usize, usize, String)>),
+    Error(String),
+}
+
+// ── list_panes tool ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ListPanesArgs {}
+
+pub struct ListPanesTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl ListPanesTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for ListPanesTool {
+    const NAME: &'static str = "list_panes";
+    type Error = ToolError;
+    type Args = ListPanesArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, and whether it's focused. Use this to discover what the user has open before reading specific panes.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        log::info!("[list_panes] Tool called, sending PaneQuery::List");
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::List,
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+        log::info!("[list_panes] PaneRequest sent, waiting for response...");
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|e| {
+                    log::error!("[list_panes] Timed out waiting for response: {}", e);
+                    ToolError::CommandFailed("Pane query timed out".into())
+                })
+        })?;
+        log::info!("[list_panes] Got response");
+
+        match response {
+            PaneResponse::PaneList(panes) => {
+                serde_json::to_string_pretty(&panes)
+                    .map_err(|e| ToolError::CommandFailed(e.to_string()))
+            }
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+// ── read_pane tool ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ReadPaneArgs {
+    pub pane_index: usize,
+    #[serde(default = "default_pane_lines")]
+    pub lines: usize,
+}
+
+fn default_pane_lines() -> usize {
+    50
+}
+
+pub struct ReadPaneTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl ReadPaneTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for ReadPaneTool {
+    const NAME: &'static str = "read_pane";
+    type Error = ToolError;
+    type Args = ReadPaneArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Read the recent visible output from a specific terminal pane. Use list_panes first to discover available panes and their indices.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "The pane index (from list_panes)"
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "description": "Number of recent lines to read (default: 50)"
+                    }
+                },
+                "required": ["pane_index"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::ReadContent {
+                    pane_index: args.pane_index,
+                    lines: args.lines,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| ToolError::CommandFailed("Pane query timed out".into()))
+        })?;
+
+        match response {
+            PaneResponse::Content(content) => Ok(content),
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+// ── send_keys tool ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SendKeysArgs {
+    pub pane_index: usize,
+    pub keys: String,
+}
+
+/// Send raw keystrokes to any terminal pane. This is the low-level
+/// primitive for interacting with TUIs, cancelling commands (Ctrl-C),
+/// or sending input to any running process — not just shells.
+pub struct SendKeysTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl SendKeysTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for SendKeysTool {
+    const NAME: &'static str = "send_keys";
+    type Error = ToolError;
+    type Args = SendKeysArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Send raw keystrokes to a specific terminal pane. Use this for TUI interaction, sending Ctrl-C (as \\x03), Enter (as \\n), arrow keys, or any input to a running process. For running shell commands, prefer terminal_exec instead.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "The pane index (from list_panes)"
+                    },
+                    "keys": {
+                        "type": "string",
+                        "description": "Keystrokes to send. Supports escape sequences: \\n (Enter), \\t (Tab), \\x03 (Ctrl-C), \\x1b (Escape), \\x1b[A (Up arrow), etc."
+                    }
+                },
+                "required": ["pane_index", "keys"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // Decode escape sequences in the keys string
+        let decoded = decode_key_escapes(&args.keys);
+
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::SendKeys {
+                    pane_index: args.pane_index,
+                    keys: decoded,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| ToolError::CommandFailed("Pane query timed out".into()))
+        })?;
+
+        match response {
+            PaneResponse::KeysSent => Ok("Keys sent successfully".to_string()),
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+// ── batch_exec tool ──────────────────────────────────────────────
+//
+// Execute commands across multiple panes in parallel. This is critical
+// for multi-pane workflows: "run uptime on all machines" executes
+// concurrently instead of sequentially (which would take N * timeout).
+//
+// Works within Rig's sequential tool dispatch constraint by batching
+// what would otherwise be N sequential terminal_exec calls into one.
+
+#[derive(Deserialize)]
+pub struct BatchExecArgs {
+    pub commands: Vec<BatchCommand>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct BatchCommand {
+    pub command: String,
+    pub pane_index: usize,
+}
+
+#[derive(Serialize)]
+struct BatchResult {
+    pane_index: usize,
+    output: String,
+    exit_code: Option<i32>,
+    error: Option<String>,
+}
+
+pub struct BatchExecTool {
+    request_tx: Sender<TerminalExecRequest>,
+}
+
+impl BatchExecTool {
+    pub fn new(request_tx: Sender<TerminalExecRequest>) -> Self {
+        Self { request_tx }
+    }
+}
+
+impl Tool for BatchExecTool {
+    const NAME: &'static str = "batch_exec";
+    type Error = ToolError;
+    type Args = BatchExecArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Execute commands across multiple panes in PARALLEL. Use this when you need to run commands on 2+ panes simultaneously (e.g., check uptime on all machines, deploy to staging and production). Much faster than calling terminal_exec multiple times.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "commands": {
+                        "type": "array",
+                        "description": "List of commands to execute, each targeting a specific pane",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "command": {
+                                    "type": "string",
+                                    "description": "The shell command to execute"
+                                },
+                                "pane_index": {
+                                    "type": "integer",
+                                    "description": "Target pane index (from list_panes)"
+                                }
+                            },
+                            "required": ["command", "pane_index"]
+                        }
+                    }
+                },
+                "required": ["commands"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if args.commands.is_empty() {
+            return Ok("[]".to_string());
+        }
+
+        log::info!("[batch_exec] Executing {} commands in parallel", args.commands.len());
+
+        // Send all commands concurrently, collect response receivers
+        let mut receivers = Vec::with_capacity(args.commands.len());
+        for cmd in &args.commands {
+            let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+            self.request_tx
+                .send(TerminalExecRequest {
+                    command: cmd.command.clone(),
+                    working_dir: None,
+                    pane_index: Some(cmd.pane_index),
+                    response_tx,
+                })
+                .map_err(|_| ToolError::CommandFailed("Terminal exec channel closed".into()))?;
+            receivers.push((cmd.pane_index, response_rx));
+        }
+
+        // Wait for all results concurrently with timeout
+        let results: Vec<BatchResult> = tokio::task::block_in_place(|| {
+            receivers
+                .into_iter()
+                .map(|(pane_index, rx)| {
+                    match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+                        Ok(resp) => BatchResult {
+                            pane_index,
+                            output: resp.output,
+                            exit_code: resp.exit_code,
+                            error: None,
+                        },
+                        Err(_) => BatchResult {
+                            pane_index,
+                            output: String::new(),
+                            exit_code: None,
+                            error: Some("Timed out (60s)".into()),
+                        },
+                    }
+                })
+                .collect()
+        });
+
+        serde_json::to_string_pretty(&results)
+            .map_err(|e| ToolError::CommandFailed(e.to_string()))
+    }
+}
+
+// ── search_panes tool ─────────────────────────────────────────────
+//
+// Search scrollback + visible screen across one or all panes.
+// Invaluable for finding previous command output, error messages,
+// or any text the user has seen in any pane.
+
+#[derive(Deserialize)]
+pub struct SearchPanesArgs {
+    pub pattern: String,
+    #[serde(default)]
+    pub pane_index: Option<usize>,
+    #[serde(default = "default_max_matches")]
+    pub max_matches: usize,
+}
+
+fn default_max_matches() -> usize {
+    50
+}
+
+pub struct SearchPanesTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl SearchPanesTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for SearchPanesTool {
+    const NAME: &'static str = "search_panes";
+    type Error = ToolError;
+    type Args = SearchPanesArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Search terminal scrollback and visible screen for text. Searches across all panes or a specific pane. Use this to find previous command output, error messages, or any text that appeared in any terminal pane.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Text to search for (case-insensitive substring match)"
+                    },
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Optional: search only this pane (from list_panes). Omit to search all panes."
+                    },
+                    "max_matches": {
+                        "type": "integer",
+                        "description": "Maximum number of matching lines to return (default: 50)"
+                    }
+                },
+                "required": ["pattern"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::SearchText {
+                    pane_index: args.pane_index,
+                    pattern: args.pattern.clone(),
+                    max_matches: args.max_matches,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|_| ToolError::CommandFailed("Search timed out".into()))
+        })?;
+
+        match response {
+            PaneResponse::SearchResults(results) => {
+                if results.is_empty() {
+                    return Ok(format!("No matches found for '{}'", args.pattern));
+                }
+                let mut output = String::new();
+                let mut current_pane = 0;
+                for (pane_idx, line_num, text) in &results {
+                    if *pane_idx != current_pane {
+                        current_pane = *pane_idx;
+                        output.push_str(&format!("\n── Pane {} ──\n", pane_idx));
+                    }
+                    output.push_str(&format!("{:>5}: {}\n", line_num, text));
+                }
+                Ok(output)
+            }
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+/// Decode common escape sequences in key strings.
+/// Supports: \n, \t, \r, \xNN (hex byte), \x1b[... (ANSI sequences).
+fn decode_key_escapes(input: &str) -> String {
+    let mut result = Vec::new();
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            match bytes[i + 1] {
+                b'n' => { result.push(b'\n'); i += 2; }
+                b't' => { result.push(b'\t'); i += 2; }
+                b'r' => { result.push(b'\r'); i += 2; }
+                b'\\' => { result.push(b'\\'); i += 2; }
+                b'x' if i + 3 < bytes.len() => {
+                    let hex = &input[i + 2..i + 4];
+                    if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                        result.push(byte);
+                        i += 4;
+                    } else {
+                        result.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+                _ => { result.push(bytes[i]); i += 1; }
+            }
+        } else {
+            result.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&result).into_owned()
 }
 
 /// Simple glob matching for filename filtering.

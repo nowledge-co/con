@@ -14,6 +14,7 @@ pub use provider::{
 };
 pub use skills::{Skill, SkillRegistry};
 pub use tools::{
-    EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, SearchTool, ShellExecTool,
-    TerminalExecRequest, TerminalExecResponse, TerminalExecTool,
+    BatchExecTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool,
+    PaneInfo, PaneQuery, PaneRequest, PaneResponse, ReadPaneTool, SearchPanesTool, SearchTool,
+    SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecResponse, TerminalExecTool,
 };

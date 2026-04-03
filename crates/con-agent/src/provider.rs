@@ -18,7 +18,8 @@ use crate::context::TerminalContext;
 use crate::conversation::{AgentStep, Conversation, Message};
 use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{
-    EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, SearchTool, ShellExecTool,
+    BatchExecTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool,
+    PaneRequest, ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool,
     TerminalExecRequest, TerminalExecTool,
 };
 
@@ -407,19 +408,24 @@ pub enum AgentEvent {
 /// concrete types while keeping tool registration in one place.
 macro_rules! build_and_stream {
     ($client:expr, $cfg:expr, $kind:expr, $system_prompt:expr, $prompt:expr,
-     $history:expr, $hook:expr, $terminal_exec_tx:expr,
+     $history:expr, $hook:expr, $terminal_exec_tx:expr, $pane_tx:expr,
      $event_tx:expr, $cancelled:expr, $workspace_root:expr) => {{
         let root: std::path::PathBuf = $workspace_root;
         let mut builder = $client
             .agent($cfg.effective_model(&$kind))
             .preamble($system_prompt)
-            .tool(TerminalExecTool::new($terminal_exec_tx))
+            .tool(TerminalExecTool::new($terminal_exec_tx.clone()))
             .tool(ShellExecTool)
             .tool(FileReadTool::new(root.clone()))
             .tool(FileWriteTool::new(root.clone()))
             .tool(EditFileTool::new(root.clone()))
             .tool(ListFilesTool::new(root.clone()))
             .tool(SearchTool::new(root))
+            .tool(ListPanesTool::new($pane_tx.clone()))
+            .tool(ReadPaneTool::new($pane_tx.clone()))
+            .tool(SendKeysTool::new($pane_tx.clone()))
+            .tool(SearchPanesTool::new($pane_tx))
+            .tool(BatchExecTool::new($terminal_exec_tx))
             .default_max_turns($cfg.max_turns);
 
         if let Some(max_tokens) = $cfg.effective_max_tokens(&$kind) {
@@ -430,6 +436,23 @@ macro_rules! build_and_stream {
         }
 
         let agent = builder.build();
+
+        // Diagnostic: log registered tools by querying the tool server
+        match agent.tool_server_handle.get_tool_defs(None).await {
+            Ok(defs) => {
+                let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+                log::info!(
+                    "[agent] Registered {} tools for {:?}/{}: {:?}",
+                    defs.len(),
+                    $kind,
+                    $cfg.effective_model(&$kind),
+                    names,
+                );
+            }
+            Err(e) => {
+                log::error!("[agent] Failed to query tool definitions: {}", e);
+            }
+        }
 
         let stream = agent
             .stream_prompt($prompt)
@@ -463,6 +486,7 @@ impl AgentProvider {
         event_tx: Sender<AgentEvent>,
         approval_rx: crossbeam_channel::Receiver<ToolApprovalDecision>,
         terminal_exec_tx: crossbeam_channel::Sender<TerminalExecRequest>,
+        pane_tx: crossbeam_channel::Sender<PaneRequest>,
         cancelled: Arc<AtomicBool>,
     ) -> Result<Message> {
         let _ = event_tx.send(AgentEvent::Thinking);
@@ -474,6 +498,16 @@ impl AgentProvider {
             .last_user_message()
             .map(|m| m.content.clone())
             .unwrap_or_default();
+
+        log::info!(
+            "[agent] Sending to {:?}/{}: system_prompt={} chars, history={} msgs, user_msg={} chars, panes={}",
+            kind,
+            self.config.effective_model(kind),
+            system_prompt.len(),
+            chat_history.len(),
+            last_user_msg.len(),
+            1 + context.other_panes.len(),
+        );
 
         let _ = event_tx.send(AgentEvent::Step(AgentStep::Thinking(format!(
             "{}:{}",
@@ -502,7 +536,7 @@ impl AgentProvider {
             ($client:expr) => {
                 build_and_stream!(
                     $client, self.config, kind, &system_prompt, &last_user_msg,
-                    chat_history, hook, terminal_exec_tx, &event_tx, &cancelled,
+                    chat_history, hook, terminal_exec_tx, pane_tx, &event_tx, &cancelled,
                     workspace_root.clone()
                 )?
             };
@@ -800,8 +834,17 @@ async fn consume_stream<R: Send + 'static>(
                         }
                     }
                 }
+                StreamedAssistantContent::ToolCall { tool_call, .. } => {
+                    log::info!("[agent] Stream: tool_call received: {}", tool_call.function.name);
+                }
                 _ => {}
             },
+            Ok(MultiTurnStreamItem::StreamUserItem(user_item)) => {
+                log::info!("[agent] Stream: user item (tool result): {:?}", user_item);
+            }
+            Ok(MultiTurnStreamItem::FinalResponse(_)) => {
+                log::info!("[agent] Stream: final response received");
+            }
             Ok(_) => {}
             Err(e) => return Err(anyhow::anyhow!("Streaming error: {e}")),
         }
