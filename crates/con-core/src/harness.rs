@@ -1,5 +1,5 @@
 use con_agent::{
-    is_dangerous, AgentEvent, AgentProvider, Conversation, Message, SkillRegistry,
+    is_dangerous, AgentEvent, AgentProvider, Conversation, Message, PaneRequest, SkillRegistry,
     TerminalContext, TerminalExecRequest, ToolApprovalDecision,
 };
 use con_terminal::Grid;
@@ -94,6 +94,10 @@ pub struct AgentHarness {
     /// The sender is cloned into TerminalExecTool instances.
     terminal_exec_tx: Sender<TerminalExecRequest>,
     terminal_exec_rx: Receiver<TerminalExecRequest>,
+    /// Channel for pane queries (list, read, send_keys).
+    /// The sender is cloned into pane tools; the workspace polls the receiver.
+    pane_tx: Sender<PaneRequest>,
+    pane_rx: Receiver<PaneRequest>,
     /// Cancellation flag for the current agent request.
     /// Set to true to stop streaming. Reset on each new send_message().
     cancel_flag: Arc<AtomicBool>,
@@ -104,6 +108,7 @@ impl AgentHarness {
         let skills = SkillRegistry::new();
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
         let (terminal_exec_tx, terminal_exec_rx) = crossbeam_channel::unbounded();
+        let (pane_tx, pane_rx) = crossbeam_channel::unbounded();
 
         let runtime = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
@@ -121,6 +126,8 @@ impl AgentHarness {
             runtime,
             terminal_exec_tx,
             terminal_exec_rx,
+            pane_tx,
+            pane_rx,
             cancel_flag: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -144,6 +151,12 @@ impl AgentHarness {
         &self.terminal_exec_rx
     }
 
+    /// Channel for pane queries — the workspace polls this to
+    /// answer list_panes, read_pane, and send_keys requests.
+    pub fn pane_requests(&self) -> &Receiver<PaneRequest> {
+        &self.pane_rx
+    }
+
     /// Classify user input: NLP, command, or skill
     pub fn classify_input(&self, input: &str) -> InputKind {
         let trimmed = input.trim();
@@ -164,8 +177,14 @@ impl AgentHarness {
         InputKind::NaturalLanguage(trimmed.to_string())
     }
 
-    /// Build terminal context from the current grid state
-    pub fn build_context(&self, grid: &Grid, cwd: Option<&str>) -> TerminalContext {
+    /// Build terminal context from the current grid state.
+    /// `other_panes` contains summaries of non-focused panes in the same tab.
+    pub fn build_context(
+        &self,
+        grid: &Grid,
+        cwd: Option<&str>,
+        other_panes: Vec<con_agent::context::PaneSummary>,
+    ) -> TerminalContext {
         let recent_output = grid.content_lines(50);
         let cwd = cwd
             .map(|s| s.to_string())
@@ -308,6 +327,7 @@ impl AgentHarness {
             agents_md,
             skills: self.skills.names(),
             command_history,
+            other_panes,
             git_diff,
             project_structure,
         }
@@ -333,6 +353,7 @@ impl AgentHarness {
         let agent_config = self.config.clone();
         let conversation = self.conversation.clone();
         let terminal_exec_tx = self.terminal_exec_tx.clone();
+        let pane_tx = self.pane_tx.clone();
         let cancelled = self.cancel_flag.clone();
 
         // Per-request approval channel: the sender goes to the UI via
@@ -396,7 +417,7 @@ impl AgentHarness {
             let provider = AgentProvider::new(agent_config);
 
             match provider
-                .send(&conv_snapshot, &context, agent_tx, approval_rx, terminal_exec_tx, cancelled)
+                .send(&conv_snapshot, &context, agent_tx, approval_rx, terminal_exec_tx, pane_tx, cancelled)
                 .await
             {
                 Ok(assistant_msg) => {
@@ -494,6 +515,10 @@ impl AgentHarness {
 
     pub fn update_config(&mut self, config: con_agent::AgentConfig) {
         self.config = config;
+    }
+
+    pub fn set_auto_approve(&mut self, enabled: bool) {
+        self.config.auto_approve_tools = enabled;
     }
 
     pub fn conversation(&self) -> Arc<Mutex<Conversation>> {
