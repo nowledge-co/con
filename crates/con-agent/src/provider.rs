@@ -869,6 +869,13 @@ async fn consume_stream<R: Send + 'static>(
             Ok(_) => {}
             Err(e) => {
                 log::error!("[agent] Stream error: {e}");
+                let msg = e.to_string();
+                // Surface actionable error for models that don't support tool use
+                if msg.contains("tool use") || msg.contains("tool_use") {
+                    return Err(anyhow::anyhow!(
+                        "This model does not support tool use. Choose a model that supports function calling (e.g., Claude, GPT-4o, Llama 3.3)."
+                    ));
+                }
                 return Err(anyhow::anyhow!("Streaming error: {e}"));
             }
         }

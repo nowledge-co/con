@@ -602,13 +602,15 @@ fn looks_like_command(input: &str, is_remote: bool) -> bool {
 
     // --- Definitive structural signals (always apply) ---
 
-    // Shell builtins
+    // Shell builtins (these are never NL — "cd", "export", etc.)
     if SHELL_BUILTINS.contains(&first_word) {
         return true;
     }
 
-    // Executable on local $PATH
-    if path_executables().contains(first_word) {
+    // Executable on local $PATH — but only if the surrounding text
+    // doesn't read like natural language. Many short English words
+    // (`what`, `test`, `time`, `sort`, `make`) are also executables.
+    if path_executables().contains(first_word) && !has_natural_language_signals(input) {
         return true;
     }
 
