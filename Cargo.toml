@@ -3,6 +3,7 @@ members = [
     "crates/con",
     "crates/con-core",
     "crates/con-terminal",
+    "crates/con-ghostty",
     "crates/con-agent",
     "crates/con-cli",
     # gpui-component library (adopted into our workspace)
@@ -22,6 +23,7 @@ version = "0.1.0"
 # Internal crates
 con-core = { path = "crates/con-core" }
 con-terminal = { path = "crates/con-terminal" }
+con-ghostty = { path = "crates/con-ghostty" }
 con-agent = { path = "crates/con-agent" }
 
 # UI — mainline GPUI from Zed (required for gpui-component compatibility)
