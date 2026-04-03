@@ -667,33 +667,54 @@ fn looks_like_command(input: &str, is_remote: bool) -> bool {
     false
 }
 
-/// Detects natural-language signals that distinguish NL from short commands.
-/// Used as a negative signal: if these are present, the input is likely NL
-/// even if the first word looks command-shaped.
+/// Detects natural-language syntax using structural signals only.
+///
+/// Uses three purely syntactic checks — no word lists:
+/// 1. Sentence-ending punctuation: `?` or `.` at the end (shell commands never end this way)
+/// 2. First word starts with uppercase (shell executables are lowercase)
+/// 3. Contains clause-separating commas (`, ` — distinct from shell comma usage)
+/// 4. Multi-word input with no shell argument structure (no flags, paths, or operators)
 fn has_natural_language_signals(input: &str) -> bool {
-    let lower = input.to_ascii_lowercase();
-    let words: Vec<&str> = lower.split_whitespace().collect();
+    let trimmed = input.trim();
 
-    // Question patterns (first word or second word after a command-like word)
-    const QUESTION_WORDS: &[&str] = &[
-        "what", "how", "why", "when", "where", "which", "who", "is", "are", "can",
-        "could", "would", "should", "does", "do", "will", "explain", "describe",
-        "tell", "show", "help", "please",
-    ];
-    if let Some(first) = words.first() {
-        if QUESTION_WORDS.contains(first) {
-            return true;
-        }
+    // 1. Ends with sentence punctuation — commands never end with ? or .
+    //    (note: shell `!` is history expansion, so we skip it)
+    if trimmed.ends_with('?') || trimmed.ends_with('.') {
+        return true;
     }
 
-    // Articles and pronouns — strong NL signal when present anywhere
-    const NL_MARKERS: &[&str] = &[
-        "the", "a", "an", "this", "that", "these", "those",
-        "i", "me", "my", "you", "your", "we", "our",
-        "about", "with", "from", "into",
-    ];
-    if words.iter().any(|w| NL_MARKERS.contains(w)) {
+    // 2. First character is uppercase — shell commands are lowercase.
+    //    Env var assignments (VAR=val) are caught earlier in the pipeline.
+    if trimmed.starts_with(|c: char| c.is_ascii_uppercase()) {
         return true;
+    }
+
+    // 3. Contains clause-separating comma+space pattern.
+    //    Shell uses commas in brace expansion {a,b} but not ", " between words.
+    if trimmed.contains(", ") {
+        return true;
+    }
+
+    // 4. Multi-word input where no token looks like a shell argument.
+    //    Shell arguments are: flags (-x, --foo), paths (/foo, ./bar),
+    //    env vars ($FOO), globs (*.txt), or quoted strings.
+    //    If none of the tokens after the first have these patterns, it's likely prose.
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    if words.len() >= 3 {
+        let has_shell_args = words[1..].iter().any(|w| {
+            w.starts_with('-')       // flag
+                || w.starts_with('/')    // absolute path
+                || w.starts_with("./")   // relative path
+                || w.starts_with("~/")   // home path
+                || w.starts_with('$')    // variable
+                || w.contains('*')       // glob
+                || w.contains('=')       // assignment
+                || w.starts_with('"')    // quoted string
+                || w.starts_with('\'')   // quoted string
+        });
+        if !has_shell_args {
+            return true;
+        }
     }
 
     false

@@ -9,7 +9,7 @@ use crate::agent_panel::{AgentPanel, CancelRequest, EnableAutoApprove, LoadConve
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
 use crate::pane_tree::{PaneTree, SplitDirection};
-use crate::settings_panel::{self, SaveSettings, SettingsPanel};
+use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
 use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, InputChanged, TerminalView};
 use con_terminal::TerminalTheme;
@@ -159,6 +159,8 @@ impl ConWorkspace {
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
             .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_settings_saved)
+            .detach();
+        cx.subscribe_in(&settings_panel, window, Self::on_theme_preview)
             .detach();
         cx.subscribe_in(&command_palette, window, Self::on_palette_select)
             .detach();
@@ -414,13 +416,12 @@ impl ConWorkspace {
             .iter()
             .map(|tab| {
                 let terminal = tab.pane_tree.focused_terminal();
-                let title = terminal
-                    .read(cx)
-                    .title()
-                    .unwrap_or_else(|| tab.title.clone());
+                let tv = terminal.read(cx);
+                let title = tv.title().unwrap_or_else(|| tab.title.clone());
+                let is_ssh = tv.grid().lock().detected_remote_host().is_some();
                 SessionEntry {
                     name: title,
-                    is_ssh: false,
+                    is_ssh,
                 }
             })
             .collect();
@@ -516,6 +517,28 @@ impl ConWorkspace {
 
         // Settings panel closes on save — restore terminal focus
         self.focus_terminal(window, cx);
+    }
+
+    fn on_theme_preview(
+        &mut self,
+        _settings: &Entity<SettingsPanel>,
+        event: &ThemePreview,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(new_theme) = TerminalTheme::by_name(&event.0) {
+            if new_theme.name != self.terminal_theme.name {
+                self.terminal_theme = new_theme.clone();
+                for tab in &self.tabs {
+                    for terminal in tab.pane_tree.all_terminals() {
+                        terminal.update(cx, |view, _cx| {
+                            view.grid().lock().set_theme(&new_theme);
+                        });
+                    }
+                }
+                cx.notify();
+            }
+        }
     }
 
     fn on_input_escape(
@@ -1264,17 +1287,38 @@ impl Render for ConWorkspace {
                 let tv = terminal.read(cx);
                 let grid = tv.grid().lock();
                 let hostname = grid.detected_remote_host();
-                // SSH panes: use hostname as the display name (clean, short)
-                // Local panes: prefer cwd basename > title > fallback
+                // Pane naming priority:
+                // 1. Remote hostname (from OSC 7, title, or ssh command detection)
+                // 2. Terminal title (set by shell via OSC 0/1/2 — often user@host)
+                // 3. CWD basename (last resort, but skip home dir names to avoid showing username)
+                // 4. Fallback "Pane N"
                 let name = if let Some(ref host) = hostname {
                     host.clone()
+                } else if let Some(ref title) = grid.title {
+                    // Use the title but clean it — many shells set "user@host: /path"
+                    // Extract the meaningful part
+                    if let Some(colon) = title.find(':') {
+                        title[..colon].trim().to_string()
+                    } else {
+                        title.clone()
+                    }
                 } else {
                     grid.current_dir.as_ref()
                         .and_then(|d| {
-                            std::path::Path::new(d).file_name()
-                                .map(|n| n.to_string_lossy().to_string())
+                            let base = std::path::Path::new(d)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())?;
+                            // Skip home directory names — they just show the username
+                            // which is confusing as a pane name
+                            let is_home = d.starts_with("/home/") || d.starts_with("/Users/");
+                            if is_home && std::path::Path::new(d).parent()
+                                .map_or(false, |p| p.file_name().map_or(false, |n| n == "home" || n == "Users"))
+                            {
+                                None
+                            } else {
+                                Some(base)
+                            }
                         })
-                        .or_else(|| grid.title.clone())
                         .unwrap_or_else(|| format!("Pane {}", id + 1))
                 };
                 let is_busy = grid.is_busy();

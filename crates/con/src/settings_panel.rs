@@ -11,6 +11,9 @@ actions!(
     [ToggleSettings, SaveSettings, DismissSettings]
 );
 
+/// Emitted when the user selects a different terminal theme for live preview.
+pub struct ThemePreview(pub String);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SettingsSection {
     General,
@@ -425,6 +428,7 @@ impl SettingsPanel {
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, _, cx| {
                                                     this.config.terminal.theme = theme_name.clone();
+                                                    cx.emit(ThemePreview(theme_name.clone()));
                                                     cx.notify();
                                                 }),
                                             )
@@ -686,6 +690,7 @@ impl SettingsPanel {
 }
 
 impl EventEmitter<SaveSettings> for SettingsPanel {}
+impl EventEmitter<ThemePreview> for SettingsPanel {}
 
 impl Focusable for SettingsPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {

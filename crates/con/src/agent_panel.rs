@@ -780,14 +780,14 @@ impl Render for AgentPanel {
             .vertical_scrollbar(&self.scroll_handle)
             .px(px(16.0))
             .pt(px(16.0))
-            .pb(px(12.0))
-            .gap(px(16.0));
+            .pb(px(16.0))
+            .gap(px(20.0));
 
         for (msg_idx, msg) in self.state.messages.iter().enumerate() {
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
 
-            let mut msg_el = div().flex().flex_col().gap(px(6.0));
+            let mut msg_el = div().flex().flex_col().gap(px(4.0));
 
             if is_system {
                 msg_el = msg_el.child(
@@ -804,12 +804,12 @@ impl Render for AgentPanel {
                         .justify_end()
                         .child(
                             div()
-                                .max_w(rems(18.0))
+                                .max_w(rems(20.0))
                                 .px(px(12.0))
                                 .py(px(8.0))
-                                .rounded(px(12.0))
+                                .rounded(px(16.0))
                                 .rounded_tr(px(4.0))
-                                .bg(theme.primary.opacity(0.15))
+                                .bg(theme.primary.opacity(0.12))
                                 .child(
                                     div()
                                         .text_sm()
@@ -859,7 +859,7 @@ impl Render for AgentPanel {
                                 .flex()
                                 .items_center()
                                 .gap(px(4.0))
-                                .pl(px(18.0))
+                                .pl(px(20.0))
                                 .cursor_pointer()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
@@ -890,7 +890,7 @@ impl Render for AgentPanel {
                             };
                             msg_el = msg_el.child(
                                 div()
-                                    .pl(px(18.0))
+                                    .pl(px(24.0))
                                     .ml(px(4.0))
                                     .border_l_1()
                                     .border_color(theme.muted.opacity(0.15))
@@ -899,7 +899,7 @@ impl Render for AgentPanel {
                                             .pl(px(8.0))
                                             .py(px(4.0))
                                             .text_xs()
-                                            .line_height(px(16.0))
+                                            .line_height(px(18.0))
                                             .text_color(theme.muted_foreground.opacity(0.7))
                                             .child(
                                                 TextView::markdown(
@@ -919,7 +919,7 @@ impl Render for AgentPanel {
                     let content: SharedString = msg.content.clone().into();
                     msg_el = msg_el.child(
                         div()
-                            .pl(px(18.0))
+                            .pl(px(20.0))
                             .text_sm()
                             .child(
                                 TextView::markdown(
@@ -948,7 +948,7 @@ impl Render for AgentPanel {
                         .flex()
                         .items_center()
                         .gap(px(4.0))
-                        .pl(px(18.0))
+                        .pl(px(20.0))
                         .cursor_pointer()
                         .text_xs()
                         .text_color(theme.muted_foreground)
@@ -979,8 +979,8 @@ impl Render for AgentPanel {
                     let mut steps_el = div()
                         .flex()
                         .flex_col()
-                        .gap(px(2.0))
-                        .pl(px(18.0))
+                        .gap(px(1.0))
+                        .pl(px(24.0))
                         .ml(px(4.0))
                         .border_l_1()
                         .border_color(theme.muted.opacity(0.15));
@@ -999,9 +999,9 @@ impl Render for AgentPanel {
                         let mut step_header = div()
                             .flex()
                             .items_center()
-                            .gap(px(5.0))
+                            .gap(px(6.0))
                             .pl(px(8.0))
-                            .py(px(2.0))
+                            .py(px(3.0))
                             .child(
                                 div()
                                     .size(px(4.0))
@@ -1011,7 +1011,7 @@ impl Render for AgentPanel {
                             .child(
                                 svg()
                                     .path(step.icon)
-                                    .size(px(11.0))
+                                    .size(px(12.0))
                                     .text_color(theme.muted_foreground),
                             )
                             .child(
@@ -1032,7 +1032,7 @@ impl Render for AgentPanel {
                             step_header = step_header.child(
                                 svg()
                                     .path(detail_chevron)
-                                    .size(px(9.0))
+                                    .size(px(10.0))
                                     .text_color(theme.muted_foreground.opacity(0.5)),
                             );
                         }
@@ -1069,7 +1069,7 @@ impl Render for AgentPanel {
                                 let md: SharedString = format!("```\n{preview}\n```").into();
                                 step_el = step_el.child(
                                     div()
-                                        .ml(px(22.0))
+                                        .ml(px(24.0))
                                         .mr(px(4.0))
                                         .mt(px(2.0))
                                         .mb(px(4.0))
@@ -1340,7 +1340,7 @@ impl Render for AgentPanel {
             };
             messages_area = messages_area.child(
                 div()
-                    .pl(px(18.0))
+                    .pl(px(20.0))
                     .flex()
                     .items_center()
                     .gap(px(6.0))
