@@ -204,18 +204,14 @@ impl Render for InputBar {
             )
             .child(mode_label);
 
-        // Pane selector — status-aware pills with broadcast toggle
+        // Pane selector — visible when multiple panes exist
         let all_selected = !self.panes.is_empty()
             && self.selected_pane_ids.len() == self.panes.len();
         let pane_area = if has_multiple_panes {
             let mut pills = div()
                 .flex()
                 .items_center()
-                .gap(px(2.0))
-                .h(px(control_h))
-                .px(px(2.0))
-                .rounded(px(6.0))
-                .bg(theme.muted.opacity(0.10));
+                .gap(px(3.0));
 
             for pane in &self.panes {
                 let pane_id = pane.id;
@@ -225,26 +221,26 @@ impl Render for InputBar {
                     self.selected_pane_ids.contains(&pane.id)
                 };
 
-                // Status dot color: red=dead, amber=busy, blue=SSH, green=idle
+                // Status dot color: red=dead, amber=busy, cyan=SSH, green=idle
                 let dot_color = if !pane.is_alive {
                     theme.danger
                 } else if pane.is_busy {
                     theme.warning
                 } else if pane.hostname.is_some() {
-                    theme.link
+                    theme.primary
                 } else {
                     theme.success
                 };
 
                 // Display: hostname for SSH, otherwise name truncated
                 let label = if let Some(host) = &pane.hostname {
-                    if host.len() > 10 {
-                        format!("{}…", &host[..8])
+                    if host.len() > 12 {
+                        format!("{}…", &host[..10])
                     } else {
                         host.clone()
                     }
-                } else if pane.name.len() > 12 {
-                    format!("{}…", &pane.name[..10])
+                } else if pane.name.len() > 14 {
+                    format!("{}…", &pane.name[..12])
                 } else {
                     pane.name.clone()
                 };
@@ -253,27 +249,27 @@ impl Render for InputBar {
                     .id(SharedString::from(format!("pane-sel-{pane_id}")))
                     .flex()
                     .items_center()
-                    .gap(px(4.0))
-                    .h(px(control_h - 4.0))
-                    .px(px(8.0))
-                    .rounded(px(4.0))
+                    .gap(px(5.0))
+                    .h(px(control_h))
+                    .px(px(10.0))
+                    .rounded(px(6.0))
                     .text_size(px(11.0))
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
                     .bg(if is_target {
-                        theme.primary.opacity(0.18)
+                        theme.background
                     } else {
                         theme.transparent
                     })
                     .text_color(if is_target {
-                        theme.primary
+                        theme.foreground
                     } else {
-                        theme.muted_foreground
+                        theme.muted_foreground.opacity(0.6)
                     })
                     .hover(|s| if is_target {
                         s
                     } else {
-                        s.bg(theme.muted.opacity(0.12))
+                        s.bg(theme.muted.opacity(0.10))
                     })
                     .on_mouse_down(
                         MouseButton::Left,
@@ -285,7 +281,7 @@ impl Render for InputBar {
                     .child(
                         div()
                             .size(px(6.0))
-                            .rounded(px(3.0))
+                            .rounded_full()
                             .bg(dot_color)
                     )
                     .child(label);
@@ -293,21 +289,21 @@ impl Render for InputBar {
                 pills = pills.child(pill);
             }
 
-            // "All" toggle — clickable, toggles select-all / deselect-all
+            // "All" toggle
             let all_btn = div()
                 .id("pane-sel-all")
                 .flex()
                 .items_center()
                 .justify_center()
-                .h(px(control_h - 4.0))
-                .px(px(6.0))
-                .rounded(px(4.0))
+                .h(px(control_h))
+                .px(px(8.0))
+                .rounded(px(6.0))
                 .text_size(px(10.0))
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
-                .bg(if all_selected { theme.warning.opacity(0.15) } else { theme.transparent })
-                .text_color(if all_selected { theme.warning } else { theme.muted_foreground.opacity(0.5) })
-                .hover(|s| s.bg(theme.warning.opacity(0.10)))
+                .bg(if all_selected { theme.primary.opacity(0.12) } else { theme.transparent })
+                .text_color(if all_selected { theme.primary } else { theme.muted_foreground.opacity(0.4) })
+                .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {

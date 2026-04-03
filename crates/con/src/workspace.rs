@@ -1493,6 +1493,7 @@ impl Render for ConWorkspace {
             let mut tab_content = div()
                 .flex()
                 .items_center()
+                .gap(px(6.0))
                 .overflow_x_hidden();
 
             // Attention dot for tabs with pending agent activity
@@ -1501,10 +1502,22 @@ impl Render for ConWorkspace {
                     div()
                         .size(px(6.0))
                         .rounded_full()
-                        .bg(theme.primary)
-                        .mr(px(6.0)),
+                        .bg(theme.primary),
                 );
             }
+
+            // Terminal icon
+            tab_content = tab_content.child(
+                svg()
+                    .path("phosphor/terminal.svg")
+                    .size(px(13.0))
+                    .flex_shrink_0()
+                    .text_color(if is_active {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground.opacity(0.5)
+                    }),
+            );
 
             tab_content = tab_content.child(display_title);
 

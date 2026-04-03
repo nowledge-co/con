@@ -1471,11 +1471,14 @@ impl Render for AgentPanel {
             });
 
         // ── Panel ───────────────────────────────────────────────
+        // Use system proportional font for readable prose — the workspace root
+        // sets Ioskeley Mono which would cascade here without this override.
         let mut panel = div()
             .flex()
             .flex_col()
             .size_full()
             .bg(theme.title_bar)
+            .font_family(".SystemUIFont")
             .child(header);
 
         if self.showing_history {

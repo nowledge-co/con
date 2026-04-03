@@ -397,8 +397,10 @@ impl PaneTree {
         match node {
             PaneNode::Leaf { id: _, terminal } => {
                 // Leaf — no flex sizing here, parent Split handles sizing.
+                // Add small left inset so terminal text doesn't touch the edge.
                 div()
                     .size_full()
+                    .pl(px(4.0))
                     .child(terminal.clone())
                     .into_any_element()
             }
@@ -425,27 +427,29 @@ impl PaneTree {
                 let divider = match dir {
                     SplitDirection::Horizontal => div()
                         .id(divider_id)
-                        .w(px(4.0))
+                        .w(px(6.0))
                         .h_full()
                         .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_col_resize()
-                        .hover(|s| s.bg(theme.primary.opacity(0.06)))
+                        .bg(theme.title_bar)
+                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
                         .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _window, _cx| {
                             cb_divider(sid, f32::from(event.position.x));
                         }),
                     SplitDirection::Vertical => div()
                         .id(divider_id)
-                        .h(px(4.0))
+                        .h(px(6.0))
                         .w_full()
                         .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_row_resize()
-                        .hover(|s| s.bg(theme.primary.opacity(0.06)))
+                        .bg(theme.title_bar)
+                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
                         .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _window, _cx| {
                             cb_divider(sid, f32::from(event.position.y));
                         }),
