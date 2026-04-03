@@ -46,7 +46,7 @@ cargo test --workspace # test
 
 ## Design Language
 
-- **Font**: IoskeleyMono (embedded, all weights). Use `font_family("Ioskeley Mono")` in code.
+- **Font**: IoskeleyMono (embedded, all weights) for terminal chrome — tabs, sidebar, input bar. System font (.SystemUIFont / SF Pro) for AI panel prose text. Code blocks use IoskeleyMono via `mono_font.family` in theme JSON.
 - **Default theme**: Flexoki Light. Dark available as Flexoki Dark.
 - **Icons**: Phosphor Icons (phosphoricons.com). SVGs in `assets/phosphor/`.
 - **Borderless**: No `border_1()`, `border_r_1()`, etc. Use opacity-based fills for surface separation.
