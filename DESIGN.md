@@ -31,6 +31,9 @@ An open-source, cross-platform, GPU-accelerated terminal emulator that treats AI
 │  │  ┌────────────┐ ┌────────────┐ ┌────────────────┐  │  │
 │  │  │ Terminal    │ │ Agent      │ │ Session        │  │  │
 │  │  │ Manager    │ │ Harness    │ │ Manager        │  │  │
+│  │  │            │ │ (shared)   │ │                │  │  │
+│  │  │            │ │ + per-tab  │ │                │  │  │
+│  │  │            │ │ Sessions   │ │                │  │  │
 │  │  └─────┬──────┘ └─────┬──────┘ └────────────────┘  │  │
 │  └────────┼──────────────┼────────────────────────────┘  │
 │           │              │                               │
@@ -65,7 +68,7 @@ kingston/
 │   ├── con-core/              # shared logic, no UI dependency
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── harness.rs     # orchestrates agent ↔ terminal
+│   │       ├── harness.rs     # AgentHarness (shared) + AgentSession (per-tab)
 │   │       ├── session.rs     # persist/restore workspace state
 │   │       ├── config.rs      # con config (TOML)
 │   │       └── suggestions.rs # AI shell command suggestions
@@ -158,7 +161,9 @@ GPUI gives us Zed-level text rendering quality (critical for a terminal) and a p
 
 **Per-request approval channels:** Each `send_message()` creates a fresh crossbeam channel pair. The sender is delivered to the UI via `ToolApprovalNeeded` events. The receiver is owned by the `ConHook` for that request. This eliminates race conditions between concurrent agent requests — only one hook instance reads from each channel.
 
-**Conversation round-trip:** The conversation state (`Arc<Mutex<Conversation>>`) is shared between the main thread and spawned tasks. After the agent completes, the assistant message is added back to the conversation, enabling multi-turn context.
+**Per-tab agent sessions:** Each tab owns an independent `AgentSession` — its own conversation, event channels, terminal exec channels, and cancellation flag. The `AgentHarness` (shared per window) holds only infrastructure: the tokio runtime (2 worker threads), config, and skill registry. When the user switches tabs, the agent panel swaps its `PanelState` in and out via `std::mem::replace()`, preserving each tab's conversation history and in-flight state. Background tabs continue processing agent events into their cached `PanelState`. Terminal exec requests route to the originating tab's pane tree, not the active tab — so an agent running in Tab 2 executes commands in Tab 2 even if the user has switched to Tab 1.
+
+**Conversation round-trip:** The conversation state (`Arc<Mutex<Conversation>>`) is shared between the main thread and spawned tasks. After the agent completes, the assistant message is added back to the conversation, enabling multi-turn context. Each tab persists its own `conversation_id` across restarts.
 
 **Escape hatch:** If we later need ai-sdk features, we can spawn a Bun/Node sidecar process and communicate over IPC. This is a pragmatic fallback, not a primary architecture.
 
@@ -274,6 +279,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Inline suggestions ghost text (Tab to accept, debounced AI completions)
 - [x] Extended thinking display (collapsible sections in agent panel)
 - [x] Theme configurability (4 built-in themes, live switching, settings picker)
+- [x] Per-tab agent sessions (each tab owns its own conversation, context, and approval state)
 
 ---
 

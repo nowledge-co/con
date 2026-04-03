@@ -13,7 +13,8 @@ con is a terminal that treats AI as a first-class feature, not an afterthought. 
 - **Smart input bar** — Type naturally. con auto-detects whether you're entering a shell command or asking the AI a question. Or switch to explicit Shell/Agent mode
 - **Tool transparency** — When the agent runs a command or writes a file, you see exactly what it's doing. Dangerous tools require explicit approval
 - **Skills** — Built-in actions like `/explain`, `/fix`, `/commit`, `/test`, `/review`. Extend with your own via `AGENTS.md`
-- **Session persistence** — Tabs, layout, and agent panel state are saved and restored automatically
+- **Per-tab agent sessions** — Each tab has its own conversation and context. Switch tabs freely while the agent works; your conversations stay with the tabs they belong to
+- **Session persistence** — Tabs, conversations, and layout are saved and restored automatically
 
 ## Getting Started
 
@@ -71,7 +72,7 @@ con is structured as a Rust workspace with clear crate boundaries:
 - **con-terminal** — Terminal emulation (VT parser, PTY, grid, keyboard encoding)
 - **con-agent** — AI harness (Rig 0.34, tool definitions, conversation, skills)
 
-The agent harness runs on a shared tokio runtime. Events flow from the agent to the UI via crossbeam channels. Tool calls go through a PromptHook lifecycle that emits events for every step — the UI is never in the dark about what the agent is doing.
+The agent harness uses a shared tokio runtime with per-tab sessions — each tab owns its own conversation and event channels. Events flow from the agent to the UI via crossbeam channels. Tool calls go through a PromptHook lifecycle that emits events for every step — the UI is never in the dark about what the agent is doing.
 
 ## License
 

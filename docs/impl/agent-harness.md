@@ -10,37 +10,73 @@ The agent harness orchestrates the AI agent lifecycle: user input → model call
 
 ## Architecture
 
+The harness is split into two concerns: **shared infrastructure** (one per window) and **per-tab sessions** (one per tab).
+
 ```
-User Input
+Window (ConWorkspace)
+  │
+  ├─ AgentHarness (shared)
+  │   ├── config: AgentConfig       ← provider, model, auth
+  │   ├── skills: SkillRegistry     ← built-in + AGENTS.md
+  │   └── runtime: Arc<Runtime>     ← tokio, 2 worker threads
+  │
+  └─ tabs: Vec<Tab>
+      └── Tab
+          ├── pane_tree: PaneTree
+          ├── session: AgentSession         ← per-tab
+          │   ├── conversation: Arc<Mutex<Conversation>>
+          │   ├── event_tx / event_rx       ← HarnessEvent channel
+          │   ├── terminal_exec_tx / rx     ← TerminalExecRequest channel
+          │   ├── pane_tx / pane_rx         ← PaneRequest channel
+          │   └── cancel_flag: Arc<AtomicBool>
+          └── panel_state: PanelState       ← per-tab UI snapshot
+              ├── messages: Vec<PanelMessage>
+              ├── tool_calls: Vec<ToolCallEntry>
+              ├── pending_approvals: Vec<PendingApproval>
+              ├── streaming: bool
+              └── status: AgentStatus
+```
+
+**Why this split:**
+- Runtime and config are expensive to duplicate; skills are project-level, not tab-level.
+- Conversations must be isolated: Tab 1's agent shouldn't see Tab 2's history.
+- Terminal exec requests must route to the originating tab's pane tree, not the active tab.
+- Background tabs keep running — switching away doesn't interrupt the agent.
+
+## Request Flow
+
+```
+User Input (Tab N)
     │
     ▼
-ConWorkspace::on_input_submit()
+ConWorkspace::send_to_agent()
     │
     ├── Adds user message to AgentPanel
     ├── Snapshots terminal grid → TerminalContext
-    └── Calls AgentHarness::send_message(content, context)
+    └── Calls harness.send_message(&tabs[N].session, content, context)
             │
             ▼
-        AgentHarness (con-core)
+        AgentHarness::send_message(session, ...)
             │
-            ├── Adds user message to Arc<Mutex<Conversation>>
+            ├── Adds user message to session.conversation
+            ├── Resets session.cancel_flag
             ├── Creates per-request approval channel
-            └── Spawns tokio task:
+            └── Spawns tokio task on shared runtime:
                     │
                     ├── Spawns bridge thread (AgentEvent → HarnessEvent)
-                    ├── Snapshots conversation (brief lock)
-                    ├── Creates AgentProvider
+                    ├── Snapshots conversation (brief mutex lock)
+                    ├── Creates AgentProvider from config
                     └── Calls provider.send(conv, ctx, event_tx, approval_rx)
                             │
                             ▼
                         AgentProvider (con-agent)
                             │
-                            ├── Builds Rig Agent with 4 tools
+                            ├── Builds Rig Agent with tools
                             ├── Creates ConHook with event_tx + approval_rx
                             └── agent.prompt(msg).with_hook(hook).with_history(history)
                                     │
                                     ▼
-                                Rig Agent Loop (rig-core)
+                                Rig Agent Loop
                                     │
                                     ├── Calls model API
                                     ├── on_tool_call → ConHook emits ToolCallStart
@@ -52,21 +88,68 @@ ConWorkspace::on_input_submit()
                             ▼
                         Provider adds assistant message to conversation
                         Bridge emits HarnessEvent::ResponseComplete
-                            │
-                            ▼
-                        ConWorkspace polls events_rx
-                        Updates AgentPanel UI
 ```
+
+## Event Polling & Tab Routing
+
+The workspace polls **all** tabs' sessions every 4ms:
+
+```
+for tab_idx in 0..tabs.len() {
+    // Agent events
+    while let Ok(event) = tabs[tab_idx].session.events().try_recv() {
+        if tab_idx == active_tab {
+            → AgentPanel (with cx.notify → re-render)
+        } else {
+            → tabs[tab_idx].panel_state.apply_event(event)
+            → tabs[tab_idx].needs_attention = true
+        }
+    }
+
+    // Terminal exec — always routed to the originating tab
+    while let Ok(req) = tabs[tab_idx].session.terminal_exec_requests().try_recv() {
+        → handle_terminal_exec_request_for_tab(tab_idx, req)
+    }
+
+    // Pane queries — always routed to the originating tab
+    while let Ok(req) = tabs[tab_idx].session.pane_requests().try_recv() {
+        → handle_pane_request_for_tab(tab_idx, req)
+    }
+}
+```
+
+Key properties:
+- Active tab events update the AgentPanel directly (live rendering).
+- Background tab events are applied to `PanelState` (pure data, no GPUI dependency).
+- Terminal exec routes to the **originating** tab, not the active tab.
+- The `needs_attention` flag drives a blue dot indicator on the tab.
+
+## Tab Switching (PanelState Swap)
+
+When the user switches from Tab A to Tab B:
+
+```rust
+// 1. Take Tab B's cached state
+let incoming = mem::replace(&mut tabs[B].panel_state, PanelState::new());
+
+// 2. Swap into AgentPanel, get Tab A's live state back
+let outgoing = agent_panel.swap_state(incoming);
+
+// 3. Stash Tab A's state
+tabs[A].panel_state = outgoing;
+```
+
+This avoids cloning — `mem::replace` moves ownership. The AgentPanel always displays exactly one tab's state.
 
 ## Channel Architecture
 
-### Event channel (Harness → UI)
-- `crossbeam::unbounded::<HarnessEvent>()` — created once at harness init
-- Polled by GPUI workspace every 50ms via `cx.spawn(async move |this, cx| { loop { ... } })`
-- All events flow through this single channel
+### Per-tab event channels (Session → UI)
+- `crossbeam::unbounded::<HarnessEvent>()` — one per AgentSession
+- Created when a tab is opened or restored
+- Polled by the workspace's event loop
 
 ### Per-request approval channel (UI → Hook)
-- Fresh `crossbeam::unbounded::<ToolApprovalDecision>()` per `send_message()`
+- Fresh `crossbeam::unbounded::<ToolApprovalDecision>()` per `send_message()` call
 - Sender delivered to UI inside `HarnessEvent::ToolApprovalNeeded`
 - Receiver owned by `ConHook` for that request
 - Hook blocks with 5-minute timeout on `recv_timeout()`
@@ -82,8 +165,14 @@ ConWorkspace::on_input_submit()
 |------|---------------|----------|
 | `file_read` | Safe | Executes immediately |
 | `search` | Safe | Executes immediately |
+| `list_panes` | Safe | Executes immediately |
+| `read_pane` | Safe | Executes immediately |
+| `search_panes` | Safe | Executes immediately |
+| `terminal_exec` | Dangerous | Requires approval (or auto_approve) |
 | `shell_exec` | Dangerous | Requires approval (or auto_approve) |
 | `file_write` | Dangerous | Requires approval (or auto_approve) |
+| `edit_file` | Dangerous | Requires approval (or auto_approve) |
+| `send_keys` | Dangerous | Requires approval (or auto_approve) |
 
 Classification happens in two places:
 1. `ConHook::on_tool_call` — blocks on approval for dangerous tools
@@ -91,7 +180,7 @@ Classification happens in two places:
 
 ## Conversation State
 
-`Arc<Mutex<Conversation>>` shared between main thread and spawned tasks.
+`Arc<Mutex<Conversation>>` per tab, shared between main thread and spawned tasks.
 
 The mutex is held briefly for two operations:
 1. **Snapshot** — clone conversation before agent call
@@ -99,9 +188,21 @@ The mutex is held briefly for two operations:
 
 Rig manages its own history via `with_history(&mut Vec<rig::message::Message>)`. Our `to_rig_history()` provides User/Assistant text pairs. Rig appends tool call/result messages during its turn loop.
 
-## Streaming Status
+## Session Persistence
 
-The `on_text_delta` hook is implemented but **only fires when using `stream_prompt()`**. The current non-streaming path (`prompt()`) does not trigger it. The UI handles `Token` events correctly — when streaming is added, the agent panel will render incremental text without changes.
+Each tab saves its own `conversation_id` to `session.json`:
+
+```json
+{
+  "tabs": [
+    { "title": "Terminal 1", "conversation_id": "abc-123", ... },
+    { "title": "Terminal 2", "conversation_id": "def-456", ... }
+  ],
+  "conversation_id": null
+}
+```
+
+On restore, each tab loads its own conversation. For backward compatibility, if a tab has no `conversation_id` but the session-level field exists, the first tab inherits it.
 
 ## Config
 

@@ -1393,17 +1393,34 @@ impl Render for ConWorkspace {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, window, cx| {
-                                // Close this specific tab
-                                if this.tabs.len() > 1 {
-                                    this.tabs.remove(index);
-                                    if this.active_tab >= this.tabs.len() {
-                                        this.active_tab = this.tabs.len() - 1;
-                                    } else if this.active_tab > index {
-                                        this.active_tab -= 1;
-                                    }
-                                    this.save_session(cx);
-                                    cx.notify();
+                                if this.tabs.len() <= 1 {
+                                    return;
                                 }
+                                // Save the closing tab's conversation
+                                {
+                                    let conv = this.tabs[index].session.conversation();
+                                    let _ = conv.lock().save();
+                                }
+                                let was_active = index == this.active_tab;
+                                this.tabs.remove(index);
+                                if this.active_tab >= this.tabs.len() {
+                                    this.active_tab = this.tabs.len() - 1;
+                                } else if this.active_tab > index {
+                                    this.active_tab -= 1;
+                                }
+                                // If the active tab was closed, swap new active's state into the panel
+                                if was_active {
+                                    let incoming = std::mem::replace(
+                                        &mut this.tabs[this.active_tab].panel_state,
+                                        PanelState::new(),
+                                    );
+                                    this.agent_panel.update(cx, |panel, cx| {
+                                        panel.swap_state(incoming, cx);
+                                    });
+                                }
+                                this.sync_sidebar(cx);
+                                this.save_session(cx);
+                                cx.notify();
                                 let _ = window;
                             }),
                         )

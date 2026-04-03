@@ -6,6 +6,10 @@ All notable changes to con are documented here.
 
 ### Added
 
+**AI Agent**
+- Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.
+- Agent conversations persist per-tab across restarts
+
 **Terminal**
 - Full terminal emulation with 256-color and truecolor support
 - Split panes — divide your workspace horizontally (Cmd+D) or vertically (Cmd+Shift+D), with drag-to-resize dividers
