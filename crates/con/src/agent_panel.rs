@@ -4,8 +4,8 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::text::TextView;
 use gpui_component::ActiveTheme;
 
-/// Max characters to show for tool result summaries in collapsed steps
-const TOOL_RESULT_DISPLAY_LEN: usize = 200;
+/// Max lines to show for tool result previews in collapsed steps
+const TOOL_RESULT_PREVIEW_LINES: usize = 6;
 /// Max characters to show in expanded thinking section
 const THINKING_DISPLAY_LEN: usize = 2000;
 
@@ -73,8 +73,11 @@ struct PanelMessage {
 struct StepEntry {
     icon: &'static str,
     label: String,
+    /// Full formatted result (may be multi-line JSON, command output, etc.)
     detail: Option<String>,
     status: StepStatus,
+    /// Whether the detail section is collapsed (default: true)
+    detail_collapsed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -154,6 +157,7 @@ impl AgentPanel {
                 label: step.to_string(),
                 detail: None,
                 status: StepStatus::Complete,
+                detail_collapsed: true,
             });
         }
         cx.notify();
@@ -234,6 +238,7 @@ impl AgentPanel {
                 label,
                 detail: None,
                 status,
+                detail_collapsed: true,
             });
         }
         cx.notify();
@@ -288,17 +293,20 @@ impl AgentPanel {
         // Move active tool calls into the message's step timeline
         for tc in self.tool_calls.drain(..) {
             let args_display = Self::format_tool_args(&tc.tool_name, &tc.args);
+            let human_name = humanize_tool_name(&tc.tool_name);
             let (status, detail) = if let Some(result) = &tc.result {
-                (StepStatus::Complete, Some(truncate_str(result, TOOL_RESULT_DISPLAY_LEN)))
+                let formatted = format_tool_result(&result);
+                (StepStatus::Complete, Some(formatted))
             } else {
                 (StepStatus::Running, None)
             };
             if let Some(last) = self.messages.last_mut() {
                 last.steps.push(StepEntry {
                     icon: Self::tool_icon(&tc.tool_name),
-                    label: format!("{}: {}", tc.tool_name, truncate_str(&args_display, 60)),
+                    label: format!("{}: {}", human_name, truncate_str(&args_display, 60)),
                     detail,
                     status,
+                    detail_collapsed: true,
                 });
             }
         }
@@ -407,6 +415,50 @@ fn truncate_str(s: &str, max_len: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", &s[..s.floor_char_boundary(max_len)])
+    }
+}
+
+/// "list_panes" → "List Panes", "terminal_exec" → "Terminal Exec"
+fn humanize_tool_name(name: &str) -> String {
+    name.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(c) => {
+                    let mut s = c.to_uppercase().to_string();
+                    s.extend(chars);
+                    s
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Format a tool result for display. Detects JSON and formats it pretty-printed,
+/// otherwise returns the raw text with literal `\n` sequences expanded.
+fn format_tool_result(raw: &str) -> String {
+    // First, try to parse as JSON and pretty-print
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) {
+        return serde_json::to_string_pretty(&json).unwrap_or_else(|_| raw.to_string());
+    }
+    // Expand literal \n sequences that come from serialized strings
+    if raw.contains("\\n") {
+        raw.replace("\\n", "\n").replace("\\t", "\t")
+    } else {
+        raw.to_string()
+    }
+}
+
+/// Create a preview of a tool result — first N lines + count of remaining.
+fn result_preview(formatted: &str, max_lines: usize) -> String {
+    let lines: Vec<&str> = formatted.lines().collect();
+    if lines.len() <= max_lines {
+        formatted.to_string()
+    } else {
+        let preview: String = lines[..max_lines].join("\n");
+        format!("{}\n… {} more lines", preview, lines.len() - max_lines)
     }
 }
 
@@ -630,14 +682,18 @@ impl Render for AgentPanel {
                         .border_l_1()
                         .border_color(theme.muted.opacity(0.15));
 
-                    for step in &msg.steps {
+                    for (step_idx, step) in msg.steps.iter().enumerate() {
                         let status_color = match step.status {
                             StepStatus::Running => theme.warning,
                             StepStatus::Complete => theme.success,
                             StepStatus::Denied => theme.danger,
                         };
 
-                        let mut step_el = div()
+                        let has_detail = step.detail.is_some();
+                        let detail_collapsed = step.detail_collapsed;
+
+                        // Step header row — clickable if has detail
+                        let mut step_header = div()
                             .flex()
                             .items_center()
                             .gap(px(5.0))
@@ -663,14 +719,80 @@ impl Render for AgentPanel {
                                     .child(truncate_str(&step.label, 80)),
                             );
 
-                        if let Some(detail) = &step.detail {
-                            step_el = step_el.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.success.opacity(0.6))
-                                    .overflow_x_hidden()
-                                    .child(truncate_str(detail, 60)),
+                        // Expand/collapse chevron for details
+                        if has_detail {
+                            let detail_chevron = if detail_collapsed {
+                                "phosphor/caret-right.svg"
+                            } else {
+                                "phosphor/caret-down.svg"
+                            };
+                            step_header = step_header.child(
+                                svg()
+                                    .path(detail_chevron)
+                                    .size(px(9.0))
+                                    .text_color(theme.muted_foreground.opacity(0.5)),
                             );
+                        }
+
+                        let mut step_el = div().flex().flex_col();
+
+                        if has_detail {
+                            step_el = step_el.child(
+                                step_header
+                                    .id(SharedString::from(format!("step-detail-{msg_idx}-{step_idx}")))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.muted.opacity(0.06)))
+                                    .rounded(px(4.0))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            if let Some(m) = this.messages.get_mut(msg_idx) {
+                                                if let Some(s) = m.steps.get_mut(step_idx) {
+                                                    s.detail_collapsed = !s.detail_collapsed;
+                                                }
+                                            }
+                                            cx.notify();
+                                        }),
+                                    ),
+                            );
+                        } else {
+                            step_el = step_el.child(step_header);
+                        }
+
+                        // Expanded detail — rendered as code block
+                        if let Some(detail) = &step.detail {
+                            if !detail_collapsed {
+                                let preview = result_preview(detail, TOOL_RESULT_PREVIEW_LINES);
+                                // Wrap in markdown code fence for syntax-highlighted rendering
+                                let is_json = detail.trim_start().starts_with('{')
+                                    || detail.trim_start().starts_with('[');
+                                let lang = if is_json { "json" } else { "" };
+                                let md: SharedString = format!("```{lang}\n{preview}\n```").into();
+                                step_el = step_el.child(
+                                    div()
+                                        .ml(px(22.0))
+                                        .mr(px(4.0))
+                                        .mt(px(2.0))
+                                        .mb(px(4.0))
+                                        .rounded(px(6.0))
+                                        .bg(theme.muted.opacity(0.06))
+                                        .overflow_x_hidden()
+                                        .child(
+                                            div()
+                                                .px(px(8.0))
+                                                .py(px(6.0))
+                                                .child(
+                                                    TextView::markdown(
+                                                        ElementId::Name(
+                                                            format!("step-result-{msg_idx}-{step_idx}").into(),
+                                                        ),
+                                                        md,
+                                                    )
+                                                    .text_xs()
+                                                ),
+                                        ),
+                                );
+                            }
                         }
 
                         steps_el = steps_el.child(step_el);
@@ -683,23 +805,24 @@ impl Render for AgentPanel {
         }
 
         // ── Active tool calls (live cards) ───────────────────────
-        for tc in &self.tool_calls {
+        for (tc_idx, tc) in self.tool_calls.iter().enumerate() {
             let is_done = tc.result.is_some();
             let icon = Self::tool_icon(&tc.tool_name);
             let args_display = Self::format_tool_args(&tc.tool_name, &tc.args);
+            let human_name = humanize_tool_name(&tc.tool_name);
 
             let status_color = if is_done { theme.success } else { theme.warning };
 
             let mut tc_el = div()
                 .flex()
                 .flex_col()
-                .gap(px(6.0))
+                .gap(px(4.0))
                 .mx(px(4.0))
                 .px(px(12.0))
-                .py(px(10.0))
+                .py(px(8.0))
                 .rounded(px(8.0))
                 .border_1()
-                .border_color(status_color.opacity(0.15))
+                .border_color(status_color.opacity(0.12))
                 .bg(theme.muted.opacity(0.04))
                 // Header
                 .child(
@@ -724,7 +847,7 @@ impl Render for AgentPanel {
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.foreground)
-                                .child(tc.tool_name.clone()),
+                                .child(human_name),
                         ),
                 )
                 // Args
@@ -737,14 +860,34 @@ impl Render for AgentPanel {
                         .child(truncate_str(&args_display, 80)),
                 );
 
+            // Result — rendered as formatted code block
             if let Some(result) = &tc.result {
+                let formatted = format_tool_result(result);
+                let preview = result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES);
+                let is_json = formatted.trim_start().starts_with('{')
+                    || formatted.trim_start().starts_with('[');
+                let lang = if is_json { "json" } else { "" };
+                let md: SharedString = format!("```{lang}\n{preview}\n```").into();
                 tc_el = tc_el.child(
                     div()
-                        .pt(px(4.0))
-                        .text_xs()
-                        .text_color(theme.success.opacity(0.8))
+                        .mt(px(2.0))
+                        .rounded(px(6.0))
+                        .bg(theme.muted.opacity(0.06))
                         .overflow_x_hidden()
-                        .child(truncate_str(result, 120)),
+                        .child(
+                            div()
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .child(
+                                    TextView::markdown(
+                                        ElementId::Name(
+                                            format!("tc-result-{tc_idx}").into(),
+                                        ),
+                                        md,
+                                    )
+                                    .text_xs()
+                                ),
+                        ),
                 );
             }
             messages_area = messages_area.child(tc_el);
@@ -785,7 +928,7 @@ impl Render for AgentPanel {
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.foreground)
-                                .child(format!("{} requires approval", approval.tool_name)),
+                                .child(format!("{} requires approval", humanize_tool_name(&approval.tool_name))),
                         ),
                 )
                 // Command preview
