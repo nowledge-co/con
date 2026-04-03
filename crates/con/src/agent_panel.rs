@@ -1,9 +1,10 @@
 use crossbeam_channel::Sender;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::text::TextView;
 use gpui_component::ActiveTheme;
 
-/// Max characters to show for tool result summaries
+/// Max characters to show for tool result summaries in collapsed steps
 const TOOL_RESULT_DISPLAY_LEN: usize = 200;
 /// Max characters to show in expanded thinking section
 const THINKING_DISPLAY_LEN: usize = 2000;
@@ -42,6 +43,10 @@ impl EventEmitter<LoadConversation> for AgentPanel {}
 pub struct CancelRequest;
 impl EventEmitter<CancelRequest> for AgentPanel {}
 
+/// Emitted when user clicks "Allow All" to enable auto-approve for the session.
+pub struct EnableAutoApprove;
+impl EventEmitter<EnableAutoApprove> for AgentPanel {}
+
 pub struct AgentPanel {
     messages: Vec<PanelMessage>,
     tool_calls: Vec<ToolCallEntry>,
@@ -51,6 +56,7 @@ pub struct AgentPanel {
     scroll_handle: ScrollHandle,
     showing_history: bool,
     conversation_list: Vec<ConversationSummary>,
+    auto_approve: bool,
 }
 
 struct PanelMessage {
@@ -59,8 +65,23 @@ struct PanelMessage {
     /// Extended thinking/reasoning text from the model (collapsible)
     thinking: Option<String>,
     thinking_collapsed: bool,
-    steps: Vec<String>,
+    steps: Vec<StepEntry>,
     steps_collapsed: bool,
+}
+
+/// A structured step entry (replaces raw Debug strings).
+struct StepEntry {
+    icon: &'static str,
+    label: String,
+    detail: Option<String>,
+    status: StepStatus,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum StepStatus {
+    Running,
+    Complete,
+    Denied,
 }
 
 impl PanelMessage {
@@ -91,6 +112,7 @@ impl AgentPanel {
             scroll_handle: ScrollHandle::new(),
             showing_history: false,
             conversation_list: Vec::new(),
+            auto_approve: false,
         }
     }
 
@@ -127,7 +149,12 @@ impl AgentPanel {
     pub fn add_step(&mut self, step: &str, cx: &mut Context<Self>) {
         self.status = AgentStatus::Thinking;
         if let Some(last) = self.messages.last_mut() {
-            last.steps.push(step.to_string());
+            last.steps.push(StepEntry {
+                icon: "phosphor/sparkle.svg",
+                label: step.to_string(),
+                detail: None,
+                status: StepStatus::Complete,
+            });
         }
         cx.notify();
     }
@@ -187,7 +214,6 @@ impl AgentPanel {
             return;
         }
         let approval = self.pending_approvals.remove(index);
-        let action = if allowed { "Allowed" } else { "Denied" };
         let _ = approval.approval_tx.send(ToolApprovalDecision {
             call_id: approval.call_id,
             allowed,
@@ -198,15 +224,27 @@ impl AgentPanel {
             },
         });
         if let Some(last) = self.messages.last_mut() {
-            last.steps
-                .push(format!("{}: {}", action, approval.tool_name));
+            let (status, label) = if allowed {
+                (StepStatus::Complete, format!("Allowed: {}", approval.tool_name))
+            } else {
+                (StepStatus::Denied, format!("Denied: {}", approval.tool_name))
+            };
+            last.steps.push(StepEntry {
+                icon: if allowed { "phosphor/check.svg" } else { "phosphor/x.svg" },
+                label,
+                detail: None,
+                status,
+            });
         }
         cx.notify();
     }
 
-    /// Accumulate extended thinking/reasoning text into the current message.
-    /// Creates an assistant message if one doesn't exist yet (thinking arrives
-    /// before text tokens).
+    fn resolve_all_approvals(&mut self, cx: &mut Context<Self>) {
+        while !self.pending_approvals.is_empty() {
+            self.resolve_approval(0, true, cx);
+        }
+    }
+
     pub fn update_thinking(&mut self, text: &str, cx: &mut Context<Self>) {
         self.status = AgentStatus::Thinking;
         if !self.streaming {
@@ -247,15 +285,21 @@ impl AgentPanel {
             self.messages
                 .push(PanelMessage::new("assistant", final_content));
         }
+        // Move active tool calls into the message's step timeline
         for tc in self.tool_calls.drain(..) {
-            let step = if let Some(result) = &tc.result {
-                let truncated = truncate_str(result, TOOL_RESULT_DISPLAY_LEN);
-                format!("[{}] {} → {}", tc.tool_name, tc.args, truncated)
+            let args_display = Self::format_tool_args(&tc.tool_name, &tc.args);
+            let (status, detail) = if let Some(result) = &tc.result {
+                (StepStatus::Complete, Some(truncate_str(result, TOOL_RESULT_DISPLAY_LEN)))
             } else {
-                format!("[{}] {}", tc.tool_name, tc.args)
+                (StepStatus::Running, None)
             };
             if let Some(last) = self.messages.last_mut() {
-                last.steps.push(step);
+                last.steps.push(StepEntry {
+                    icon: Self::tool_icon(&tc.tool_name),
+                    label: format!("{}: {}", tc.tool_name, truncate_str(&args_display, 60)),
+                    detail,
+                    status,
+                });
             }
         }
         self.scroll_to_bottom();
@@ -264,13 +308,16 @@ impl AgentPanel {
 
     fn tool_icon(tool_name: &str) -> &'static str {
         match tool_name {
-            "terminal_exec" => "phosphor/play.svg",
+            "terminal_exec" | "batch_exec" => "phosphor/play.svg",
             "shell_exec" => "phosphor/terminal.svg",
             "file_write" => "phosphor/pencil-simple.svg",
             "file_read" => "phosphor/file-code.svg",
             "edit_file" => "phosphor/pencil-simple.svg",
             "list_files" => "phosphor/folder.svg",
-            "search" => "phosphor/magnifying-glass.svg",
+            "search" | "search_panes" => "phosphor/magnifying-glass.svg",
+            "list_panes" => "phosphor/columns.svg",
+            "read_pane" => "phosphor/eye.svg",
+            "send_keys" => "phosphor/keyboard.svg",
             _ => "phosphor/gear.svg",
         }
     }
@@ -300,56 +347,59 @@ impl AgentPanel {
                         return format!("\"{}\"", pattern);
                     }
                 }
+                "search_panes" => {
+                    if let Some(pattern) = v.get("pattern").and_then(|q| q.as_str()) {
+                        return format!("\"{}\"", pattern);
+                    }
+                }
+                "batch_exec" => {
+                    if let Some(cmds) = v.get("commands").and_then(|c| c.as_array()) {
+                        return format!("{} commands", cmds.len());
+                    }
+                }
+                "send_keys" => {
+                    if let Some(keys) = v.get("keys").and_then(|k| k.as_str()) {
+                        return keys.to_string();
+                    }
+                }
+                "read_pane" | "list_panes" => {
+                    if let Some(idx) = v.get("pane_index").and_then(|i| i.as_u64()) {
+                        return format!("pane {}", idx);
+                    }
+                    return "all panes".to_string();
+                }
                 _ => {}
             }
         }
         truncate_str(args, 120)
     }
-}
 
-fn render_message_content(content: &str, theme: &gpui_component::theme::Theme) -> Div {
-    let parts: Vec<&str> = content.split("```").collect();
-    let mut container = div().flex().flex_col().gap(px(6.0));
-
-    for (i, part) in parts.iter().enumerate() {
-        let is_code = i % 2 == 1;
-        if part.is_empty() {
-            continue;
+    /// Derive a human-readable status line from current panel state.
+    fn status_text(&self) -> Option<(&'static str, &'static str)> {
+        // Priority: approval > running tool > thinking > responding
+        if !self.pending_approvals.is_empty() {
+            return Some(("phosphor/warning.svg", "Awaiting approval…"));
         }
-        if is_code {
-            let code = if let Some(newline_pos) = part.find('\n') {
-                &part[newline_pos + 1..]
-            } else {
-                part
+        if let Some(tc) = self.tool_calls.iter().find(|tc| tc.result.is_none()) {
+            let label = match tc.tool_name.as_str() {
+                "terminal_exec" | "batch_exec" => "Running command…",
+                "shell_exec" => "Running in background…",
+                "file_read" => "Reading file…",
+                "file_write" | "edit_file" => "Writing file…",
+                "search" | "search_panes" => "Searching…",
+                "list_panes" | "read_pane" => "Reading pane…",
+                "list_files" => "Listing files…",
+                "send_keys" => "Sending keys…",
+                _ => "Running tool…",
             };
-            container = container.child(
-                div()
-                    .px(px(10.0))
-                    .py(px(8.0))
-                    .rounded(px(6.0))
-                    .bg(theme.background)
-                    .font_family("Ioskeley Mono")
-                    .text_xs()
-                    .text_color(theme.foreground)
-                    .child(code.trim_end().to_string()),
-            );
-        } else {
-            for line in part.split('\n') {
-                if line.trim().is_empty() {
-                    container = container.child(div().h(px(6.0)));
-                } else {
-                    container = container.child(
-                        div()
-                            .text_sm()
-                            .line_height(px(20.0))
-                            .text_color(theme.foreground)
-                            .child(line.to_string()),
-                    );
-                }
-            }
+            return Some((Self::tool_icon(&tc.tool_name), label));
+        }
+        match self.status {
+            AgentStatus::Thinking => Some(("phosphor/sparkle.svg", "Thinking…")),
+            AgentStatus::Responding => Some(("phosphor/pencil-simple.svg", "Writing…")),
+            AgentStatus::Idle => None,
         }
     }
-    container
 }
 
 fn truncate_str(s: &str, max_len: usize) -> String {
@@ -385,7 +435,6 @@ impl Render for AgentPanel {
             let mut msg_el = div().flex().flex_col().gap(px(6.0));
 
             if is_system {
-                // System message: subtle, centered
                 msg_el = msg_el.child(
                     div()
                         .text_xs()
@@ -394,7 +443,6 @@ impl Render for AgentPanel {
                         .child(msg.content.clone()),
                 );
             } else if is_user {
-                // User message: right-aligned bubble
                 msg_el = msg_el.child(
                     div()
                         .flex()
@@ -417,7 +465,7 @@ impl Render for AgentPanel {
                         ),
                 );
             } else {
-                // Assistant message
+                // ── Assistant message ──
                 msg_el = msg_el
                     .child(
                         div()
@@ -439,7 +487,7 @@ impl Render for AgentPanel {
                             ),
                     );
 
-                // Extended thinking (collapsible, dimmed)
+                // Extended thinking (collapsible)
                 if let Some(thinking) = &msg.thinking {
                     if !thinking.is_empty() {
                         let thinking_collapsed = msg.thinking_collapsed;
@@ -480,11 +528,10 @@ impl Render for AgentPanel {
                         );
 
                         if !thinking_collapsed {
-                            // Truncate display to first 2000 chars for render performance
-                            let display_text = if thinking.len() > 2000 {
-                                format!("{}…", &thinking[..thinking.floor_char_boundary(THINKING_DISPLAY_LEN)])
+                            let display_text: SharedString = if thinking.len() > THINKING_DISPLAY_LEN {
+                                format!("{}…", &thinking[..thinking.floor_char_boundary(THINKING_DISPLAY_LEN)]).into()
                             } else {
-                                thinking.clone()
+                                thinking.clone().into()
                             };
                             msg_el = msg_el.child(
                                 div()
@@ -499,22 +546,38 @@ impl Render for AgentPanel {
                                             .text_xs()
                                             .line_height(px(16.0))
                                             .text_color(theme.muted_foreground.opacity(0.7))
-                                            .child(display_text),
+                                            .child(
+                                                TextView::markdown(
+                                                    ElementId::Name(format!("thinking-md-{msg_idx}").into()),
+                                                    display_text,
+                                                )
+                                                .text_xs()
+                                            ),
                                     ),
                             );
                         }
                     }
                 }
 
-                msg_el = msg_el
-                    .child(
+                // Message content — render as markdown
+                if !msg.content.is_empty() {
+                    let content: SharedString = msg.content.clone().into();
+                    msg_el = msg_el.child(
                         div()
                             .pl(px(18.0))
-                            .child(render_message_content(&msg.content, theme)),
+                            .text_sm()
+                            .child(
+                                TextView::markdown(
+                                    ElementId::Name(format!("msg-md-{msg_idx}").into()),
+                                    content,
+                                )
+                                .text_sm()
+                            ),
                     );
+                }
             }
 
-            // Steps (collapsible)
+            // ── Steps timeline (collapsible) ──
             if !msg.steps.is_empty() {
                 let step_count = msg.steps.len();
                 let collapsed = msg.steps_collapsed;
@@ -568,14 +631,49 @@ impl Render for AgentPanel {
                         .border_color(theme.muted.opacity(0.15));
 
                     for step in &msg.steps {
-                        steps_el = steps_el.child(
-                            div()
-                                .pl(px(8.0))
-                                .py(px(2.0))
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(truncate_str(step, 100)),
-                        );
+                        let status_color = match step.status {
+                            StepStatus::Running => theme.warning,
+                            StepStatus::Complete => theme.success,
+                            StepStatus::Denied => theme.danger,
+                        };
+
+                        let mut step_el = div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.0))
+                            .pl(px(8.0))
+                            .py(px(2.0))
+                            .child(
+                                div()
+                                    .size(px(4.0))
+                                    .rounded_full()
+                                    .bg(status_color),
+                            )
+                            .child(
+                                svg()
+                                    .path(step.icon)
+                                    .size(px(11.0))
+                                    .text_color(theme.muted_foreground),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .overflow_x_hidden()
+                                    .child(truncate_str(&step.label, 80)),
+                            );
+
+                        if let Some(detail) = &step.detail {
+                            step_el = step_el.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.success.opacity(0.6))
+                                    .overflow_x_hidden()
+                                    .child(truncate_str(detail, 60)),
+                            );
+                        }
+
+                        steps_el = steps_el.child(step_el);
                     }
                     msg_el = msg_el.child(steps_el);
                 }
@@ -584,11 +682,13 @@ impl Render for AgentPanel {
             messages_area = messages_area.child(msg_el);
         }
 
-        // ── Active tool calls ─────────────────────────────────────
+        // ── Active tool calls (live cards) ───────────────────────
         for tc in &self.tool_calls {
             let is_done = tc.result.is_some();
             let icon = Self::tool_icon(&tc.tool_name);
             let args_display = Self::format_tool_args(&tc.tool_name, &tc.args);
+
+            let status_color = if is_done { theme.success } else { theme.warning };
 
             let mut tc_el = div()
                 .flex()
@@ -598,7 +698,9 @@ impl Render for AgentPanel {
                 .px(px(12.0))
                 .py(px(10.0))
                 .rounded(px(8.0))
-                .bg(theme.muted.opacity(0.06))
+                .border_1()
+                .border_color(status_color.opacity(0.15))
+                .bg(theme.muted.opacity(0.04))
                 // Header
                 .child(
                     div()
@@ -609,7 +711,7 @@ impl Render for AgentPanel {
                             div()
                                 .size(px(5.0))
                                 .rounded_full()
-                                .bg(if is_done { theme.success } else { theme.warning }),
+                                .bg(status_color),
                         )
                         .child(
                             svg()
@@ -631,7 +733,7 @@ impl Render for AgentPanel {
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .overflow_x_hidden()
-                        .font_family("Ioskeley Mono")
+                        .font_family("Berkeley Mono")
                         .child(truncate_str(&args_display, 80)),
                 );
 
@@ -641,13 +743,14 @@ impl Render for AgentPanel {
                         .pt(px(4.0))
                         .text_xs()
                         .text_color(theme.success.opacity(0.8))
+                        .overflow_x_hidden()
                         .child(truncate_str(result, 120)),
                 );
             }
             messages_area = messages_area.child(tc_el);
         }
 
-        // ── Pending approvals ─────────────────────────────────────
+        // ── Pending approvals ───────────────────────────────────
         for (i, approval) in self.pending_approvals.iter().enumerate() {
             let icon = Self::tool_icon(&approval.tool_name);
             let args_display = Self::format_tool_args(&approval.tool_name, &approval.args);
@@ -662,7 +765,9 @@ impl Render for AgentPanel {
                 .px(px(12.0))
                 .py(px(10.0))
                 .rounded(px(8.0))
-                .bg(theme.warning.opacity(0.06))
+                .border_1()
+                .border_color(theme.warning.opacity(0.2))
+                .bg(theme.warning.opacity(0.04))
                 // Header
                 .child(
                     div()
@@ -698,23 +803,24 @@ impl Render for AgentPanel {
                         .child(
                             div()
                                 .text_xs()
-                                .font_family("Ioskeley Mono")
+                                .font_family("Berkeley Mono")
                                 .text_color(theme.foreground)
                                 .overflow_x_hidden()
                                 .child(truncate_str(&args_display, 80)),
                         ),
                 )
-                // Actions
+                // Actions: Deny | Allow | Allow All
                 .child(
                     div()
                         .flex()
                         .gap(px(6.0))
                         .justify_end()
+                        // Deny
                         .child(
                             div()
                                 .id(SharedString::from(format!("deny-{i}")))
-                                .h(px(28.0))
-                                .px(px(12.0))
+                                .h(px(26.0))
+                                .px(px(10.0))
                                 .flex()
                                 .items_center()
                                 .rounded(px(6.0))
@@ -723,7 +829,7 @@ impl Render for AgentPanel {
                                 .cursor_pointer()
                                 .bg(theme.muted.opacity(0.12))
                                 .text_color(theme.muted_foreground)
-                                .hover(|s| s.bg(theme.muted.opacity(0.2)))
+                                .hover(|s| s.bg(theme.danger.opacity(0.15)).text_color(theme.danger))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -732,11 +838,35 @@ impl Render for AgentPanel {
                                 )
                                 .child("Deny"),
                         )
+                        // Allow
                         .child(
                             div()
                                 .id(SharedString::from(format!("allow-{i}")))
-                                .h(px(28.0))
-                                .px(px(12.0))
+                                .h(px(26.0))
+                                .px(px(10.0))
+                                .flex()
+                                .items_center()
+                                .rounded(px(6.0))
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .cursor_pointer()
+                                .bg(theme.primary.opacity(0.15))
+                                .text_color(theme.primary)
+                                .hover(|s| s.bg(theme.primary.opacity(0.25)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.resolve_approval(allow_idx, true, cx);
+                                    }),
+                                )
+                                .child("Allow"),
+                        )
+                        // Allow All (YOLO)
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("allow-all-{i}")))
+                                .h(px(26.0))
+                                .px(px(10.0))
                                 .flex()
                                 .items_center()
                                 .rounded(px(6.0))
@@ -749,18 +879,25 @@ impl Render for AgentPanel {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
-                                        this.resolve_approval(allow_idx, true, cx);
+                                        this.auto_approve = true;
+                                        cx.emit(EnableAutoApprove);
+                                        this.resolve_all_approvals(cx);
                                     }),
                                 )
-                                .child("Allow"),
+                                .child("Allow All"),
                         ),
                 );
 
             messages_area = messages_area.child(approval_el);
         }
 
-        // Streaming indicator
-        if self.streaming {
+        // ── Status indicator (replaces "typing…") ───────────────
+        if let Some((icon, label)) = self.status_text() {
+            let status_color = match self.status {
+                AgentStatus::Thinking => theme.warning,
+                AgentStatus::Responding => theme.success,
+                AgentStatus::Idle => theme.muted_foreground,
+            };
             messages_area = messages_area.child(
                 div()
                     .pl(px(18.0))
@@ -768,26 +905,59 @@ impl Render for AgentPanel {
                     .items_center()
                     .gap(px(6.0))
                     .child(
-                        div()
-                            .size(px(4.0))
-                            .rounded_full()
-                            .bg(theme.primary.opacity(0.6)),
+                        svg()
+                            .path(icon)
+                            .size(px(12.0))
+                            .text_color(status_color.opacity(0.7)),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child("typing…"),
+                            .child(label),
                     ),
             );
         }
 
-        // ── Header ────────────────────────────────────────────────
+        // ── Header ──────────────────────────────────────────────
         let status_dot_color = match self.status {
             AgentStatus::Idle => theme.muted_foreground.opacity(0.4),
             AgentStatus::Thinking => theme.warning,
             AgentStatus::Responding => theme.success,
         };
+
+        let mut header_left = div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.foreground)
+                    .child("Agent"),
+            )
+            .child(
+                div()
+                    .size(px(6.0))
+                    .rounded_full()
+                    .bg(status_dot_color),
+            );
+
+        // Show auto-approve badge when YOLO mode is active
+        if self.auto_approve {
+            header_left = header_left.child(
+                div()
+                    .px(px(6.0))
+                    .py(px(1.0))
+                    .rounded(px(4.0))
+                    .bg(theme.warning.opacity(0.15))
+                    .text_color(theme.warning)
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("YOLO"),
+            );
+        }
 
         let header = div()
             .flex()
@@ -798,34 +968,14 @@ impl Render for AgentPanel {
             .border_b_1()
             .border_color(theme.border)
             .flex_shrink_0()
-            // Left: title + status
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground)
-                            .child("Agent"),
-                    )
-                    .child(
-                        div()
-                            .size(px(6.0))
-                            .rounded_full()
-                            .bg(status_dot_color),
-                    ),
-            )
-            // Right: actions
+            .child(header_left)
             .child({
                 let mut actions = div()
                     .flex()
                     .items_center()
                     .gap(px(2.0));
 
-                // Stop button — only visible when agent is working
+                // Stop button — visible when agent is working
                 if self.status != AgentStatus::Idle {
                     actions = actions.child(
                         icon_button("agent-stop", "phosphor/stop.svg", theme)
@@ -863,7 +1013,7 @@ impl Render for AgentPanel {
                     )
             });
 
-        // ── Panel ─────────────────────────────────────────────────
+        // ── Panel ───────────────────────────────────────────────
         let mut panel = div()
             .flex()
             .flex_col()

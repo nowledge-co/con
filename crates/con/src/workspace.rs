@@ -5,7 +5,7 @@ const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 
-use crate::agent_panel::{AgentPanel, CancelRequest, LoadConversation, NewConversation};
+use crate::agent_panel::{AgentPanel, CancelRequest, EnableAutoApprove, LoadConversation, NewConversation};
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
 use crate::pane_tree::{PaneTree, SplitDirection};
@@ -138,6 +138,8 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_cancel_request)
             .detach();
+        cx.subscribe_in(&agent_panel, window, Self::on_enable_auto_approve)
+            .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_select)
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
@@ -146,6 +148,7 @@ impl ConWorkspace {
         // Poll harness events, terminal exec requests, and suggestions
         let events_rx = harness.events().clone();
         let terminal_exec_rx = harness.terminal_exec_requests().clone();
+        let pane_query_rx = harness.pane_requests().clone();
         let suggestion_rx_for_poll = suggestion_rx.clone();
         cx.spawn(async move |this, cx| {
             loop {
@@ -168,6 +171,18 @@ impl ConWorkspace {
                     .ok();
                 }
 
+                // Handle pane queries from agent tools (list_panes, read_pane, send_keys)
+                while let Ok(req) = pane_query_rx.try_recv() {
+                    got_event = true;
+                    log::info!("[workspace] Received pane query: {:?}", std::mem::discriminant(&req.query));
+                    let result = this.update(cx, |workspace, cx| {
+                        workspace.handle_pane_request(req, cx);
+                    });
+                    if let Err(e) = result {
+                        log::error!("[workspace] Failed to handle pane request: {:?}", e);
+                    }
+                }
+
                 // Apply suggestion results from the async engine
                 while let Ok((entity_id, suggestion)) = suggestion_rx_for_poll.try_recv() {
                     got_event = true;
@@ -178,8 +193,10 @@ impl ConWorkspace {
                 }
 
                 if !got_event {
+                    // 4ms matches terminal_view's PTY polling rate.
+                    // try_recv() is non-blocking so CPU cost is negligible.
                     cx.background_executor()
-                        .timer(std::time::Duration::from_millis(50))
+                        .timer(std::time::Duration::from_millis(4))
                         .await;
                 }
             }
@@ -214,6 +231,37 @@ impl ConWorkspace {
 
     fn active_terminal(&self) -> &Entity<TerminalView> {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
+    }
+
+    /// Build agent context from the focused pane, including summaries of other panes.
+    fn build_agent_context(&self, cx: &App) -> con_agent::TerminalContext {
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let focused = self.active_terminal();
+        let focused_grid = focused.read(cx).grid();
+
+        let mut other_pane_summaries = Vec::new();
+        if pane_tree.pane_count() > 1 {
+            let focused_pid = pane_tree.focused_pane_id();
+            for (idx, terminal) in pane_tree.all_terminals().iter().enumerate() {
+                if let Some(pid) = pane_tree.pane_id_for_terminal(terminal) {
+                    if pid == focused_pid {
+                        continue;
+                    }
+                    let grid = terminal.read(cx).grid();
+                    let g = grid.lock();
+                    other_pane_summaries.push(con_agent::context::PaneSummary {
+                        pane_index: idx + 1,
+                        cwd: g.current_dir.clone(),
+                        last_command: g.last_command.clone(),
+                        last_exit_code: g.last_exit_code,
+                        recent_output: g.content_lines(10),
+                    });
+                }
+            }
+        }
+
+        self.harness
+            .build_context(&focused_grid.lock(), None, other_pane_summaries)
     }
 
     fn save_session(&self, cx: &App) {
@@ -293,6 +341,16 @@ impl ConWorkspace {
         _cx: &mut Context<Self>,
     ) {
         self.harness.cancel_current();
+    }
+
+    fn on_enable_auto_approve(
+        &mut self,
+        _panel: &Entity<AgentPanel>,
+        _event: &EnableAutoApprove,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.harness.set_auto_approve(true);
     }
 
     fn on_sidebar_select(
@@ -465,8 +523,7 @@ impl ConWorkspace {
                         self.send_to_agent(&text, cx);
                     }
                     InputKind::SkillInvoke(name, args) => {
-                        let grid = self.active_terminal().read(cx).grid();
-                        let context = self.harness.build_context(&grid.lock(), None);
+                        let context = self.build_agent_context(cx);
                         if let Some(desc) = self.harness.invoke_skill(&name, args.as_deref(), context) {
                             if !self.agent_panel_open {
                                 self.agent_panel_open = true;
@@ -574,8 +631,45 @@ impl ConWorkspace {
         req: TerminalExecRequest,
         cx: &mut Context<Self>,
     ) {
-        let terminal = self.active_terminal().clone();
+        // Use the specified pane, or fall back to the focused pane.
+        let terminal = if let Some(pane_index) = req.pane_index {
+            let pane_tree = &self.tabs[self.active_tab].pane_tree;
+            let all_terminals = pane_tree.all_terminals();
+            if pane_index == 0 || pane_index > all_terminals.len() {
+                let _ = req.response_tx.send(TerminalExecResponse {
+                    output: format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ),
+                    exit_code: Some(1),
+                });
+                return;
+            }
+            all_terminals[pane_index - 1].clone()
+        } else {
+            self.active_terminal().clone()
+        };
         let tv = terminal.read(cx);
+
+        // Safety: refuse to execute on a dead PTY.
+        if !tv.pty().lock().is_alive() {
+            let _ = req.response_tx.send(TerminalExecResponse {
+                output: "Pane PTY process has exited — cannot execute command.".to_string(),
+                exit_code: Some(1),
+            });
+            return;
+        }
+
+        // Safety: warn if pane is busy (command in progress). We don't hard-block
+        // because the agent might intentionally want to chain commands, but logging
+        // helps diagnose issues when OSC 133 tracking gets confused.
+        if tv.grid().lock().is_busy() {
+            log::warn!(
+                "[workspace] Executing on busy pane — a command is already in progress. \
+                 OSC 133 tracking may produce unexpected results."
+            );
+        }
 
         // Register the completion callback BEFORE writing the command.
         // When OSC 133 D fires, the grid captures output and sends it back.
@@ -612,6 +706,129 @@ impl ConWorkspace {
             });
         })
         .detach();
+    }
+
+    fn handle_pane_request(
+        &self,
+        req: con_agent::PaneRequest,
+        cx: &mut Context<Self>,
+    ) {
+        use con_agent::{PaneInfo, PaneQuery, PaneResponse};
+
+        log::info!("[workspace] handle_pane_request entered");
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let focused_pid = pane_tree.focused_pane_id();
+        let all_terminals = pane_tree.all_terminals();
+
+        let response = match req.query {
+            PaneQuery::List => {
+                let panes: Vec<PaneInfo> = all_terminals
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, terminal)| {
+                        let pid = pane_tree
+                            .pane_id_for_terminal(terminal)
+                            .unwrap_or(idx);
+                        let tv = terminal.read(cx);
+                        let grid = tv.grid();
+                        let g = grid.lock();
+                        // Read title from the locked grid directly — do NOT call
+                        // terminal.title() here as it would re-lock the mutex (deadlock).
+                        let title = g
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| format!("Pane {}", idx + 1));
+                        let is_alive = tv.pty().lock().is_alive();
+                        let has_shell_integration = g.last_prompt_row.is_some();
+                        PaneInfo {
+                            index: idx + 1,
+                            title,
+                            cwd: g.current_dir.clone(),
+                            is_focused: pid == focused_pid,
+                            rows: g.rows,
+                            cols: g.cols,
+                            is_alive,
+                            hostname: g.hostname.clone(),
+                            has_shell_integration,
+                            last_command: g.last_command.clone(),
+                            last_exit_code: g.last_exit_code,
+                            is_busy: g.is_busy(),
+                        }
+                    })
+                    .collect();
+                PaneResponse::PaneList(panes)
+            }
+            PaneQuery::ReadContent { pane_index, lines } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let terminal = &all_terminals[pane_index - 1];
+                    let grid = terminal.read(cx).grid();
+                    let g = grid.lock();
+                    let content = g.recent_lines(lines).join("\n");
+                    PaneResponse::Content(content)
+                }
+            }
+            PaneQuery::SendKeys { pane_index, keys } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let terminal = &all_terminals[pane_index - 1];
+                    terminal.read(cx).write_to_pty(keys.as_bytes());
+                    PaneResponse::KeysSent
+                }
+            }
+            PaneQuery::SearchText {
+                pane_index,
+                pattern,
+                max_matches,
+            } => {
+                let targets: Vec<(usize, &Entity<TerminalView>)> = match pane_index {
+                    Some(idx) if idx >= 1 && idx <= all_terminals.len() => {
+                        vec![(idx, &all_terminals[idx - 1])]
+                    }
+                    Some(idx) => {
+                        return {
+                            let _ = req.response_tx.send(PaneResponse::Error(format!(
+                                "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                                idx,
+                                all_terminals.len()
+                            )));
+                        };
+                    }
+                    None => all_terminals
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| (i + 1, *t))
+                        .collect(),
+                };
+
+                let mut results = Vec::new();
+                let remaining = max_matches;
+                for (idx, terminal) in &targets {
+                    let grid = terminal.read(cx).grid();
+                    let g = grid.lock();
+                    let per_pane = remaining.saturating_sub(results.len());
+                    if per_pane == 0 {
+                        break;
+                    }
+                    for (line_num, text) in g.search_text(&pattern, per_pane) {
+                        results.push((*idx, line_num, text));
+                    }
+                }
+                PaneResponse::SearchResults(results)
+            }
+        };
+
+        let _ = req.response_tx.send(response);
     }
 
     fn toggle_agent_panel(
@@ -746,8 +963,7 @@ impl ConWorkspace {
         self.agent_panel.update(cx, |panel, cx| {
             panel.add_message("user", content, cx);
         });
-        let grid = self.active_terminal().read(cx).grid();
-        let context = self.harness.build_context(&grid.lock(), None);
+        let context = self.build_agent_context(cx);
         self.harness.send_message(content.to_string(), context);
     }
 
@@ -923,11 +1139,25 @@ impl Render for ConWorkspace {
 
         // Sync pane info and CWD to input bar
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
-        let pane_names = pane_tree.pane_names(cx);
         let focused_pane_id = pane_tree.focused_pane_id();
-        let pane_infos: Vec<PaneInfo> = pane_names
+        let pane_infos: Vec<PaneInfo> = pane_tree
+            .pane_terminals()
             .into_iter()
-            .map(|(id, name)| PaneInfo { id, name })
+            .map(|(id, terminal)| {
+                let tv = terminal.read(cx);
+                let grid = tv.grid().lock();
+                let name = grid.title.clone()
+                    .or_else(|| {
+                        grid.current_dir.as_ref().and_then(|d| {
+                            std::path::Path::new(d).file_name().map(|n| n.to_string_lossy().to_string())
+                        })
+                    })
+                    .unwrap_or_else(|| format!("Pane {}", id + 1));
+                let hostname = grid.hostname.clone();
+                let is_busy = grid.is_busy();
+                let is_alive = tv.pty().lock().is_alive();
+                PaneInfo { id, name, hostname, is_busy, is_alive }
+            })
             .collect();
 
         let cwd = active_terminal.read(cx).grid().lock().current_dir.clone();

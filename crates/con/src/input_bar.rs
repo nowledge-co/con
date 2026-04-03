@@ -35,7 +35,14 @@ impl InputMode {
 #[derive(Clone)]
 pub struct PaneInfo {
     pub id: usize,
+    /// Display name (title, or cwd basename, or "Pane N")
     pub name: String,
+    /// SSH hostname if connected via SSH
+    pub hostname: Option<String>,
+    /// Whether a command is currently running
+    pub is_busy: bool,
+    /// Whether the PTY process is still alive
+    pub is_alive: bool,
 }
 
 pub struct InputBar {
@@ -125,6 +132,17 @@ impl InputBar {
         cx.notify();
     }
 
+    fn toggle_select_all(&mut self, cx: &mut Context<Self>) {
+        if self.selected_pane_ids.len() == self.panes.len() {
+            // Deselect all — reverts to focused-pane-only
+            self.selected_pane_ids.clear();
+        } else {
+            // Select all
+            self.selected_pane_ids = self.panes.iter().map(|p| p.id).collect();
+        }
+        cx.notify();
+    }
+
     fn mode_color(&self, cx: &App) -> Hsla {
         match self.mode {
             InputMode::Smart => cx.theme().muted_foreground,
@@ -159,7 +177,6 @@ impl Render for InputBar {
         let theme = cx.theme();
         let has_multiple_panes = self.panes.len() > 1;
         let cwd = self.cwd.clone();
-        let is_broadcast = self.selected_pane_ids.len() > 1;
 
         // All interactive controls share this height
         let control_h = 28.0;
@@ -181,7 +198,9 @@ impl Render for InputBar {
             .hover(|s| s.bg(mode_color.opacity(0.18)))
             .child(mode_label);
 
-        // Pane pills — NO borders, only bg color
+        // Pane selector — status-aware pills with broadcast toggle
+        let all_selected = !self.panes.is_empty()
+            && self.selected_pane_ids.len() == self.panes.len();
         let pane_area = if has_multiple_panes {
             let mut pills = div()
                 .flex()
@@ -190,7 +209,7 @@ impl Render for InputBar {
                 .h(px(control_h))
                 .px(px(2.0))
                 .rounded(px(6.0))
-                .bg(theme.muted.opacity(0.15));
+                .bg(theme.muted.opacity(0.10));
 
             for pane in &self.panes {
                 let pane_id = pane.id;
@@ -200,7 +219,25 @@ impl Render for InputBar {
                     self.selected_pane_ids.contains(&pane.id)
                 };
 
-                let name = if pane.name.len() > 12 {
+                // Status dot color: red=dead, amber=busy, blue=SSH, green=idle
+                let dot_color = if !pane.is_alive {
+                    theme.danger
+                } else if pane.is_busy {
+                    theme.warning
+                } else if pane.hostname.is_some() {
+                    theme.link
+                } else {
+                    theme.success
+                };
+
+                // Display: hostname for SSH, otherwise name truncated
+                let label = if let Some(host) = &pane.hostname {
+                    if host.len() > 10 {
+                        format!("{}…", &host[..8])
+                    } else {
+                        host.clone()
+                    }
+                } else if pane.name.len() > 12 {
                     format!("{}…", &pane.name[..10])
                 } else {
                     pane.name.clone()
@@ -210,7 +247,7 @@ impl Render for InputBar {
                     .id(SharedString::from(format!("pane-sel-{pane_id}")))
                     .flex()
                     .items_center()
-                    .justify_center()
+                    .gap(px(4.0))
                     .h(px(control_h - 4.0))
                     .px(px(8.0))
                     .rounded(px(4.0))
@@ -218,7 +255,7 @@ impl Render for InputBar {
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
                     .bg(if is_target {
-                        theme.primary.opacity(0.2)
+                        theme.primary.opacity(0.18)
                     } else {
                         theme.transparent
                     })
@@ -230,7 +267,7 @@ impl Render for InputBar {
                     .hover(|s| if is_target {
                         s
                     } else {
-                        s.bg(theme.muted.opacity(0.15))
+                        s.bg(theme.muted.opacity(0.12))
                     })
                     .on_mouse_down(
                         MouseButton::Left,
@@ -238,32 +275,48 @@ impl Render for InputBar {
                             this.toggle_pane_selection(pane_id, cx);
                         }),
                     )
-                    .child(name);
+                    // Status dot
+                    .child(
+                        div()
+                            .size(px(6.0))
+                            .rounded(px(3.0))
+                            .bg(dot_color)
+                    )
+                    .child(label);
 
                 pills = pills.child(pill);
             }
 
-            // ALL badge — always occupies space, invisible when not broadcasting
-            let all_badge = div()
+            // "All" toggle — clickable, toggles select-all / deselect-all
+            let all_btn = div()
+                .id("pane-sel-all")
                 .flex()
                 .items_center()
                 .justify_center()
                 .h(px(control_h - 4.0))
                 .px(px(6.0))
                 .rounded(px(4.0))
-                .text_size(px(9.0))
+                .text_size(px(10.0))
                 .font_weight(FontWeight::BOLD)
-                .bg(if is_broadcast { theme.warning.opacity(0.12) } else { theme.transparent })
-                .text_color(if is_broadcast { theme.warning } else { theme.transparent })
-                .child("ALL");
+                .cursor_pointer()
+                .bg(if all_selected { theme.warning.opacity(0.15) } else { theme.transparent })
+                .text_color(if all_selected { theme.warning } else { theme.muted_foreground.opacity(0.5) })
+                .hover(|s| s.bg(theme.warning.opacity(0.10)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.toggle_select_all(cx);
+                    }),
+                )
+                .child("All");
 
             Some(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(4.0))
+                    .gap(px(2.0))
                     .child(pills)
-                    .child(all_badge),
+                    .child(all_btn),
             )
         } else {
             None

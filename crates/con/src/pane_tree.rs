@@ -130,10 +130,10 @@ impl PaneTree {
         }
     }
 
-    /// Get all pane names (for pane selector in input bar)
-    pub fn pane_names(&self, cx: &App) -> Vec<(PaneId, String)> {
+    /// Get all pane IDs with their terminal entities
+    pub fn pane_terminals(&self) -> Vec<(PaneId, Entity<TerminalView>)> {
         let mut result = Vec::new();
-        Self::collect_pane_names(&self.root, cx, &mut result);
+        Self::collect_pane_terminals(&self.root, &mut result);
         result
     }
 
@@ -545,18 +545,14 @@ impl PaneTree {
         }
     }
 
-    fn collect_pane_names(node: &PaneNode, cx: &App, result: &mut Vec<(PaneId, String)>) {
+    fn collect_pane_terminals(node: &PaneNode, result: &mut Vec<(PaneId, Entity<TerminalView>)>) {
         match node {
             PaneNode::Leaf { id, terminal } => {
-                let name = terminal
-                    .read(cx)
-                    .title()
-                    .unwrap_or_else(|| format!("Pane {}", id + 1));
-                result.push((*id, name));
+                result.push((*id, terminal.clone()));
             }
             PaneNode::Split { first, second, .. } => {
-                Self::collect_pane_names(first, cx, result);
-                Self::collect_pane_names(second, cx, result);
+                Self::collect_pane_terminals(first, result);
+                Self::collect_pane_terminals(second, result);
             }
         }
     }

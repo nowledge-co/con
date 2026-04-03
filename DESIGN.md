@@ -5,6 +5,7 @@
 An open-source, cross-platform, GPU-accelerated terminal emulator that treats AI agents as first-class citizens. Think Warp's UX ambition meets Ghostty's terminal correctness meets a native agent harness — all in Rust.
 
 **Why con exists:**
+
 - Warp is closed-source and macOS-first
 - Existing terminals bolt AI on as an afterthought
 - Agent workflows (Claude Code, Codex, ssh, tmux) deserve deep terminal integration, not wrapper hacks
@@ -118,6 +119,7 @@ GPUI gives us Zed-level text rendering quality (critical for a terminal) and a p
 ### 2. Terminal Core: vte + portable-pty
 
 **Current approach (v0.1):**
+
 - **vte** (v0.15) — pure Rust VT100 parser, implements `Perform` trait for dispatch
 - Our `Grid` struct implements `vte::Perform` directly — handles print, CSI dispatch, SGR, OSC, ESC, alternate screen, scroll regions, cursor shapes
 - **portable-pty** — cross-platform PTY management (macOS/Linux/Windows)
@@ -138,6 +140,7 @@ GPUI gives us Zed-level text rendering quality (critical for a terminal) and a p
 | **Raw HTTP** | Maximum control but months of provider-specific work. |
 
 **Rig v0.34 gives us:**
+
 - `CompletionClient::agent()` builder — preamble + tools + model config in one chain
 - `Tool` trait — type-safe tool definitions with `Args` (Deserialize), `Output` (Serialize), `Error`
 - `Chat` trait — multi-turn conversation with `Vec<Message>` history
@@ -174,6 +177,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 ## Core Features (MVP → v0.1)
 
 ### Phase 1: Terminal That Works
+
 - [x] GPUI window with single terminal pane
 - [x] vte parsing → grid state → GPUI canvas render loop
 - [x] Keyboard input → PTY write (special keys, Ctrl+key, Alt+key, F-keys)
@@ -195,6 +199,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Split panes (horizontal Cmd+D, vertical Cmd+Shift+D, pane tree)
 
 ### Phase 2: Agent Harness
+
 - [x] Side panel for AI chat (Cmd+L to toggle)
 - [x] Terminal context injection (last N lines, current command, cwd)
 - [x] Tool execution: agent can run shell commands in terminal
@@ -204,6 +209,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Agent notification system (blue dot on tab when agent responds)
 
 ### Phase 3: Agent Lifecycle & Tool Transparency
+
 - [x] PromptHook integration — tool calls visible in agent panel
 - [x] Tool danger classification (safe: file_read, search; dangerous: shell_exec, file_write)
 - [x] Per-request approval channels (no cross-request interference)
@@ -215,6 +221,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Streaming via `stream_prompt()` with real-time token rendering
 
 ### Phase 4: Agent Chat Polish
+
 - [x] Structured tool call cards (icon, name, formatted args, result)
 - [x] Inline approval cards for dangerous tools (Allow/Deny buttons)
 - [x] Scrollable agent panel
@@ -223,6 +230,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Streaming text rendering via `stream_prompt()`
 
 ### Phase 5: Deep Integration
+
 - [x] OSC 133 command block tracking (prompt/command/exit code detection)
 - [x] Command palette (Cmd+Shift+P) with fuzzy search and keyboard nav
 - [x] Command history in agent context (last 10 commands with exit codes)
@@ -233,6 +241,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Conversation history + search (save/load/list, new chat, history panel)
 
 ### Phase 6: Polish
+
 - [x] Session persistence and restore
 - [x] Cursor blink (500ms timer, resets on keypress)
 - [x] Scrollback indicator (floating pill showing "N lines up")
@@ -254,6 +263,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [ ] CLI tool (`con` command for scripting)
 
 ### Phase 7: Agent Capabilities & Terminal Polish
+
 - [x] Rig 0.32 → 0.34 upgrade (stable API, `rustls` feature rename)
 - [x] Rich context injection (git diff, project structure, XML-tagged system prompt)
 - [x] Visible terminal tool (terminal_exec — commands execute in user's visible PTY)
@@ -300,6 +310,7 @@ Terminal Output
 ```
 
 The agent always knows:
+
 - What directory the user is in
 - What command they just ran and its output
 - Whether they're in SSH/tmux/docker
@@ -308,6 +319,7 @@ The agent always knows:
 ### Agent Tool Execution
 
 When the agent needs to run a command:
+
 1. Agent produces a `ShellExec` tool call via Rig
 2. con-core creates a new (or reuses) terminal pane
 3. Command is written to PTY
@@ -319,6 +331,7 @@ This means the user **sees** what the agent does — no hidden subprocess. Full 
 ### Compatibility with Existing Agents
 
 For tools like Claude Code, Codex CLI, or OpenCode that run *inside* the terminal:
+
 - con detects these agents via process name / OSC sequences
 - Provides enhanced UX: notification rings, focus management
 - Does NOT try to "take over" — con is the host, not the agent
@@ -329,6 +342,7 @@ For tools like Claude Code, Codex CLI, or OpenCode that run *inside* the termina
 ## Build & Development
 
 ### Prerequisites
+
 ```bash
 # macOS
 brew install rustup cmake
@@ -341,6 +355,7 @@ sudo apt install rustup cmake libwayland-dev libxkbcommon-dev
 ```
 
 ### Build
+
 ```bash
 cargo build                    # debug build
 cargo build --release          # release build
@@ -349,6 +364,7 @@ cargo test --workspace         # test everything
 ```
 
 ### Build Pipeline
+
 1. Cargo resolves workspace deps from crates.io (gpui, rig-core 0.34)
 2. GPUI-CE compiles Metal shaders at runtime (`runtime_shaders` feature — no Xcode.app needed for dev)
 3. `cargo build` produces the `con` binary with all crates linked
@@ -405,6 +421,7 @@ new-tab = "cmd+t"
 **Decision:** Use `vte` crate (v0.15) for VT parsing instead of libghostty-vt FFI.
 
 **Rationale:**
+
 - Zero build complexity — no Zig toolchain, no FFI, no bindgen
 - Pure Rust `Perform` trait maps cleanly to our Grid implementation
 - Sufficient for MVP: handles all common VT100/xterm sequences
@@ -413,6 +430,7 @@ new-tab = "cmd+t"
 ### 2. GPUI IME: Production-Ready
 
 GPUI-CE implements the full `InputHandler` trait (modeled after `NSTextInputClient`):
+
 - `marked_text_range()` / `replace_and_mark_text_in_range()` for IME composition
 - `bounds_for_range()` for candidate window positioning
 - Platform implementations: macOS (AppKit), Linux X11 (xim crate), Windows (WM_IME_*)
@@ -423,6 +441,7 @@ GPUI-CE implements the full `InputHandler` trait (modeled after `NSTextInputClie
 Ghostty has no software renderer — GPU-only. Same for con.
 
 **Rationale:** A desktop terminal emulator always has a GPU. The scenarios where it doesn't:
+
 - **Headless servers** — users SSH in, they use the remote machine's terminal, not con
 - **X11 forwarding** — OpenGL forwarding works via Blade; this is the Linux path already
 - **Containers** — con doesn't run inside Docker; it runs on the host
@@ -434,12 +453,14 @@ If we ever need headless testing, we add a test-only software rasterizer. Not a 
 **Decision:** Plugins run as external processes. con communicates via JSON-RPC over Unix domain sockets (like cmux's socket API).
 
 **Why Node.js + Python:**
+
 - Largest developer ecosystems — lowest friction for plugin authors
 - Runtimes installed by the user (system Node/Python, nvm, pyenv — their choice)
 - No embedded runtime = no binary bloat, no version conflicts
 - Security: plugins run in separate processes with explicit capability grants
 
 **How it works:**
+
 ```
 con (Rust)  ─── Unix socket (JSON-RPC) ───  plugin process (Node/Python/any)
 ```
@@ -468,6 +489,7 @@ All clear. No copyleft, no GPL contamination.
 cmux doesn't embed an LLM. It provides a **socket control API** that external agents (Claude Code, Codex) use to interact with the terminal. This is the right pattern.
 
 **con should have both:**
+
 1. **Built-in agent** (via Rig) — for users who want native AI without installing anything else
 2. **Socket API** (cmux-inspired) — for external agents and plugins to control con
 
