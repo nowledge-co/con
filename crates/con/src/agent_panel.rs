@@ -495,17 +495,16 @@ impl AgentPanel {
     }
 }
 
-/// Markdown style for chat messages — compact headings, tight paragraphs.
+/// Markdown style for chat messages — readable prose with breathing room.
 fn chat_markdown_style() -> TextViewStyle {
     TextViewStyle::default()
-        .paragraph_gap(rems(0.5))
+        .paragraph_gap(rems(0.75))
         .heading_font_size(|level, _base| {
-            // Chat-appropriate heading sizes (much smaller than default)
             match level {
-                1 => px(15.0),
-                2 => px(14.0),
-                3 => px(13.0),
-                _ => px(13.0),
+                1 => px(17.0),
+                2 => px(15.5),
+                3 => px(14.5),
+                _ => px(14.0),
             }
         })
 }
@@ -793,25 +792,25 @@ impl Render for AgentPanel {
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .vertical_scrollbar(&self.scroll_handle)
-            .px(px(18.0))
-            .pt(px(20.0))
-            .pb(px(24.0))
-            .gap(px(16.0));
+            .px(px(22.0))
+            .pt(px(24.0))
+            .pb(px(32.0))
+            .gap(px(20.0));
 
         for (msg_idx, msg) in self.state.messages.iter().enumerate() {
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
 
-            let mut msg_el = div().flex().flex_col().gap(px(6.0));
+            let mut msg_el = div().flex().flex_col().gap(px(8.0));
 
             if is_system {
                 // System greeting — quiet, centered feel
                 msg_el = msg_el.child(
                     div()
                         .px(px(4.0))
-                        .text_size(px(12.0))
-                        .text_color(theme.muted_foreground.opacity(0.6))
-                        .line_height(px(18.0))
+                        .text_size(px(13.0))
+                        .text_color(theme.muted_foreground.opacity(0.55))
+                        .line_height(px(20.0))
                         .child(msg.content.clone()),
                 );
             } else if is_user {
@@ -822,16 +821,16 @@ impl Render for AgentPanel {
                         .justify_end()
                         .child(
                             div()
-                                .max_w(rems(20.0))
-                                .px(px(14.0))
+                                .max_w(rems(24.0))
+                                .px(px(16.0))
                                 .py(px(10.0))
                                 .rounded(px(18.0))
                                 .rounded_tr(px(4.0))
                                 .bg(theme.primary.opacity(0.08))
                                 .child(
                                     div()
-                                        .text_size(px(13.5))
-                                        .line_height(px(21.0))
+                                        .text_size(px(14.0))
+                                        .line_height(px(22.0))
                                         .text_color(theme.foreground)
                                         .child(msg.content.clone()),
                                 ),
@@ -938,9 +937,9 @@ impl Render for AgentPanel {
                     msg_el = msg_el.child(
                         div()
                             .pl(px(20.0))
-                            .pr(px(4.0))
-                            .text_size(px(13.5))
-                            .line_height(px(22.0))
+                            .pr(px(8.0))
+                            .text_size(px(14.5))
+                            .line_height(px(24.0))
                             .text_color(theme.foreground)
                             .child(
                                 TextView::markdown(
@@ -948,7 +947,7 @@ impl Render for AgentPanel {
                                     content,
                                 )
                                 .style(chat_markdown_style())
-                                .text_size(px(13.5))
+                                .text_size(px(14.5))
                             ),
                     );
                 }
