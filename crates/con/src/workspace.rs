@@ -684,21 +684,44 @@ impl ConWorkspace {
         let cmd_with_newline = format!("{}\n", req.command);
         tv.write_to_pty(cmd_with_newline.as_bytes());
 
-        // Timeout fallback: if OSC 133 never fires (no shell integration),
-        // capture whatever is in the terminal after 30 seconds.
+        // Fallback: if OSC 133 never fires (no shell integration, e.g. SSH),
+        // poll the terminal for a shell prompt to detect command completion.
+        // Checks every 500ms, gives up after 15 seconds.
         let fallback_response_tx = req.response_tx;
         let grid = tv.grid().clone();
         cx.spawn(async move |_this, cx| {
+            // Wait a minimum time for the command to start executing
             cx.background_executor()
-                .timer(std::time::Duration::from_secs(30))
+                .timer(std::time::Duration::from_millis(500))
                 .await;
 
-            // If the callback already fired, the channel is closed.
-            // try_send will fail with SendError, which we ignore.
+            // Poll for completion: look for a prompt pattern in recent output
+            for _ in 0..29 {
+                // Check if the OSC 133 callback already responded
+                if fallback_response_tx.is_full() {
+                    return; // Already responded via OSC 133
+                }
+
+                let appears_done = {
+                    let g = grid.lock();
+                    // Heuristic: cursor is at column 0 or at a prompt-like position,
+                    // and the grid is no longer busy
+                    !g.is_busy() && g.last_prompt_row.is_some()
+                };
+
+                if appears_done {
+                    break;
+                }
+
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(500))
+                    .await;
+            }
+
+            // If the callback already fired, try_send will fail (channel closed).
             let output = {
                 let g = grid.lock();
-                // Capture recent terminal output as fallback
-                g.content_lines(50).join("\n")
+                g.recent_lines(50).join("\n")
             };
             let _ = fallback_response_tx.try_send(TerminalExecResponse {
                 output,
@@ -748,7 +771,7 @@ impl ConWorkspace {
                             rows: g.rows,
                             cols: g.cols,
                             is_alive,
-                            hostname: g.hostname.clone(),
+                            hostname: g.detected_remote_host(),
                             has_shell_integration,
                             last_command: g.last_command.clone(),
                             last_exit_code: g.last_exit_code,
@@ -1153,7 +1176,7 @@ impl Render for ConWorkspace {
                         })
                     })
                     .unwrap_or_else(|| format!("Pane {}", id + 1));
-                let hostname = grid.hostname.clone();
+                let hostname = grid.detected_remote_host();
                 let is_busy = grid.is_busy();
                 let is_alive = tv.pty().lock().is_alive();
                 PaneInfo { id, name, hostname, is_busy, is_alive }

@@ -292,6 +292,8 @@ pub struct Grid {
     /// Hostname from OSC 7 URI — matches local hostname for local sessions,
     /// differs for SSH sessions (reveals remote host).
     pub hostname: Option<String>,
+    /// Local machine hostname, cached once at Grid creation for SSH detection.
+    local_hostname: String,
     /// Completed command blocks from OSC 133 sequences
     pub command_blocks: Vec<CommandBlock>,
     /// Row where the current command started (OSC 133;C)
@@ -378,6 +380,9 @@ impl Grid {
             last_exit_code: None,
             current_dir: None,
             hostname: None,
+            local_hostname: gethostname::gethostname()
+                .to_string_lossy()
+                .to_string(),
             command_blocks: Vec::new(),
             command_start_row: None,
             scroll_top: 0,
@@ -457,6 +462,57 @@ impl Grid {
     /// Returns false if shell integration is not active.
     pub fn is_busy(&self) -> bool {
         self.command_start_row.is_some()
+    }
+
+    /// Detect a remote hostname if this pane is an SSH session.
+    /// Uses three signals (checked in priority order):
+    /// 1. OSC 7 hostname differs from local hostname
+    /// 2. Terminal title matches `user@host` pattern (set by many SSH configs)
+    /// 3. Last command starts with `ssh`
+    pub fn detected_remote_host(&self) -> Option<String> {
+        // 1. OSC 7 hostname differs from local
+        if let Some(h) = &self.hostname {
+            if !h.is_empty() && !h.eq_ignore_ascii_case(&self.local_hostname) {
+                return Some(h.clone());
+            }
+        }
+
+        // 2. Title matches user@host
+        if let Some(title) = &self.title {
+            if let Some(at_pos) = title.find('@') {
+                let host = title[at_pos + 1..].trim();
+                // Skip if host looks like local
+                if !host.is_empty() && !host.eq_ignore_ascii_case(&self.local_hostname) {
+                    // Take first word (title may have trailing info like ": ~/dir")
+                    let host = host.split(&[':', ' ', '\t'][..]).next().unwrap_or(host);
+                    if !host.is_empty() {
+                        return Some(host.to_string());
+                    }
+                }
+            }
+        }
+
+        // 3. Last command starts with ssh
+        if let Some(cmd) = &self.last_command {
+            let trimmed = cmd.trim();
+            if trimmed.starts_with("ssh ") || trimmed.starts_with("ssh\t") {
+                // Extract host from "ssh [flags] host" — take last non-flag arg
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if let Some(host) = parts.last() {
+                    // Could be user@host or just host
+                    let host = if let Some(at) = host.find('@') {
+                        &host[at + 1..]
+                    } else {
+                        host
+                    };
+                    if !host.starts_with('-') && !host.is_empty() {
+                        return Some(host.to_string());
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Whether the cursor is at a shell prompt (not in alternate screen / TUI,

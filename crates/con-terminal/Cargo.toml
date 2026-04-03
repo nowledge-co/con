@@ -11,3 +11,4 @@ anyhow.workspace = true
 log.workspace = true
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
+gethostname.workspace = true
