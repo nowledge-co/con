@@ -18,6 +18,9 @@ pub struct TabState {
     pub title: String,
     pub cwd: Option<String>,
     pub panes: Vec<PaneState>,
+    /// Per-tab conversation ID (persisted across restarts)
+    #[serde(default)]
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +39,7 @@ impl Default for Session {
                     cwd: None,
                     scrollback_lines: 0,
                 }],
+                conversation_id: None,
             }],
             active_tab: 0,
             agent_panel_open: false,

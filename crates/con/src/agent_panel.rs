@@ -10,6 +10,7 @@ const TOOL_RESULT_PREVIEW_LINES: usize = 6;
 const THINKING_DISPLAY_LEN: usize = 2000;
 
 use con_agent::{ConversationSummary, ToolApprovalDecision};
+use con_core::harness::HarnessEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentStatus {
@@ -47,12 +48,206 @@ impl EventEmitter<CancelRequest> for AgentPanel {}
 pub struct EnableAutoApprove;
 impl EventEmitter<EnableAutoApprove> for AgentPanel {}
 
-pub struct AgentPanel {
+// ---------------------------------------------------------------------------
+// PanelState — per-tab conversation UI state (no GPUI dependency)
+// ---------------------------------------------------------------------------
+
+const SYSTEM_GREETING: &str = "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.";
+
+/// Per-tab panel state. Holds messages, tool calls, and approvals.
+/// Methods on PanelState are pure data operations — no GPUI notifications.
+/// AgentPanel delegates to PanelState and calls cx.notify() itself.
+pub struct PanelState {
     messages: Vec<PanelMessage>,
     tool_calls: Vec<ToolCallEntry>,
     pending_approvals: Vec<PendingApproval>,
-    streaming: bool,
-    status: AgentStatus,
+    pub(crate) streaming: bool,
+    pub(crate) status: AgentStatus,
+}
+
+impl PanelState {
+    pub fn new() -> Self {
+        Self {
+            messages: vec![PanelMessage::new("system", SYSTEM_GREETING)],
+            tool_calls: Vec::new(),
+            pending_approvals: Vec::new(),
+            streaming: false,
+            status: AgentStatus::Idle,
+        }
+    }
+
+    /// Populate from a loaded conversation (replay messages without steps/tools).
+    pub fn from_conversation(conv: &con_agent::Conversation) -> Self {
+        let mut state = Self::new();
+        for msg in &conv.messages {
+            let role = match msg.role {
+                con_agent::MessageRole::User => "user",
+                con_agent::MessageRole::Assistant => "assistant",
+                con_agent::MessageRole::System => "system",
+                con_agent::MessageRole::Tool => "system",
+            };
+            state.add_message(role, &msg.content);
+        }
+        state
+    }
+
+    pub fn clear(&mut self) {
+        self.messages = vec![PanelMessage::new("system", SYSTEM_GREETING)];
+        self.tool_calls.clear();
+        self.pending_approvals.clear();
+        self.streaming = false;
+        self.status = AgentStatus::Idle;
+    }
+
+    pub fn add_message(&mut self, role: &str, content: &str) {
+        self.streaming = false;
+        self.status = AgentStatus::Idle;
+        self.messages.push(PanelMessage::new(role, content));
+    }
+
+    pub fn add_step(&mut self, step: &str) {
+        self.status = AgentStatus::Thinking;
+        if let Some(last) = self.messages.last_mut() {
+            last.steps.push(StepEntry {
+                icon: "phosphor/sparkle.svg",
+                label: step.to_string(),
+                detail: None,
+                status: StepStatus::Complete,
+                detail_collapsed: true,
+            });
+        }
+    }
+
+    pub fn add_tool_call(&mut self, call_id: &str, tool_name: &str, args: &str) {
+        self.status = AgentStatus::Thinking;
+        self.tool_calls.push(ToolCallEntry {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            args: args.to_string(),
+            result: None,
+        });
+    }
+
+    pub fn complete_tool_call(&mut self, call_id: &str, result: &str) {
+        if let Some(entry) = self.tool_calls.iter_mut().find(|e| e.call_id == call_id) {
+            entry.result = Some(result.to_string());
+        }
+    }
+
+    pub fn add_pending_approval(
+        &mut self,
+        call_id: &str,
+        tool_name: &str,
+        args: &str,
+        approval_tx: Sender<ToolApprovalDecision>,
+    ) {
+        self.pending_approvals.push(PendingApproval {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            args: args.to_string(),
+            approval_tx,
+        });
+    }
+
+    pub fn update_thinking(&mut self, text: &str) {
+        self.status = AgentStatus::Thinking;
+        if !self.streaming {
+            let mut msg = PanelMessage::assistant();
+            msg.thinking = Some(String::new());
+            self.messages.push(msg);
+            self.streaming = true;
+        }
+        if let Some(last) = self.messages.last_mut() {
+            let thinking = last.thinking.get_or_insert_with(String::new);
+            thinking.push_str(text);
+        }
+    }
+
+    pub fn update_streaming(&mut self, token: &str) {
+        self.status = AgentStatus::Responding;
+        if !self.streaming {
+            self.messages.push(PanelMessage::assistant());
+            self.streaming = true;
+        }
+        if let Some(last) = self.messages.last_mut() {
+            last.content.push_str(token);
+        }
+    }
+
+    pub fn complete_response(&mut self, final_content: &str) {
+        self.status = AgentStatus::Idle;
+        if self.streaming {
+            if let Some(last) = self.messages.last_mut() {
+                last.content = final_content.to_string();
+            }
+            self.streaming = false;
+        } else {
+            self.messages
+                .push(PanelMessage::new("assistant", final_content));
+        }
+        // Move active tool calls into the message's step timeline
+        for tc in self.tool_calls.drain(..) {
+            let args_display = format_tool_args(&tc.tool_name, &tc.args);
+            let human_name = humanize_tool_name(&tc.tool_name);
+            let (status, detail) = if let Some(result) = &tc.result {
+                let formatted = format_tool_result(&tc.tool_name, &result);
+                (StepStatus::Complete, Some(formatted))
+            } else {
+                (StepStatus::Running, None)
+            };
+            if let Some(last) = self.messages.last_mut() {
+                last.steps.push(StepEntry {
+                    icon: tool_icon(&tc.tool_name),
+                    label: format!("{}: {}", human_name, truncate_str(&args_display, 60)),
+                    detail,
+                    status,
+                    detail_collapsed: true,
+                });
+            }
+        }
+    }
+
+    /// Apply a harness event to this state (for background tabs, no GPUI).
+    pub fn apply_event(&mut self, event: HarnessEvent) {
+        match event {
+            HarnessEvent::Thinking => {
+                self.add_step("Thinking...");
+            }
+            HarnessEvent::ThinkingDelta(text) => {
+                self.update_thinking(&text);
+            }
+            HarnessEvent::Step(step) => {
+                self.add_step(&format!("{:?}", step));
+            }
+            HarnessEvent::Token(token) => {
+                self.update_streaming(&token);
+            }
+            HarnessEvent::ToolCallStart { call_id, tool_name, args } => {
+                self.add_tool_call(&call_id, &tool_name, &args);
+            }
+            HarnessEvent::ToolApprovalNeeded { call_id, tool_name, args, approval_tx } => {
+                self.add_pending_approval(&call_id, &tool_name, &args, approval_tx);
+            }
+            HarnessEvent::ToolCallComplete { call_id, tool_name: _, result } => {
+                self.complete_tool_call(&call_id, &result);
+            }
+            HarnessEvent::ResponseComplete(msg) => {
+                self.complete_response(&msg.content);
+            }
+            HarnessEvent::Error(err) => {
+                self.add_message("system", &format!("Error: {}", err));
+            }
+            HarnessEvent::SkillsUpdated(_) => {}
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AgentPanel — GPUI entity wrapping PanelState
+// ---------------------------------------------------------------------------
+
+pub struct AgentPanel {
+    state: PanelState,
     scroll_handle: ScrollHandle,
     showing_history: bool,
     conversation_list: Vec<ConversationSummary>,
@@ -105,13 +300,10 @@ impl PanelMessage {
 }
 
 impl AgentPanel {
+    #[allow(dead_code)]
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
-            messages: vec![PanelMessage::new("system", "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.")],
-            tool_calls: Vec::new(),
-            pending_approvals: Vec::new(),
-            streaming: false,
-            status: AgentStatus::Idle,
+            state: PanelState::new(),
             scroll_handle: ScrollHandle::new(),
             showing_history: false,
             conversation_list: Vec::new(),
@@ -119,12 +311,28 @@ impl AgentPanel {
         }
     }
 
+    /// Create with a pre-populated panel state (e.g. restored from session).
+    pub fn with_state(state: PanelState, _cx: &mut Context<Self>) -> Self {
+        Self {
+            state,
+            scroll_handle: ScrollHandle::new(),
+            showing_history: false,
+            conversation_list: Vec::new(),
+            auto_approve: false,
+        }
+    }
+
+    /// Swap the displayed panel state. Returns the old state (to stash back in the tab).
+    pub fn swap_state(&mut self, new_state: PanelState, cx: &mut Context<Self>) -> PanelState {
+        let old = std::mem::replace(&mut self.state, new_state);
+        self.scroll_handle = ScrollHandle::new();
+        self.showing_history = false;
+        cx.notify();
+        old
+    }
+
     pub fn clear_messages(&mut self, cx: &mut Context<Self>) {
-        self.messages = vec![PanelMessage::new("system", "Ask anything about your terminal, code, or system. The agent can read files, run commands, and search your workspace.")];
-        self.tool_calls.clear();
-        self.pending_approvals.clear();
-        self.streaming = false;
-        self.status = AgentStatus::Idle;
+        self.state.clear();
         self.showing_history = false;
         cx.notify();
     }
@@ -142,24 +350,13 @@ impl AgentPanel {
     }
 
     pub fn add_message(&mut self, role: &str, content: &str, cx: &mut Context<Self>) {
-        self.streaming = false;
-        self.status = AgentStatus::Idle;
-        self.messages.push(PanelMessage::new(role, content));
+        self.state.add_message(role, content);
         self.scroll_to_bottom();
         cx.notify();
     }
 
     pub fn add_step(&mut self, step: &str, cx: &mut Context<Self>) {
-        self.status = AgentStatus::Thinking;
-        if let Some(last) = self.messages.last_mut() {
-            last.steps.push(StepEntry {
-                icon: "phosphor/sparkle.svg",
-                label: step.to_string(),
-                detail: None,
-                status: StepStatus::Complete,
-                detail_collapsed: true,
-            });
-        }
+        self.state.add_step(step);
         cx.notify();
     }
 
@@ -170,13 +367,7 @@ impl AgentPanel {
         args: &str,
         cx: &mut Context<Self>,
     ) {
-        self.status = AgentStatus::Thinking;
-        self.tool_calls.push(ToolCallEntry {
-            call_id: call_id.to_string(),
-            tool_name: tool_name.to_string(),
-            args: args.to_string(),
-            result: None,
-        });
+        self.state.add_tool_call(call_id, tool_name, args);
         self.scroll_to_bottom();
         cx.notify();
     }
@@ -188,9 +379,7 @@ impl AgentPanel {
         result: &str,
         cx: &mut Context<Self>,
     ) {
-        if let Some(entry) = self.tool_calls.iter_mut().find(|e| e.call_id == call_id) {
-            entry.result = Some(result.to_string());
-        }
+        self.state.complete_tool_call(call_id, result);
         self.scroll_to_bottom();
         cx.notify();
     }
@@ -203,21 +392,16 @@ impl AgentPanel {
         approval_tx: Sender<ToolApprovalDecision>,
         cx: &mut Context<Self>,
     ) {
-        self.pending_approvals.push(PendingApproval {
-            call_id: call_id.to_string(),
-            tool_name: tool_name.to_string(),
-            args: args.to_string(),
-            approval_tx,
-        });
+        self.state.add_pending_approval(call_id, tool_name, args, approval_tx);
         self.scroll_to_bottom();
         cx.notify();
     }
 
     fn resolve_approval(&mut self, index: usize, allowed: bool, cx: &mut Context<Self>) {
-        if index >= self.pending_approvals.len() {
+        if index >= self.state.pending_approvals.len() {
             return;
         }
-        let approval = self.pending_approvals.remove(index);
+        let approval = self.state.pending_approvals.remove(index);
         let _ = approval.approval_tx.send(ToolApprovalDecision {
             call_id: approval.call_id,
             allowed,
@@ -227,7 +411,7 @@ impl AgentPanel {
                 Some("User denied tool execution".to_string())
             },
         });
-        if let Some(last) = self.messages.last_mut() {
+        if let Some(last) = self.state.messages.last_mut() {
             let (status, label) = if allowed {
                 (StepStatus::Complete, format!("Allowed: {}", approval.tool_name))
             } else {
@@ -245,150 +429,36 @@ impl AgentPanel {
     }
 
     fn resolve_all_approvals(&mut self, cx: &mut Context<Self>) {
-        while !self.pending_approvals.is_empty() {
+        while !self.state.pending_approvals.is_empty() {
             self.resolve_approval(0, true, cx);
         }
     }
 
     pub fn update_thinking(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.status = AgentStatus::Thinking;
-        if !self.streaming {
-            let mut msg = PanelMessage::assistant();
-            msg.thinking = Some(String::new());
-            self.messages.push(msg);
-            self.streaming = true;
-        }
-        if let Some(last) = self.messages.last_mut() {
-            let thinking = last.thinking.get_or_insert_with(String::new);
-            thinking.push_str(text);
-        }
+        self.state.update_thinking(text);
         self.scroll_to_bottom();
         cx.notify();
     }
 
     pub fn update_streaming(&mut self, token: &str, cx: &mut Context<Self>) {
-        self.status = AgentStatus::Responding;
-        if !self.streaming {
-            self.messages.push(PanelMessage::assistant());
-            self.streaming = true;
-        }
-        if let Some(last) = self.messages.last_mut() {
-            last.content.push_str(token);
-        }
+        self.state.update_streaming(token);
         self.scroll_to_bottom();
         cx.notify();
     }
 
     pub fn complete_response(&mut self, final_content: &str, cx: &mut Context<Self>) {
-        self.status = AgentStatus::Idle;
-        if self.streaming {
-            if let Some(last) = self.messages.last_mut() {
-                last.content = final_content.to_string();
-            }
-            self.streaming = false;
-        } else {
-            self.messages
-                .push(PanelMessage::new("assistant", final_content));
-        }
-        // Move active tool calls into the message's step timeline
-        for tc in self.tool_calls.drain(..) {
-            let args_display = Self::format_tool_args(&tc.tool_name, &tc.args);
-            let human_name = humanize_tool_name(&tc.tool_name);
-            let (status, detail) = if let Some(result) = &tc.result {
-                let formatted = format_tool_result(&tc.tool_name, &result);
-                (StepStatus::Complete, Some(formatted))
-            } else {
-                (StepStatus::Running, None)
-            };
-            if let Some(last) = self.messages.last_mut() {
-                last.steps.push(StepEntry {
-                    icon: Self::tool_icon(&tc.tool_name),
-                    label: format!("{}: {}", human_name, truncate_str(&args_display, 60)),
-                    detail,
-                    status,
-                    detail_collapsed: true,
-                });
-            }
-        }
+        self.state.complete_response(final_content);
         self.scroll_to_bottom();
         cx.notify();
-    }
-
-    fn tool_icon(tool_name: &str) -> &'static str {
-        match tool_name {
-            "terminal_exec" | "batch_exec" => "phosphor/play.svg",
-            "shell_exec" => "phosphor/terminal.svg",
-            "file_write" => "phosphor/pencil-simple.svg",
-            "file_read" => "phosphor/file-code.svg",
-            "edit_file" => "phosphor/pencil-simple.svg",
-            "list_files" => "phosphor/folder.svg",
-            "search" | "search_panes" => "phosphor/magnifying-glass.svg",
-            "list_panes" => "phosphor/columns.svg",
-            "read_pane" => "phosphor/eye.svg",
-            "send_keys" => "phosphor/keyboard.svg",
-            _ => "phosphor/gear.svg",
-        }
-    }
-
-    fn format_tool_args(tool_name: &str, args: &str) -> String {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
-            match tool_name {
-                "terminal_exec" | "shell_exec" => {
-                    if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
-                        return cmd.to_string();
-                    }
-                }
-                "file_read" | "file_write" | "edit_file" => {
-                    if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
-                        return path.to_string();
-                    }
-                }
-                "list_files" => {
-                    return v
-                        .get("path")
-                        .and_then(|p| p.as_str())
-                        .unwrap_or(".")
-                        .to_string();
-                }
-                "search" => {
-                    if let Some(pattern) = v.get("pattern").and_then(|q| q.as_str()) {
-                        return format!("\"{}\"", pattern);
-                    }
-                }
-                "search_panes" => {
-                    if let Some(pattern) = v.get("pattern").and_then(|q| q.as_str()) {
-                        return format!("\"{}\"", pattern);
-                    }
-                }
-                "batch_exec" => {
-                    if let Some(cmds) = v.get("commands").and_then(|c| c.as_array()) {
-                        return format!("{} commands", cmds.len());
-                    }
-                }
-                "send_keys" => {
-                    if let Some(keys) = v.get("keys").and_then(|k| k.as_str()) {
-                        return keys.to_string();
-                    }
-                }
-                "read_pane" | "list_panes" => {
-                    if let Some(idx) = v.get("pane_index").and_then(|i| i.as_u64()) {
-                        return format!("pane {}", idx);
-                    }
-                    return "all panes".to_string();
-                }
-                _ => {}
-            }
-        }
-        truncate_str(args, 120)
     }
 
     /// Derive a human-readable status line from current panel state.
     fn status_text(&self) -> Option<(&'static str, &'static str)> {
         // Priority: approval > running tool > thinking > responding
-        if !self.pending_approvals.is_empty() {
+        if !self.state.pending_approvals.is_empty() {
             return Some(("phosphor/warning.svg", "Awaiting approval…"));
         }
-        if let Some(tc) = self.tool_calls.iter().find(|tc| tc.result.is_none()) {
+        if let Some(tc) = self.state.tool_calls.iter().find(|tc| tc.result.is_none()) {
             let label = match tc.tool_name.as_str() {
                 "terminal_exec" | "batch_exec" => "Running command…",
                 "shell_exec" => "Running in background…",
@@ -400,14 +470,82 @@ impl AgentPanel {
                 "send_keys" => "Sending keys…",
                 _ => "Running tool…",
             };
-            return Some((Self::tool_icon(&tc.tool_name), label));
+            return Some((tool_icon(&tc.tool_name), label));
         }
-        match self.status {
+        match self.state.status {
             AgentStatus::Thinking => Some(("phosphor/sparkle.svg", "Thinking…")),
             AgentStatus::Responding => Some(("phosphor/pencil-simple.svg", "Writing…")),
             AgentStatus::Idle => None,
         }
     }
+}
+
+fn tool_icon(tool_name: &str) -> &'static str {
+    match tool_name {
+        "terminal_exec" | "batch_exec" => "phosphor/play.svg",
+        "shell_exec" => "phosphor/terminal.svg",
+        "file_write" => "phosphor/pencil-simple.svg",
+        "file_read" => "phosphor/file-code.svg",
+        "edit_file" => "phosphor/pencil-simple.svg",
+        "list_files" => "phosphor/folder.svg",
+        "search" | "search_panes" => "phosphor/magnifying-glass.svg",
+        "list_panes" => "phosphor/columns.svg",
+        "read_pane" => "phosphor/eye.svg",
+        "send_keys" => "phosphor/keyboard.svg",
+        _ => "phosphor/gear.svg",
+    }
+}
+
+fn format_tool_args(tool_name: &str, args: &str) -> String {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+        match tool_name {
+            "terminal_exec" | "shell_exec" => {
+                if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
+                    return cmd.to_string();
+                }
+            }
+            "file_read" | "file_write" | "edit_file" => {
+                if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
+                    return path.to_string();
+                }
+            }
+            "list_files" => {
+                return v
+                    .get("path")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or(".")
+                    .to_string();
+            }
+            "search" => {
+                if let Some(pattern) = v.get("pattern").and_then(|q| q.as_str()) {
+                    return format!("\"{}\"", pattern);
+                }
+            }
+            "search_panes" => {
+                if let Some(pattern) = v.get("pattern").and_then(|q| q.as_str()) {
+                    return format!("\"{}\"", pattern);
+                }
+            }
+            "batch_exec" => {
+                if let Some(cmds) = v.get("commands").and_then(|c| c.as_array()) {
+                    return format!("{} commands", cmds.len());
+                }
+            }
+            "send_keys" => {
+                if let Some(keys) = v.get("keys").and_then(|k| k.as_str()) {
+                    return keys.to_string();
+                }
+            }
+            "read_pane" | "list_panes" => {
+                if let Some(idx) = v.get("pane_index").and_then(|i| i.as_u64()) {
+                    return format!("pane {}", idx);
+                }
+                return "all panes".to_string();
+            }
+            _ => {}
+        }
+    }
+    truncate_str(args, 120)
 }
 
 fn truncate_str(s: &str, max_len: usize) -> String {
@@ -630,7 +768,7 @@ impl Render for AgentPanel {
             .pb(px(12.0))
             .gap(px(16.0));
 
-        for (msg_idx, msg) in self.messages.iter().enumerate() {
+        for (msg_idx, msg) in self.state.messages.iter().enumerate() {
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
 
@@ -714,7 +852,7 @@ impl Render for AgentPanel {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
-                                        if let Some(m) = this.messages.get_mut(msg_idx) {
+                                        if let Some(m) = this.state.messages.get_mut(msg_idx) {
                                             m.thinking_collapsed = !m.thinking_collapsed;
                                         }
                                         cx.notify();
@@ -803,7 +941,7 @@ impl Render for AgentPanel {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, _, cx| {
-                                if let Some(m) = this.messages.get_mut(msg_idx) {
+                                if let Some(m) = this.state.messages.get_mut(msg_idx) {
                                     m.steps_collapsed = !m.steps_collapsed;
                                 }
                                 cx.notify();
@@ -896,7 +1034,7 @@ impl Render for AgentPanel {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
-                                            if let Some(m) = this.messages.get_mut(msg_idx) {
+                                            if let Some(m) = this.state.messages.get_mut(msg_idx) {
                                                 if let Some(s) = m.steps.get_mut(step_idx) {
                                                     s.detail_collapsed = !s.detail_collapsed;
                                                 }
@@ -951,10 +1089,10 @@ impl Render for AgentPanel {
         }
 
         // ── Active tool calls (live cards) ───────────────────────
-        for (tc_idx, tc) in self.tool_calls.iter().enumerate() {
+        for (tc_idx, tc) in self.state.tool_calls.iter().enumerate() {
             let is_done = tc.result.is_some();
-            let icon = Self::tool_icon(&tc.tool_name);
-            let args_display = Self::format_tool_args(&tc.tool_name, &tc.args);
+            let icon = tool_icon(&tc.tool_name);
+            let args_display = format_tool_args(&tc.tool_name, &tc.args);
             let human_name = humanize_tool_name(&tc.tool_name);
 
             let status_color = if is_done { theme.success } else { theme.warning };
@@ -1038,9 +1176,9 @@ impl Render for AgentPanel {
         }
 
         // ── Pending approvals ───────────────────────────────────
-        for (i, approval) in self.pending_approvals.iter().enumerate() {
-            let icon = Self::tool_icon(&approval.tool_name);
-            let args_display = Self::format_tool_args(&approval.tool_name, &approval.args);
+        for (i, approval) in self.state.pending_approvals.iter().enumerate() {
+            let icon = tool_icon(&approval.tool_name);
+            let args_display = format_tool_args(&approval.tool_name, &approval.args);
             let allow_idx = i;
             let deny_idx = i;
 
@@ -1180,7 +1318,7 @@ impl Render for AgentPanel {
 
         // ── Status indicator (replaces "typing…") ───────────────
         if let Some((icon, label)) = self.status_text() {
-            let status_color = match self.status {
+            let status_color = match self.state.status {
                 AgentStatus::Thinking => theme.warning,
                 AgentStatus::Responding => theme.success,
                 AgentStatus::Idle => theme.muted_foreground,
@@ -1207,7 +1345,7 @@ impl Render for AgentPanel {
         }
 
         // ── Header ──────────────────────────────────────────────
-        let status_dot_color = match self.status {
+        let status_dot_color = match self.state.status {
             AgentStatus::Idle => theme.muted_foreground.opacity(0.4),
             AgentStatus::Thinking => theme.warning,
             AgentStatus::Responding => theme.success,
@@ -1263,15 +1401,15 @@ impl Render for AgentPanel {
                     .gap(px(2.0));
 
                 // Stop button — visible when agent is working
-                if self.status != AgentStatus::Idle {
+                if self.state.status != AgentStatus::Idle {
                     actions = actions.child(
                         icon_button("agent-stop", "phosphor/stop.svg", theme)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
                                     cx.emit(CancelRequest);
-                                    this.status = AgentStatus::Idle;
-                                    this.streaming = false;
+                                    this.state.status = AgentStatus::Idle;
+                                    this.state.streaming = false;
                                     cx.notify();
                                 }),
                             ),

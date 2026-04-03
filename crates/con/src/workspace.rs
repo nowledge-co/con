@@ -5,7 +5,7 @@ const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 
-use crate::agent_panel::{AgentPanel, CancelRequest, EnableAutoApprove, LoadConversation, NewConversation};
+use crate::agent_panel::{AgentPanel, CancelRequest, EnableAutoApprove, LoadConversation, NewConversation, PanelState};
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
 use crate::pane_tree::{PaneTree, SplitDirection};
@@ -15,8 +15,8 @@ use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, Input
 use con_terminal::TerminalTheme;
 use crate::{CloseTab, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
 use con_core::config::Config;
-use con_agent::{TerminalExecRequest, TerminalExecResponse};
-use con_core::harness::{AgentHarness, HarnessEvent, InputKind};
+use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
+use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
 use con_core::session::Session;
 use con_core::suggestions::SuggestionEngine;
 
@@ -24,6 +24,8 @@ struct Tab {
     pane_tree: PaneTree,
     title: String,
     needs_attention: bool,
+    session: AgentSession,
+    panel_state: PanelState,
 }
 
 /// The main workspace: tabs + agent panel + input bar + settings overlay
@@ -73,6 +75,30 @@ impl ConWorkspace {
                 let theme = &terminal_theme;
                 let cwd = tab_state.cwd.as_deref();
                 let terminal = cx.new(|cx| TerminalView::with_options(80, 24, font_size, scrollback_lines, theme, cwd, cx));
+                // Restore per-tab conversation, with migration from global conversation_id
+                let agent_session = if let Some(conv_id) = &tab_state.conversation_id {
+                    match Conversation::load(conv_id) {
+                        Ok(conv) => AgentSession::with_conversation(conv),
+                        Err(_) => AgentSession::new(),
+                    }
+                } else if i == 0 {
+                    // Migration: first tab gets the old session-level conversation
+                    if let Some(conv_id) = &session.conversation_id {
+                        match Conversation::load(conv_id) {
+                            Ok(conv) => AgentSession::with_conversation(conv),
+                            Err(_) => AgentSession::new(),
+                        }
+                    } else {
+                        AgentSession::new()
+                    }
+                } else {
+                    AgentSession::new()
+                };
+                let panel_state = {
+                    let conv = agent_session.conversation().clone();
+                    let conv = conv.lock();
+                    PanelState::from_conversation(&conv)
+                };
                 Tab {
                     pane_tree: PaneTree::new(terminal),
                     title: if tab_state.title.is_empty() {
@@ -81,6 +107,8 @@ impl ConWorkspace {
                         tab_state.title.clone()
                     },
                     needs_attention: false,
+                    session: agent_session,
+                    panel_state,
                 }
             })
             .collect();
@@ -90,6 +118,8 @@ impl ConWorkspace {
                 pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),
                 needs_attention: false,
+                session: AgentSession::new(),
+                panel_state: PanelState::new(),
             });
         }
         // Subscribe to events from all terminals
@@ -108,21 +138,21 @@ impl ConWorkspace {
         let active_tab = session.active_tab.min(tabs.len() - 1);
         let agent_panel_open = session.agent_panel_open;
         let agent_panel_width = session.agent_panel_width.unwrap_or(AGENT_PANEL_DEFAULT_WIDTH);
-        let agent_panel = cx.new(|cx| AgentPanel::new(cx));
+        // Take the active tab's restored panel state for the AgentPanel
+        let initial_panel_state = std::mem::replace(
+            &mut tabs[active_tab].panel_state,
+            PanelState::new(),
+        );
+        let agent_panel = cx.new(|cx| AgentPanel::with_state(initial_panel_state, cx));
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
-        let mut harness = AgentHarness::new(&config).unwrap_or_else(|e| {
+        let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
             log::error!("Failed to create agent harness: {}. Agent features disabled.", e);
             panic!("Fatal: agent harness initialization failed: {}", e);
         });
         let suggestion_engine = harness.suggestion_engine(300);
         let (suggestion_tx, suggestion_rx) = crossbeam_channel::unbounded();
-
-        // Restore previous conversation if saved in session
-        if let Some(conv_id) = &session.conversation_id {
-            harness.load_conversation(conv_id);
-        }
 
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
@@ -145,56 +175,49 @@ impl ConWorkspace {
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
             .detach();
 
-        // Poll harness events, terminal exec requests, and suggestions
-        let events_rx = harness.events().clone();
-        let terminal_exec_rx = harness.terminal_exec_requests().clone();
-        let pane_query_rx = harness.pane_requests().clone();
+        // Poll all tabs' agent sessions + suggestions
         let suggestion_rx_for_poll = suggestion_rx.clone();
         cx.spawn(async move |this, cx| {
             loop {
                 let mut got_event = false;
-                while let Ok(event) = events_rx.try_recv() {
-                    got_event = true;
-                    let ev = event.clone();
-                    this.update(cx, |workspace, cx| {
-                        workspace.handle_harness_event(ev, cx);
-                    })
-                    .ok();
-                }
 
-                // Handle visible terminal exec requests from the agent
-                while let Ok(req) = terminal_exec_rx.try_recv() {
-                    got_event = true;
-                    this.update(cx, |workspace, cx| {
-                        workspace.handle_terminal_exec_request(req, cx);
-                    })
-                    .ok();
-                }
+                this.update(cx, |workspace, cx| {
+                    // Drain events from every tab's session
+                    for tab_idx in 0..workspace.tabs.len() {
+                        let is_active = tab_idx == workspace.active_tab;
 
-                // Handle pane queries from agent tools (list_panes, read_pane, send_keys)
-                while let Ok(req) = pane_query_rx.try_recv() {
-                    got_event = true;
-                    log::info!("[workspace] Received pane query: {:?}", std::mem::discriminant(&req.query));
-                    let result = this.update(cx, |workspace, cx| {
-                        workspace.handle_pane_request(req, cx);
-                    });
-                    if let Err(e) = result {
-                        log::error!("[workspace] Failed to handle pane request: {:?}", e);
+                        // Agent events
+                        while let Ok(event) = workspace.tabs[tab_idx].session.events().try_recv() {
+                            got_event = true;
+                            if is_active {
+                                workspace.handle_harness_event(event, cx);
+                            } else {
+                                workspace.tabs[tab_idx].panel_state.apply_event(event);
+                                workspace.tabs[tab_idx].needs_attention = true;
+                            }
+                        }
+
+                        // Terminal exec requests — route to the tab that owns the session
+                        while let Ok(req) = workspace.tabs[tab_idx].session.terminal_exec_requests().try_recv() {
+                            got_event = true;
+                            workspace.handle_terminal_exec_request_for_tab(tab_idx, req, cx);
+                        }
+
+                        // Pane queries — route to the tab that owns the session
+                        while let Ok(req) = workspace.tabs[tab_idx].session.pane_requests().try_recv() {
+                            got_event = true;
+                            workspace.handle_pane_request_for_tab(tab_idx, req, cx);
+                        }
                     }
-                }
 
-                // Apply suggestion results from the async engine
-                while let Ok((entity_id, suggestion)) = suggestion_rx_for_poll.try_recv() {
-                    got_event = true;
-                    this.update(cx, |workspace, cx| {
+                    // Apply suggestion results
+                    while let Ok((entity_id, suggestion)) = suggestion_rx_for_poll.try_recv() {
+                        got_event = true;
                         workspace.apply_suggestion(entity_id, suggestion, cx);
-                    })
-                    .ok();
-                }
+                    }
+                }).ok();
 
                 if !got_event {
-                    // 4ms matches terminal_view's PTY polling rate.
-                    // try_recv() is non-blocking so CPU cost is negligible.
                     cx.background_executor()
                         .timer(std::time::Duration::from_millis(4))
                         .await;
@@ -279,6 +302,7 @@ impl ConWorkspace {
                     title,
                     cwd,
                     panes: vec![],
+                    conversation_id: Some(tab.session.conversation_id()),
                 }
             })
             .collect();
@@ -288,7 +312,7 @@ impl ConWorkspace {
             active_tab: self.active_tab,
             agent_panel_open: self.agent_panel_open,
             agent_panel_width: Some(self.agent_panel_width),
-            conversation_id: Some(self.harness.conversation_id()),
+            conversation_id: None, // deprecated — per-tab now
         };
         if let Err(e) = session.save() {
             log::warn!("Failed to save session: {}", e);
@@ -302,7 +326,10 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.harness.new_conversation();
+        self.tabs[self.active_tab].session.new_conversation();
+        self.agent_panel.update(cx, |panel, cx| {
+            panel.clear_messages(cx);
+        });
         self.save_session(cx);
     }
 
@@ -313,21 +340,14 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.harness.load_conversation(&event.id) {
-            // Replay messages into the panel
+        if self.tabs[self.active_tab].session.load_conversation(&event.id) {
+            // Rebuild panel state from the loaded conversation
+            let conv = self.tabs[self.active_tab].session.conversation();
+            let conv = conv.lock();
+            let new_state = PanelState::from_conversation(&conv);
+            drop(conv);
             self.agent_panel.update(cx, |panel, cx| {
-                panel.clear_messages(cx);
-                let conv = self.harness.conversation();
-                let conv = conv.lock();
-                for msg in &conv.messages {
-                    let role = match msg.role {
-                        con_agent::MessageRole::User => "user",
-                        con_agent::MessageRole::Assistant => "assistant",
-                        con_agent::MessageRole::System => "system",
-                        con_agent::MessageRole::Tool => "system",
-                    };
-                    panel.add_message(role, &msg.content, cx);
-                }
+                panel.swap_state(new_state, cx);
             });
             self.save_session(cx);
         }
@@ -340,7 +360,7 @@ impl ConWorkspace {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
-        self.harness.cancel_current();
+        self.tabs[self.active_tab].session.cancel_current();
     }
 
     fn on_enable_auto_approve(
@@ -524,7 +544,8 @@ impl ConWorkspace {
                     }
                     InputKind::SkillInvoke(name, args) => {
                         let context = self.build_agent_context(cx);
-                        if let Some(desc) = self.harness.invoke_skill(&name, args.as_deref(), context) {
+                        let session = &self.tabs[self.active_tab].session;
+                        if let Some(desc) = self.harness.invoke_skill(session, &name, args.as_deref(), context) {
                             if !self.agent_panel_open {
                                 self.agent_panel_open = true;
                             }
@@ -603,12 +624,6 @@ impl ConWorkspace {
                 self.agent_panel.update(cx, |panel, cx| {
                     panel.complete_response(&msg.content, cx);
                 });
-                // Mark non-active tabs for attention
-                for (i, tab) in self.tabs.iter_mut().enumerate() {
-                    if i != self.active_tab {
-                        tab.needs_attention = true;
-                    }
-                }
             }
             HarnessEvent::Error(err) => {
                 self.agent_panel.update(cx, |panel, cx| {
@@ -626,14 +641,15 @@ impl ConWorkspace {
     /// Registers an OSC 133 completion callback to capture the output
     /// and send it back to the tool. Falls back to a timeout-based capture
     /// for shells without shell integration.
-    fn handle_terminal_exec_request(
+    fn handle_terminal_exec_request_for_tab(
         &mut self,
+        tab_idx: usize,
         req: TerminalExecRequest,
         cx: &mut Context<Self>,
     ) {
         // Use the specified pane, or fall back to the focused pane.
         let terminal = if let Some(pane_index) = req.pane_index {
-            let pane_tree = &self.tabs[self.active_tab].pane_tree;
+            let pane_tree = &self.tabs[tab_idx].pane_tree;
             let all_terminals = pane_tree.all_terminals();
             if pane_index == 0 || pane_index > all_terminals.len() {
                 let _ = req.response_tx.send(TerminalExecResponse {
@@ -648,7 +664,7 @@ impl ConWorkspace {
             }
             all_terminals[pane_index - 1].clone()
         } else {
-            self.active_terminal().clone()
+            self.tabs[tab_idx].pane_tree.focused_terminal().clone()
         };
         let tv = terminal.read(cx);
 
@@ -746,15 +762,16 @@ impl ConWorkspace {
         .detach();
     }
 
-    fn handle_pane_request(
+    fn handle_pane_request_for_tab(
         &self,
+        tab_idx: usize,
         req: con_agent::PaneRequest,
         cx: &mut Context<Self>,
     ) {
         use con_agent::{PaneInfo, PaneQuery, PaneResponse};
 
         log::info!("[workspace] handle_pane_request entered");
-        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let pane_tree = &self.tabs[tab_idx].pane_tree;
         let focused_pid = pane_tree.focused_pane_id();
         let all_terminals = pane_tree.all_terminals();
 
@@ -943,13 +960,27 @@ impl ConWorkspace {
         cx.subscribe_in(&terminal, window, Self::on_input_changed)
             .detach();
         let tab_number = self.tabs.len() + 1;
+        let old_active = self.active_tab;
+
         self.tabs.push(Tab {
             pane_tree: PaneTree::new(terminal.clone()),
             title: format!("Terminal {}", tab_number),
             needs_attention: false,
+            session: AgentSession::new(),
+            panel_state: PanelState::new(),
         });
         self.active_tab = self.tabs.len() - 1;
-        // Focus the new terminal
+
+        // Swap panel state: stash old tab's state, load new tab's (empty) state
+        let incoming = std::mem::replace(
+            &mut self.tabs[self.active_tab].panel_state,
+            PanelState::new(),
+        );
+        let outgoing = self.agent_panel.update(cx, |panel, cx| {
+            panel.swap_state(incoming, cx)
+        });
+        self.tabs[old_active].panel_state = outgoing;
+
         terminal.focus_handle(cx).focus(window, cx);
         self.save_session(cx);
         cx.notify();
@@ -959,10 +990,23 @@ impl ConWorkspace {
         if self.tabs.len() <= 1 {
             return;
         }
+        // Save the closing tab's conversation
+        {
+            let conv = self.tabs[self.active_tab].session.conversation();
+            let _ = conv.lock().save();
+        }
         self.tabs.remove(self.active_tab);
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
         }
+        // Swap new active tab's panel state into the panel
+        let incoming = std::mem::replace(
+            &mut self.tabs[self.active_tab].panel_state,
+            PanelState::new(),
+        );
+        self.agent_panel.update(cx, |panel, cx| {
+            panel.swap_state(incoming, cx);
+        });
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
@@ -1002,7 +1046,8 @@ impl ConWorkspace {
             panel.add_message("user", content, cx);
         });
         let context = self.build_agent_context(cx);
-        self.harness.send_message(content.to_string(), context);
+        let session = &self.tabs[self.active_tab].session;
+        self.harness.send_message(session, content.to_string(), context);
     }
 
     fn split_pane(
@@ -1143,15 +1188,29 @@ impl ConWorkspace {
     }
 
     fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index < self.tabs.len() {
-            self.active_tab = index;
-            self.tabs[index].needs_attention = false;
-            // Focus the terminal in the newly activated tab
-            let terminal = self.tabs[index].pane_tree.focused_terminal().clone();
-            terminal.focus_handle(cx).focus(window, cx);
-            self.save_session(cx);
-            cx.notify();
+        if index >= self.tabs.len() || index == self.active_tab {
+            return;
         }
+        let old_active = self.active_tab;
+
+        // Take the incoming tab's panel state
+        let incoming = std::mem::replace(
+            &mut self.tabs[index].panel_state,
+            PanelState::new(),
+        );
+        // Swap into the panel, get the outgoing state back
+        let outgoing = self.agent_panel.update(cx, |panel, cx| {
+            panel.swap_state(incoming, cx)
+        });
+        // Stash outgoing state into the old tab
+        self.tabs[old_active].panel_state = outgoing;
+
+        self.active_tab = index;
+        self.tabs[index].needs_attention = false;
+        let terminal = self.tabs[index].pane_tree.focused_terminal().clone();
+        terminal.focus_handle(cx).focus(window, cx);
+        self.save_session(cx);
+        cx.notify();
     }
 
     /// Focus the active terminal (used after modal close, etc.)

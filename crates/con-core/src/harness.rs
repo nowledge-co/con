@@ -65,51 +65,114 @@ pub enum InputKind {
     SkillInvoke(String, Option<String>),
 }
 
-/// The agent harness — orchestrates agent <-> terminal interaction.
-///
-/// Owns a single shared tokio runtime for all async agent work.
-/// Each `send_message()` call spawns a task on this runtime.
-///
-/// ## Channel architecture
-///
-/// - `event_tx/rx`: Harness → UI. All events (tool calls, responses, errors).
-/// - Per-request approval channels: Created fresh for each `send_message()`.
-///   The sender is delivered inside `ToolApprovalNeeded` events. The receiver
-///   is owned by the `ConHook` for that request. This prevents cross-request
-///   interference — only one hook reads from each channel.
-///
-/// ## Conversation state
-///
-/// `Arc<Mutex<Conversation>>` is shared between the main thread and
-/// spawned tasks. The mutex is held briefly (clone snapshot, add message).
-/// The async agent work operates on a snapshot, not under the lock.
-pub struct AgentHarness {
-    config: con_agent::AgentConfig,
+// ---------------------------------------------------------------------------
+// AgentSession — per-tab conversation state and channels
+// ---------------------------------------------------------------------------
+
+/// Per-tab agent session. Owns the conversation and channels for one tab's
+/// agent interactions. Lightweight: no runtime, no config, no skills.
+pub struct AgentSession {
     conversation: Arc<Mutex<Conversation>>,
-    skills: SkillRegistry,
     event_tx: Sender<HarnessEvent>,
     event_rx: Receiver<HarnessEvent>,
-    runtime: Arc<Runtime>,
-    /// Channel for visible terminal execution requests (agent → workspace).
-    /// The sender is cloned into TerminalExecTool instances.
     terminal_exec_tx: Sender<TerminalExecRequest>,
     terminal_exec_rx: Receiver<TerminalExecRequest>,
-    /// Channel for pane queries (list, read, send_keys).
-    /// The sender is cloned into pane tools; the workspace polls the receiver.
     pane_tx: Sender<PaneRequest>,
     pane_rx: Receiver<PaneRequest>,
-    /// Cancellation flag for the current agent request.
-    /// Set to true to stop streaming. Reset on each new send_message().
     cancel_flag: Arc<AtomicBool>,
+}
+
+impl AgentSession {
+    /// Create a fresh session with a new conversation.
+    pub fn new() -> Self {
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (terminal_exec_tx, terminal_exec_rx) = crossbeam_channel::unbounded();
+        let (pane_tx, pane_rx) = crossbeam_channel::unbounded();
+        Self {
+            conversation: Arc::new(Mutex::new(Conversation::new())),
+            event_tx,
+            event_rx,
+            terminal_exec_tx,
+            terminal_exec_rx,
+            pane_tx,
+            pane_rx,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Create a session from a loaded conversation.
+    pub fn with_conversation(conv: Conversation) -> Self {
+        let mut s = Self::new();
+        s.conversation = Arc::new(Mutex::new(conv));
+        s
+    }
+
+    pub fn events(&self) -> &Receiver<HarnessEvent> {
+        &self.event_rx
+    }
+
+    pub fn terminal_exec_requests(&self) -> &Receiver<TerminalExecRequest> {
+        &self.terminal_exec_rx
+    }
+
+    pub fn pane_requests(&self) -> &Receiver<PaneRequest> {
+        &self.pane_rx
+    }
+
+    pub fn conversation_id(&self) -> String {
+        self.conversation.lock().id.clone()
+    }
+
+    pub fn cancel_current(&self) {
+        self.cancel_flag.store(true, Ordering::Relaxed);
+    }
+
+    pub fn conversation(&self) -> Arc<Mutex<Conversation>> {
+        self.conversation.clone()
+    }
+
+    /// Start a new conversation, saving the current one first.
+    pub fn new_conversation(&mut self) {
+        let conv = self.conversation.lock();
+        if let Err(e) = conv.save() {
+            log::warn!("Failed to save conversation: {}", e);
+        }
+        drop(conv);
+        self.conversation = Arc::new(Mutex::new(Conversation::new()));
+    }
+
+    /// Restore a conversation by ID, saving the current one first.
+    pub fn load_conversation(&mut self, id: &str) -> bool {
+        match Conversation::load(id) {
+            Ok(conv) => {
+                let current = self.conversation.lock();
+                let _ = current.save();
+                drop(current);
+                self.conversation = Arc::new(Mutex::new(conv));
+                true
+            }
+            Err(e) => {
+                log::warn!("Failed to load conversation {}: {}", id, e);
+                false
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AgentHarness — shared infrastructure (1 per window)
+// ---------------------------------------------------------------------------
+
+/// Shared agent infrastructure. Owns the tokio runtime, config, and skills.
+/// Does NOT own conversation or channels — those are per-tab in AgentSession.
+pub struct AgentHarness {
+    config: con_agent::AgentConfig,
+    skills: SkillRegistry,
+    runtime: Arc<Runtime>,
 }
 
 impl AgentHarness {
     pub fn new(config: &Config) -> anyhow::Result<Self> {
-        let skills = SkillRegistry::new();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
-        let (terminal_exec_tx, terminal_exec_rx) = crossbeam_channel::unbounded();
-        let (pane_tx, pane_rx) = crossbeam_channel::unbounded();
-
         let runtime = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -119,21 +182,9 @@ impl AgentHarness {
 
         Ok(Self {
             config: config.agent.clone(),
-            conversation: Arc::new(Mutex::new(Conversation::new())),
-            skills,
-            event_tx,
-            event_rx,
+            skills: SkillRegistry::new(),
             runtime,
-            terminal_exec_tx,
-            terminal_exec_rx,
-            pane_tx,
-            pane_rx,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
         })
-    }
-
-    pub fn events(&self) -> &Receiver<HarnessEvent> {
-        &self.event_rx
     }
 
     /// Create a SuggestionEngine that shares the harness tokio runtime.
@@ -143,18 +194,6 @@ impl AgentHarness {
             self.runtime.clone(),
             debounce_ms,
         )
-    }
-
-    /// Channel for terminal exec requests — the workspace polls this to
-    /// execute agent commands in the visible terminal.
-    pub fn terminal_exec_requests(&self) -> &Receiver<TerminalExecRequest> {
-        &self.terminal_exec_rx
-    }
-
-    /// Channel for pane queries — the workspace polls this to
-    /// answer list_panes, read_pane, and send_keys requests.
-    pub fn pane_requests(&self) -> &Receiver<PaneRequest> {
-        &self.pane_rx
     }
 
     /// Classify user input: NLP, command, or skill
@@ -333,28 +372,23 @@ impl AgentHarness {
         }
     }
 
-    /// Send a natural language message to the agent.
+    /// Send a natural language message to the agent using a specific tab's session.
     ///
-    /// Spawns an async task on the shared tokio runtime. The task:
-    /// 1. Snapshots the conversation (brief lock)
-    /// 2. Creates a per-request approval channel
-    /// 3. Runs the agent with a ConHook that emits events
-    /// 4. Adds the assistant response back to the conversation (brief lock)
-    pub fn send_message(&mut self, content: String, context: TerminalContext) {
+    /// The session provides the conversation and channels;
+    /// the harness provides runtime and config.
+    pub fn send_message(&self, session: &AgentSession, content: String, context: TerminalContext) {
         let user_msg = Message::user(&content);
-        self.conversation
-            .lock()
-            .add_message(user_msg);
+        session.conversation.lock().add_message(user_msg);
 
         // Reset cancellation flag for new request
-        self.cancel_flag.store(false, Ordering::Relaxed);
+        session.cancel_flag.store(false, Ordering::Relaxed);
 
-        let harness_tx = self.event_tx.clone();
+        let harness_tx = session.event_tx.clone();
         let agent_config = self.config.clone();
-        let conversation = self.conversation.clone();
-        let terminal_exec_tx = self.terminal_exec_tx.clone();
-        let pane_tx = self.pane_tx.clone();
-        let cancelled = self.cancel_flag.clone();
+        let conversation = session.conversation.clone();
+        let terminal_exec_tx = session.terminal_exec_tx.clone();
+        let pane_tx = session.pane_tx.clone();
+        let cancelled = session.cancel_flag.clone();
 
         // Per-request approval channel: the sender goes to the UI via
         // ToolApprovalNeeded events, the receiver goes to the ConHook.
@@ -436,9 +470,10 @@ impl AgentHarness {
         });
     }
 
-    /// Invoke a skill
+    /// Invoke a skill using the active tab's session.
     pub fn invoke_skill(
-        &mut self,
+        &self,
+        session: &AgentSession,
         skill_name: &str,
         args: Option<&str>,
         context: TerminalContext,
@@ -449,68 +484,28 @@ impl AgentHarness {
         } else {
             skill.prompt_template.clone()
         };
-        self.send_message(prompt, context);
+        self.send_message(session, prompt, context);
         Some(skill.description.clone())
     }
 
-    /// Load skills from AGENTS.md in the given directory
-    pub fn load_agents_md(&mut self, dir: &Path) {
+    /// Load skills from AGENTS.md in the given directory.
+    /// Returns the updated skill names list if loading succeeded.
+    pub fn load_agents_md(&mut self, dir: &Path) -> Option<Vec<String>> {
         let agents_path = dir.join("AGENTS.md");
         if agents_path.exists() {
             match self.skills.load_agents_md(&agents_path) {
                 Ok(n) => {
                     log::info!("Loaded {} skills from AGENTS.md", n);
-                    let _ = self
-                        .event_tx
-                        .send(HarnessEvent::SkillsUpdated(self.skills.names()));
+                    Some(self.skills.names())
                 }
                 Err(e) => {
                     log::warn!("Failed to load AGENTS.md: {}", e);
+                    None
                 }
             }
+        } else {
+            None
         }
-    }
-
-    /// Start a new conversation, saving the current one first
-    pub fn new_conversation(&mut self) {
-        let conv = self.conversation.lock();
-        if let Err(e) = conv.save() {
-            log::warn!("Failed to save conversation: {}", e);
-        }
-        drop(conv);
-        self.conversation = Arc::new(Mutex::new(Conversation::new()));
-    }
-
-    /// Restore a conversation by ID
-    pub fn load_conversation(&mut self, id: &str) -> bool {
-        match Conversation::load(id) {
-            Ok(conv) => {
-                // Save current first
-                let current = self.conversation.lock();
-                let _ = current.save();
-                drop(current);
-                self.conversation = Arc::new(Mutex::new(conv));
-                true
-            }
-            Err(e) => {
-                log::warn!("Failed to load conversation {}: {}", id, e);
-                false
-            }
-        }
-    }
-
-    /// Get the current conversation ID
-    pub fn conversation_id(&self) -> String {
-        self.conversation
-            .lock()
-            .id
-            .clone()
-    }
-
-    /// Cancel the current agent request. The streaming loop will
-    /// stop and return the partial response accumulated so far.
-    pub fn cancel_current(&self) {
-        self.cancel_flag.store(true, Ordering::Relaxed);
     }
 
     pub fn update_config(&mut self, config: con_agent::AgentConfig) {
@@ -519,10 +514,6 @@ impl AgentHarness {
 
     pub fn set_auto_approve(&mut self, enabled: bool) {
         self.config.auto_approve_tools = enabled;
-    }
-
-    pub fn conversation(&self) -> Arc<Mutex<Conversation>> {
-        self.conversation.clone()
     }
 
     pub fn skill_names(&self) -> Vec<String> {
