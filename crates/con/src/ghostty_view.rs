@@ -151,12 +151,11 @@ impl GhosttyView {
             _ => return,
         };
 
+        // Create with a zero-origin frame — update_frame() will set the
+        // correct flipped position immediately after initialization.
         let nsview: id = unsafe {
             let frame = NSRect::new(
-                cocoa::foundation::NSPoint::new(
-                    f64::from(bounds.origin.x),
-                    f64::from(bounds.origin.y),
-                ),
+                cocoa::foundation::NSPoint::new(0.0, 0.0),
                 cocoa::foundation::NSSize::new(
                     f64::from(bounds.size.width),
                     f64::from(bounds.size.height),
@@ -182,7 +181,8 @@ impl GhosttyView {
                 self.terminal = Some(Arc::new(terminal));
                 self.nsview = Some(nsview);
                 self.initialized = true;
-                self.last_bounds = Some(bounds);
+                // Don't set last_bounds here — let update_frame() handle
+                // the coordinate flip and position the NSView correctly.
                 log::info!(
                     "Ghostty surface created: {}x{} px, scale {}",
                     width_px, height_px, scale

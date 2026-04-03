@@ -397,7 +397,6 @@ impl PaneTree {
             PaneNode::Leaf { id: _, terminal } => {
                 div()
                     .size_full()
-                    .pl(px(4.0))
                     .child(terminal.render_child())
                     .into_any_element()
             }
@@ -454,6 +453,7 @@ impl PaneTree {
 
                 let make_pane = |child: AnyElement, basis: f32| -> Div {
                     let mut d = div()
+                        .flex_grow()
                         .flex_shrink()
                         .flex_basis(relative(basis))
                         .overflow_hidden();
