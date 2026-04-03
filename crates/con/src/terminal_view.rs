@@ -453,8 +453,10 @@ impl Render for TerminalView {
                 run_text.clear();
                 continue;
             }
+            // Use char count (columns), not byte length — multi-byte chars
+            // like box-drawing (3 bytes each) would break run contiguity
             if cell.row != run_row
-                || cell.col != run_col + run_text.len()
+                || cell.col != run_col + run_text.chars().count()
                 || cell_style != run_style
             {
                 flush_run(&mut text_divs, run_row, run_col, &run_text, &run_style);
