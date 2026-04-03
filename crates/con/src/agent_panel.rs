@@ -177,13 +177,28 @@ impl PanelState {
     pub fn complete_response(&mut self, final_content: &str) {
         self.status = AgentStatus::Idle;
         if self.streaming {
-            if let Some(last) = self.messages.last_mut() {
-                last.content = final_content.to_string();
+            // Only overwrite streamed content if final_content is non-empty.
+            // Some providers don't emit text items, leaving final_content empty —
+            // in that case, keep whatever was accumulated during streaming.
+            if !final_content.is_empty() {
+                if let Some(last) = self.messages.last_mut() {
+                    last.content = final_content.to_string();
+                }
             }
             self.streaming = false;
-        } else {
+        } else if !final_content.is_empty() {
             self.messages
                 .push(PanelMessage::new("assistant", final_content));
+        }
+        // Ensure a message exists for tool call steps even when no text was produced.
+        // This happens when the agent only used tools without generating text output.
+        if !self.tool_calls.is_empty()
+            && self
+                .messages
+                .last()
+                .map_or(true, |m| m.role != "assistant")
+        {
+            self.messages.push(PanelMessage::new("assistant", ""));
         }
         // Move active tool calls into the message's step timeline
         for tc in self.tool_calls.drain(..) {

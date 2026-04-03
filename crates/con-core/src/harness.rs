@@ -4,10 +4,11 @@ use con_agent::{
 };
 use con_terminal::Grid;
 use crossbeam_channel::{Receiver, Sender};
+use std::collections::HashSet;
 use std::path::Path;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 
 use crate::config::Config;
@@ -529,24 +530,57 @@ impl AgentHarness {
     }
 }
 
-/// Heuristic to detect shell commands vs natural language
+/// Shell builtins that won't appear as executables on $PATH.
+/// POSIX + bash/zsh builtins that users commonly type as standalone commands.
+const SHELL_BUILTINS: &[&str] = &[
+    // POSIX required builtins
+    "cd", "echo", "eval", "exec", "exit", "export", "readonly", "return", "set", "shift",
+    "source", "test", "times", "trap", "type", "ulimit", "umask", "unset", "wait",
+    // bash/zsh builtins commonly typed as commands
+    "alias", "bg", "bind", "builtin", "caller", "command", "compgen", "complete", "declare",
+    "dirs", "disown", "enable", "fc", "fg", "hash", "help", "history", "jobs", "let", "local",
+    "logout", "popd", "pushd", "read", "shopt", "suspend", "typeset", "unalias",
+];
+
+/// Scan $PATH once and cache the set of executable names.
+fn path_executables() -> &'static HashSet<String> {
+    static CACHE: OnceLock<HashSet<String>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let path_var = std::env::var("PATH").unwrap_or_default();
+        let mut exes = HashSet::with_capacity(2048);
+        for dir in std::env::split_paths(&path_var) {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    if let Some(name) = entry.file_name().to_str() {
+                        exes.insert(name.to_string());
+                    }
+                }
+            }
+        }
+        exes
+    })
+}
+
+/// Detect whether input is a shell command or natural language.
+///
+/// Uses three signals (no static word list):
+/// 1. First token is an executable on $PATH or a shell builtin
+/// 2. First token is a path (`./`, `/`, `~/`)
+/// 3. Input contains shell operators (`|`, `>`, `>>`, `&&`, `;`)
 fn looks_like_command(input: &str) -> bool {
     let first_word = input.split_whitespace().next().unwrap_or("");
 
-    const COMMANDS: &[&str] = &[
-        "ls", "cd", "pwd", "cat", "echo", "grep", "find", "mkdir", "rm", "cp", "mv", "touch",
-        "chmod", "chown", "curl", "wget", "git", "docker", "npm", "yarn", "pnpm", "cargo",
-        "rustc", "python", "pip", "node", "go", "make", "cmake", "ssh", "scp", "rsync", "tar",
-        "zip", "unzip", "brew", "apt", "yum", "pacman", "sudo", "kill", "ps", "top", "htop",
-        "df", "du", "head", "tail", "less", "more", "sort", "uniq", "wc", "sed", "awk", "xargs",
-        "env", "export", "which", "man", "vim", "nvim", "nano", "code", "open", "pbcopy",
-        "pbpaste",
-    ];
-
-    if COMMANDS.contains(&first_word) {
+    // Shell builtins
+    if SHELL_BUILTINS.contains(&first_word) {
         return true;
     }
 
+    // Executable on $PATH
+    if path_executables().contains(first_word) {
+        return true;
+    }
+
+    // Explicit path invocation
     if first_word.starts_with("./")
         || first_word.starts_with('/')
         || first_word.starts_with("~/")
@@ -554,6 +588,7 @@ fn looks_like_command(input: &str) -> bool {
         return true;
     }
 
+    // Shell operators indicate a pipeline/compound command
     if input.contains(" | ")
         || input.contains(" > ")
         || input.contains(" >> ")

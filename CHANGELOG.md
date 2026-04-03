@@ -10,6 +10,17 @@ All notable changes to con are documented here.
 - Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.
 - Agent conversations persist per-tab across restarts
 
+### Improved
+
+**Smart Input**
+- Command detection now scans your `$PATH` at startup instead of using a static word list. Any installed program — `hostname`, `terraform`, `kubectl`, or a custom script in `/usr/local/bin` — is correctly recognized as a shell command without manual configuration.
+
+### Fixed
+
+**AI Agent**
+- Fixed agent hanging after receiving a final response from certain providers
+- Fixed empty agent responses appearing as stuck/hanging when providers don't emit text items during streaming
+
 **Terminal**
 - Full terminal emulation with 256-color and truecolor support
 - Split panes — divide your workspace horizontally (Cmd+D) or vertically (Cmd+Shift+D), with drag-to-resize dividers

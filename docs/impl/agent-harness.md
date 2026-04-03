@@ -213,3 +213,24 @@ max_turns = 10              # max tool-use turns per request
 ```
 
 `auto_approve_tools = true` makes `ConHook` return `ToolCallHookAction::cont()` for all tools, bypassing the approval channel entirely.
+
+## Input Classification
+
+`classify_input()` determines whether user input is a skill invocation, a shell command, or a natural language query (for the AI agent). The order is:
+
+1. **Skill** — starts with `/` and matches a registered skill name
+2. **Shell command** — first token is a known executable or has shell syntax
+3. **Natural language** — everything else → sent to the agent
+
+### Command detection (`looks_like_command`)
+
+Uses three signals — no static word list:
+
+| Signal | Example | How |
+|--------|---------|-----|
+| Shell builtin | `cd`, `export`, `alias` | Checked against `SHELL_BUILTINS` constant (POSIX + bash/zsh) |
+| PATH executable | `hostname`, `git`, `docker` | `$PATH` directories scanned once at startup, cached in `OnceLock<HashSet>` |
+| Path invocation | `./script.sh`, `/usr/bin/env` | Prefix match: `./`, `/`, `~/` |
+| Shell operators | `cat foo \| grep bar` | Contains ` \| `, ` > `, ` >> `, ` && `, ` ; ` |
+
+The PATH scan happens on first call and caches ~2000+ executable names. This eliminates the maintenance burden of a static command list and correctly classifies any installed program.
