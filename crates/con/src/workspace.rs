@@ -15,7 +15,7 @@ use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, InputChanged, TerminalView};
 use con_terminal::TerminalTheme;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
 use crate::ghostty_view::{GhosttyFocusChanged, GhosttyProcessExited, GhosttyTitleChanged, GhosttyView};
 use crate::{CloseTab, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
 use con_core::config::Config;
@@ -61,10 +61,49 @@ pub struct ConWorkspace {
     /// Current terminal color theme
     terminal_theme: TerminalTheme,
     /// Whether to use ghostty backend for new terminals
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
     use_ghostty: bool,
     /// Shared ghostty app instance (macOS only, lazy-initialized)
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
     ghostty_app: Option<std::sync::Arc<con_ghostty::GhosttyApp>>,
+}
+
+// ── Terminal factory functions ────────────────────────────────
+//
+// Standalone so they can be called both during ConWorkspace::new()
+// (before `self` exists) and from create_terminal() (after).
+
+fn make_legacy_terminal(
+    font_size: f32,
+    scrollback_lines: usize,
+    theme: &TerminalTheme,
+    cwd: Option<&str>,
+    window: &mut Window,
+    cx: &mut Context<ConWorkspace>,
+) -> TerminalPane {
+    let terminal_view = cx.new(|cx| {
+        if let Some(cwd) = cwd {
+            TerminalView::with_options(80, 24, font_size, scrollback_lines, theme, Some(cwd), cx)
+        } else {
+            TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx)
+        }
+    });
+    let pane = TerminalPane::Legacy(terminal_view);
+    subscribe_terminal_pane(&pane, window, cx);
+    pane
+}
+
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
+fn make_ghostty_terminal(
+    app: &std::sync::Arc<con_ghostty::GhosttyApp>,
+    window: &mut Window,
+    cx: &mut Context<ConWorkspace>,
+) -> TerminalPane {
+    let app = app.clone();
+    let view = cx.new(|cx| crate::ghostty_view::GhosttyView::new(app, cx));
+    let pane = TerminalPane::Ghostty(view);
+    subscribe_terminal_pane(&pane, window, cx);
+    pane
 }
 
 impl ConWorkspace {
@@ -76,15 +115,39 @@ impl ConWorkspace {
             .unwrap_or_default();
         let session = Session::load().unwrap_or_default();
 
+        // Eagerly initialize ghostty if configured, so all terminals use the same backend.
+        #[cfg(all(target_os = "macos", feature = "ghostty"))]
+        let (use_ghostty, ghostty_app) = {
+            if config.terminal.use_ghostty() {
+                match con_ghostty::GhosttyApp::new() {
+                    Ok(app) => (true, Some(std::sync::Arc::new(app))),
+                    Err(e) => {
+                        log::error!("Failed to create ghostty app: {}. Using legacy backend.", e);
+                        (false, None)
+                    }
+                }
+            } else {
+                (false, None)
+            }
+        };
+
+        // Closure to create a terminal with the correct backend for this session.
+        #[allow(unused_mut)]
+        let mut make_terminal = |cwd: Option<&str>, window: &mut Window, cx: &mut Context<Self>| -> TerminalPane {
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
+            if let Some(ref app) = ghostty_app {
+                return make_ghostty_terminal(app, window, cx);
+            }
+            make_legacy_terminal(font_size, scrollback_lines, &terminal_theme, cwd, window, cx)
+        };
+
         let mut tabs: Vec<Tab> = session
             .tabs
             .iter()
             .enumerate()
             .map(|(i, tab_state)| {
-                let theme = &terminal_theme;
                 let cwd = tab_state.cwd.as_deref();
-                let terminal_view = cx.new(|cx| TerminalView::with_options(80, 24, font_size, scrollback_lines, theme, cwd, cx));
-                let terminal = TerminalPane::Legacy(terminal_view);
+                let terminal = make_terminal(cwd, window, cx);
                 // Restore per-tab conversation, with migration from global conversation_id
                 let agent_session = if let Some(conv_id) = &tab_state.conversation_id {
                     match Conversation::load(conv_id) {
@@ -123,8 +186,7 @@ impl ConWorkspace {
             })
             .collect();
         if tabs.is_empty() {
-            let terminal_view = cx.new(|cx| TerminalView::with_options(80, 24, font_size, scrollback_lines, &terminal_theme, None, cx));
-            let terminal = TerminalPane::Legacy(terminal_view);
+            let terminal = make_terminal(None, window, cx);
             tabs.push(Tab {
                 pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),
@@ -132,12 +194,6 @@ impl ConWorkspace {
                 session: AgentSession::new(),
                 panel_state: PanelState::new(),
             });
-        }
-        // Subscribe to events from all terminals
-        for tab in &tabs {
-            for terminal in tab.pane_tree.all_terminals() {
-                subscribe_terminal_pane(terminal, window, cx);
-            }
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
         let agent_panel_open = session.agent_panel_open;
@@ -255,9 +311,10 @@ impl ConWorkspace {
             suggestion_engine,
             suggestion_tx,
             terminal_theme,
-            use_ghostty: config.terminal.use_ghostty(),
-            #[cfg(target_os = "macos")]
-            ghostty_app: None,
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
+            use_ghostty,
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
+            ghostty_app,
         }
     }
 
@@ -268,7 +325,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TerminalPane {
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "ghostty"))]
         if self.use_ghostty {
             // Lazy-init the shared ghostty app
             if self.ghostty_app.is_none() {
@@ -283,28 +340,11 @@ impl ConWorkspace {
                 }
             }
             if let Some(ref app) = self.ghostty_app {
-                let app = app.clone();
-                let view = cx.new(|cx| {
-                    crate::ghostty_view::GhosttyView::new(app, cx)
-                });
-                let pane = TerminalPane::Ghostty(view);
-                subscribe_terminal_pane(&pane, window, cx);
+                let pane = make_ghostty_terminal(app, window, cx);
                 return pane;
             }
         }
-        let font_size = self.font_size;
-        let scrollback_lines = self.scrollback_lines;
-        let theme = &self.terminal_theme;
-        let terminal_view = cx.new(|cx| {
-            if let Some(cwd) = cwd {
-                TerminalView::with_options(80, 24, font_size, scrollback_lines, theme, Some(cwd), cx)
-            } else {
-                TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx)
-            }
-        });
-        let pane = TerminalPane::Legacy(terminal_view);
-        subscribe_terminal_pane(&pane, window, cx);
-        pane
+        make_legacy_terminal(self.font_size, self.scrollback_lines, &self.terminal_theme, cwd, window, cx)
     }
 
     fn active_terminal(&self) -> &TerminalPane {
@@ -1290,7 +1330,7 @@ impl ConWorkspace {
 
     // ── Ghostty event handlers ──────────────────────────────
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
     pub(crate) fn on_ghostty_focus_changed(
         &mut self,
         entity: &Entity<GhosttyView>,
@@ -1307,7 +1347,7 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
     pub(crate) fn on_ghostty_process_exited(
         &mut self,
         _entity: &Entity<GhosttyView>,
@@ -1326,7 +1366,7 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
     pub(crate) fn on_ghostty_title_changed(
         &mut self,
         _entity: &Entity<GhosttyView>,
