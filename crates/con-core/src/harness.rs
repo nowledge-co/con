@@ -450,11 +450,16 @@ impl AgentHarness {
 
             let provider = AgentProvider::new(agent_config);
 
+            log::info!("[harness] Calling provider.send()");
             match provider
                 .send(&conv_snapshot, &context, agent_tx, approval_rx, terminal_exec_tx, pane_tx, cancelled)
                 .await
             {
                 Ok(assistant_msg) => {
+                    log::info!(
+                        "[harness] provider.send() completed: {} chars",
+                        assistant_msg.content.len()
+                    );
                     let mut conv = conversation.lock();
                     conv.add_message(assistant_msg);
                     if let Err(e) = conv.save() {
@@ -462,11 +467,14 @@ impl AgentHarness {
                     }
                 }
                 Err(e) => {
+                    log::error!("[harness] provider.send() failed: {}", e);
                     let _ = harness_tx.send(HarnessEvent::Error(e.to_string()));
                 }
             }
 
+            log::info!("[harness] Waiting for bridge thread to finish");
             let _ = bridge.await;
+            log::info!("[harness] Request complete");
         });
     }
 

@@ -796,6 +796,11 @@ impl AgentProvider {
 ///
 /// Checks the cancellation flag between stream items. When cancelled,
 /// returns the partial response accumulated so far.
+///
+/// **Important:** We break on `FinalResponse` rather than waiting for
+/// the stream to yield `None`. Rig's `async_stream` generator may not
+/// terminate promptly after yielding `FinalResponse` (tracing
+/// instrumentation, async cleanup), causing an indefinite hang.
 async fn consume_stream<R: Send + 'static>(
     mut stream: StreamingResult<R>,
     event_tx: &Sender<AgentEvent>,
@@ -808,6 +813,7 @@ async fn consume_stream<R: Send + 'static>(
 
     while let Some(item) = stream.next().await {
         if cancelled.load(Ordering::Relaxed) {
+            log::info!("[agent] Stream cancelled by user");
             break;
         }
         match item {
@@ -835,19 +841,41 @@ async fn consume_stream<R: Send + 'static>(
                     }
                 }
                 StreamedAssistantContent::ToolCall { tool_call, .. } => {
-                    log::info!("[agent] Stream: tool_call received: {}", tool_call.function.name);
+                    log::info!("[agent] Stream: tool_call: {}", tool_call.function.name);
                 }
                 _ => {}
             },
             Ok(MultiTurnStreamItem::StreamUserItem(user_item)) => {
-                log::info!("[agent] Stream: user item (tool result): {:?}", user_item);
+                log::info!("[agent] Stream: tool result: {:?}", user_item);
             }
-            Ok(MultiTurnStreamItem::FinalResponse(_)) => {
-                log::info!("[agent] Stream: final response received");
+            Ok(MultiTurnStreamItem::FinalResponse(final_resp)) => {
+                log::info!(
+                    "[agent] Stream: final response ({} chars accumulated, {} chars in FinalResponse)",
+                    response_text.len(),
+                    final_resp.response().len(),
+                );
+                // Use FinalResponse text if we somehow missed streaming deltas.
+                // FinalResponse contains the last turn's text; response_text has
+                // all turns. Prefer response_text when available.
+                if response_text.is_empty() && !final_resp.response().is_empty() {
+                    response_text = final_resp.response().to_string();
+                }
+                // FinalResponse is the terminal item — do NOT wait for None.
+                // Rig's async_stream generator may not yield None promptly after
+                // FinalResponse due to tracing instrumentation and async cleanup,
+                // causing the stream to hang indefinitely.
+                break;
             }
             Ok(_) => {}
-            Err(e) => return Err(anyhow::anyhow!("Streaming error: {e}")),
+            Err(e) => {
+                log::error!("[agent] Stream error: {e}");
+                return Err(anyhow::anyhow!("Streaming error: {e}"));
+            }
         }
     }
+    log::info!(
+        "[agent] Stream consumption complete: {} chars",
+        response_text.len(),
+    );
     Ok(response_text)
 }
