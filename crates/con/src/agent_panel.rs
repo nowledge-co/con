@@ -793,10 +793,10 @@ impl Render for AgentPanel {
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .vertical_scrollbar(&self.scroll_handle)
-            .px(px(16.0))
-            .pt(px(16.0))
-            .pb(px(20.0))
-            .gap(px(20.0));
+            .px(px(18.0))
+            .pt(px(20.0))
+            .pb(px(24.0))
+            .gap(px(16.0));
 
         for (msg_idx, msg) in self.state.messages.iter().enumerate() {
             let is_user = msg.role == "user";
@@ -815,23 +815,23 @@ impl Render for AgentPanel {
                         .child(msg.content.clone()),
                 );
             } else if is_user {
-                // User message — right-aligned bubble with warm primary tint
+                // User message — right-aligned bubble
                 msg_el = msg_el.child(
                     div()
                         .flex()
                         .justify_end()
                         .child(
                             div()
-                                .max_w(rems(18.0))
-                                .px(px(12.0))
-                                .py(px(8.0))
-                                .rounded(px(16.0))
+                                .max_w(rems(20.0))
+                                .px(px(14.0))
+                                .py(px(10.0))
+                                .rounded(px(18.0))
                                 .rounded_tr(px(4.0))
                                 .bg(theme.primary.opacity(0.08))
                                 .child(
                                     div()
-                                        .text_size(px(13.0))
-                                        .line_height(px(20.0))
+                                        .text_size(px(13.5))
+                                        .line_height(px(21.0))
                                         .text_color(theme.foreground)
                                         .child(msg.content.clone()),
                                 ),
@@ -844,17 +844,18 @@ impl Render for AgentPanel {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.0))
+                            .gap(px(5.0))
+                            .pb(px(2.0))
                             .child(
                                 svg()
                                     .path("phosphor/oven.svg")
-                                    .size(px(13.0))
+                                    .size(px(14.0))
                                     .text_color(theme.primary),
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.0))
-                                    .font_weight(FontWeight::BOLD)
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.primary)
                                     .child("Con"),
                             ),
@@ -936,10 +937,10 @@ impl Render for AgentPanel {
                     let content: SharedString = msg.content.clone().into();
                     msg_el = msg_el.child(
                         div()
-                            .pl(px(18.0))
+                            .pl(px(20.0))
                             .pr(px(4.0))
-                            .text_size(px(13.0))
-                            .line_height(px(20.0))
+                            .text_size(px(13.5))
+                            .line_height(px(22.0))
                             .text_color(theme.foreground)
                             .child(
                                 TextView::markdown(
@@ -947,7 +948,7 @@ impl Render for AgentPanel {
                                     content,
                                 )
                                 .style(chat_markdown_style())
-                                .text_size(px(13.0))
+                                .text_size(px(13.5))
                             ),
                     );
                 }
@@ -1421,8 +1422,8 @@ impl Render for AgentPanel {
             .flex()
             .items_center()
             .justify_between()
-            .h(px(38.0))
-            .px(px(14.0))
+            .h(px(36.0))
+            .px(px(16.0))
             .flex_shrink_0()
             .child(header_left)
             .child({
@@ -1475,7 +1476,6 @@ impl Render for AgentPanel {
             .flex_col()
             .size_full()
             .bg(theme.title_bar)
-            .font_family("Ioskeley Mono")
             .child(header);
 
         if self.showing_history {

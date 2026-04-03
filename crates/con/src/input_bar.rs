@@ -179,7 +179,7 @@ impl Render for InputBar {
         let cwd = self.cwd.clone();
 
         // All interactive controls share this height
-        let control_h = 26.0;
+        let control_h = 28.0;
 
         // Mode pill — compact, quiet
         let mode_pill = div()
@@ -188,8 +188,8 @@ impl Render for InputBar {
             .items_center()
             .justify_center()
             .h(px(control_h))
-            .px(px(8.0))
-            .rounded(px(5.0))
+            .px(px(10.0))
+            .rounded(px(6.0))
             .cursor_pointer()
             .bg(mode_color.opacity(0.10))
             .text_size(px(11.0))
@@ -329,21 +329,22 @@ impl Render for InputBar {
         };
 
         // Send button — circular, prominent
+        let send_btn_size = 30.0;
         let send_button = div()
             .id("send-button")
             .flex()
             .items_center()
             .justify_center()
-            .h(px(control_h))
-            .w(px(control_h))
-            .rounded(px(control_h / 2.0))
+            .h(px(send_btn_size))
+            .w(px(send_btn_size))
+            .rounded(px(send_btn_size / 2.0))
             .cursor_pointer()
             .bg(theme.primary)
             .hover(|s| s.bg(theme.primary_hover))
             .child(
                 svg()
                     .path("phosphor/arrow-up.svg")
-                    .size(px(14.0))
+                    .size(px(15.0))
                     .text_color(theme.primary_foreground),
             )
             .on_mouse_down(
@@ -364,21 +365,29 @@ impl Render for InputBar {
                     cx.emit(EscapeInput);
                 }
             }))
-            // Main row
+            // Main row — input field with subtle background container
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .h(px(40.0))
+                    .h(px(48.0))
                     .px(px(10.0))
                     .gap(px(6.0))
                     .child(mode_pill)
                     .child(
-                        div().flex_1().child(
-                            Input::new(&self.input_state)
-                                .appearance(false)
-                                .cleanable(false),
-                        ),
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .h(px(34.0))
+                            .px(px(4.0))
+                            .rounded(px(8.0))
+                            .bg(theme.background)
+                            .child(
+                                Input::new(&self.input_state)
+                                    .appearance(false)
+                                    .cleanable(false),
+                            ),
                     )
                     .children(pane_area)
                     .child(send_button),
