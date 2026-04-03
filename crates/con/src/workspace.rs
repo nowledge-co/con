@@ -221,7 +221,7 @@ impl ConWorkspace {
 
                 if !got_event {
                     cx.background_executor()
-                        .timer(std::time::Duration::from_millis(4))
+                        .timer(std::time::Duration::from_millis(16))
                         .await;
                 }
             }
@@ -1353,22 +1353,21 @@ impl Render for ConWorkspace {
                 .child(
                     div()
                         .id("agent-panel-divider")
-                        .w(px(5.0))
+                        .w(px(4.0))
                         .h_full()
                         .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_col_resize()
-                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
+                        .hover(|s| s.bg(theme.primary.opacity(0.06)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
                                 this.agent_panel_drag =
                                     Some((f32::from(event.position.x), this.agent_panel_width));
                             }),
-                        )
-                        .child(div().w(px(1.0)).h_full().bg(theme.border.opacity(0.6))),
+                        ),
                 )
                 .child(
                     div()
@@ -1383,12 +1382,12 @@ impl Render for ConWorkspace {
         let tab_count = self.tabs.len();
         let mut tab_bar = div()
             .flex()
-            .h(px(38.0))
+            .h(px(36.0))
             .bg(theme.title_bar)
             .items_end()
             .pl(px(78.0)) // leave room for traffic lights
-            .pr(px(12.0))
-            .gap(px(0.0));
+            .pr(px(8.0))
+            .gap(px(1.0));
 
         for (index, tab) in self.tabs.iter().enumerate() {
             let is_active = index == self.active_tab;
@@ -1469,9 +1468,10 @@ impl Render for ConWorkspace {
                 .group("tab")
                 .flex()
                 .items_center()
-                .px(px(14.0))
-                .py(px(6.0))
-                .rounded_t(px(6.0))
+                .px(px(12.0))
+                .h(px(30.0))
+                .rounded(px(6.0))
+                .mb(px(2.0))
                 .text_size(px(12.0))
                 .max_w(px(180.0))
                 .cursor_pointer()
@@ -1486,8 +1486,8 @@ impl Render for ConWorkspace {
                     .font_weight(FontWeight::MEDIUM);
             } else {
                 tab_el = tab_el
-                    .text_color(theme.muted_foreground.opacity(0.7))
-                    .hover(|s| s.bg(theme.secondary.opacity(0.4)));
+                    .text_color(theme.muted_foreground.opacity(0.6))
+                    .hover(|s| s.bg(theme.secondary));
             }
 
             let mut tab_content = div()
@@ -1522,13 +1522,13 @@ impl Render for ConWorkspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(22.0))
-                .mb(px(5.0))
-                .ml(px(4.0))
+                .size(px(24.0))
+                .mb(px(4.0))
+                .ml(px(2.0))
                 .rounded(px(5.0))
                 .cursor_pointer()
-                .text_color(theme.muted_foreground.opacity(0.5))
-                .hover(|s| s.bg(theme.secondary.opacity(0.4)).text_color(theme.muted_foreground))
+                .text_color(theme.muted_foreground.opacity(0.4))
+                .hover(|s| s.bg(theme.secondary).text_color(theme.muted_foreground))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
@@ -1545,6 +1545,7 @@ impl Render for ConWorkspace {
             .flex_col()
             .size_full()
             .bg(theme.background)
+            .font_family("Ioskeley Mono")
             .key_context("ConWorkspace")
             // Pane drag-to-resize: capture mouse move/up on root so it works
             // even when cursor is over terminal views (which capture mouse events).

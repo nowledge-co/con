@@ -98,6 +98,7 @@ psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
 
 [profile.dev]
 split-debuginfo = "unpacked"
+opt-level = 1
 
 [profile.release]
 lto = "thin"

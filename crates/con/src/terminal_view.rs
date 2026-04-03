@@ -205,7 +205,7 @@ impl TerminalView {
                     Ok(PtyEvent::Exit(_)) => break,
                     Err(crossbeam_channel::TryRecvError::Empty) => {
                         cx.background_executor()
-                            .timer(std::time::Duration::from_millis(4))
+                            .timer(std::time::Duration::from_millis(16))
                             .await;
                     }
                     Err(crossbeam_channel::TryRecvError::Disconnected) => break,
