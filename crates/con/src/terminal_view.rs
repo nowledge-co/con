@@ -251,6 +251,10 @@ impl TerminalView {
         &self.grid
     }
 
+    pub fn pty(&self) -> &Arc<Mutex<Pty>> {
+        &self.pty
+    }
+
     pub fn title(&self) -> Option<String> {
         self.grid.lock().title.clone()
     }

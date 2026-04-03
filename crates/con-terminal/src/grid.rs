@@ -289,6 +289,9 @@ pub struct Grid {
     pub last_command: Option<String>,
     pub last_exit_code: Option<i32>,
     pub current_dir: Option<String>,
+    /// Hostname from OSC 7 URI — matches local hostname for local sessions,
+    /// differs for SSH sessions (reveals remote host).
+    pub hostname: Option<String>,
     /// Completed command blocks from OSC 133 sequences
     pub command_blocks: Vec<CommandBlock>,
     /// Row where the current command started (OSC 133;C)
@@ -374,6 +377,7 @@ impl Grid {
             last_command: None,
             last_exit_code: None,
             current_dir: None,
+            hostname: None,
             command_blocks: Vec::new(),
             command_start_row: None,
             scroll_top: 0,
@@ -447,6 +451,12 @@ impl Grid {
             }
         }
         self.dirty = vec![true; self.rows];
+    }
+
+    /// Whether a command is currently executing (between OSC 133;C and D).
+    /// Returns false if shell integration is not active.
+    pub fn is_busy(&self) -> bool {
+        self.command_start_row.is_some()
     }
 
     /// Whether the cursor is at a shell prompt (not in alternate screen / TUI,
@@ -717,6 +727,8 @@ impl Grid {
         lines.join("\n")
     }
 
+    /// Get recent lines from the active screen only (no scrollback).
+    /// Used for ghost text suggestions and terminal_exec fallback capture.
     pub fn content_lines(&self, max_lines: usize) -> Vec<String> {
         let mut lines = Vec::new();
         let start = if self.rows > max_lines {
@@ -728,11 +740,79 @@ impl Grid {
             let line: String = self.cells[row].iter().map(|c| c.c).collect();
             lines.push(line.trim_end().to_string());
         }
-        // Trim trailing empty lines
         while lines.last().is_some_and(|l| l.is_empty()) {
             lines.pop();
         }
         lines
+    }
+
+    /// Get the last `max_lines` lines from scrollback + active screen combined.
+    /// Unlike `content_lines`, this reaches into scrollback history — useful for
+    /// read_pane where the agent needs to see output that scrolled off screen.
+    pub fn recent_lines(&self, max_lines: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        let sb_len = self.scrollback.len();
+        let total = sb_len + self.rows;
+        let start = total.saturating_sub(max_lines);
+
+        // Scrollback portion
+        if start < sb_len {
+            let sb_start = start;
+            for i in sb_start..sb_len {
+                let line: String = self.scrollback[i].iter().map(|c| c.c).collect();
+                lines.push(line.trim_end().to_string());
+            }
+        }
+
+        // Screen portion
+        let screen_start = if start > sb_len { start - sb_len } else { 0 };
+        for row in screen_start..self.rows {
+            let line: String = self.cells[row].iter().map(|c| c.c).collect();
+            lines.push(line.trim_end().to_string());
+        }
+
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        lines
+    }
+
+    /// Search scrollback + active screen for lines matching `pattern` (case-insensitive substring).
+    /// Returns matching lines with 1-based line numbers, **newest first** so the most
+    /// recent matches survive the `max_matches` cap.
+    pub fn search_text(&self, pattern: &str, max_matches: usize) -> Vec<(usize, String)> {
+        if pattern.is_empty() || max_matches == 0 {
+            return Vec::new();
+        }
+        let pattern_lower = pattern.to_lowercase();
+        let mut results = Vec::new();
+        let sb_len = self.scrollback.len();
+
+        // Search active screen bottom-to-top (most recent first)
+        for i in (0..self.rows).rev() {
+            let line: String = self.cells[i].iter().map(|c| c.c).collect();
+            let trimmed = line.trim_end().to_string();
+            if !trimmed.is_empty() && trimmed.to_lowercase().contains(&pattern_lower) {
+                results.push((sb_len + i + 1, trimmed));
+                if results.len() >= max_matches {
+                    return results;
+                }
+            }
+        }
+
+        // Search scrollback bottom-to-top (most recent first)
+        for i in (0..sb_len).rev() {
+            let line: String = self.scrollback[i].iter().map(|c| c.c).collect();
+            let trimmed = line.trim_end().to_string();
+            if !trimmed.is_empty() && trimmed.to_lowercase().contains(&pattern_lower) {
+                results.push((i + 1, trimmed));
+                if results.len() >= max_matches {
+                    return results;
+                }
+            }
+        }
+
+        results
     }
 
     fn scroll_up(&mut self) {
@@ -968,14 +1048,17 @@ impl Perform for Grid {
                     self.title = Some(String::from_utf8_lossy(params[1]).to_string());
                 }
             }
-            // OSC 7: Current directory
+            // OSC 7: Current directory (file://hostname/path)
             b"7" => {
                 if params.len() > 1 {
                     let uri = String::from_utf8_lossy(params[1]);
-                    // file://hostname/path format
-                    if let Some(path) = uri.strip_prefix("file://") {
-                        if let Some(slash_pos) = path.find('/') {
-                            self.current_dir = Some(path[slash_pos..].to_string());
+                    if let Some(rest) = uri.strip_prefix("file://") {
+                        if let Some(slash_pos) = rest.find('/') {
+                            let host = &rest[..slash_pos];
+                            if !host.is_empty() {
+                                self.hostname = Some(host.to_string());
+                            }
+                            self.current_dir = Some(rest[slash_pos..].to_string());
                         }
                     }
                 }
