@@ -1,6 +1,7 @@
 mod agent_panel;
 mod assets;
 mod command_palette;
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
 mod ghostty_view;
 mod input_bar;
 mod pane_tree;

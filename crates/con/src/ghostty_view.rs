@@ -11,7 +11,7 @@
 //! sequences), so application cursor mode, kitty keyboard protocol, and
 //! ghostty key bindings all work correctly.
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
 use std::os::raw::c_void;
 use std::sync::Arc;
 
@@ -19,16 +19,17 @@ use con_ghostty::ffi;
 use con_ghostty::{GhosttyApp, GhosttyTerminal, MouseButton};
 use gpui::*;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
 use cocoa::base::{id, NO, YES};
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
 use cocoa::foundation::NSRect;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
 use objc::{class, msg_send, sel, sel_impl};
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
 use raw_window_handle::HasWindowHandle;
 
 /// Emitted when the terminal title changes.
+#[allow(dead_code)]
 pub struct GhosttyTitleChanged(pub Option<String>);
 
 /// Emitted when the terminal process exits.
@@ -46,7 +47,7 @@ pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
     nsview: Option<id>,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
@@ -93,7 +94,7 @@ impl GhosttyView {
             app,
             terminal: None,
             focus_handle: cx.focus_handle(),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             nsview: None,
             initialized: false,
             last_bounds: None,
@@ -124,11 +125,12 @@ impl GhosttyView {
         }
     }
 
+    #[allow(dead_code)]
     pub fn selection_text(&self) -> Option<String> {
         self.terminal.as_ref().and_then(|t| t.selection_text())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
     fn ensure_initialized(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
         if self.initialized {
             return;
@@ -195,7 +197,7 @@ impl GhosttyView {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
     fn update_frame(&mut self, bounds: Bounds<Pixels>) {
         if self.last_bounds.as_ref() == Some(&bounds) {
             return;
@@ -229,7 +231,7 @@ impl GhosttyView {
     }
 
     fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "ghostty"))]
         {
             self.ensure_initialized(bounds, window);
             self.update_frame(bounds);
@@ -384,7 +386,7 @@ fn gpui_key_to_keycode(key: &str) -> Option<u32> {
 
 impl Drop for GhosttyView {
     fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "ghostty"))]
         if let Some(nsview) = self.nsview.take() {
             unsafe {
                 let _: () = msg_send![nsview, removeFromSuperview];

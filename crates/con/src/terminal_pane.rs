@@ -12,14 +12,14 @@ use parking_lot::Mutex;
 
 use crate::terminal_view::TerminalView;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
 use crate::ghostty_view::GhosttyView;
 
 /// A terminal pane backed by either the legacy Grid+vte renderer or
 /// ghostty's GPU-accelerated Metal renderer.
 pub enum TerminalPane {
     Legacy(Entity<TerminalView>),
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
     Ghostty(Entity<GhosttyView>),
 }
 
@@ -27,7 +27,7 @@ impl Clone for TerminalPane {
     fn clone(&self) -> Self {
         match self {
             Self::Legacy(e) => Self::Legacy(e.clone()),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => Self::Ghostty(e.clone()),
         }
     }
@@ -39,7 +39,7 @@ impl TerminalPane {
     pub fn title(&self, cx: &App) -> Option<String> {
         match self {
             Self::Legacy(e) => e.read(cx).title(),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => e.read(cx).title(),
         }
     }
@@ -47,7 +47,7 @@ impl TerminalPane {
     pub fn current_dir(&self, cx: &App) -> Option<String> {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().current_dir.clone(),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => e.read(cx).current_dir(),
         }
     }
@@ -55,7 +55,7 @@ impl TerminalPane {
     pub fn is_alive(&self, cx: &App) -> bool {
         match self {
             Self::Legacy(e) => e.read(cx).pty().lock().is_alive(),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => e.read(cx).is_alive(),
         }
     }
@@ -63,7 +63,7 @@ impl TerminalPane {
     pub fn detected_remote_host(&self, cx: &App) -> Option<String> {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().detected_remote_host(),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => None, // ghostty doesn't expose this
         }
     }
@@ -71,7 +71,7 @@ impl TerminalPane {
     pub fn is_busy(&self, cx: &App) -> bool {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().is_busy(),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => false, // ghostty doesn't expose OSC 133 state
         }
     }
@@ -82,7 +82,7 @@ impl TerminalPane {
     pub fn write(&self, data: &[u8], cx: &App) {
         match self {
             Self::Legacy(e) => e.read(cx).write_to_pty(data),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => {
                 let text = String::from_utf8_lossy(data);
                 e.read(cx).send_text(&text);
@@ -97,7 +97,7 @@ impl TerminalPane {
                     view.grid().lock().set_theme(theme);
                 });
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => {
                 // Ghostty uses its own theme system via color scheme
                 let is_dark = theme.name.to_lowercase().contains("dark");
@@ -113,7 +113,7 @@ impl TerminalPane {
                     view.grid().lock().clear_scrollback();
                 });
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => {} // not available via ghostty API
         }
     }
@@ -125,7 +125,7 @@ impl TerminalPane {
                     view.set_suggestion(suggestion, cx);
                 });
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => {} // ghostty doesn't support ghost text
         }
     }
@@ -137,16 +137,7 @@ impl TerminalPane {
     pub fn as_grid(&self, cx: &App) -> Option<Arc<Mutex<Grid>>> {
         match self {
             Self::Legacy(e) => Some(e.read(cx).grid().clone()),
-            #[cfg(target_os = "macos")]
-            Self::Ghostty(_) => None,
-        }
-    }
-
-    /// Access the legacy TerminalView entity.
-    pub fn as_legacy(&self) -> Option<&Entity<TerminalView>> {
-        match self {
-            Self::Legacy(e) => Some(e),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => None,
         }
     }
@@ -155,7 +146,7 @@ impl TerminalPane {
     pub fn notify(&self, cx: &mut App) {
         match self {
             Self::Legacy(e) => e.update(cx, |_, cx| cx.notify()),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => e.update(cx, |_, cx| cx.notify()),
         }
     }
@@ -165,7 +156,7 @@ impl TerminalPane {
     pub fn entity_id(&self) -> EntityId {
         match self {
             Self::Legacy(e) => e.entity_id(),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => e.entity_id(),
         }
     }
@@ -173,7 +164,7 @@ impl TerminalPane {
     pub fn focus_handle(&self, cx: &App) -> FocusHandle {
         match self {
             Self::Legacy(e) => e.focus_handle(cx),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => e.focus_handle(cx),
         }
     }
@@ -191,7 +182,7 @@ impl TerminalPane {
     pub fn render_child(&self) -> AnyElement {
         match self {
             Self::Legacy(e) => e.clone().into_any_element(),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => e.clone().into_any_element(),
         }
     }
@@ -202,7 +193,7 @@ impl TerminalPane {
     pub fn content_lines(&self, n: usize, cx: &App) -> Vec<String> {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().content_lines(n),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => Vec::new(),
         }
     }
@@ -211,7 +202,7 @@ impl TerminalPane {
     pub fn recent_lines(&self, n: usize, cx: &App) -> Vec<String> {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().recent_lines(n),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => Vec::new(),
         }
     }
@@ -219,7 +210,7 @@ impl TerminalPane {
     pub fn last_command(&self, cx: &App) -> Option<String> {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().last_command.clone(),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => None,
         }
     }
@@ -227,7 +218,7 @@ impl TerminalPane {
     pub fn last_exit_code(&self, cx: &App) -> Option<i32> {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().last_exit_code,
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => None,
         }
     }
@@ -239,7 +230,7 @@ impl TerminalPane {
                 let g = e.read(cx).grid().lock();
                 (g.cols, g.rows)
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => {
                 let size = e.read(cx).terminal().map(|t| t.size());
                 match size {
@@ -254,7 +245,7 @@ impl TerminalPane {
     pub fn search_text(&self, pattern: &str, limit: usize, cx: &App) -> Vec<(usize, String)> {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().search_text(pattern, limit),
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(_) => Vec::new(),
         }
     }
@@ -280,7 +271,7 @@ pub fn subscribe_terminal_pane(
             cx.subscribe_in(entity, window, ConWorkspace::on_input_changed)
                 .detach();
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "ghostty"))]
         TerminalPane::Ghostty(entity) => {
             cx.subscribe_in(
                 entity,

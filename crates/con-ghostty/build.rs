@@ -26,7 +26,7 @@ fn main() {
         "cargo:rustc-link-search=native={}",
         lib_path.parent().unwrap().display()
     );
-    println!("cargo:rustc-link-lib=static=ghostty");
+    println!("cargo:rustc-link-lib=static=ghostty-fat");
 
     // macOS frameworks required by libghostty
     if cfg!(target_os = "macos") {
@@ -64,12 +64,12 @@ fn find_libghostty(ghostty_dir: &PathBuf) -> PathBuf {
     // Check zig-cache for the freshly built library
     let zig_cache = ghostty_dir.join(".zig-cache");
     if zig_cache.exists() {
-        // Walk the cache looking for the most recent libghostty.a
+        // Walk the cache looking for the most recent libghostty-fat.a
         let output = Command::new("find")
             .args([
                 zig_cache.to_str().unwrap(),
                 "-name",
-                "libghostty.a",
+                "libghostty-fat.a",
                 "-type",
                 "f",
             ])
@@ -96,10 +96,10 @@ fn find_libghostty(ghostty_dir: &PathBuf) -> PathBuf {
     }
 
     // Fallback: check macos/build/Debug
-    let fallback = ghostty_dir.join("macos/build/Debug/libghostty.a");
+    let fallback = ghostty_dir.join("macos/build/Debug/libghostty-fat.a");
     if fallback.exists() {
         return fallback;
     }
 
-    panic!("Could not find libghostty.a — run: cd 3pp/ghostty && zig build -Dapp-runtime=none");
+    panic!("Could not find libghostty-fat.a — run: cd 3pp/ghostty && zig build -Dapp-runtime=none");
 }
