@@ -492,23 +492,10 @@ impl Grid {
             }
         }
 
-        // 3. Last command starts with ssh
+        // 3. Command text contains "ssh " (may have prompt prefix like "❯ ssh host")
         if let Some(cmd) = &self.last_command {
-            let trimmed = cmd.trim();
-            if trimmed.starts_with("ssh ") || trimmed.starts_with("ssh\t") {
-                // Extract host from "ssh [flags] host" — take last non-flag arg
-                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                if let Some(host) = parts.last() {
-                    // Could be user@host or just host
-                    let host = if let Some(at) = host.find('@') {
-                        &host[at + 1..]
-                    } else {
-                        host
-                    };
-                    if !host.starts_with('-') && !host.is_empty() {
-                        return Some(host.to_string());
-                    }
-                }
+            if let Some(host) = extract_ssh_target(cmd) {
+                return Some(host);
             }
         }
 
@@ -1509,4 +1496,47 @@ impl Perform for Grid {
             _ => {}
         }
     }
+}
+
+/// Extract the SSH target host from a command string that may include prompt prefix.
+/// Handles: "ssh host", "❯ ssh host", "ssh user@host", "ssh -p 22 host", etc.
+fn extract_ssh_target(text: &str) -> Option<String> {
+    // Find "ssh " in the text, ensuring it's at a word boundary
+    let idx = text.find("ssh ")?;
+    if idx > 0 {
+        let prev = text.as_bytes()[idx - 1];
+        if prev.is_ascii_alphanumeric() || prev == b'/' {
+            return None; // Part of another word like "openssh" or path
+        }
+    }
+
+    let ssh_part = &text[idx..];
+    let parts: Vec<&str> = ssh_part.split_whitespace().collect();
+
+    // Skip flags and their arguments to find the host
+    let mut skip_next = false;
+    for part in parts.iter().skip(1) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if part.starts_with('-') {
+            // Flags that take a value argument
+            if matches!(*part, "-p" | "-i" | "-l" | "-o" | "-F" | "-J" | "-W" | "-L" | "-R" | "-D" | "-b" | "-c" | "-e" | "-m" | "-S" | "-w") {
+                skip_next = true;
+            }
+            continue;
+        }
+        // This is the host (possibly user@host)
+        let host = match part.find('@') {
+            Some(at) => &part[at + 1..],
+            None => part,
+        };
+        // Strip port suffix if present (host:port)
+        let host = host.split(':').next().unwrap_or(host);
+        if !host.is_empty() {
+            return Some(host.to_string());
+        }
+    }
+    None
 }

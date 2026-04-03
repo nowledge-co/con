@@ -685,32 +685,47 @@ impl ConWorkspace {
         tv.write_to_pty(cmd_with_newline.as_bytes());
 
         // Fallback: if OSC 133 never fires (no shell integration, e.g. SSH),
-        // poll the terminal for a shell prompt to detect command completion.
-        // Checks every 500ms, gives up after 15 seconds.
+        // detect completion via cursor stability — when cursor position stops
+        // changing for ~1s, the command has likely finished and returned to prompt.
         let fallback_response_tx = req.response_tx;
         let grid = tv.grid().clone();
         cx.spawn(async move |_this, cx| {
-            // Wait a minimum time for the command to start executing
+            // Wait for the command to start producing output
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(500))
                 .await;
 
-            // Poll for completion: look for a prompt pattern in recent output
+            let mut stable_count: u32 = 0;
+            let mut last_cursor = (usize::MAX, usize::MAX);
+            let required_stable = 2; // 2 × 500ms = 1s of no cursor movement
+
             for _ in 0..29 {
                 // Check if the OSC 133 callback already responded
                 if fallback_response_tx.is_full() {
-                    return; // Already responded via OSC 133
+                    return;
                 }
 
-                let appears_done = {
+                let (done_osc, cursor_pos) = {
                     let g = grid.lock();
-                    // Heuristic: cursor is at column 0 or at a prompt-like position,
-                    // and the grid is no longer busy
-                    !g.is_busy() && g.last_prompt_row.is_some()
+                    let osc_done = !g.is_busy() && g.last_prompt_row.is_some();
+                    let pos = (g.cursor.row, g.cursor.col);
+                    (osc_done, pos)
                 };
 
-                if appears_done {
+                // Fast path: shell integration detected completion
+                if done_osc {
                     break;
+                }
+
+                // Slow path: cursor stability (for sessions without shell integration)
+                if cursor_pos == last_cursor {
+                    stable_count += 1;
+                    if stable_count >= required_stable {
+                        break;
+                    }
+                } else {
+                    stable_count = 0;
+                    last_cursor = cursor_pos;
                 }
 
                 cx.background_executor()
@@ -1169,14 +1184,20 @@ impl Render for ConWorkspace {
             .map(|(id, terminal)| {
                 let tv = terminal.read(cx);
                 let grid = tv.grid().lock();
-                let name = grid.title.clone()
-                    .or_else(|| {
-                        grid.current_dir.as_ref().and_then(|d| {
-                            std::path::Path::new(d).file_name().map(|n| n.to_string_lossy().to_string())
-                        })
-                    })
-                    .unwrap_or_else(|| format!("Pane {}", id + 1));
                 let hostname = grid.detected_remote_host();
+                // SSH panes: use hostname as the display name (clean, short)
+                // Local panes: prefer cwd basename > title > fallback
+                let name = if let Some(ref host) = hostname {
+                    host.clone()
+                } else {
+                    grid.current_dir.as_ref()
+                        .and_then(|d| {
+                            std::path::Path::new(d).file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                        })
+                        .or_else(|| grid.title.clone())
+                        .unwrap_or_else(|| format!("Pane {}", id + 1))
+                };
                 let is_busy = grid.is_busy();
                 let is_alive = tv.pty().lock().is_alive();
                 PaneInfo { id, name, hostname, is_busy, is_alive }

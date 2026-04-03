@@ -295,7 +295,7 @@ impl AgentPanel {
             let args_display = Self::format_tool_args(&tc.tool_name, &tc.args);
             let human_name = humanize_tool_name(&tc.tool_name);
             let (status, detail) = if let Some(result) = &tc.result {
-                let formatted = format_tool_result(&result);
+                let formatted = format_tool_result(&tc.tool_name, &result);
                 (StepStatus::Complete, Some(formatted))
             } else {
                 (StepStatus::Running, None)
@@ -436,18 +436,168 @@ fn humanize_tool_name(name: &str) -> String {
         .join(" ")
 }
 
-/// Format a tool result for display. Detects JSON and formats it pretty-printed,
-/// otherwise returns the raw text with literal `\n` sequences expanded.
-fn format_tool_result(raw: &str) -> String {
-    // First, try to parse as JSON and pretty-print
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) {
-        return serde_json::to_string_pretty(&json).unwrap_or_else(|_| raw.to_string());
+/// Unwrap Rig's double-encoding: Rig calls `serde_json::to_string()` on tool Output,
+/// so `Output = String` gets wrapped in JSON string escaping. This unwraps it.
+fn unwrap_tool_result(raw: &str) -> serde_json::Value {
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(serde_json::Value::String(inner)) => {
+            // Double-encoded: Rig wrapped our string in JSON quotes.
+            // Try to parse the inner string as JSON (e.g., batch_exec's JSON array).
+            match serde_json::from_str::<serde_json::Value>(&inner) {
+                Ok(v) => v,
+                Err(_) => serde_json::Value::String(inner),
+            }
+        }
+        Ok(v) => v,
+        Err(_) => serde_json::Value::String(raw.to_string()),
     }
-    // Expand literal \n sequences that come from serialized strings
-    if raw.contains("\\n") {
-        raw.replace("\\n", "\n").replace("\\t", "\t")
-    } else {
-        raw.to_string()
+}
+
+/// Format a tool result for display. Content-aware: understands the shape of
+/// each tool's output and renders it as human-readable text, not raw JSON.
+fn format_tool_result(tool_name: &str, raw: &str) -> String {
+    let value = unwrap_tool_result(raw);
+
+    match tool_name {
+        "batch_exec" => format_batch_result(&value),
+        "terminal_exec" | "shell_exec" => format_exec_result(&value),
+        "list_panes" => format_list_panes_result(&value),
+        "search" | "search_panes" => format_search_result(&value),
+        _ => format_generic_result(&value),
+    }
+}
+
+/// batch_exec: show each pane's output as a labeled block.
+fn format_batch_result(value: &serde_json::Value) -> String {
+    let arr = match value.as_array() {
+        Some(a) => a,
+        None => return format_generic_result(value),
+    };
+    let mut out = String::new();
+    for item in arr {
+        let idx = item.get("pane_index").and_then(|v| v.as_u64()).unwrap_or(0);
+        let output = item.get("output").and_then(|v| v.as_str()).unwrap_or("");
+        let exit_code = item.get("exit_code").and_then(|v| v.as_i64());
+        let error = item.get("error").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("── Pane {} ", idx));
+        if let Some(code) = exit_code {
+            out.push_str(&format!("(exit {}) ", code));
+        }
+        out.push_str("──\n");
+        if let Some(err) = error {
+            out.push_str(&format!("Error: {}\n", err));
+        }
+        let cleaned = output.trim();
+        if !cleaned.is_empty() {
+            out.push_str(cleaned);
+            out.push('\n');
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// terminal_exec / shell_exec: show stdout directly.
+fn format_exec_result(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(obj) => {
+            let stdout = obj.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+            let stderr = obj.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+            let exit_code = obj.get("exit_code").and_then(|v| v.as_i64());
+
+            let mut out = String::new();
+            let trimmed = stdout.trim();
+            if !trimmed.is_empty() {
+                out.push_str(trimmed);
+            }
+            if !stderr.trim().is_empty() {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&format!("stderr: {}", stderr.trim()));
+            }
+            if let Some(code) = exit_code {
+                if code != 0 {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(&format!("exit code: {}", code));
+                }
+            }
+            if out.is_empty() {
+                "(no output)".to_string()
+            } else {
+                out
+            }
+        }
+        serde_json::Value::String(s) => s.clone(),
+        _ => format_generic_result(value),
+    }
+}
+
+/// list_panes: show a compact pane summary.
+fn format_list_panes_result(value: &serde_json::Value) -> String {
+    let arr = match value.as_array() {
+        Some(a) => a,
+        None => return format_generic_result(value),
+    };
+    let mut out = String::new();
+    for item in arr {
+        let idx = item.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+        let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+        let focused = item.get("is_focused").and_then(|v| v.as_bool()).unwrap_or(false);
+        let busy = item.get("is_busy").and_then(|v| v.as_bool()).unwrap_or(false);
+        let alive = item.get("is_alive").and_then(|v| v.as_bool()).unwrap_or(true);
+        let hostname = item.get("hostname").and_then(|v| v.as_str());
+        let cwd = item.get("cwd").and_then(|v| v.as_str());
+
+        let mut flags = Vec::new();
+        if focused { flags.push("focused"); }
+        if busy { flags.push("busy"); }
+        if !alive { flags.push("dead"); }
+        if let Some(h) = hostname { flags.push(h); }
+
+        let location = cwd.unwrap_or("");
+        let flag_str = if flags.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", flags.join(", "))
+        };
+        out.push_str(&format!("{}. {}{} {}\n", idx, title, flag_str, location));
+    }
+    out.trim_end().to_string()
+}
+
+/// search / search_panes: show matching lines.
+fn format_search_result(value: &serde_json::Value) -> String {
+    // search_panes returns SearchResults: Vec<(pane_idx, line_num, text)>
+    // search returns SearchOutput with matches
+    match value {
+        serde_json::Value::Array(arr) => {
+            let mut out = String::new();
+            for item in arr {
+                if let Some(arr_item) = item.as_array() {
+                    // Tuple format: [pane_idx, line_num, text]
+                    let pane = arr_item.first().and_then(|v| v.as_u64()).unwrap_or(0);
+                    let line = arr_item.get(1).and_then(|v| v.as_u64()).unwrap_or(0);
+                    let text = arr_item.get(2).and_then(|v| v.as_str()).unwrap_or("");
+                    out.push_str(&format!("pane {}:{}: {}\n", pane, line, text));
+                }
+            }
+            if out.is_empty() { "(no matches)".to_string() } else { out.trim_end().to_string() }
+        }
+        _ => format_generic_result(value),
+    }
+}
+
+/// Fallback: pretty-print JSON objects, or return strings directly.
+fn format_generic_result(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        _ => serde_json::to_string_pretty(value).unwrap_or_else(|_| format!("{:?}", value)),
     }
 }
 
@@ -763,11 +913,7 @@ impl Render for AgentPanel {
                         if let Some(detail) = &step.detail {
                             if !detail_collapsed {
                                 let preview = result_preview(detail, TOOL_RESULT_PREVIEW_LINES);
-                                // Wrap in markdown code fence for syntax-highlighted rendering
-                                let is_json = detail.trim_start().starts_with('{')
-                                    || detail.trim_start().starts_with('[');
-                                let lang = if is_json { "json" } else { "" };
-                                let md: SharedString = format!("```{lang}\n{preview}\n```").into();
+                                let md: SharedString = format!("```\n{preview}\n```").into();
                                 step_el = step_el.child(
                                     div()
                                         .ml(px(22.0))
@@ -862,11 +1008,9 @@ impl Render for AgentPanel {
 
             // Result — rendered as formatted code block
             if let Some(result) = &tc.result {
-                let formatted = format_tool_result(result);
+                let formatted = format_tool_result(&tc.tool_name, result);
                 let preview = result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES);
-                let is_json = formatted.trim_start().starts_with('{')
-                    || formatted.trim_start().starts_with('[');
-                let lang = if is_json { "json" } else { "" };
+                let lang = "";
                 let md: SharedString = format!("```{lang}\n{preview}\n```").into();
                 tc_el = tc_el.child(
                     div()
