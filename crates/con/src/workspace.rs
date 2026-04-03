@@ -68,6 +68,22 @@ pub struct ConWorkspace {
     ghostty_app: Option<std::sync::Arc<con_ghostty::GhosttyApp>>,
 }
 
+// ── Theme conversion ──────────────────────────────────────────
+
+/// Convert con's TerminalTheme to ghostty's TerminalColors.
+#[cfg(all(target_os = "macos", feature = "ghostty"))]
+fn theme_to_ghostty_colors(theme: &TerminalTheme) -> con_ghostty::TerminalColors {
+    let mut palette = [[0u8; 3]; 16];
+    for (i, c) in theme.ansi.iter().enumerate() {
+        palette[i] = [c.r, c.g, c.b];
+    }
+    con_ghostty::TerminalColors {
+        foreground: [theme.foreground.r, theme.foreground.g, theme.foreground.b],
+        background: [theme.background.r, theme.background.g, theme.background.b],
+        palette,
+    }
+}
+
 // ── Terminal factory functions ────────────────────────────────
 //
 // Standalone so they can be called both during ConWorkspace::new()
@@ -119,7 +135,8 @@ impl ConWorkspace {
         #[cfg(all(target_os = "macos", feature = "ghostty"))]
         let (use_ghostty, ghostty_app) = {
             if config.terminal.use_ghostty() {
-                match con_ghostty::GhosttyApp::new() {
+                let colors = theme_to_ghostty_colors(&terminal_theme);
+                match con_ghostty::GhosttyApp::new(Some(&colors)) {
                     Ok(app) => (true, Some(std::sync::Arc::new(app))),
                     Err(e) => {
                         log::error!("Failed to create ghostty app: {}. Using legacy backend.", e);
@@ -329,7 +346,8 @@ impl ConWorkspace {
         if self.use_ghostty {
             // Lazy-init the shared ghostty app
             if self.ghostty_app.is_none() {
-                match con_ghostty::GhosttyApp::new() {
+                let colors = theme_to_ghostty_colors(&self.terminal_theme);
+                match con_ghostty::GhosttyApp::new(Some(&colors)) {
                     Ok(app) => {
                         self.ghostty_app = Some(std::sync::Arc::new(app));
                     }
@@ -601,15 +619,7 @@ impl ConWorkspace {
         // Apply terminal theme if changed
         if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
             if new_theme.name != self.terminal_theme.name {
-                self.terminal_theme = new_theme.clone();
-                // Update all existing terminal panes
-                for tab in &self.tabs {
-                    for terminal in tab.pane_tree.all_terminals() {
-                        terminal.set_theme(&new_theme, cx);
-                    }
-                }
-                // Sync GPUI UI theme (dark/light) with terminal theme
-                crate::theme::sync_gpui_mode(&new_theme.name, window, cx);
+                self.apply_terminal_theme(new_theme, window, cx);
             }
         }
 
@@ -626,17 +636,36 @@ impl ConWorkspace {
     ) {
         if let Some(new_theme) = TerminalTheme::by_name(&event.0) {
             if new_theme.name != self.terminal_theme.name {
-                self.terminal_theme = new_theme.clone();
-                for tab in &self.tabs {
-                    for terminal in tab.pane_tree.all_terminals() {
-                        terminal.set_theme(&new_theme, cx);
-                    }
-                }
-                // Sync GPUI UI theme (dark/light) with terminal theme
-                crate::theme::sync_gpui_mode(&new_theme.name, window, cx);
+                self.apply_terminal_theme(new_theme, window, cx);
                 cx.notify();
             }
         }
+    }
+
+    /// Apply a new terminal theme to all panes and sync UI mode.
+    fn apply_terminal_theme(
+        &mut self,
+        theme: TerminalTheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal_theme = theme.clone();
+        // Update all terminal panes (legacy gets full theme, ghostty gets color scheme)
+        for tab in &self.tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                terminal.set_theme(&theme, cx);
+            }
+        }
+        // Update ghostty app-level config with full color palette
+        #[cfg(all(target_os = "macos", feature = "ghostty"))]
+        if let Some(ref app) = self.ghostty_app {
+            let colors = theme_to_ghostty_colors(&theme);
+            if let Err(e) = app.update_colors(&colors) {
+                log::error!("Failed to update ghostty colors: {}", e);
+            }
+        }
+        // Sync GPUI UI theme (dark/light) with terminal theme
+        crate::theme::sync_gpui_mode(&theme.name, window, cx);
     }
 
     fn on_input_escape(
@@ -1328,6 +1357,16 @@ impl ConWorkspace {
         self.active_terminal().focus(window, cx);
     }
 
+    /// Show or hide all ghostty NSViews across all tabs.
+    /// Used for z-order management when GPUI overlays (modals) appear.
+    fn set_ghostty_views_visible(&self, visible: bool, cx: &App) {
+        for tab in &self.tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                terminal.set_native_view_visible(visible, cx);
+            }
+        }
+    }
+
     // ── Ghostty event handlers ──────────────────────────────
 
     #[cfg(all(target_os = "macos", feature = "ghostty"))]
@@ -1388,6 +1427,11 @@ impl Render for ConWorkspace {
         let is_modal_open = self.is_modal_open(cx);
         if self.modal_was_open && !is_modal_open {
             self.focus_terminal(window, cx);
+            // Restore ghostty NSViews that were hidden for z-order
+            self.set_ghostty_views_visible(true, cx);
+        } else if !self.modal_was_open && is_modal_open {
+            // Hide ghostty NSViews so GPUI overlays render on top
+            self.set_ghostty_views_visible(false, cx);
         }
         self.modal_was_open = is_modal_open;
 

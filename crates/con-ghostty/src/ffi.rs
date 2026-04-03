@@ -413,6 +413,7 @@ unsafe extern "C" {
     pub fn ghostty_config_new() -> ghostty_config_t;
     pub fn ghostty_config_free(config: ghostty_config_t);
     pub fn ghostty_config_load_default_files(config: ghostty_config_t);
+    pub fn ghostty_config_load_file(config: ghostty_config_t, path: *const c_char);
     pub fn ghostty_config_finalize(config: ghostty_config_t);
     pub fn ghostty_config_get(
         config: ghostty_config_t,

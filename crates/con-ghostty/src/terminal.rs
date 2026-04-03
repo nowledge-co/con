@@ -11,12 +11,57 @@
 //! - The GhosttyApp must be ticked from the main thread (Metal rendering)
 
 use std::ffi::{CStr, CString};
+use std::io::Write;
 use std::os::raw::c_void;
 use std::sync::{Arc, Once};
 
 use parking_lot::Mutex;
 
 use crate::ffi;
+
+// ── Theme colors for ghostty config ──────────────────────────
+
+/// Terminal colors in a format ghostty understands.
+/// Decoupled from con-terminal's TerminalTheme to avoid cross-crate dependency.
+#[derive(Debug, Clone)]
+pub struct TerminalColors {
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
+    pub palette: [[u8; 3]; 16],
+}
+
+impl TerminalColors {
+    /// Generate a ghostty config string with these colors.
+    fn to_config_string(&self) -> String {
+        let mut s = String::with_capacity(512);
+        s.push_str(&format!(
+            "background = {:02x}{:02x}{:02x}\n",
+            self.background[0], self.background[1], self.background[2]
+        ));
+        s.push_str(&format!(
+            "foreground = {:02x}{:02x}{:02x}\n",
+            self.foreground[0], self.foreground[1], self.foreground[2]
+        ));
+        for (i, c) in self.palette.iter().enumerate() {
+            s.push_str(&format!(
+                "palette = {}={:02x}{:02x}{:02x}\n",
+                i, c[0], c[1], c[2]
+            ));
+        }
+        s
+    }
+
+    /// Write colors to a temp file and return the path.
+    fn write_config_file(&self) -> Result<std::path::PathBuf, String> {
+        let dir = std::env::temp_dir().join("con-ghostty");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {}", e))?;
+        let path = dir.join("theme.conf");
+        let mut f = std::fs::File::create(&path).map_err(|e| format!("create: {}", e))?;
+        f.write_all(self.to_config_string().as_bytes())
+            .map_err(|e| format!("write: {}", e))?;
+        Ok(path)
+    }
+}
 
 // ── Per-surface state updated by action callbacks ───────────
 
@@ -63,8 +108,8 @@ pub struct GhosttyApp {
 }
 
 impl GhosttyApp {
-    /// Create a new ghostty app with default config.
-    pub fn new() -> Result<Self, String> {
+    /// Create a new ghostty app with the given terminal colors.
+    pub fn new(colors: Option<&TerminalColors>) -> Result<Self, String> {
         ensure_ghostty_init()?;
 
         // Create and finalize config
@@ -73,7 +118,11 @@ impl GhosttyApp {
             return Err("ghostty_config_new returned null".into());
         }
         unsafe {
-            ffi::ghostty_config_load_default_files(config);
+            // Load our theme colors instead of the user's ghostty config.
+            // This ensures ghostty matches con's theme system.
+            if let Some(colors) = colors {
+                Self::load_colors_into_config(config, colors)?;
+            }
             ffi::ghostty_config_finalize(config);
         }
 
@@ -113,6 +162,34 @@ impl GhosttyApp {
     /// and AppKit operations require it.
     pub fn tick(&self) {
         unsafe { ffi::ghostty_app_tick(self.app) }
+    }
+
+    /// Load theme colors into a ghostty config via a temp file.
+    fn load_colors_into_config(
+        config: ffi::ghostty_config_t,
+        colors: &TerminalColors,
+    ) -> Result<(), String> {
+        let path = colors.write_config_file()?;
+        let path_str = path.to_str().ok_or("non-UTF8 path")?;
+        let cpath = CString::new(path_str).map_err(|e| format!("CString: {}", e))?;
+        unsafe { ffi::ghostty_config_load_file(config, cpath.as_ptr()) };
+        Ok(())
+    }
+
+    /// Update the app's terminal colors at runtime.
+    /// Creates a new config, loads the colors, and applies it.
+    pub fn update_colors(&self, colors: &TerminalColors) -> Result<(), String> {
+        let config = unsafe { ffi::ghostty_config_new() };
+        if config.is_null() {
+            return Err("ghostty_config_new returned null".into());
+        }
+        unsafe {
+            Self::load_colors_into_config(config, colors)?;
+            ffi::ghostty_config_finalize(config);
+            ffi::ghostty_app_update_config(self.app, config);
+            ffi::ghostty_config_free(config);
+        }
+        Ok(())
     }
 
     /// Set the global color scheme.

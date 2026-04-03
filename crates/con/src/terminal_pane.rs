@@ -151,6 +151,16 @@ impl TerminalPane {
         }
     }
 
+    /// Show or hide the native NSView layer for z-order management.
+    /// No-op for legacy terminals (they render via GPUI's Metal layer).
+    pub fn set_native_view_visible(&self, _visible: bool, _cx: &App) {
+        match self {
+            Self::Legacy(_) => {} // GPUI-rendered, z-order handled by GPUI
+            #[cfg(all(target_os = "macos", feature = "ghostty"))]
+            Self::Ghostty(e) => e.read(_cx).set_visible(_visible),
+        }
+    }
+
     // ── GPUI integration ────────────────────────────────────
 
     pub fn entity_id(&self) -> EntityId {
