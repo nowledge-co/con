@@ -238,6 +238,18 @@ impl GhosttyView {
         }
     }
 
+    /// Show or hide the native NSView. Used to manage z-order when
+    /// GPUI overlays (settings, command palette) need to appear on top.
+    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    pub fn set_visible(&self, visible: bool) {
+        if let Some(nsview) = self.nsview {
+            unsafe {
+                let hidden = if visible { NO } else { YES };
+                let _: () = msg_send![nsview, setHidden:hidden];
+            }
+        }
+    }
+
     /// Convert GPUI window-global position to view-local pixel coordinates.
     fn view_local_px(&self, pos: Point<Pixels>) -> (f64, f64) {
         let scale = self.scale_factor as f64;
