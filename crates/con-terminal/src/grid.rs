@@ -449,21 +449,37 @@ impl Grid {
     }
 
     /// Apply a new terminal theme, updating the palette and default colors.
+    /// Only re-themes cells that were using the old default fg/bg — cells with
+    /// explicitly set ANSI colors (prompts, colored output) are preserved.
     pub fn set_theme(&mut self, theme: &TerminalTheme) {
+        let old_fg = self.default_style.fg;
+        let old_bg = self.default_style.bg;
         self.default_style = Style {
             fg: theme.foreground,
             bg: theme.background,
             ..Style::default()
         };
         self.palette = theme.palette();
-        // Reset the current style to match the new theme defaults
         self.style = self.default_style;
-        // Re-render all cells with default bg/fg to match the new theme
         for row in &mut self.cells {
             for cell in row.iter_mut() {
-                // Only update cells that were using the old default colors
-                cell.style.fg = theme.foreground;
-                cell.style.bg = theme.background;
+                if cell.style.fg == old_fg {
+                    cell.style.fg = theme.foreground;
+                }
+                if cell.style.bg == old_bg {
+                    cell.style.bg = theme.background;
+                }
+            }
+        }
+        // Also update scrollback cells
+        for row in &mut self.scrollback {
+            for cell in row.iter_mut() {
+                if cell.style.fg == old_fg {
+                    cell.style.fg = theme.foreground;
+                }
+                if cell.style.bg == old_bg {
+                    cell.style.bg = theme.background;
+                }
             }
         }
         self.dirty = vec![true; self.rows];
