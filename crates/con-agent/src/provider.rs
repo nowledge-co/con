@@ -519,6 +519,7 @@ impl AgentProvider {
             event_tx.clone(),
             approval_rx,
             self.config.auto_approve_tools,
+            cancelled.clone(),
         );
 
         // Each provider dispatches to its native Rig client — exhaustive match

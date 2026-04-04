@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crossbeam_channel::Sender;
 use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
 use rig::completion::CompletionModel;
@@ -39,6 +42,7 @@ pub struct ConHook {
     event_tx: Sender<AgentEvent>,
     approval_rx: crossbeam_channel::Receiver<ToolApprovalDecision>,
     auto_approve: bool,
+    cancel_flag: Arc<AtomicBool>,
 }
 
 impl ConHook {
@@ -46,11 +50,13 @@ impl ConHook {
         event_tx: Sender<AgentEvent>,
         approval_rx: crossbeam_channel::Receiver<ToolApprovalDecision>,
         auto_approve: bool,
+        cancel_flag: Arc<AtomicBool>,
     ) -> Self {
         Self {
             event_tx,
             approval_rx,
             auto_approve,
+            cancel_flag,
         }
     }
 }
@@ -62,8 +68,11 @@ pub fn is_dangerous(tool_name: &str) -> bool {
     )
 }
 
-/// Approval timeout: 5 minutes. If the user doesn't respond, the tool
-/// call is denied. This prevents indefinite hangs.
+/// Poll interval when waiting for approval. Short enough to respond
+/// quickly to cancellation, long enough to avoid busy-spinning.
+const APPROVAL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Total approval timeout: 5 minutes.
 const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 impl<M: CompletionModel> PromptHook<M> for ConHook {
@@ -80,6 +89,7 @@ impl<M: CompletionModel> PromptHook<M> for ConHook {
         let event_tx = self.event_tx.clone();
         let approval_rx = self.approval_rx.clone();
         let auto_approve = self.auto_approve;
+        let cancel_flag = self.cancel_flag.clone();
 
         async move {
             let _ = event_tx.send(AgentEvent::ToolCallStart {
@@ -92,12 +102,28 @@ impl<M: CompletionModel> PromptHook<M> for ConHook {
                 return ToolCallHookAction::cont();
             }
 
-            // Block the tokio worker thread while waiting for UI approval.
-            // Safe because: (1) each hook has its own dedicated channel,
-            // (2) tool calls are sequential within an agent request, and
-            // (3) we use a timeout to prevent indefinite hangs.
+            // Poll for approval with short intervals so we can respond
+            // to cancellation (e.g. app quit) without blocking shutdown.
             let decision = tokio::task::block_in_place(|| {
-                approval_rx.recv_timeout(APPROVAL_TIMEOUT).ok()
+                let deadline = std::time::Instant::now() + APPROVAL_TIMEOUT;
+                loop {
+                    // Check cancellation first — enables clean shutdown
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        return None;
+                    }
+
+                    match approval_rx.recv_timeout(APPROVAL_POLL_INTERVAL) {
+                        Ok(decision) => return Some(decision),
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                            if std::time::Instant::now() >= deadline {
+                                return None;
+                            }
+                        }
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                            return None;
+                        }
+                    }
+                }
             });
 
             match decision {
@@ -107,7 +133,7 @@ impl<M: CompletionModel> PromptHook<M> for ConHook {
                         .unwrap_or_else(|| "User denied tool execution".to_string()),
                 ),
                 None => ToolCallHookAction::skip(
-                    "Tool approval timed out — denied for safety",
+                    "Tool approval timed out or cancelled",
                 ),
             }
         }
