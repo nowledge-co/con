@@ -92,6 +92,7 @@ fn main() {
                     MenuItem::separator(),
                     MenuItem::action("Quit con", Quit),
                 ],
+                disabled: false,
             },
             Menu {
                 name: "File".into(),
@@ -99,6 +100,7 @@ fn main() {
                     MenuItem::action("New Tab", NewTab),
                     MenuItem::action("Close Tab", CloseTab),
                 ],
+                disabled: false,
             },
             Menu {
                 name: "Edit".into(),
@@ -112,6 +114,7 @@ fn main() {
                     MenuItem::separator(),
                     MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
                 ],
+                disabled: false,
             },
             Menu {
                 name: "View".into(),
@@ -119,6 +122,7 @@ fn main() {
                     MenuItem::action("Toggle Agent Panel", ToggleAgentPanel),
                     MenuItem::action("Command Palette", command_palette::ToggleCommandPalette),
                 ],
+                disabled: false,
             },
             Menu {
                 name: "Terminal".into(),
@@ -126,6 +130,7 @@ fn main() {
                     MenuItem::action("Split Right", SplitRight),
                     MenuItem::action("Split Down", SplitDown),
                 ],
+                disabled: false,
             },
         ]);
 
