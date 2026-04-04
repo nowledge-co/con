@@ -1,0 +1,131 @@
+{
+  "name": "Tokyo Night",
+  "author": "con",
+  "themes": [
+    {
+      "name": "Tokyo Night",
+      "mode": "dark",
+      "is_default": false,
+      "font.size": 14,
+      "font.family": ".SystemUIFont",
+      "mono_font.family": "Ioskeley Mono",
+      "mono_font.size": 14,
+      "radius": 8,
+      "radius_lg": 12,
+      "shadow": false,
+      "colors": {
+        "background": "#1A1B26",
+        "foreground": "#C0CAF5",
+        "border": "#292E42",
+        "input.border": "#292E42",
+        "caret": "#7DCFFF",
+        "ring": "#7DCFFF",
+
+        "primary.background": "#7AA2F7",
+        "primary.foreground": "#1A1B26",
+        "primary.hover.background": "#5D87E0",
+        "primary.active.background": "#4670C8",
+
+        "secondary.background": "#16161E",
+        "secondary.foreground": "#C0CAF5",
+        "secondary.hover.background": "#292E42",
+        "secondary.active.background": "#414868",
+
+        "muted.background": "#16161E",
+        "muted.foreground": "#A9B1D6",
+
+        "accent.background": "#292E42",
+        "accent.foreground": "#C0CAF5",
+
+        "success.background": "#9ECE6A",
+        "success.foreground": "#1A1B26",
+
+        "danger.background": "#F7768E",
+        "danger.foreground": "#1A1B26",
+        "danger.hover.background": "#E05670",
+        "danger.active.background": "#C43B55",
+
+        "warning.background": "#E0AF68",
+        "warning.foreground": "#1A1B26",
+
+        "info.background": "#7AA2F7",
+        "info.foreground": "#1A1B26",
+
+        "title_bar.background": "#16161E",
+        "title_bar.border": "#292E42",
+
+        "sidebar.background": "#16161E",
+        "sidebar.foreground": "#C0CAF5",
+        "sidebar.border": "#292E42",
+
+        "list.active.background": "#7AA2F733",
+
+        "selection.background": "#7AA2F740",
+
+        "scrollbar.thumb.background": "#29294280",
+        "scrollbar.thumb.hover.background": "#414868",
+
+        "base.red": "#F7768E",
+        "base.orange": "#FF9E64",
+        "base.yellow": "#E0AF68",
+        "base.green": "#9ECE6A",
+        "base.cyan": "#7DCFFF",
+        "base.blue": "#7AA2F7",
+        "base.purple": "#BB9AF7",
+        "base.magenta": "#FF007C"
+      },
+      "highlight": {
+        "editor.foreground": "#C0CAF5",
+        "editor.background": "#1A1B26",
+        "editor.active_line.background": "#16161E",
+        "editor.line_number": "#414868",
+        "editor.active_line_number": "#7AA2F7",
+        "editor.invisible": "#41486866",
+        "conflict": "#E0AF68",
+        "created": "#9ECE6A",
+        "hidden": "#414868",
+        "hint": "#A9B1D6",
+        "modified": "#FF9E64",
+        "predictive": "#A9B1D6",
+        "warning": "#E0AF68",
+        "syntax": {
+          "attribute": { "color": "#7DCFFF" },
+          "boolean": { "color": "#FF9E64" },
+          "comment": { "color": "#565F89" },
+          "comment.doc": { "color": "#565F89" },
+          "constant": { "color": "#FF9E64" },
+          "constructor": { "color": "#7AA2F7" },
+          "emphasis": { "color": "#BB9AF7", "font_style": "italic" },
+          "emphasis.strong": { "color": "#BB9AF7", "font_weight": 700 },
+          "enum": { "color": "#E0AF68" },
+          "function": { "color": "#7AA2F7" },
+          "hint": { "color": "#565F89" },
+          "keyword": { "color": "#BB9AF7" },
+          "label": { "color": "#7DCFFF" },
+          "link_text": { "color": "#7DCFFF" },
+          "link_uri": { "color": "#7DCFFF" },
+          "number": { "color": "#FF9E64" },
+          "operator": { "color": "#89DDFF" },
+          "predictive": { "color": "#A9B1D6" },
+          "preproc": { "color": "#7DCFFF" },
+          "primary": { "color": "#7AA2F7" },
+          "property": { "color": "#73DACA" },
+          "punctuation": { "color": "#A9B1D6" },
+          "punctuation.bracket": { "color": "#A9B1D6" },
+          "punctuation.delimiter": { "color": "#A9B1D6" },
+          "string": { "color": "#9ECE6A" },
+          "string.escape": { "color": "#BB9AF7" },
+          "string.regex": { "color": "#B4F9F8" },
+          "string.special": { "color": "#7DCFFF" },
+          "tag": { "color": "#F7768E" },
+          "text.literal": { "color": "#9ECE6A" },
+          "title": { "color": "#7AA2F7" },
+          "type": { "color": "#2AC3DE" },
+          "variable": { "color": "#C0CAF5" },
+          "variable.special": { "color": "#DB4B4B" },
+          "variant": { "color": "#7DCFFF" }
+        }
+      }
+    }
+  ]
+}

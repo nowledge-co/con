@@ -381,7 +381,7 @@ impl SettingsPanel {
     fn render_appearance(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let current_theme = &self.config.terminal.theme;
-        let available = con_terminal::TerminalTheme::available();
+        let all_themes = con_terminal::TerminalTheme::all_available();
 
         section_content("Appearance", "Customize the look and feel.", &theme)
             .child(
@@ -402,57 +402,109 @@ impl SettingsPanel {
                                     .flex_wrap()
                                     .gap(px(10.0));
 
-                                for name in available.iter() {
-                                    let is_sel = *name == current_theme.as_str();
-                                    let term_theme = con_terminal::TerminalTheme::by_name(name)
-                                        .unwrap_or_default();
+                                for term_theme in all_themes.iter() {
+                                    let name = term_theme.name.as_str();
+                                    let is_sel = name == current_theme.as_str();
                                     let theme_name = name.to_string();
-
-                                    // Color swatch card: bg + 8 bright ANSI color bars
                                     let bg = term_theme.background;
                                     let fg = term_theme.foreground;
                                     let bg_gpui = gpui::rgb(bg.to_u32());
                                     let fg_gpui = gpui::rgb(fg.to_u32());
+                                    let green = gpui::rgb(term_theme.ansi[2].to_u32());
+                                    let cyan = gpui::rgb(term_theme.ansi[6].to_u32());
+                                    let blue = gpui::rgb(term_theme.ansi[4].to_u32());
+                                    let yellow = gpui::rgb(term_theme.ansi[3].to_u32());
+                                    let red = gpui::rgb(term_theme.ansi[1].to_u32());
+                                    let magenta = gpui::rgb(term_theme.ansi[5].to_u32());
 
-                                    // Build color bars from the 8 bright ANSI colors (indices 8-15)
-                                    let mut bars = div()
+                                    // Mini terminal preview — ghostty.style inspired
+                                    // Simulated terminal with multiple output lines
+                                    let terminal_preview = div()
                                         .flex()
-                                        .items_end()
-                                        .gap(px(3.0))
-                                        .h(px(32.0))
+                                        .flex_col()
+                                        .bg(bg_gpui)
+                                        .rounded_t(px(8.0))
                                         .px(px(8.0))
-                                        .pt(px(6.0));
-
-                                    for idx in 8..16 {
-                                        let c = term_theme.ansi[idx];
-                                        // Vary bar heights for visual interest
-                                        let heights = [20.0, 26.0, 18.0, 24.0, 22.0, 28.0, 16.0, 24.0];
-                                        let h = heights[idx - 8];
-                                        bars = bars.child(
+                                        .pt(px(6.0))
+                                        .pb(px(6.0))
+                                        .gap(px(1.0))
+                                        .font_family("Ioskeley Mono")
+                                        .text_size(px(8.0))
+                                        .line_height(px(12.0))
+                                        // Title bar dots
+                                        .child(
                                             div()
-                                                .w(px(6.0))
-                                                .h(px(h))
-                                                .rounded(px(2.0))
+                                                .flex()
+                                                .gap(px(3.0))
+                                                .pb(px(4.0))
+                                                .child(div().size(px(5.0)).rounded_full().bg(red))
+                                                .child(div().size(px(5.0)).rounded_full().bg(yellow))
+                                                .child(div().size(px(5.0)).rounded_full().bg(green)),
+                                        )
+                                        // Line 1: prompt + command
+                                        .child(
+                                            div().flex().gap(px(3.0))
+                                                .child(div().text_color(green).child("$"))
+                                                .child(div().text_color(cyan).child("git"))
+                                                .child(div().text_color(fg_gpui).child("log --oneline")),
+                                        )
+                                        // Line 2: git output
+                                        .child(
+                                            div().flex().gap(px(3.0))
+                                                .child(div().text_color(yellow).child("a1b2c3d"))
+                                                .child(div().text_color(fg_gpui).child("feat: init")),
+                                        )
+                                        // Line 3: another line
+                                        .child(
+                                            div().flex().gap(px(3.0))
+                                                .child(div().text_color(yellow).child("e4f5g6h"))
+                                                .child(div().text_color(fg_gpui).child("fix: theme")),
+                                        )
+                                        // Line 4: new prompt
+                                        .child(
+                                            div().flex().gap(px(3.0))
+                                                .child(div().text_color(green).child("$"))
+                                                .child(div().text_color(blue).child("ls"))
+                                                .child(div().text_color(fg_gpui).child("src/")),
+                                        )
+                                        // Line 5: ls output
+                                        .child(
+                                            div().flex().gap(px(4.0))
+                                                .child(div().text_color(blue).child("lib/"))
+                                                .child(div().text_color(magenta).child("main.rs"))
+                                                .child(div().text_color(fg_gpui).child("README")),
+                                        );
+
+                                    // Palette strip — all 16 colors as continuous blocks
+                                    let mut palette_strip = div()
+                                        .flex()
+                                        .h(px(4.0));
+
+                                    for idx in 0..16 {
+                                        let c = term_theme.ansi[idx];
+                                        palette_strip = palette_strip.child(
+                                            div()
+                                                .flex_1()
+                                                .h_full()
                                                 .bg(gpui::rgb(c.to_u32())),
                                         );
                                     }
-
-                                    let border_color = if is_sel {
-                                        theme.primary
-                                    } else {
-                                        theme.border
-                                    };
 
                                     grid = grid.child(
                                         div()
                                             .id(SharedString::from(format!("term-theme-{name}")))
                                             .cursor_pointer()
-                                            .w(px(100.0))
-                                            .rounded(px(8.0))
-                                            .border_2()
-                                            .border_color(border_color)
+                                            .w(px(150.0))
+                                            .flex()
+                                            .flex_col()
+                                            .rounded(px(10.0))
                                             .overflow_hidden()
-                                            .hover(|s| s.border_color(theme.primary.opacity(0.6)))
+                                            .bg(if is_sel {
+                                                theme.primary.opacity(0.10)
+                                            } else {
+                                                theme.muted.opacity(0.04)
+                                            })
+                                            .hover(|s| s.bg(theme.primary.opacity(0.06)))
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, _, cx| {
@@ -461,23 +513,39 @@ impl SettingsPanel {
                                                     cx.notify();
                                                 }),
                                             )
-                                            // Preview area: terminal bg + color bars
-                                            .child(
-                                                div()
-                                                    .bg(bg_gpui)
-                                                    .child(bars),
-                                            )
-                                            // Label area
+                                            // Terminal preview area
+                                            .child(terminal_preview)
+                                            // Color palette strip
+                                            .child(palette_strip)
+                                            // Label row
                                             .child(
                                                 div()
                                                     .flex()
                                                     .items_center()
                                                     .justify_center()
-                                                    .h(px(24.0))
-                                                    .bg(bg_gpui)
-                                                    .text_size(px(10.0))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(fg_gpui)
+                                                    .gap(px(4.0))
+                                                    .h(px(26.0))
+                                                    .text_size(px(10.5))
+                                                    .font_weight(if is_sel {
+                                                        FontWeight::SEMIBOLD
+                                                    } else {
+                                                        FontWeight::MEDIUM
+                                                    })
+                                                    .text_color(if is_sel {
+                                                        theme.primary
+                                                    } else {
+                                                        theme.muted_foreground
+                                                    })
+                                                    .children(if is_sel {
+                                                        Some(
+                                                            svg()
+                                                                .path("phosphor/check.svg")
+                                                                .size(px(10.0))
+                                                                .text_color(theme.primary),
+                                                        )
+                                                    } else {
+                                                        None
+                                                    })
                                                     .child(display_theme_name(name)),
                                             ),
                                     );
@@ -866,19 +934,20 @@ impl Render for SettingsPanel {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .h(px(44.0))
-                            .px(px(16.0))
+                            .h(px(48.0))
+                            .px(px(20.0))
                             .flex_shrink_0()
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(px(13.0))
                                     .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.foreground)
                                     .child("Settings"),
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
+                                    .text_size(px(11.0))
+                                    .text_color(theme.muted_foreground.opacity(0.5))
                                     .child("⌘↵ save · Esc close"),
                             ),
                     )
@@ -946,8 +1015,9 @@ fn group_label(text: &str) -> Div {
     div()
         .text_size(px(10.0))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(gpui::hsla(0.0, 0.0, 0.45, 1.0))
-        .px(px(2.0))
+        .text_color(gpui::hsla(0.0, 0.0, 0.50, 0.7))
+        .px(px(4.0))
+        .pt(px(4.0))
         .child(text.to_string())
 }
 
@@ -959,11 +1029,9 @@ fn card(theme: &gpui_component::Theme) -> Div {
         .bg(theme.muted.opacity(0.08))
 }
 
-fn row_separator(theme: &gpui_component::Theme) -> Div {
-    div()
-        .h(px(1.0))
-        .mx(px(12.0))
-        .bg(theme.border.opacity(0.5))
+fn row_separator(_theme: &gpui_component::Theme) -> Div {
+    // Borderless design — use vertical spacing instead of separator lines
+    div().h(px(1.0))
 }
 
 fn row_field(label: &str, input: &Entity<InputState>) -> Div {
@@ -1120,6 +1188,23 @@ fn display_theme_name(name: &str) -> String {
         "flexoki-light" => "Flexoki Light".into(),
         "catppuccin-mocha" => "Catppuccin".into(),
         "tokyonight" => "Tokyo Night".into(),
-        other => other.to_string(),
+        "rose-pine" => "Rose Pine".into(),
+        "gruvbox-dark" => "Gruvbox Dark".into(),
+        "solarized-dark" => "Solarized Dark".into(),
+        "one-half-dark" => "One Half Dark".into(),
+        "kanagawa-wave" => "Kanagawa Wave".into(),
+        "everforest-dark" => "Everforest Dark".into(),
+        // User themes: convert kebab-case to Title Case
+        other => other
+            .split('-')
+            .map(|word| {
+                let mut c = word.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().to_string() + c.as_str(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }

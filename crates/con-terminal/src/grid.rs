@@ -164,6 +164,222 @@ impl TerminalTheme {
         }
     }
 
+    /// Dracula — from ghostty.style / iTerm2-Color-Schemes (MIT).
+    pub fn dracula() -> Self {
+        Self {
+            name: "dracula".into(),
+            foreground: Color::rgb(0xF8, 0xF8, 0xF2),
+            background: Color::rgb(0x28, 0x2A, 0x36),
+            ansi: [
+                Color::rgb(0x21, 0x22, 0x2C), // black
+                Color::rgb(0xFF, 0x55, 0x55), // red
+                Color::rgb(0x50, 0xFA, 0x7B), // green
+                Color::rgb(0xF1, 0xFA, 0x8C), // yellow
+                Color::rgb(0xBD, 0x93, 0xF9), // blue
+                Color::rgb(0xFF, 0x79, 0xC6), // magenta
+                Color::rgb(0x8B, 0xE9, 0xFD), // cyan
+                Color::rgb(0xF8, 0xF8, 0xF2), // white
+                Color::rgb(0x62, 0x72, 0xA4), // bright black
+                Color::rgb(0xFF, 0x6E, 0x6E), // bright red
+                Color::rgb(0x69, 0xFF, 0x94), // bright green
+                Color::rgb(0xFF, 0xFF, 0xA5), // bright yellow
+                Color::rgb(0xD6, 0xAC, 0xFF), // bright blue
+                Color::rgb(0xFF, 0x92, 0xDF), // bright magenta
+                Color::rgb(0xA4, 0xFF, 0xFF), // bright cyan
+                Color::rgb(0xFF, 0xFF, 0xFF), // bright white
+            ],
+        }
+    }
+
+    /// Nord — from ghostty.style / iTerm2-Color-Schemes (MIT).
+    pub fn nord() -> Self {
+        Self {
+            name: "nord".into(),
+            foreground: Color::rgb(0xD8, 0xDE, 0xE9),
+            background: Color::rgb(0x2E, 0x34, 0x40),
+            ansi: [
+                Color::rgb(0x3B, 0x42, 0x52), // black
+                Color::rgb(0xBF, 0x61, 0x6A), // red
+                Color::rgb(0xA3, 0xBE, 0x8C), // green
+                Color::rgb(0xEB, 0xCB, 0x8B), // yellow
+                Color::rgb(0x81, 0xA1, 0xC1), // blue
+                Color::rgb(0xB4, 0x8E, 0xAD), // magenta
+                Color::rgb(0x88, 0xC0, 0xD0), // cyan
+                Color::rgb(0xE5, 0xE9, 0xF0), // white
+                Color::rgb(0x59, 0x63, 0x77), // bright black
+                Color::rgb(0xBF, 0x61, 0x6A), // bright red
+                Color::rgb(0xA3, 0xBE, 0x8C), // bright green
+                Color::rgb(0xEB, 0xCB, 0x8B), // bright yellow
+                Color::rgb(0x81, 0xA1, 0xC1), // bright blue
+                Color::rgb(0xB4, 0x8E, 0xAD), // bright magenta
+                Color::rgb(0x8F, 0xBC, 0xBB), // bright cyan
+                Color::rgb(0xEC, 0xEF, 0xF4), // bright white
+            ],
+        }
+    }
+
+    /// Rose Pine — from ghostty.style / iTerm2-Color-Schemes (MIT).
+    pub fn rose_pine() -> Self {
+        Self {
+            name: "rose-pine".into(),
+            foreground: Color::rgb(0xE0, 0xDE, 0xF4),
+            background: Color::rgb(0x19, 0x17, 0x24),
+            ansi: [
+                Color::rgb(0x26, 0x23, 0x3A), // black (overlay)
+                Color::rgb(0xEB, 0x6F, 0x92), // red (love)
+                Color::rgb(0x31, 0x74, 0x8F), // green (pine)
+                Color::rgb(0xF6, 0xC1, 0x77), // yellow (gold)
+                Color::rgb(0x9C, 0xCF, 0xD8), // blue (foam)
+                Color::rgb(0xC4, 0xA7, 0xE7), // magenta (iris)
+                Color::rgb(0xEA, 0x9A, 0x97), // cyan (rose)
+                Color::rgb(0xE0, 0xDE, 0xF4), // white (text)
+                Color::rgb(0x6E, 0x6A, 0x86), // bright black (muted)
+                Color::rgb(0xEB, 0x6F, 0x92), // bright red
+                Color::rgb(0x31, 0x74, 0x8F), // bright green
+                Color::rgb(0xF6, 0xC1, 0x77), // bright yellow
+                Color::rgb(0x9C, 0xCF, 0xD8), // bright blue
+                Color::rgb(0xC4, 0xA7, 0xE7), // bright magenta
+                Color::rgb(0xEA, 0x9A, 0x97), // bright cyan
+                Color::rgb(0xE0, 0xDE, 0xF4), // bright white
+            ],
+        }
+    }
+
+    /// Gruvbox Dark — from ghostty.style / iTerm2-Color-Schemes (MIT).
+    pub fn gruvbox_dark() -> Self {
+        Self {
+            name: "gruvbox-dark".into(),
+            foreground: Color::rgb(0xEB, 0xDB, 0xB2),
+            background: Color::rgb(0x28, 0x28, 0x28),
+            ansi: [
+                Color::rgb(0x28, 0x28, 0x28), // black
+                Color::rgb(0xCC, 0x24, 0x1D), // red
+                Color::rgb(0x98, 0x97, 0x1A), // green
+                Color::rgb(0xD7, 0x99, 0x21), // yellow
+                Color::rgb(0x45, 0x85, 0x88), // blue
+                Color::rgb(0xB1, 0x62, 0x86), // magenta
+                Color::rgb(0x68, 0x9D, 0x6A), // cyan
+                Color::rgb(0xA8, 0x99, 0x84), // white
+                Color::rgb(0x92, 0x83, 0x74), // bright black
+                Color::rgb(0xFB, 0x49, 0x34), // bright red
+                Color::rgb(0xB8, 0xBB, 0x26), // bright green
+                Color::rgb(0xFA, 0xBD, 0x2F), // bright yellow
+                Color::rgb(0x83, 0xA5, 0x98), // bright blue
+                Color::rgb(0xD3, 0x86, 0x9B), // bright magenta
+                Color::rgb(0x8E, 0xC0, 0x7C), // bright cyan
+                Color::rgb(0xEB, 0xDB, 0xB2), // bright white
+            ],
+        }
+    }
+
+    /// Solarized Dark — from ghostty.style / iTerm2-Color-Schemes (MIT).
+    pub fn solarized_dark() -> Self {
+        Self {
+            name: "solarized-dark".into(),
+            foreground: Color::rgb(0x83, 0x94, 0x96),
+            background: Color::rgb(0x00, 0x2B, 0x36),
+            ansi: [
+                Color::rgb(0x07, 0x36, 0x42), // black
+                Color::rgb(0xDC, 0x32, 0x2F), // red
+                Color::rgb(0x85, 0x99, 0x00), // green
+                Color::rgb(0xB5, 0x89, 0x00), // yellow
+                Color::rgb(0x26, 0x8B, 0xD2), // blue
+                Color::rgb(0xD3, 0x36, 0x82), // magenta
+                Color::rgb(0x2A, 0xA1, 0x98), // cyan
+                Color::rgb(0xEE, 0xE8, 0xD5), // white
+                Color::rgb(0x00, 0x2B, 0x36), // bright black
+                Color::rgb(0xCB, 0x4B, 0x16), // bright red (orange)
+                Color::rgb(0x58, 0x6E, 0x75), // bright green
+                Color::rgb(0x65, 0x7B, 0x83), // bright yellow
+                Color::rgb(0x83, 0x94, 0x96), // bright blue
+                Color::rgb(0x6C, 0x71, 0xC4), // bright magenta (violet)
+                Color::rgb(0x93, 0xA1, 0xA1), // bright cyan
+                Color::rgb(0xFD, 0xF6, 0xE3), // bright white
+            ],
+        }
+    }
+
+    /// One Half Dark — from ghostty.style / iTerm2-Color-Schemes (MIT).
+    pub fn one_half_dark() -> Self {
+        Self {
+            name: "one-half-dark".into(),
+            foreground: Color::rgb(0xDC, 0xDF, 0xE4),
+            background: Color::rgb(0x28, 0x2C, 0x34),
+            ansi: [
+                Color::rgb(0x28, 0x2C, 0x34), // black
+                Color::rgb(0xE0, 0x6C, 0x75), // red
+                Color::rgb(0x98, 0xC3, 0x79), // green
+                Color::rgb(0xE5, 0xC0, 0x7B), // yellow
+                Color::rgb(0x61, 0xAF, 0xEF), // blue
+                Color::rgb(0xC6, 0x78, 0xDD), // magenta
+                Color::rgb(0x56, 0xB6, 0xC2), // cyan
+                Color::rgb(0xDC, 0xDF, 0xE4), // white
+                Color::rgb(0x5C, 0x63, 0x70), // bright black
+                Color::rgb(0xE0, 0x6C, 0x75), // bright red
+                Color::rgb(0x98, 0xC3, 0x79), // bright green
+                Color::rgb(0xE5, 0xC0, 0x7B), // bright yellow
+                Color::rgb(0x61, 0xAF, 0xEF), // bright blue
+                Color::rgb(0xC6, 0x78, 0xDD), // bright magenta
+                Color::rgb(0x56, 0xB6, 0xC2), // bright cyan
+                Color::rgb(0xDC, 0xDF, 0xE4), // bright white
+            ],
+        }
+    }
+
+    /// Kanagawa Wave — from ghostty.style / iTerm2-Color-Schemes (MIT).
+    pub fn kanagawa_wave() -> Self {
+        Self {
+            name: "kanagawa-wave".into(),
+            foreground: Color::rgb(0xDC, 0xD7, 0xBA),
+            background: Color::rgb(0x1F, 0x1F, 0x28),
+            ansi: [
+                Color::rgb(0x16, 0x16, 0x1D), // black
+                Color::rgb(0xC3, 0x40, 0x43), // red
+                Color::rgb(0x76, 0x94, 0x6A), // green
+                Color::rgb(0xC0, 0xA3, 0x6E), // yellow
+                Color::rgb(0x7E, 0x9C, 0xD8), // blue
+                Color::rgb(0x95, 0x7F, 0xB8), // magenta
+                Color::rgb(0x6A, 0x95, 0x89), // cyan
+                Color::rgb(0xC8, 0xC0, 0x93), // white
+                Color::rgb(0x72, 0x73, 0x69), // bright black
+                Color::rgb(0xE8, 0x21, 0x24), // bright red
+                Color::rgb(0x98, 0xBB, 0x6C), // bright green
+                Color::rgb(0xE6, 0xC3, 0x84), // bright yellow
+                Color::rgb(0x7F, 0xB4, 0xCA), // bright blue
+                Color::rgb(0x93, 0x8A, 0xA9), // bright magenta
+                Color::rgb(0x7A, 0xA8, 0x9F), // bright cyan
+                Color::rgb(0xDC, 0xD7, 0xBA), // bright white
+            ],
+        }
+    }
+
+    /// Everforest Dark Hard — from ghostty.style / iTerm2-Color-Schemes (MIT).
+    pub fn everforest_dark() -> Self {
+        Self {
+            name: "everforest-dark".into(),
+            foreground: Color::rgb(0xD3, 0xC6, 0xAA),
+            background: Color::rgb(0x27, 0x2E, 0x33),
+            ansi: [
+                Color::rgb(0x41, 0x4B, 0x50), // black
+                Color::rgb(0xE6, 0x7E, 0x80), // red
+                Color::rgb(0xA7, 0xC0, 0x80), // green
+                Color::rgb(0xDB, 0xBC, 0x7F), // yellow
+                Color::rgb(0x7F, 0xBB, 0xB3), // blue
+                Color::rgb(0xD6, 0x99, 0xB6), // magenta
+                Color::rgb(0x83, 0xC0, 0x92), // cyan
+                Color::rgb(0xD3, 0xC6, 0xAA), // white
+                Color::rgb(0x9D, 0xA9, 0xA0), // bright black
+                Color::rgb(0xE6, 0x7E, 0x80), // bright red
+                Color::rgb(0xA7, 0xC0, 0x80), // bright green
+                Color::rgb(0xDB, 0xBC, 0x7F), // bright yellow
+                Color::rgb(0x7F, 0xBB, 0xB3), // bright blue
+                Color::rgb(0xD6, 0x99, 0xB6), // bright magenta
+                Color::rgb(0x83, 0xC0, 0x92), // bright cyan
+                Color::rgb(0xD3, 0xC6, 0xAA), // bright white
+            ],
+        }
+    }
+
     /// Look up a built-in theme by name. Case-insensitive.
     pub fn by_name(name: &str) -> Option<Self> {
         match name.to_lowercase().as_str() {
@@ -171,14 +387,166 @@ impl TerminalTheme {
             "flexoki-light" => Some(Self::flexoki_light()),
             "catppuccin-mocha" | "catppuccin" => Some(Self::catppuccin_mocha()),
             "tokyonight" | "tokyo-night" => Some(Self::tokyonight()),
-            _ => None,
+            "dracula" => Some(Self::dracula()),
+            "nord" => Some(Self::nord()),
+            "rose-pine" | "rosepine" => Some(Self::rose_pine()),
+            "gruvbox-dark" | "gruvbox" => Some(Self::gruvbox_dark()),
+            "solarized-dark" | "solarized" => Some(Self::solarized_dark()),
+            "one-half-dark" | "onehalfdark" => Some(Self::one_half_dark()),
+            "kanagawa-wave" | "kanagawa" => Some(Self::kanagawa_wave()),
+            "everforest-dark" | "everforest" => Some(Self::everforest_dark()),
+            _ => {
+                // Fall back to user themes from ~/.config/con/themes/
+                Self::load_user_themes()
+                    .into_iter()
+                    .find(|t| t.name == name.to_lowercase())
+            }
         }
+    }
+
+    /// All available themes: built-in + user-installed.
+    pub fn all_available() -> Vec<Self> {
+        let mut themes: Vec<Self> = Self::available()
+            .iter()
+            .filter_map(|name| Self::by_name(name))
+            .collect();
+        let user_themes = Self::load_user_themes();
+        for ut in user_themes {
+            if !themes.iter().any(|t| t.name == ut.name) {
+                themes.push(ut);
+            }
+        }
+        themes
     }
 
     /// All available built-in theme names.
     pub fn available() -> &'static [&'static str] {
-        &["flexoki-dark", "flexoki-light", "catppuccin-mocha", "tokyonight"]
+        &[
+            "flexoki-dark",
+            "flexoki-light",
+            "catppuccin-mocha",
+            "tokyonight",
+            "dracula",
+            "nord",
+            "rose-pine",
+            "gruvbox-dark",
+            "solarized-dark",
+            "one-half-dark",
+            "kanagawa-wave",
+            "everforest-dark",
+        ]
     }
+
+    /// Parse a ghostty-format theme file (iTerm2-Color-Schemes / ghostty.style format).
+    ///
+    /// Format: key-value lines like `palette = 0=#RRGGBB`, `background = #RRGGBB`, etc.
+    /// Returns None if the file doesn't contain the required fields.
+    pub fn from_ghostty_format(name: &str, content: &str) -> Option<Self> {
+        let mut bg = None;
+        let mut fg = None;
+        let mut ansi = [Color::rgb(0, 0, 0); 16];
+        let mut palette_count = 0;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut parts = line.splitn(2, '=');
+            let key = parts.next()?.trim();
+            let value = parts.next()?.trim();
+
+            match key {
+                "background" => bg = parse_hex_color(value),
+                "foreground" => fg = parse_hex_color(value),
+                "palette" => {
+                    // "0=#RRGGBB" format
+                    let mut idx_color = value.splitn(2, '=');
+                    if let (Some(idx_str), Some(hex)) = (idx_color.next(), idx_color.next()) {
+                        if let Ok(idx) = idx_str.trim().parse::<usize>() {
+                            if idx < 16 {
+                                if let Some(c) = parse_hex_color(hex.trim()) {
+                                    ansi[idx] = c;
+                                    palette_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Require at least background, foreground, and some palette entries
+        if bg.is_some() && fg.is_some() && palette_count >= 8 {
+            Some(Self {
+                name: name.to_string(),
+                foreground: fg.unwrap(),
+                background: bg.unwrap(),
+                ansi,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Load user themes from `~/.config/con/themes/`.
+    /// Each file should be in ghostty format (no extension required).
+    /// Returns theme names and parsed themes.
+    pub fn load_user_themes() -> Vec<Self> {
+        let dir = if cfg!(target_os = "macos") {
+            std::env::var("HOME").ok().map(|h| {
+                std::path::PathBuf::from(h)
+                    .join("Library/Application Support/con/themes")
+            })
+        } else {
+            std::env::var("XDG_CONFIG_HOME")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".config")))
+                .map(|p| p.join("con/themes"))
+        };
+        let dir = match dir {
+            Some(d) => d,
+            None => return Vec::new(),
+        };
+
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut themes = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .replace(' ', "-");
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Some(theme) = Self::from_ghostty_format(&name, &content) {
+                        themes.push(theme);
+                    }
+                }
+            }
+        }
+        themes
+    }
+}
+
+/// Parse a hex color string like `#RRGGBB` or `RRGGBB`.
+fn parse_hex_color(s: &str) -> Option<Color> {
+    let hex = s.strip_prefix('#').unwrap_or(s);
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(Color::rgb(r, g, b))
 }
 
 impl Default for TerminalTheme {

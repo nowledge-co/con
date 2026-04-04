@@ -4,6 +4,8 @@ use std::borrow::Cow;
 
 const CON_DARK_THEME: &str = include_str!("../../../assets/themes/con-dark.json");
 const CON_LIGHT_THEME: &str = include_str!("../../../assets/themes/con-light.json");
+const CATPPUCCIN_THEME: &str = include_str!("../../../assets/themes/catppuccin-mocha.json");
+const TOKYONIGHT_THEME: &str = include_str!("../../../assets/themes/tokyonight.json");
 
 // Embed IoskeleyMono font files at compile time.
 // Only essential weights: Regular, Bold, Italic, BoldItalic for terminal,
@@ -33,26 +35,15 @@ pub fn init_theme(cx: &mut App, terminal_theme: &str) {
         ])
         .expect("Failed to register IoskeleyMono fonts");
 
-    // Load both dark and light themes into the registry
-    ThemeRegistry::global_mut(cx)
-        .load_themes_from_str(CON_DARK_THEME)
-        .expect("Failed to load con dark theme");
-    ThemeRegistry::global_mut(cx)
-        .load_themes_from_str(CON_LIGHT_THEME)
-        .expect("Failed to load con light theme");
-
-    // Set our themes as the active dark/light themes
-    // Clone out of registry before taking mutable borrow on Theme
-    let con_dark = ThemeRegistry::global(cx).themes().get("Con Dark").cloned();
-    let con_light = ThemeRegistry::global(cx).themes().get("Con Light").cloned();
-    if let Some(dark) = con_dark {
-        Theme::global_mut(cx).dark_theme = dark;
-    }
-    if let Some(light) = con_light {
-        Theme::global_mut(cx).light_theme = light;
+    // Load all themes into the registry
+    for theme_json in [CON_DARK_THEME, CON_LIGHT_THEME, CATPPUCCIN_THEME, TOKYONIGHT_THEME] {
+        ThemeRegistry::global_mut(cx)
+            .load_themes_from_str(theme_json)
+            .expect("Failed to load theme");
     }
 
-    // Activate mode matching the terminal theme
+    // Set initial dark/light themes based on the terminal theme
+    apply_gpui_theme(terminal_theme, cx);
     let mode = if terminal_theme.contains("light") {
         ThemeMode::Light
     } else {
@@ -61,13 +52,36 @@ pub fn init_theme(cx: &mut App, terminal_theme: &str) {
     Theme::change(mode, None, cx);
 }
 
-/// Switch the GPUI theme mode to match a terminal theme.
-/// Call this when the user selects a terminal theme to keep UI and terminal in sync.
+/// Switch the GPUI theme to match a terminal theme.
+/// Swaps both the active dark/light theme AND the mode.
 pub fn sync_gpui_mode(terminal_theme_name: &str, window: &mut gpui::Window, cx: &mut gpui::App) {
+    apply_gpui_theme(terminal_theme_name, cx);
     let mode = if terminal_theme_name.contains("light") {
         ThemeMode::Light
     } else {
         ThemeMode::Dark
     };
     Theme::change(mode, Some(window), cx);
+}
+
+/// Map a terminal theme name to the corresponding GPUI theme and set it as active.
+fn apply_gpui_theme(terminal_theme_name: &str, cx: &mut gpui::App) {
+    let (dark_name, light_name) = match terminal_theme_name {
+        "catppuccin-mocha" => ("Catppuccin Mocha", "Con Light"),
+        "tokyonight" => ("Tokyo Night", "Con Light"),
+        "flexoki-dark" => ("Con Dark", "Con Light"),
+        "flexoki-light" => ("Con Dark", "Con Light"),
+        name if name.contains("light") => ("Con Dark", "Con Light"),
+        _ => ("Con Dark", "Con Light"),
+    };
+
+    let dark = ThemeRegistry::global(cx).themes().get(dark_name).cloned();
+    let light = ThemeRegistry::global(cx).themes().get(light_name).cloned();
+
+    if let Some(d) = dark {
+        Theme::global_mut(cx).dark_theme = d;
+    }
+    if let Some(l) = light {
+        Theme::global_mut(cx).light_theme = l;
+    }
 }
