@@ -74,13 +74,23 @@ impl InputBar {
 
         let _subscriptions = vec![
             cx.subscribe_in(&input_state, window, {
-                let input_state = input_state.clone();
-                move |_this, _, ev: &InputEvent, _window, cx| {
-                    if let InputEvent::PressEnter { secondary: false } = ev {
-                        let value = input_state.read(cx).value();
-                        if !value.trim().is_empty() {
-                            cx.emit(SubmitInput);
+                move |this, _, ev: &InputEvent, window, cx| {
+                    match ev {
+                        InputEvent::PressEnter { secondary: false } => {
+                            // If skill completions are showing, Enter completes the selection
+                            let matches = this.filtered_skills(cx);
+                            if !matches.is_empty() {
+                                let idx = this.skill_selection.min(matches.len().saturating_sub(1));
+                                let name = matches[idx].name.clone();
+                                this.complete_skill(&name, window, cx);
+                            } else {
+                                let value = this.input_state.read(cx).value();
+                                if !value.trim().is_empty() {
+                                    cx.emit(SubmitInput);
+                                }
+                            }
                         }
+                        _ => {}
                     }
                 }
             }),

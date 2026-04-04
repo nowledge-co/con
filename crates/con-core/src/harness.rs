@@ -168,7 +168,10 @@ impl AgentSession {
 /// Does NOT own conversation or channels — those are per-tab in AgentSession.
 pub struct AgentHarness {
     config: con_agent::AgentConfig,
+    skills_config: crate::config::SkillsConfig,
     skills: SkillRegistry,
+    /// Last cwd used for skill scanning, to avoid redundant rescans.
+    last_skills_cwd: Option<String>,
     runtime: Arc<Runtime>,
 }
 
@@ -183,7 +186,9 @@ impl AgentHarness {
 
         Ok(Self {
             config: config.agent.clone(),
+            skills_config: config.skills.clone(),
             skills: SkillRegistry::new(),
+            last_skills_cwd: None,
             runtime,
         })
     }
@@ -643,24 +648,27 @@ impl AgentHarness {
         Some(skill.description.clone())
     }
 
-    /// Load skills from AGENTS.md in the given directory.
-    /// Returns the updated skill names list if loading succeeded.
-    pub fn load_agents_md(&mut self, dir: &Path) -> Option<Vec<String>> {
-        let agents_path = dir.join("AGENTS.md");
-        if agents_path.exists() {
-            match self.skills.load_agents_md(&agents_path) {
-                Ok(n) => {
-                    log::info!("Loaded {} skills from AGENTS.md", n);
-                    Some(self.skills.names())
-                }
-                Err(e) => {
-                    log::warn!("Failed to load AGENTS.md: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
+    /// Scan for skills from configured filesystem paths.
+    /// Only rescans if the cwd has changed since the last scan.
+    /// Returns true if skills were (re)loaded.
+    pub fn scan_skills(&mut self, cwd: &str) -> bool {
+        if self.last_skills_cwd.as_deref() == Some(cwd) {
+            return false;
         }
+        self.last_skills_cwd = Some(cwd.to_string());
+        let cwd_path = Path::new(cwd);
+        let global_dirs = self.skills_config.resolved_global_paths();
+        let project_dirs = self.skills_config.resolved_project_paths(cwd_path);
+        let count = self.skills.scan(&global_dirs, &project_dirs);
+        log::info!("Skill scan for {}: {} skill(s) found", cwd, count);
+        true
+    }
+
+    /// Update skills config (e.g. after settings change).
+    pub fn update_skills_config(&mut self, config: crate::config::SkillsConfig) {
+        self.skills_config = config;
+        // Force rescan on next cwd check
+        self.last_skills_cwd = None;
     }
 
     pub fn update_config(&mut self, config: con_agent::AgentConfig) {

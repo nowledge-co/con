@@ -515,6 +515,7 @@ impl AgentProvider {
             self.config.effective_model(kind),
         ))));
 
+        log::info!("[provider] auto_approve_tools = {}", self.config.auto_approve_tools);
         let hook = ConHook::new(
             event_tx.clone(),
             approval_rx,

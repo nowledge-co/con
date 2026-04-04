@@ -449,6 +449,7 @@ impl SettingsPanel {
     pub fn agent_config(&self) -> &AgentConfig { &self.config.agent }
     pub fn terminal_config(&self) -> &con_core::config::TerminalConfig { &self.config.terminal }
     pub fn keybinding_config(&self) -> &con_core::config::KeybindingConfig { &self.config.keybindings }
+    pub fn skills_config(&self) -> &con_core::config::SkillsConfig { &self.config.skills }
 
     fn persist_config(&self) -> anyhow::Result<()> {
         let path = Config::config_path();
@@ -513,6 +514,32 @@ impl SettingsPanel {
                 cx.notify();
             }));
 
+        // --- Skills path chips (must render before borrowing theme) ---
+        let project_paths = self.config.skills.project_paths.clone();
+        let global_paths = self.config.skills.global_paths.clone();
+
+        let project_chips = self.render_path_chips("project", &project_paths, cx);
+        let global_chips = self.render_path_chips("global", &global_paths, cx);
+
+        let project_presets = self.render_path_presets(
+            "project",
+            &project_paths,
+            &[
+                (".claude/skills", "Claude Code"),
+                (".agents/skills", "Agents"),
+            ],
+            cx,
+        );
+        let global_presets = self.render_path_presets(
+            "global",
+            &global_paths,
+            &[
+                ("~/.claude/skills", "Claude Code"),
+                ("~/.config/agents/skills", "Agents"),
+            ],
+            cx,
+        );
+
         let theme = cx.theme();
         section_content("General", "Terminal and agent behavior.", theme)
             .child(
@@ -553,6 +580,229 @@ impl SettingsPanel {
                             ),
                     ),
             )
+            // Skills paths
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("Skills", &theme))
+                    .child(
+                        card(theme)
+                            // Project paths row
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.0))
+                                    .px(px(16.0))
+                                    .py(px(12.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .child("Project paths"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.0))
+                                                    .text_color(theme.muted_foreground.opacity(0.5))
+                                                    .child("relative to cwd"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_wrap()
+                                            .gap(px(4.0))
+                                            .children(project_chips)
+                                            .children(project_presets),
+                                    ),
+                            )
+                            .child(row_separator(theme))
+                            // Global paths row
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.0))
+                                    .px(px(16.0))
+                                    .py(px(12.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .child("Global paths"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.0))
+                                                    .text_color(theme.muted_foreground.opacity(0.5))
+                                                    .child("~ expanded to home"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_wrap()
+                                            .gap(px(4.0))
+                                            .children(global_chips)
+                                            .children(global_presets),
+                                    ),
+                            ),
+                    ),
+            )
+    }
+
+    /// Render removable path chips for a given path list.
+    fn render_path_chips(
+        &self,
+        kind: &str,
+        paths: &[String],
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = cx.theme();
+        let chip_bg = theme.muted.opacity(0.12);
+        let fg = theme.foreground;
+        let muted = theme.muted_foreground.opacity(0.5);
+        let danger = theme.danger;
+
+        paths
+            .iter()
+            .enumerate()
+            .map(|(idx, path)| {
+                let kind = kind.to_string();
+                let path_display = path.clone();
+
+                div()
+                    .id(SharedString::from(format!("skill-{kind}-{idx}")))
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .h(px(24.0))
+                    .px(px(8.0))
+                    .rounded(px(5.0))
+                    .bg(chip_bg)
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(fg)
+                            .child(path_display),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("skill-rm-{kind}-{idx}")))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(14.0))
+                            .rounded(px(3.0))
+                            .cursor_pointer()
+                            .text_color(muted)
+                            .hover(|s| s.text_color(danger))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.remove_skill_path(&kind, idx);
+                                    cx.notify();
+                                }),
+                            )
+                            .child(
+                                svg()
+                                    .path("phosphor/x.svg")
+                                    .size(px(10.0))
+                                    .text_color(muted),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// Render preset quick-add buttons for paths not yet in the list.
+    fn render_path_presets(
+        &self,
+        kind: &str,
+        current_paths: &[String],
+        presets: &[(&str, &str)],
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = cx.theme();
+        let muted_fg = theme.muted_foreground.opacity(0.4);
+        let hover_bg = theme.muted.opacity(0.08);
+        let hover_fg = theme.foreground;
+
+        presets
+            .iter()
+            .filter(|(path, _)| !current_paths.iter().any(|p| p == path))
+            .map(|(path, label)| {
+                let kind = kind.to_string();
+                let path = path.to_string();
+                let label = label.to_string();
+
+                div()
+                    .id(SharedString::from(format!("skill-add-{kind}-{label}")))
+                    .flex()
+                    .items_center()
+                    .gap(px(3.0))
+                    .h(px(24.0))
+                    .px(px(8.0))
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .text_color(muted_fg)
+                    .hover(|s| s.bg(hover_bg).text_color(hover_fg))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.add_skill_path(&kind, &path);
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        svg()
+                            .path("phosphor/plus.svg")
+                            .size(px(10.0))
+                            .text_color(muted_fg),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .child(label),
+                    )
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    fn add_skill_path(&mut self, kind: &str, path: &str) {
+        let paths = match kind {
+            "project" => &mut self.config.skills.project_paths,
+            "global" => &mut self.config.skills.global_paths,
+            _ => return,
+        };
+        if !paths.iter().any(|p| p == path) {
+            paths.push(path.to_string());
+        }
+    }
+
+    fn remove_skill_path(&mut self, kind: &str, idx: usize) {
+        let paths = match kind {
+            "project" => &mut self.config.skills.project_paths,
+            "global" => &mut self.config.skills.global_paths,
+            _ => return,
+        };
+        if idx < paths.len() {
+            paths.remove(idx);
+        }
     }
 
     fn render_appearance(&self, cx: &mut Context<Self>) -> Div {

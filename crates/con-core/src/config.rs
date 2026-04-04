@@ -94,6 +94,79 @@ pub struct Config {
     pub terminal: TerminalConfig,
     pub agent: AgentConfig,
     pub keybindings: KeybindingConfig,
+    pub skills: SkillsConfig,
+}
+
+/// Configuration for skill discovery paths.
+///
+/// Skills are SKILL.md files following the open skills ecosystem format (skills.sh).
+/// con scans both project-local and global directories for skills.
+///
+/// # Defaults
+/// ```toml
+/// [skills]
+/// project_paths = [".con/skills"]
+/// global_paths = ["~/.config/con/skills"]
+/// ```
+///
+/// # Sharing with other agents
+/// ```toml
+/// [skills]
+/// # Scan Claude Code + universal agents paths too
+/// project_paths = [".con/skills", ".claude/skills", ".agents/skills"]
+/// global_paths = ["~/.config/con/skills", "~/.claude/skills"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    /// Project-local skill directories (relative to cwd).
+    /// Scanned in order; later entries override earlier ones on name collision.
+    pub project_paths: Vec<String>,
+    /// Global skill directories (absolute paths, ~ expanded).
+    /// Scanned before project paths; project skills override global on collision.
+    pub global_paths: Vec<String>,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            project_paths: vec![
+                "skills".into(),
+                ".agents/skills".into(),
+                ".con/skills".into(),
+            ],
+            global_paths: vec!["~/.config/con/skills".into()],
+        }
+    }
+}
+
+impl SkillsConfig {
+    /// Resolve global paths, expanding ~ to the user's home directory.
+    pub fn resolved_global_paths(&self) -> Vec<PathBuf> {
+        let home = dirs::home_dir();
+        self.global_paths
+            .iter()
+            .map(|p| {
+                if p.starts_with("~/") {
+                    if let Some(ref h) = home {
+                        h.join(&p[2..])
+                    } else {
+                        PathBuf::from(p)
+                    }
+                } else {
+                    PathBuf::from(p)
+                }
+            })
+            .collect()
+    }
+
+    /// Resolve project-local paths relative to a cwd.
+    pub fn resolved_project_paths(&self, cwd: &std::path::Path) -> Vec<PathBuf> {
+        self.project_paths
+            .iter()
+            .map(|p| cwd.join(p))
+            .collect()
+    }
 }
 
 impl Config {

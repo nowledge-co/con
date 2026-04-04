@@ -1,66 +1,109 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// A skill is a named capability with a prompt template.
-/// Skills are loaded from AGENTS.md or registered programmatically.
+/// Skills are discovered from SKILL.md files on the filesystem,
+/// following the open agent skills ecosystem format (skills.sh).
+///
+/// Discovery paths (in priority order):
+///   1. Project-local: `<cwd>/.con/skills/*/SKILL.md`
+///   2. Global user:   `~/.config/con/skills/*/SKILL.md`
+///
+/// SKILL.md format (YAML frontmatter + markdown body):
+/// ```text
+/// ---
+/// name: my-skill
+/// description: What this skill does
+/// ---
+///
+/// # My Skill
+/// Prompt template content that the agent will follow...
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
     pub name: String,
     pub description: String,
     pub prompt_template: String,
-    /// Source: "builtin", "agents_md", "plugin"
-    pub source: String,
+    /// Where this skill was loaded from
+    pub source: SkillSource,
 }
 
-/// Registry of available skills
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum SkillSource {
+    /// From <cwd>/.con/skills/
+    Project(PathBuf),
+    /// From ~/.config/con/skills/
+    Global(PathBuf),
+}
+
+impl std::fmt::Display for SkillSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Project(p) => write!(f, "project:{}", p.display()),
+            Self::Global(p) => write!(f, "global:{}", p.display()),
+        }
+    }
+}
+
+/// Registry of available skills, populated by scanning the filesystem.
 #[derive(Debug, Clone, Default)]
 pub struct SkillRegistry {
     skills: HashMap<String, Skill>,
 }
 
 impl SkillRegistry {
+    /// Create an empty registry. Call `scan()` to populate from filesystem.
     pub fn new() -> Self {
-        let mut registry = Self::default();
-        registry.register_builtins();
-        registry
+        Self::default()
     }
 
-    fn register_builtins(&mut self) {
-        self.register(Skill {
-            name: "explain".to_string(),
-            description: "Explain the last command output or error".to_string(),
-            prompt_template: "Explain this terminal output. What happened and why? If there's an error, suggest how to fix it.".to_string(),
-            source: "builtin".to_string(),
-        });
+    /// Scan for SKILL.md files from configured paths and populate the registry.
+    ///
+    /// Global paths are scanned first, then project paths.
+    /// Later paths override earlier ones on name collision, so project skills
+    /// take priority over global skills.
+    ///
+    /// Returns the number of skills loaded.
+    pub fn scan(&mut self, global_dirs: &[PathBuf], project_dirs: &[PathBuf]) -> usize {
+        self.skills.clear();
 
-        self.register(Skill {
-            name: "fix".to_string(),
-            description: "Fix the last error".to_string(),
-            prompt_template: "The last command failed. Analyze the error, determine the root cause, and execute the fix.".to_string(),
-            source: "builtin".to_string(),
-        });
+        // Load global first (later entries override earlier)
+        for dir in global_dirs {
+            self.scan_directory(dir, |path| SkillSource::Global(path));
+        }
+        // Then project (overrides global on collision)
+        for dir in project_dirs {
+            self.scan_directory(dir, |path| SkillSource::Project(path));
+        }
 
-        self.register(Skill {
-            name: "commit".to_string(),
-            description: "Create a git commit with a good message".to_string(),
-            prompt_template: "Look at the staged changes (run `git diff --cached`), write a concise commit message following conventional commits, and create the commit.".to_string(),
-            source: "builtin".to_string(),
-        });
+        let count = self.skills.len();
+        if count > 0 {
+            log::info!("Loaded {} skill(s) from filesystem", count);
+        }
+        count
+    }
 
-        self.register(Skill {
-            name: "test".to_string(),
-            description: "Run tests and fix failures".to_string(),
-            prompt_template: "Run the project's test suite. If any tests fail, analyze the failures and fix them.".to_string(),
-            source: "builtin".to_string(),
-        });
+    /// Scan a single directory for `*/SKILL.md` entries.
+    fn scan_directory<F>(&mut self, dir: &Path, make_source: F)
+    where
+        F: Fn(PathBuf) -> SkillSource,
+    {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return, // directory doesn't exist — that's fine
+        };
 
-        self.register(Skill {
-            name: "review".to_string(),
-            description: "Review recent changes".to_string(),
-            prompt_template: "Review the recent changes (git diff). Look for bugs, security issues, and suggest improvements.".to_string(),
-            source: "builtin".to_string(),
-        });
+        for entry in entries.flatten() {
+            let skill_dir = entry.path();
+            if !skill_dir.is_dir() {
+                continue;
+            }
+            let skill_md = skill_dir.join("SKILL.md");
+            if let Some(skill) = parse_skill_md(&skill_md, make_source(skill_dir)) {
+                self.skills.insert(skill.name.clone(), skill);
+            }
+        }
     }
 
     pub fn register(&mut self, skill: Skill) {
@@ -81,72 +124,132 @@ impl SkillRegistry {
 
     /// Return (name, description) pairs for all registered skills.
     pub fn summaries(&self) -> Vec<(String, String)> {
-        self.skills.values().map(|s| (s.name.clone(), s.description.clone())).collect()
+        self.skills
+            .values()
+            .map(|s| (s.name.clone(), s.description.clone()))
+            .collect()
     }
 
-    /// Load skills from an AGENTS.md file.
-    /// AGENTS.md format:
-    /// ```text
-    /// ## skill-name
-    /// Description of what this skill does.
-    ///
-    /// ```prompt
-    /// The prompt template for the agent.
-    /// ```
-    /// ```
-    pub fn load_agents_md(&mut self, path: &Path) -> anyhow::Result<usize> {
-        let content = std::fs::read_to_string(path)?;
-        let mut loaded = 0;
+    pub fn is_empty(&self) -> bool {
+        self.skills.is_empty()
+    }
+}
 
-        let mut current_name: Option<String> = None;
-        let mut current_desc = String::new();
-        let mut current_prompt = String::new();
-        let mut in_prompt_block = false;
+/// Parse a SKILL.md file into a Skill.
+///
+/// Expected format: YAML frontmatter with `name` and `description`,
+/// followed by markdown body used as the prompt template.
+fn parse_skill_md(path: &Path, source: SkillSource) -> Option<Skill> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let (frontmatter, body) = parse_frontmatter(&content)?;
 
-        for line in content.lines() {
-            if line.starts_with("## ") {
-                // Save previous skill if any
-                if let Some(name) = current_name.take() {
-                    if !current_prompt.is_empty() {
-                        self.register(Skill {
-                            name,
-                            description: current_desc.trim().to_string(),
-                            prompt_template: current_prompt.trim().to_string(),
-                            source: "agents_md".to_string(),
-                        });
-                        loaded += 1;
-                    }
-                }
-                current_name = Some(line[3..].trim().to_string());
-                current_desc = String::new();
-                current_prompt = String::new();
-                in_prompt_block = false;
-            } else if line.starts_with("```prompt") {
-                in_prompt_block = true;
-            } else if line.starts_with("```") && in_prompt_block {
-                in_prompt_block = false;
-            } else if in_prompt_block {
-                current_prompt.push_str(line);
-                current_prompt.push('\n');
-            } else if current_name.is_some() && !in_prompt_block && !line.starts_with('#') {
-                current_desc.push_str(line);
-                current_desc.push('\n');
-            }
+    let name = frontmatter.get("name")?.to_string();
+    let description = frontmatter.get("description").cloned().unwrap_or_default();
+
+    if name.is_empty() {
+        return None;
+    }
+
+    let prompt_template = body.trim().to_string();
+    if prompt_template.is_empty() {
+        return None;
+    }
+
+    Some(Skill {
+        name,
+        description,
+        prompt_template,
+        source,
+    })
+}
+
+/// Minimal frontmatter parser for SKILL.md files.
+/// Parses `---` delimited YAML-like key: value pairs.
+/// Returns (key-value map, body after frontmatter).
+fn parse_frontmatter(content: &str) -> Option<(HashMap<String, String>, String)> {
+    let content = content.trim_start();
+    if !content.starts_with("---") {
+        return None;
+    }
+
+    // Find closing ---
+    let after_open = &content[3..];
+    let after_open = after_open
+        .strip_prefix('\n')
+        .or_else(|| after_open.strip_prefix("\r\n"))?;
+    let close_pos = after_open.find("\n---")?;
+    let yaml_str = &after_open[..close_pos];
+    let body_start = close_pos + 4; // skip \n---
+    let body = if body_start < after_open.len() {
+        let rest = &after_open[body_start..];
+        rest.strip_prefix('\n')
+            .or_else(|| rest.strip_prefix("\r\n"))
+            .unwrap_or(rest)
+    } else {
+        ""
+    };
+
+    // Simple key: value parsing (sufficient for name + description)
+    let mut map = HashMap::new();
+    for line in yaml_str.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
         }
-
-        // Save last skill
-        if let Some(name) = current_name {
-            if !current_prompt.is_empty() {
-                self.register(Skill {
-                    name,
-                    description: current_desc.trim().to_string(),
-                    prompt_template: current_prompt.trim().to_string(),
-                    source: "agents_md".to_string(),
-                });
-                loaded += 1;
-            }
+        if let Some((key, value)) = line.split_once(':') {
+            let key = key.trim().to_string();
+            let value = value.trim().to_string();
+            // Strip surrounding quotes if present
+            let value = if (value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\''))
+            {
+                value[1..value.len() - 1].to_string()
+            } else {
+                value
+            };
+            map.insert(key, value);
         }
+    }
 
-        Ok(loaded)
+    Some((map, body.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frontmatter_basic() {
+        let content =
+            "---\nname: my-skill\ndescription: Does something\n---\n\n# My Skill\nDo the thing.";
+        let (fm, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm["name"], "my-skill");
+        assert_eq!(fm["description"], "Does something");
+        assert!(body.contains("Do the thing."));
+    }
+
+    #[test]
+    fn frontmatter_with_quotes() {
+        let content =
+            "---\nname: \"quoted-skill\"\ndescription: 'Has quotes'\n---\n\nDo stuff.";
+        let (fm, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm["name"], "quoted-skill");
+        assert_eq!(fm["description"], "Has quotes");
+        assert_eq!(body.trim(), "Do stuff.");
+    }
+
+    #[test]
+    fn no_frontmatter_returns_none() {
+        assert!(parse_frontmatter("# Just markdown\nNo frontmatter here.").is_none());
+    }
+
+    #[test]
+    fn empty_body_returns_none_from_parse_skill() {
+        // parse_skill_md needs a real file, but we can test the logic path:
+        // if prompt_template is empty after trimming, skill is None
+        let content = "---\nname: empty\ndescription: No body\n---\n";
+        let (fm, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm["name"], "empty");
+        assert!(body.trim().is_empty());
     }
 }

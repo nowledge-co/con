@@ -646,6 +646,10 @@ impl ConWorkspace {
         let new_config = settings.read(cx).agent_config().clone();
         self.harness.update_config(new_config);
 
+        // Apply updated skills paths (forces rescan on next cwd check)
+        let skills_config = settings.read(cx).skills_config().clone();
+        self.harness.update_skills_config(skills_config);
+
         let term_config = settings.read(cx).terminal_config().clone();
         self.font_size = term_config.font_size;
         self.scrollback_lines = term_config.scrollback_lines;
@@ -1632,6 +1636,10 @@ impl Render for ConWorkspace {
             .collect();
 
         let cwd = active_terminal.current_dir(cx);
+        // Scan skills when cwd changes (project-local + global ~/.config/con/skills/)
+        if let Some(ref raw_cwd) = cwd {
+            self.harness.scan_skills(raw_cwd);
+        }
         let display_cwd = cwd
             .map(|cwd| match dirs::home_dir() {
                 Some(home) => {

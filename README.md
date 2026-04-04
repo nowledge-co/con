@@ -2,7 +2,7 @@
   <img src="assets/Con-macOS-Dark-256x256@2x.png" width="120" alt="con logo">
 </p>
 <h1 align="center">con</h1>
-<p align="center"><strong>The terminal emulator with a built-in AI harness, nothing more</strong></p>
+<p align="center"><strong>The terminal emulator with AI harness, nothing more</strong></p>
 
 <p align="center">
   Open source. Fast. Terminal-first.
@@ -37,7 +37,7 @@ If you want less than Con, you probably already have more ideas than us ;).
 
 - a terminal emulator
 - built-in AI harness aware of panes within a tab
-- works well with `ssh`, `tmux`, `opencode`,`codex`, and `claude code`
+- works well with `ssh`, `tmux`, `opencode`, `codex`, and `claude code`
 
 ## Status
 
@@ -53,8 +53,8 @@ If you want to build from source or hack on `con`, see `HACKING.md`.
 
 ## Docs
 
-- `DESIGN.md` — vision and architecture
-- `HACKING.md` — build and contributor quickstart
+- `DESIGN.md` vision and architecture
+- `HACKING.md` build and contributor quickstart
 
 ## License
 
