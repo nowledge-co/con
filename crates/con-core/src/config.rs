@@ -135,7 +135,10 @@ impl Default for SkillsConfig {
                 ".agents/skills".into(),
                 ".con/skills".into(),
             ],
-            global_paths: vec!["~/.config/con/skills".into()],
+            global_paths: vec![
+                "~/.config/con/skills".into(),
+                "~/.agents/skills".into(),
+            ],
         }
     }
 }

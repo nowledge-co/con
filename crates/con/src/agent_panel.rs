@@ -376,6 +376,10 @@ impl AgentPanel {
         self.model_name = name;
     }
 
+    pub fn set_auto_approve(&mut self, enabled: bool) {
+        self.auto_approve = enabled;
+    }
+
     /// Create with a pre-populated panel state (e.g. restored from session).
     pub fn with_state(state: PanelState, _cx: &mut Context<Self>) -> Self {
         Self {

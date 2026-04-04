@@ -70,25 +70,17 @@ impl InputBar {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Type a command or ask AI...")
+                .auto_grow(1, 6)
         });
 
+        // Submit / skill-complete is handled in on_key_down (not PressEnter)
+        // so we can distinguish Enter (submit) from Shift+Enter (newline).
         let _subscriptions = vec![
             cx.subscribe_in(&input_state, window, {
-                move |this, _, ev: &InputEvent, window, cx| {
+                move |_this, _, ev: &InputEvent, _window, _cx| {
                     match ev {
-                        InputEvent::PressEnter { secondary: false } => {
-                            // If skill completions are showing, Enter completes the selection
-                            let matches = this.filtered_skills(cx);
-                            if !matches.is_empty() {
-                                let idx = this.skill_selection.min(matches.len().saturating_sub(1));
-                                let name = matches[idx].name.clone();
-                                this.complete_skill(&name, window, cx);
-                            } else {
-                                let value = this.input_state.read(cx).value();
-                                if !value.trim().is_empty() {
-                                    cx.emit(SubmitInput);
-                                }
-                            }
+                        InputEvent::PressEnter { .. } => {
+                            // Handled in on_key_down for shift/enter distinction
                         }
                         _ => {}
                     }
@@ -442,6 +434,32 @@ impl Render for InputBar {
                         this.skill_selection = (this.skill_selection + 1).min(matches.len().saturating_sub(1));
                         cx.notify();
                     }
+                    "enter" if !event.keystroke.modifiers.shift => {
+                        // Regular Enter: undo the newline auto_grow inserted, then submit or complete
+                        this.input_state.update(cx, |s, cx| {
+                            let cursor = s.cursor();
+                            let val = s.value().to_string();
+                            // Remove the newline just inserted at cursor-1
+                            if cursor > 0 && val.as_bytes().get(cursor - 1) == Some(&b'\n') {
+                                let mut cleaned = val[..cursor - 1].to_string();
+                                cleaned.push_str(&val[cursor..]);
+                                s.set_value(&cleaned, window, cx);
+                            }
+                        });
+
+                        let matches = this.filtered_skills(cx);
+                        if !matches.is_empty() {
+                            let idx = this.skill_selection.min(matches.len().saturating_sub(1));
+                            let name = matches[idx].name.clone();
+                            this.complete_skill(&name, window, cx);
+                        } else {
+                            let value = this.input_state.read(cx).value();
+                            if !value.trim().is_empty() {
+                                cx.emit(SubmitInput);
+                            }
+                        }
+                    }
+                    // Shift+Enter: newline already inserted by auto_grow, nothing to do
                     _ => {}
                 }
             }))
@@ -449,9 +467,10 @@ impl Render for InputBar {
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .h(px(44.0))
+                    .items_end()
+                    .min_h(px(44.0))
                     .px(px(12.0))
+                    .py(px(6.0))
                     .gap(px(6.0))
                     .child(mode_pill)
                     .child(
@@ -459,7 +478,7 @@ impl Render for InputBar {
                             .flex_1()
                             .flex()
                             .items_center()
-                            .h(px(32.0))
+                            .min_h(px(32.0))
                             .px(px(4.0))
                             .rounded(px(6.0))
                             .bg(theme.background)
@@ -492,7 +511,7 @@ impl Render for InputBar {
                         div()
                             .text_size(px(10.0))
                             .text_color(theme.muted_foreground.opacity(0.25))
-                            .child("/ skills  ⇥ mode  ↵ send"),
+                            .child("/ skills  ⇥ mode  ⇧↵ newline  ↵ send"),
                     ),
             )
     }

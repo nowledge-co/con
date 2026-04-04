@@ -221,7 +221,11 @@ impl ConWorkspace {
             &mut tabs[active_tab].panel_state,
             PanelState::new(),
         );
-        let agent_panel = cx.new(|cx| AgentPanel::with_state(initial_panel_state, cx));
+        let agent_panel = cx.new(|cx| {
+            let mut panel = AgentPanel::with_state(initial_panel_state, cx);
+            panel.set_auto_approve(config.agent.auto_approve_tools);
+            panel
+        });
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
@@ -644,7 +648,13 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         let new_config = settings.read(cx).agent_config().clone();
+        let auto_approve = new_config.auto_approve_tools;
         self.harness.update_config(new_config);
+
+        // Sync auto-approve to agent panel UI
+        self.agent_panel.update(cx, |panel, _cx| {
+            panel.set_auto_approve(auto_approve);
+        });
 
         // Apply updated skills paths (forces rescan on next cwd check)
         let skills_config = settings.read(cx).skills_config().clone();
@@ -819,15 +829,27 @@ impl ConWorkspace {
                 args,
                 approval_tx,
             } => {
-                self.agent_panel.update(cx, |panel, cx| {
-                    panel.add_pending_approval(
-                        &call_id,
-                        &tool_name,
-                        &args,
-                        approval_tx,
-                        cx,
-                    );
-                });
+                if self.harness.config().auto_approve_tools {
+                    // Auto-approved: send approval decision, show as regular tool call
+                    let _ = approval_tx.send(con_agent::ToolApprovalDecision {
+                        call_id: call_id.clone(),
+                        allowed: true,
+                        reason: Some("auto-approved".into()),
+                    });
+                    self.agent_panel.update(cx, |panel, cx| {
+                        panel.add_tool_call(&call_id, &tool_name, &args, cx);
+                    });
+                } else {
+                    self.agent_panel.update(cx, |panel, cx| {
+                        panel.add_pending_approval(
+                            &call_id,
+                            &tool_name,
+                            &args,
+                            approval_tx,
+                            cx,
+                        );
+                    });
+                }
             }
             HarnessEvent::ToolCallComplete {
                 call_id,

@@ -671,6 +671,10 @@ impl AgentHarness {
         self.last_skills_cwd = None;
     }
 
+    pub fn config(&self) -> &con_agent::AgentConfig {
+        &self.config
+    }
+
     pub fn update_config(&mut self, config: con_agent::AgentConfig) {
         self.config = config;
     }
