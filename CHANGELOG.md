@@ -6,11 +6,23 @@ All notable changes to con are documented here.
 
 ### Added
 
+**Terminal — Ghostty Backend**
+- GPU-accelerated terminal rendering on macOS via Ghostty's Metal engine. Text rendering, scrollback, and compositing all run on the GPU for consistently smooth performance, even with high-throughput output.
+- Full VT compliance out of the box — Kitty keyboard protocol, hyperlinks, sixel graphics, and OSC 133 shell integration are handled natively by Ghostty. No configuration needed.
+- Instant command completion tracking — when a command finishes, con knows the exit code and exactly how long it took. The agent uses this to respond immediately instead of waiting on a timeout.
+- Clipboard integration — copy and paste work natively between the terminal and the system clipboard, including programmatic clipboard access via OSC 52.
+
 **AI Agent**
 - Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.
 - Agent conversations persist per-tab across restarts
+- Command duration and exit code are now included in the agent's context. When you ask "what happened?", the agent can tell you a build took 12 seconds and failed with exit code 1 — not just show you the output.
 
 ### Improved
+
+**AI Agent**
+- The agent system prompt has been restructured for sharper tool usage. Questions are answered with minimal side effects; tasks are executed carefully with verification. Each tool now has explicit guidelines so the agent picks the right one the first time.
+- Remote host detection works on Ghostty panes — the agent correctly identifies SSH sessions and targets the right host.
+- Busy/idle detection works on Ghostty panes — the agent waits for a running command to finish before sending another.
 
 **Smart Input**
 - Command detection now scans your `$PATH` at startup instead of using a static word list. Any installed program — `hostname`, `terraform`, `kubectl`, or a custom script in `/usr/local/bin` — is correctly recognized as a shell command without manual configuration.
@@ -19,6 +31,7 @@ All notable changes to con are documented here.
 
 **AI Agent**
 - The agent now sees your full pane layout (hostname, directory, busy status) directly in its context. When you have multiple panes open — especially SSH sessions to different machines — the agent targets the right pane without extra steps.
+- Ghostty panes now report `has_shell_integration: true` in the agent's pane list, enabling the agent to use command tracking features.
 
 ### Fixed
 

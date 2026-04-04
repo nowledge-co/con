@@ -1178,6 +1178,7 @@ dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
  "log",
+ "objc",
  "parking_lot",
 ]
 

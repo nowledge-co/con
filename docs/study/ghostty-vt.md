@@ -1,60 +1,76 @@
-# Study: libghostty-vt
+# Study: Ghostty Integration
 
-## Overview
+## Decision: Full Ghostty via libghostty C API
 
-libghostty-vt is the embeddable VT parsing library extracted from Ghostty. It provides terminal sequence parsing, key encoding, and text attribute handling via a C API.
+We initially planned to use **libghostty-vt** — the standalone VT parser library extracted from Ghostty — and build our own Grid, renderer, and scrollback on top. After evaluation, we chose to embed **full Ghostty** instead via its libghostty C API.
 
-## What It Gives Us
+### Why Full Ghostty Over libghostty-vt
+
+| Consideration | libghostty-vt (parser only) | libghostty (full terminal) |
+|---|---|---|
+| VT compliance | Parser actions only — we build Grid, screen state, scrollback | Complete: parser + screen + scrollback + renderer |
+| Rendering | Our own GPUI canvas rendering | Metal GPU rendering via NSView |
+| Shell integration | We implement OSC 133 handling | Built-in: COMMAND_FINISHED with exit code + duration |
+| Clipboard | We implement via PTY + pasteboard | Built-in: read/write callbacks |
+| Maintenance | We maintain ~3000 lines of Grid + rendering | ~800 line FFI wrapper |
+| Build | Zig toolchain + bindgen | Pre-built libghostty, Rust FFI only |
+
+**The deciding factor:** COMMAND_FINISHED. Ghostty fires this action when OSC 133;D arrives, providing the exit code and nanosecond-precision duration of the completed command. This single capability eliminates the 3-second blind timeout in `terminal_exec`, making agent command execution instant and reliable. Building this from libghostty-vt would have required reimplementing Ghostty's shell integration handling.
+
+### Architecture
+
+```
+con process
+├── GhosttyApp (singleton)
+│   └── ghostty_app_t — runtime config, font discovery
+│
+├── GhosttyTerminal (per pane)
+│   ├── ghostty_surface_t — owns PTY, parser, screen, renderer
+│   ├── NSView — Metal rendering surface, composited in GPUI window
+│   ├── TerminalState — action-driven state (title, pwd, exit code, busy)
+│   └── Callbacks:
+│       ├── action_callback — 66 actions (7 handled, 59 acknowledged)
+│       ├── read_clipboard_callback — paste from NSPasteboard
+│       ├── write_clipboard_callback — copy to NSPasteboard
+│       ├── close_surface_callback — child process exited
+│       └── size_report_callback — terminal dimensions
+│
+└── GhosttyView (GPUI Element)
+    ├── Forwards key/mouse events to ghostty_surface_key/mouse
+    ├── Manages NSView lifecycle (add/remove from window)
+    └── Handles focus tracking
+```
+
+### What libghostty-vt Would Have Given Us
+
+(Preserved for reference — this was our original plan.)
 
 | Component | What it does | C API header |
 |-----------|-------------|--------------|
-| **Parser** | DEC ANSI state machine (vt100.net spec). States: ground, escape, CSI, DCS, OSC. Actions: print, execute, csi_dispatch, esc_dispatch, osc_dispatch. | via Zig module |
-| **OSC parser** | Window title, hyperlinks (OSC 8), semantic prompts (OSC 133), color schemes | `vt/osc.h` |
+| **Parser** | DEC ANSI state machine. States: ground, escape, CSI, DCS, OSC. | via Zig module |
+| **OSC parser** | Window title, hyperlinks (OSC 8), semantic prompts (OSC 133) | `vt/osc.h` |
 | **SGR parser** | Text attributes: bold, italic, underline, 256-color, RGB | `vt/sgr.h` |
-| **Key encoder** | Kitty keyboard protocol, xterm/VT102 escape sequences, dead keys, modifiers | `vt/key.h` |
+| **Key encoder** | Kitty keyboard protocol, xterm/VT102 escape sequences | `vt/key.h` |
 | **Paste validator** | Bracketed paste safety checks | `vt/paste.h` |
-| **Color utilities** | RGB extraction, palette management | `vt/color.h` |
 
-## What It Does NOT Give Us
+It does **not** provide: Screen/Grid state, rendering, PTY management, or scrollback. All of those would have been our responsibility.
 
-- **Screen/Grid state** — Terminal.zig and Screen.zig are in the full libghostty, not libghostty-vt. We need to implement our own grid that consumes parser actions.
-- **Rendering** — Metal/OpenGL renderers are Ghostty app code, not library code.
-- **PTY management** — Not in library scope. We use `portable-pty`.
-- **Scrollback** — PageList/Page are full-app code.
+### Current Action Coverage
 
-## Build
+7 of 66 ghostty actions are handled with specific logic. The remaining 59 return `true` (acknowledged) to prevent ghostty from logging unhandled-action warnings.
 
-```bash
-cd 3pp/ghostty
-zig build lib-vt                    # builds libghostty_vt shared lib
-zig build lib-vt -Dtarget=x86_64-linux-gnu  # cross-compile
-```
+**Handled:**
+- `SET_TITLE` — updates terminal tab title
+- `PWD` — updates working directory (OSC 7)
+- `RENDER` — signals frame rendered, sets `needs_render`
+- `COMMAND_FINISHED` — captures exit code + duration, clears busy state, records history
+- `SHOW_CHILD_EXITED` — marks terminal as exited
+- `COLOR_CHANGE` — triggers re-render
+- `RING_BELL` — plays system beep via `NSBeep()`
 
-Outputs: `zig-out/lib/libghostty-vt.{so,dylib}`, headers at `zig-out/include/ghostty/`
-
-Minimum Zig version: **0.15.2** (from build.zig.zon)
-
-## Integration Plan
-
-1. `con-terminal/build.rs` runs `zig build lib-vt` against `3pp/ghostty`
-2. `bindgen` generates Rust FFI from `include/ghostty/vt.h`
-3. Safe Rust wrapper in `con-terminal/src/vt.rs`
-4. Our own `Grid` struct consumes parser actions and maintains screen state
-5. Grid exposes cell data for GPUI canvas rendering
-
-## Key Insight
-
-libghostty-vt is a **parser + encoder library**, not a full terminal emulator. We must implement:
-- Grid/Screen (cell storage, cursor tracking, scrollback)
-- Dirty tracking for efficient rendering
-- Selection (copy/paste rectangle tracking)
-- Alternate screen buffer switching
-
-This is deliberate — it keeps our grid implementation GPUI-friendly rather than fighting Ghostty's Zig data structures across FFI.
-
-## Examples
-
-See `3pp/ghostty/example/c-vt*/` for C integration patterns. Key files:
-- `c-vt/main.c` — OSC parser usage
-- `c-vt-key-encode/main.c` — Key encoding with Kitty protocol
-- `c-vt-sgr/main.c` — SGR attribute parsing
+**Not yet handled (future work):**
+- `OPEN_URL` — hyperlink clicks
+- `START_SEARCH` / `END_SEARCH` — native terminal search
+- `MOUSE_SHAPE` — cursor shape changes
+- `DESKTOP_NOTIFICATION` — system notifications from terminal apps
+- `SET_MOUSE_VISIBILITY` — show/hide cursor during typing

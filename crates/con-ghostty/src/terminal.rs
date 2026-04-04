@@ -65,14 +65,60 @@ impl TerminalColors {
 
 // ── Per-surface state updated by action callbacks ───────────
 
+/// Signal emitted when ghostty fires COMMAND_FINISHED (OSC 133;D).
+/// Consumed once by `take_command_finished()`.
+pub struct CommandFinishedSignal {
+    pub exit_code: Option<i32>,
+    pub duration: std::time::Duration,
+}
+
+/// A completed command from COMMAND_FINISHED, stored in history ring buffer.
+#[derive(Debug, Clone)]
+pub struct CommandRecord {
+    pub exit_code: Option<i32>,
+    pub duration: std::time::Duration,
+}
+
 /// Terminal state received via ghostty action callbacks.
 /// Each GhosttyTerminal has its own instance, stored as surface userdata.
-#[derive(Default)]
 pub struct TerminalState {
     pub title: Option<String>,
     pub pwd: Option<String>,
     pub needs_render: bool,
     pub child_exited: bool,
+    /// Last exit code from COMMAND_FINISHED (persists across commands).
+    pub last_exit_code: Option<i32>,
+    /// Last command duration from COMMAND_FINISHED.
+    pub last_command_duration: Option<std::time::Duration>,
+    /// One-shot signal for the most recent COMMAND_FINISHED.
+    /// Set by action callback, consumed by terminal_exec handler.
+    pub command_finished_signal: Option<CommandFinishedSignal>,
+    /// Circular buffer of recent command completions (last 20).
+    pub command_history: Vec<CommandRecord>,
+    /// Whether a command is currently running (between command_start and command_finished).
+    /// Set true when we write a command to PTY, cleared by COMMAND_FINISHED.
+    pub is_busy: bool,
+    /// Surface handle — stored so clipboard callbacks can complete requests.
+    pub surface: ffi::ghostty_surface_t,
+}
+
+const MAX_COMMAND_HISTORY: usize = 20;
+
+impl Default for TerminalState {
+    fn default() -> Self {
+        Self {
+            title: None,
+            pwd: None,
+            needs_render: false,
+            child_exited: false,
+            last_exit_code: None,
+            last_command_duration: None,
+            command_finished_signal: None,
+            command_history: Vec::with_capacity(MAX_COMMAND_HISTORY),
+            is_busy: false,
+            surface: std::ptr::null_mut(),
+        }
+    }
 }
 
 pub type StateRef = Arc<Mutex<TerminalState>>;
@@ -241,6 +287,9 @@ impl GhosttyApp {
             return Err("ghostty_surface_new returned null".into());
         }
 
+        // Store the surface handle so clipboard callbacks can complete requests.
+        state.lock().surface = surface;
+
         Ok(GhosttyTerminal {
             surface,
             state,
@@ -363,6 +412,12 @@ impl GhosttyTerminal {
     /// that callers shouldn't need to know about.
     pub fn write_to_pty(&self, data: &[u8]) {
         let text = String::from_utf8_lossy(data);
+
+        // If this looks like a command (ends with newline), mark as busy
+        if text.contains('\n') {
+            self.state.lock().is_busy = true;
+        }
+
         let mut pending_text = String::new();
 
         for ch in text.chars() {
@@ -439,6 +494,50 @@ impl GhosttyTerminal {
     /// Whether the child process has exited.
     pub fn is_alive(&self) -> bool {
         !unsafe { ffi::ghostty_surface_process_exited(self.surface) }
+    }
+
+    /// Take the command-finished signal (if any). Consuming — returns None on second call.
+    /// Used by terminal_exec to detect command completion with exit code.
+    pub fn take_command_finished(&self) -> Option<CommandFinishedSignal> {
+        self.state.lock().command_finished_signal.take()
+    }
+
+    /// Last exit code from the most recent COMMAND_FINISHED action.
+    pub fn last_exit_code(&self) -> Option<i32> {
+        self.state.lock().last_exit_code
+    }
+
+    /// Last command duration from the most recent COMMAND_FINISHED action.
+    pub fn last_command_duration(&self) -> Option<std::time::Duration> {
+        self.state.lock().last_command_duration
+    }
+
+    /// Whether a command is currently running (between write_to_pty and COMMAND_FINISHED).
+    pub fn is_busy(&self) -> bool {
+        self.state.lock().is_busy
+    }
+
+    /// Mark the terminal as busy (called when writing a command to PTY).
+    pub fn set_busy(&self) {
+        self.state.lock().is_busy = true;
+    }
+
+    /// Recent command history (exit codes + durations, last 20).
+    pub fn command_history(&self) -> Vec<CommandRecord> {
+        self.state.lock().command_history.clone()
+    }
+
+    /// Detect remote hostname from PWD (OSC 7 URIs contain file://hostname/path).
+    pub fn detected_remote_host(&self) -> Option<String> {
+        let pwd = self.state.lock().pwd.clone()?;
+        // OSC 7 sends URIs like "file://hostname/path"
+        if let Some(rest) = pwd.strip_prefix("file://") {
+            let host = rest.split('/').next().unwrap_or("");
+            if !host.is_empty() && host != "localhost" && host != "" {
+                return Some(host.to_string());
+            }
+        }
+        None
     }
 
     /// Whether the terminal has a text selection.
@@ -579,6 +678,22 @@ impl GhosttyTerminal {
                 self.read_screen_text(max_lines)
             }
         }
+    }
+
+    /// Search terminal text (viewport + scrollback) for a pattern.
+    /// Returns (line_number, matched_line) tuples, up to `limit` results.
+    pub fn search_text(&self, pattern: &str, limit: usize) -> Vec<(usize, String)> {
+        let lines = self.read_recent_lines(5000); // read up to 5000 lines of scrollback
+        let mut results = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if line.contains(pattern) {
+                results.push((i, line.clone()));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        results
     }
 
     /// Check and clear the needs_render flag.
@@ -730,43 +845,150 @@ unsafe extern "C" fn action_callback(
                 state.lock().needs_render = true;
                 true
             }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_COMMAND_FINISHED => {
+                let cf = action.action.command_finished;
+                let exit_code = if cf.exit_code < 0 { None } else { Some(cf.exit_code as i32) };
+                let duration = std::time::Duration::from_nanos(cf.duration);
+                let mut s = state.lock();
+                s.last_exit_code = exit_code;
+                s.last_command_duration = Some(duration);
+                s.command_finished_signal = Some(CommandFinishedSignal { exit_code, duration });
+                s.is_busy = false;
+                // Append to command history ring buffer
+                if s.command_history.len() >= MAX_COMMAND_HISTORY {
+                    s.command_history.remove(0);
+                }
+                s.command_history.push(CommandRecord { exit_code, duration });
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SHOW_CHILD_EXITED => {
+                state.lock().child_exited = true;
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_COLOR_CHANGE => {
+                state.lock().needs_render = true;
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_RING_BELL => {
+                // macOS system beep
+                #[cfg(target_os = "macos")]
+                {
+                    unsafe extern "C" { fn NSBeep(); }
+                    NSBeep();
+                }
+                true
+            }
             _ => false,
         }
     }
 }
 
-/// Clipboard read stub — returns false (clipboard not available).
-/// Ghostty calls this without null-checking, so it must always be set.
+/// Clipboard read — ghostty wants to paste. Read from macOS pasteboard and complete the request.
 unsafe extern "C" fn read_clipboard_callback(
-    _userdata: *mut c_void,
+    userdata: *mut c_void,
     _clipboard: ffi::ghostty_clipboard_e,
-    _request: *mut c_void,
+    request: *mut c_void,
 ) -> bool {
-    // TODO: integrate with GPUI/macOS clipboard for paste support
-    false
+    unsafe {
+        if userdata.is_null() {
+            return false;
+        }
+
+        let state = &*(userdata as *const StateRef);
+        let surface = state.lock().surface;
+        if surface.is_null() {
+            return false;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            use objc::{class, msg_send, sel, sel_impl};
+            use objc::runtime::Object;
+
+            let pb: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
+            // NSPasteboardTypeString = @"public.utf8-plain-text"
+            let type_str = CString::new("public.utf8-plain-text").unwrap();
+            let ns_type: *mut Object = msg_send![class!(NSString), stringWithUTF8String: type_str.as_ptr()];
+            let text: *mut Object = msg_send![pb, stringForType: ns_type];
+            if text.is_null() {
+                let empty = c"";
+                ffi::ghostty_surface_complete_clipboard_request(
+                    surface, empty.as_ptr(), request, false,
+                );
+                return true;
+            }
+            let utf8: *const std::os::raw::c_char = msg_send![text, UTF8String];
+            ffi::ghostty_surface_complete_clipboard_request(surface, utf8, request, false);
+            return true;
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
 }
 
-/// Clipboard confirmation stub — does nothing.
-/// Ghostty calls this without null-checking, so it must always be set.
+/// Clipboard confirmation — ghostty confirmed a clipboard read (e.g. OSC 52).
 unsafe extern "C" fn confirm_read_clipboard_callback(
-    _userdata: *mut c_void,
-    _text: *const std::os::raw::c_char,
-    _request: *mut c_void,
+    userdata: *mut c_void,
+    text: *const std::os::raw::c_char,
+    request: *mut c_void,
     _request_type: ffi::ghostty_clipboard_request_e,
 ) {
-    // TODO: implement clipboard confirmation UI
+    unsafe {
+        if userdata.is_null() || text.is_null() {
+            return;
+        }
+        let state = &*(userdata as *const StateRef);
+        let surface = state.lock().surface;
+        if !surface.is_null() {
+            ffi::ghostty_surface_complete_clipboard_request(surface, text, request, true);
+        }
+    }
 }
 
-/// Clipboard write stub — does nothing.
-/// Ghostty calls this without null-checking, so it must always be set.
+/// Clipboard write — ghostty wants to copy (selection, OSC 52). Write to macOS pasteboard.
 unsafe extern "C" fn write_clipboard_callback(
     _userdata: *mut c_void,
     _clipboard: ffi::ghostty_clipboard_e,
-    _content: *const ffi::ghostty_clipboard_content_s,
-    _content_count: usize,
+    content: *const ffi::ghostty_clipboard_content_s,
+    content_count: usize,
     _confirm: bool,
 ) {
-    // TODO: integrate with GPUI/macOS clipboard for copy support
+    unsafe {
+        if content.is_null() || content_count == 0 {
+            return;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            use objc::{class, msg_send, sel, sel_impl};
+            use objc::runtime::Object;
+
+            let items = std::slice::from_raw_parts(content, content_count);
+
+            for item in items {
+                if item.data.is_null() {
+                    continue;
+                }
+                let text = CStr::from_ptr(item.data).to_string_lossy();
+                if text.is_empty() {
+                    continue;
+                }
+
+                let pb: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
+                let _: () = msg_send![pb, clearContents];
+
+                let cstr = CString::new(text.as_ref()).unwrap_or_default();
+                let ns_str: *mut Object = msg_send![class!(NSString), stringWithUTF8String: cstr.as_ptr()];
+
+                // NSPasteboardTypeString = @"public.utf8-plain-text"
+                let type_cstr = CString::new("public.utf8-plain-text").unwrap();
+                let ns_type: *mut Object = msg_send![class!(NSString), stringWithUTF8String: type_cstr.as_ptr()];
+                let _success: bool = msg_send![pb, setString: ns_str forType: ns_type];
+                return;
+            }
+        }
+    }
 }
 
 unsafe extern "C" fn close_surface_callback(

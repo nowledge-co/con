@@ -7,9 +7,11 @@ con is an open-source, cross-platform, GPU-accelerated terminal emulator with a 
 ## Stack
 
 - **UI**: GPUI-CE v0.3.3 (community edition of Zed's framework, Apache 2.0)
-- **Terminal emulation**: vte v0.15 (pure Rust VT parser) + portable-pty
+- **Terminal backend (macOS)**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. Primary backend on macOS.
+- **Terminal backend (fallback)**: vte v0.15 (pure Rust VT parser) + portable-pty + GPUI canvas rendering. Used on Linux/Windows and as test fallback.
+- **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API (surface lifecycle, action callbacks, clipboard, key/mouse input)
 - **AI agent**: Rig v0.34.0 (from crates.io, 13 providers, Tool trait)
-- **PTY**: portable-pty crate (cross-platform)
+- **PTY**: portable-pty crate (cross-platform, used by legacy backend)
 - **Socket API**: planned — Unix domain sockets, JSON-RPC (cmux-inspired)
 
 ## Repository Layout
@@ -25,7 +27,8 @@ kingston/
 ├── crates/
 │   ├── con/           # Main binary (GPUI app shell)
 │   ├── con-core/      # Shared logic (harness, config, session)
-│   ├── con-terminal/  # Terminal emulation (grid, pty, input encoding)
+│   ├── con-terminal/  # Terminal emulation — legacy vte backend (grid, pty, input encoding)
+│   ├── con-ghostty/   # Ghostty FFI wrapper — primary macOS backend (libghostty C API)
 │   ├── con-agent/     # AI harness (Rig 0.34, tools, conversation)
 │   └── con-cli/       # CLI + socket client (stub)
 ├── postmortem/        # Integration & incident postmortems

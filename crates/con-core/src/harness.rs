@@ -369,6 +369,7 @@ impl AgentHarness {
             recent_output,
             last_command: grid.last_command.clone(),
             last_exit_code: grid.last_exit_code,
+            last_command_duration_secs: None, // legacy Grid doesn't track duration
             git_branch,
             ssh_host,
             tmux_session,
@@ -388,6 +389,7 @@ impl AgentHarness {
         cwd: Option<String>,
         last_command: Option<String>,
         last_exit_code: Option<i32>,
+        last_command_duration_secs: Option<f64>,
         is_busy: bool,
         focused_pane_index: usize,
         focused_hostname: Option<String>,
@@ -504,6 +506,7 @@ impl AgentHarness {
             recent_output: recent_output.to_vec(),
             last_command,
             last_exit_code,
+            last_command_duration_secs,
             git_branch,
             ssh_host,
             tmux_session,

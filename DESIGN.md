@@ -38,10 +38,14 @@ An open-source, cross-platform, GPU-accelerated terminal emulator that treats AI
 │  └────────┼──────────────┼────────────────────────────┘  │
 │           │              │                               │
 │  ┌────────┴────────┐  ┌──┴──────────────┐               │
-│  │ con-terminal    │  │ con-agent       │               │
-│  │ (vte parser     │  │ (rig 0.34,      │               │
-│  │  + PTY)         │  │  multi-provider)     │               │
-│  └─────────────────┘  └─────────────────┘               │
+│  │ con-ghostty     │  │ con-agent       │               │
+│  │ (libghostty FFI │  │ (rig 0.34,      │               │
+│  │  Metal, macOS)  │  │  multi-provider)│               │
+│  ├─────────────────┤  └─────────────────┘               │
+│  │ con-terminal    │                                    │
+│  │ (vte + PTY,     │                                    │
+│  │  fallback)      │                                    │
+│  └─────────────────┘                                    │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -73,12 +77,18 @@ kingston/
 │   │       ├── config.rs      # con config (TOML)
 │   │       └── suggestions.rs # AI shell command suggestions
 │   │
-│   ├── con-terminal/          # terminal emulation layer
+│   ├── con-terminal/          # terminal emulation — legacy vte backend
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── pty.rs         # cross-platform PTY (portable-pty)
 │   │       ├── grid.rs        # terminal grid + VTE Perform impl
 │   │       └── input.rs       # keyboard → escape sequence encoding
+│   │
+│   ├── con-ghostty/           # ghostty FFI — primary macOS backend
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── ffi.rs         # C API bindings (libghostty types, functions)
+│   │       └── terminal.rs    # GhosttyApp, GhosttyTerminal, TerminalState, action callbacks
 │   │
 │   ├── con-agent/             # AI agent harness (Rig 0.34)
 │   │   └── src/
@@ -119,16 +129,28 @@ kingston/
 
 GPUI gives us Zed-level text rendering quality (critical for a terminal) and a proven canvas API for custom grid drawing. The `termy` project in awesome-gpui proves terminal embedding works.
 
-### 2. Terminal Core: vte + portable-pty
+### 2. Terminal Core: Dual Backend (Ghostty + vte)
 
-**Current approach (v0.1):**
+**Primary backend — libghostty (macOS):**
+
+- **Full Ghostty** terminal emulator embedded via its C API (`libghostty`)
+- GPU-accelerated Metal rendering via native NSView composited into GPUI's window
+- Complete VT compliance: Kitty keyboard protocol, sixel, hyperlinks, OSC 133 shell integration
+- Action callback system: 66 actions (SET_TITLE, PWD, COMMAND_FINISHED, RING_BELL, COLOR_CHANGE, SHOW_CHILD_EXITED, etc.)
+- `con-ghostty` crate provides a safe Rust FFI wrapper: `GhosttyApp` (singleton), `GhosttyTerminal` (per-surface), `TerminalState` (action-driven state)
+- Clipboard integration via NSPasteboard, key/mouse input forwarded through ghostty's input API
+
+**Fallback backend — vte + portable-pty (all platforms):**
 
 - **vte** (v0.15) — pure Rust VT100 parser, implements `Perform` trait for dispatch
 - Our `Grid` struct implements `vte::Perform` directly — handles print, CSI dispatch, SGR, OSC, ESC, alternate screen, scroll regions, cursor shapes
 - **portable-pty** — cross-platform PTY management (macOS/Linux/Windows)
 - 256-color + truecolor rendering, scrollback buffer
+- GPUI canvas rendering (software text rasterization)
 
-**Future (post-MVP):** Evaluate migrating to libghostty-vt for production-grade VT compliance (Kitty keyboard protocol, hyperlinks, full sixel support). The vte-based approach is sufficient for the current milestone and avoids the Zig build dependency.
+**Unified abstraction — `TerminalPane` enum:**
+
+Both backends are wrapped by `TerminalPane` in the `con` crate. All workspace, agent, and pane tree code works through this common API. Grid-specific features (command blocks, OSC 133 text search) gracefully degrade when using ghostty, while ghostty-specific features (COMMAND_FINISHED with exit code + duration, Metal rendering) are unavailable on the legacy backend.
 
 ### 3. AI Agent Harness: Rig
 
@@ -329,8 +351,8 @@ When the agent needs to run a command:
 1. Agent produces a `ShellExec` tool call via Rig
 2. con-core creates a new (or reuses) terminal pane
 3. Command is written to PTY
-4. Output is captured via grid state + OSC 133 boundaries
-5. Result is fed back to agent
+4. Output is captured via COMMAND_FINISHED action (ghostty — instant, with exit code + duration) or OSC 133 boundaries (legacy — callback-driven) or screen scraping (timeout fallback)
+5. Result is fed back to agent with exit code and duration metadata
 
 This means the user **sees** what the agent does — no hidden subprocess. Full transparency.
 
@@ -411,27 +433,29 @@ new-tab = "cmd+t"
 
 ## Why This Stack Wins
 
-1. **Ghostty's terminal correctness** — years of VT compat work, free
+1. **Ghostty's terminal correctness** — full Ghostty embedded via libghostty, Metal GPU rendering, complete VT compliance including Kitty keyboard and OSC 133 shell integration
 2. **GPUI's rendering quality** — Zed proves it handles text beautifully at scale
 3. **Rig's agent abstractions** — swap providers, define tools in Rust, stream tokens
 4. **Rust's performance** — sub-millisecond input latency, <100MB RAM
-5. **Cross-platform from day 1** — GPUI + portable-pty + libghostty-vt all support macOS/Linux/Windows
+5. **Cross-platform from day 1** — GPUI + portable-pty support macOS/Linux/Windows; Ghostty primary on macOS, vte fallback elsewhere
 6. **Open source** — fill the gap Warp left
 
 ---
 
 ## Resolved Decisions
 
-### 1. Terminal Parsing: vte (Pure Rust)
+### 1. Terminal Backend: Full Ghostty (macOS Primary) + vte Fallback
 
-**Decision:** Use `vte` crate (v0.15) for VT parsing instead of libghostty-vt FFI.
+**Decision:** Embed full Ghostty via libghostty C API as the primary macOS backend. Retain vte as a cross-platform fallback.
 
 **Rationale:**
 
-- Zero build complexity — no Zig toolchain, no FFI, no bindgen
-- Pure Rust `Perform` trait maps cleanly to our Grid implementation
-- Sufficient for MVP: handles all common VT100/xterm sequences
-- Future migration to libghostty-vt remains possible if we need Kitty keyboard protocol or sixel graphics
+- Ghostty provides production-grade VT compliance (Kitty keyboard, sixel, hyperlinks, OSC 133) without reimplementing it
+- GPU-accelerated Metal rendering via native NSView — superior performance to software rasterization
+- Action callback system gives us COMMAND_FINISHED (exit code + duration), eliminating blind timeouts for agent command execution
+- The `con-ghostty` crate is a thin FFI wrapper (~800 lines), not a fork — upstream Ghostty updates flow through cleanly
+- vte fallback preserved for Linux/Windows and CI environments where Ghostty isn't available
+- `TerminalPane` enum abstracts both backends — workspace and agent code is backend-agnostic
 
 ### 2. GPUI IME: Production-Ready
 

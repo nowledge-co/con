@@ -308,12 +308,22 @@ pub struct ghostty_action_pwd_s {
     pub pwd: *const c_char,
 }
 
+/// Action payload for COMMAND_FINISHED (shell integration OSC 133;D).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_command_finished_s {
+    /// Exit code: -1 if unknown, otherwise 0-255.
+    pub exit_code: i16,
+    /// Duration the command was running, in nanoseconds.
+    pub duration: u64,
+}
+
 /// Action union — only relevant fields are accessed based on tag.
 #[repr(C)]
 pub union ghostty_action_u {
     pub set_title: ghostty_action_set_title_s,
     pub pwd: ghostty_action_pwd_s,
-    // Other action payloads omitted — we only need title and pwd for now.
+    pub command_finished: ghostty_action_command_finished_s,
     // The union size is determined by the largest variant in ghostty.h;
     // we pad to ensure correct size.
     pub _pad: [u8; 128],
@@ -516,6 +526,14 @@ unsafe extern "C" {
     pub fn ghostty_surface_update_config(
         surface: ghostty_surface_t,
         config: ghostty_config_t,
+    );
+
+    // Clipboard
+    pub fn ghostty_surface_complete_clipboard_request(
+        surface: ghostty_surface_t,
+        text: *const c_char,
+        request: *mut c_void,
+        confirmed: bool,
     );
 
     // macOS-specific

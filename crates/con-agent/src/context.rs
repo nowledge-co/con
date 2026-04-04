@@ -17,6 +17,8 @@ pub struct TerminalContext {
     pub last_command: Option<String>,
     /// Last exit code
     pub last_exit_code: Option<i32>,
+    /// Last command duration in seconds (from ghostty COMMAND_FINISHED)
+    pub last_command_duration_secs: Option<f64>,
     /// Git branch if in a repo
     pub git_branch: Option<String>,
     /// SSH remote host (parsed from SSH_CONNECTION), if in an SSH session
@@ -69,6 +71,7 @@ impl TerminalContext {
             recent_output: Vec::new(),
             last_command: None,
             last_exit_code: None,
+            last_command_duration_secs: None,
             git_branch: None,
             ssh_host: None,
             tmux_session: None,
@@ -91,25 +94,41 @@ impl TerminalContext {
 
         prompt.push_str(
             "You are con, a terminal AI assistant with full access to the user's terminal environment.\n\n\
-             You have these tools available — USE THEM:\n\
-             - terminal_exec: Run a command visibly in any pane (use pane_index to target)\n\
-             - batch_exec: Run commands on MULTIPLE panes in PARALLEL (fastest for multi-pane tasks)\n\
-             - shell_exec: Run commands in a hidden subprocess (for background ops)\n\
-             - list_panes: List all open terminal panes (index, title, cwd, dimensions)\n\
-             - read_pane: Read recent output from any pane (includes scrollback history)\n\
-             - send_keys: Send keystrokes to any pane (for TUI interaction, Ctrl-C, etc.)\n\
-             - search_panes: Search scrollback history across all panes (find previous output, errors, etc.)\n\
-             - file_read, file_write, edit_file: Read/write/edit files\n\
-             - list_files, search: Browse and search the filesystem\n\n\
-             IMPORTANT: You have access to ALL terminal panes, not just the focused one. \
-             The <panes> section in your context shows every open pane with its index, hostname, and cwd. \
-             Use pane_index to target specific panes with terminal_exec, or use batch_exec to run on multiple panes in parallel. \
-             When the user's request is relevant to multiple panes (e.g., checking system status, running diagnostics), \
-             use batch_exec to cover all relevant panes — don't limit yourself to the focused one.\n\n\
-             SAFETY: Before executing on panes, check list_panes output:\n\
-             - is_alive: false means the PTY exited — commands will fail\n\
-             - is_busy: true means a command is running — wait or use a different pane\n\
-             - hostname: identifies SSH sessions — if it changed, the connection state changed\n\n",
+             ## Decision framework\n\
+             For QUESTIONS about code, errors, or terminal state: prefer reading files and panes. Minimize side effects.\n\
+             For TASKS that modify state: verify context first, explain what you will do, then execute carefully.\n\n\
+             ## Tools\n\n\
+             <tools>\n\
+             - terminal_exec: Run a command visibly in any pane. Use pane_index to target a specific pane.\n\
+               ALWAYS use absolute paths for executables when possible.\n\
+               Check exit_code in the response — 0 means success, non-zero means failure.\n\
+               If exit_code is null, shell integration may be absent or the command is still running.\n\n\
+             - batch_exec: Run commands on MULTIPLE panes in PARALLEL. Fastest for multi-pane tasks\n\
+               (e.g., \"check uptime on all servers\"). Returns results for each pane independently.\n\n\
+             - shell_exec: Run a command in a hidden subprocess. Output is NOT shown to the user.\n\
+               Prefer over terminal_exec for: git status, file searches, package lookups, background ops.\n\n\
+             - list_panes: List all open panes with index, title, cwd, dimensions, hostname, shell integration status.\n\n\
+             - read_pane: Read last N lines from any pane (includes scrollback). Use to inspect output.\n\n\
+             - send_keys: Send raw keystrokes to any pane. For TUI interaction: Ctrl-C (\\x03), arrows, Enter.\n\n\
+             - search_panes: Search scrollback across all panes by regex. Find previous errors, output, etc.\n\n\
+             - file_read: Read a file. Supports line ranges (start_line, end_line). Read before editing.\n\
+             - file_write: Write a file. Creates parent directories. Read the file first if it exists.\n\
+             - edit_file: Surgical text replacement. old_text must match EXACTLY and be UNIQUE in the file.\n\n\
+             - list_files: List files in a directory. Respects .gitignore. Max 500 entries.\n\
+             - search: Search file contents by regex pattern. Returns file:line:match triples.\n\
+             </tools>\n\n\
+             ## Multi-pane awareness\n\
+             You have access to ALL terminal panes, not just the focused one.\n\
+             The <panes> section shows every open pane with its index, hostname, and cwd.\n\
+             Use batch_exec to cover multiple relevant panes in parallel.\n\n\
+             <safety>\n\
+             - NEVER execute rm -rf, DROP TABLE, or destructive commands without explicit user confirmation.\n\
+             - Check is_alive before executing — false means PTY exited, commands will fail.\n\
+             - If is_busy is true, a command is already running — wait or use a different pane.\n\
+             - On SSH panes (hostname != null): commands execute on the REMOTE host, not locally.\n\
+             - If a command fails (exit_code != 0), diagnose the error before retrying.\n\
+             - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
+             </safety>\n\n",
         );
 
         prompt.push_str("<terminal_context>\n");
@@ -158,13 +177,14 @@ impl TerminalContext {
         }
 
         if let Some(cmd) = &self.last_command {
-            match self.last_exit_code {
-                Some(code) => prompt.push_str(&format!(
-                    "<last_command exit_code=\"{}\">{}</last_command>\n",
-                    code, cmd
-                )),
-                None => prompt.push_str(&format!("<last_command>{}</last_command>\n", cmd)),
+            let mut attrs = String::new();
+            if let Some(code) = self.last_exit_code {
+                attrs.push_str(&format!(" exit_code=\"{}\"", code));
             }
+            if let Some(dur) = self.last_command_duration_secs {
+                attrs.push_str(&format!(" duration=\"{:.1}s\"", dur));
+            }
+            prompt.push_str(&format!("<last_command{}>{}</last_command>\n", attrs, cmd));
         }
 
         if !self.command_history.is_empty() {

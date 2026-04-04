@@ -64,7 +64,7 @@ impl TerminalPane {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().detected_remote_host(),
             #[cfg(target_os = "macos")]
-            Self::Ghostty(_) => None, // ghostty doesn't expose this
+            Self::Ghostty(e) => e.read(cx).terminal().and_then(|t| t.detected_remote_host()),
         }
     }
 
@@ -72,7 +72,7 @@ impl TerminalPane {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().is_busy(),
             #[cfg(target_os = "macos")]
-            Self::Ghostty(_) => false, // ghostty doesn't expose OSC 133 state
+            Self::Ghostty(e) => e.read(cx).terminal().map(|t| t.is_busy()).unwrap_or(false),
         }
     }
 
@@ -231,7 +231,12 @@ impl TerminalPane {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().last_command.clone(),
             #[cfg(target_os = "macos")]
-            Self::Ghostty(_) => None,
+            Self::Ghostty(_) => {
+                // Ghostty doesn't capture the command text from OSC 133;C,
+                // only exit code + duration from COMMAND_FINISHED.
+                // TODO: capture command text when ghostty exposes it
+                None
+            }
         }
     }
 
@@ -239,7 +244,36 @@ impl TerminalPane {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().last_exit_code,
             #[cfg(target_os = "macos")]
-            Self::Ghostty(_) => None,
+            Self::Ghostty(e) => e.read(cx).terminal().and_then(|t| t.last_exit_code()),
+        }
+    }
+
+    /// Take the command-finished signal from ghostty (consuming).
+    /// Returns (exit_code, duration). Only available for ghostty panes.
+    pub fn take_command_finished(
+        &self,
+        cx: &App,
+    ) -> Option<(Option<i32>, std::time::Duration)> {
+        match self {
+            Self::Legacy(_) => None, // Legacy uses OSC 133 callback
+            #[cfg(target_os = "macos")]
+            Self::Ghostty(e) => e
+                .read(cx)
+                .terminal()
+                .and_then(|t| t.take_command_finished())
+                .map(|sig| (sig.exit_code, sig.duration)),
+        }
+    }
+
+    /// Last command duration from ghostty's COMMAND_FINISHED action.
+    pub fn last_command_duration(&self, cx: &App) -> Option<std::time::Duration> {
+        match self {
+            Self::Legacy(_) => None,
+            #[cfg(target_os = "macos")]
+            Self::Ghostty(e) => e
+                .read(cx)
+                .terminal()
+                .and_then(|t| t.last_command_duration()),
         }
     }
 
@@ -261,12 +295,16 @@ impl TerminalPane {
         }
     }
 
-    /// Search visible text. Returns empty for ghostty.
+    /// Search terminal text (viewport + scrollback) for a pattern.
     pub fn search_text(&self, pattern: &str, limit: usize, cx: &App) -> Vec<(usize, String)> {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().search_text(pattern, limit),
             #[cfg(target_os = "macos")]
-            Self::Ghostty(_) => Vec::new(),
+            Self::Ghostty(e) => {
+                e.read(cx).terminal()
+                    .map(|t| t.search_text(pattern, limit))
+                    .unwrap_or_default()
+            }
         }
     }
 }

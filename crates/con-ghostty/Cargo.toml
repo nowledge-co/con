@@ -14,3 +14,4 @@ parking_lot.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+objc = "0.2"

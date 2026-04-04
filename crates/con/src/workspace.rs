@@ -417,6 +417,7 @@ impl ConWorkspace {
                     focused.current_dir(cx),
                     focused.last_command(cx),
                     focused.last_exit_code(cx),
+                    focused.last_command_duration(cx).map(|d| d.as_secs_f64()),
                     focused.is_busy(cx),
                     focused_pane_index,
                     focused_hostname,
@@ -911,9 +912,27 @@ impl ConWorkspace {
                         last_cursor = cursor_pos;
                     }
                 } else {
-                    // Ghostty: no Grid access, just wait via timeout
+                    // Ghostty: poll COMMAND_FINISHED action for reliable completion
+                    let finished = _this.update(cx, |_ws, cx| {
+                        pane_for_fallback.take_command_finished(cx)
+                    }).ok().flatten();
+
+                    if let Some((exit_code, _duration)) = finished {
+                        // Command finished with exit code from shell integration
+                        let output = _this.update(cx, |_ws, cx| {
+                            pane_for_fallback.recent_lines(50, cx).join("\n")
+                        }).unwrap_or_default();
+                        let _ = fallback_response_tx.try_send(TerminalExecResponse {
+                            output,
+                            exit_code,
+                        });
+                        return;
+                    }
+
+                    // Safety net: timeout after 29 × 500ms if no signal arrives
+                    // (e.g., shell without integration, or very long command)
                     stable_count += 1;
-                    if stable_count >= 6 { // 6 × 500ms = 3s timeout
+                    if stable_count >= 29 {
                         break;
                     }
                 }
@@ -966,9 +985,16 @@ impl ConWorkspace {
                         let title = terminal.title(cx)
                             .unwrap_or_else(|| format!("Pane {}", idx + 1));
                         let (cols, rows) = terminal.grid_size(cx);
-                        let has_shell_integration = terminal.as_grid(cx)
-                            .map(|g| g.lock().last_prompt_row.is_some())
-                            .unwrap_or(false);
+                        // Ghostty always has shell integration (COMMAND_FINISHED
+                        // action fires via OSC 133). Legacy only has it if a prompt
+                        // has been seen.
+                        let has_shell_integration = if terminal.as_grid(cx).is_some() {
+                            terminal.as_grid(cx)
+                                .map(|g| g.lock().last_prompt_row.is_some())
+                                .unwrap_or(false)
+                        } else {
+                            true // ghostty pane
+                        };
                         PaneInfo {
                             index: idx + 1,
                             title,
