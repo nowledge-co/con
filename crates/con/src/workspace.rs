@@ -309,6 +309,15 @@ impl ConWorkspace {
         let initial_terminal = tabs[active_tab].pane_tree.focused_terminal();
         initial_terminal.focus(window, cx);
 
+        // Hide non-active tabs' ghostty NSViews so only the active tab is visible
+        for (i, tab) in tabs.iter().enumerate() {
+            if i != active_tab {
+                for terminal in tab.pane_tree.all_terminals() {
+                    terminal.set_native_view_visible(false, cx);
+                }
+            }
+        }
+
         Self {
             sidebar,
             tabs,
@@ -1147,6 +1156,12 @@ impl ConWorkspace {
         let tab_number = self.tabs.len() + 1;
         let old_active = self.active_tab;
 
+        // Hide old tab's ghostty NSViews and unfocus surfaces
+        for t in self.tabs[old_active].pane_tree.all_terminals() {
+            t.set_native_view_visible(false, cx);
+            t.set_ghostty_focus(false, cx);
+        }
+
         self.tabs.push(Tab {
             pane_tree: PaneTree::new(terminal.clone()),
             title: format!("Terminal {}", tab_number),
@@ -1166,12 +1181,13 @@ impl ConWorkspace {
         });
         self.tabs[old_active].panel_state = outgoing;
 
+        terminal.set_ghostty_focus(true, cx);
         terminal.focus(window, cx);
         self.save_session(cx);
         cx.notify();
     }
 
-    fn close_tab(&mut self, _: &CloseTab, _window: &mut Window, cx: &mut Context<Self>) {
+    fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.tabs.len() <= 1 {
             return;
         }
@@ -1179,6 +1195,11 @@ impl ConWorkspace {
         {
             let conv = self.tabs[self.active_tab].session.conversation();
             let _ = conv.lock().save();
+        }
+        // Hide closing tab's ghostty NSViews
+        for t in self.tabs[self.active_tab].pane_tree.all_terminals() {
+            t.set_native_view_visible(false, cx);
+            t.set_ghostty_focus(false, cx);
         }
         self.tabs.remove(self.active_tab);
         if self.active_tab >= self.tabs.len() {
@@ -1192,6 +1213,13 @@ impl ConWorkspace {
         self.agent_panel.update(cx, |panel, cx| {
             panel.swap_state(incoming, cx);
         });
+        // Show and focus new active tab's ghostty views
+        for t in self.tabs[self.active_tab].pane_tree.all_terminals() {
+            t.set_native_view_visible(true, cx);
+        }
+        let focused = self.tabs[self.active_tab].pane_tree.focused_terminal();
+        focused.set_ghostty_focus(true, cx);
+        focused.focus(window, cx);
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
@@ -1379,9 +1407,23 @@ impl ConWorkspace {
         // Stash outgoing state into the old tab
         self.tabs[old_active].panel_state = outgoing;
 
+        // Hide old tab's ghostty NSViews and unfocus surfaces
+        for terminal in self.tabs[old_active].pane_tree.all_terminals() {
+            terminal.set_native_view_visible(false, cx);
+            terminal.set_ghostty_focus(false, cx);
+        }
+
         self.active_tab = index;
         self.tabs[index].needs_attention = false;
-        self.tabs[index].pane_tree.focused_terminal().focus(window, cx);
+
+        // Show new tab's ghostty NSViews and focus active surface
+        for terminal in self.tabs[index].pane_tree.all_terminals() {
+            terminal.set_native_view_visible(true, cx);
+        }
+        let focused = self.tabs[index].pane_tree.focused_terminal();
+        focused.set_ghostty_focus(true, cx);
+        focused.focus(window, cx);
+
         self.save_session(cx);
         cx.notify();
     }
@@ -1399,12 +1441,21 @@ impl ConWorkspace {
         }
     }
 
-    /// Show or hide all ghostty NSViews across all tabs.
-    /// Used for z-order management when GPUI overlays (modals) appear.
+    /// Show or hide ghostty NSViews for z-order management.
+    /// When showing, only the active tab's views are made visible.
+    /// When hiding, all views are hidden (for modal overlays).
     fn set_ghostty_views_visible(&self, visible: bool, cx: &App) {
-        for tab in &self.tabs {
-            for terminal in tab.pane_tree.all_terminals() {
-                terminal.set_native_view_visible(visible, cx);
+        if visible {
+            // Only show the active tab's views
+            for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
+                terminal.set_native_view_visible(true, cx);
+            }
+        } else {
+            // Hide all tabs' views for modal z-order
+            for tab in &self.tabs {
+                for terminal in tab.pane_tree.all_terminals() {
+                    terminal.set_native_view_visible(false, cx);
+                }
             }
         }
     }
@@ -1583,13 +1634,19 @@ impl Render for ConWorkspace {
         // Tab bar — macOS-style with close buttons and quiet active treatment
         let tab_count = self.tabs.len();
         let mut tab_bar = div()
+            .id("tab-bar")
             .flex()
             .h(px(36.0))
             .bg(theme.title_bar)
             .items_end()
             .pl(px(78.0)) // leave room for traffic lights
             .pr(px(8.0))
-            .gap(px(1.0));
+            .gap(px(1.0))
+            .on_click(|event, window, _cx| {
+                if event.click_count() == 2 {
+                    window.titlebar_double_click();
+                }
+            });
 
         for (index, tab) in self.tabs.iter().enumerate() {
             let is_active = index == self.active_tab;
@@ -1611,19 +1668,24 @@ impl Render for ConWorkspace {
             // Close button — visible on hover for inactive tabs, always for active
             let show_close = tab_count > 1;
             let close_button = if show_close {
+                let mut close_el = div()
+                    .id(close_id)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(18.0))
+                    .rounded(px(4.0))
+                    .ml(px(4.0))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.muted.opacity(0.25)));
+                // Only show on hover for inactive tabs
+                if !is_active {
+                    close_el = close_el
+                        .invisible()
+                        .group_hover("tab", |s| s.visible());
+                }
                 Some(
-                    div()
-                        .id(close_id)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(16.0))
-                        .rounded(px(4.0))
-                        .ml(px(6.0))
-                        .text_size(px(10.0))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.muted.opacity(0.20)))
-                        .text_color(theme.muted_foreground.opacity(0.5))
+                    close_el
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, window, cx| {
@@ -1634,6 +1696,11 @@ impl Render for ConWorkspace {
                                 {
                                     let conv = this.tabs[index].session.conversation();
                                     let _ = conv.lock().save();
+                                }
+                                // Hide closing tab's ghostty NSViews
+                                for t in this.tabs[index].pane_tree.all_terminals() {
+                                    t.set_native_view_visible(false, cx);
+                                    t.set_ghostty_focus(false, cx);
                                 }
                                 let was_active = index == this.active_tab;
                                 this.tabs.remove(index);
@@ -1652,13 +1719,24 @@ impl Render for ConWorkspace {
                                         panel.swap_state(incoming, cx);
                                     });
                                 }
+                                // Show and focus new active tab's views
+                                for t in this.tabs[this.active_tab].pane_tree.all_terminals() {
+                                    t.set_native_view_visible(true, cx);
+                                }
+                                let focused = this.tabs[this.active_tab].pane_tree.focused_terminal();
+                                focused.set_ghostty_focus(true, cx);
+                                focused.focus(window, cx);
                                 this.sync_sidebar(cx);
                                 this.save_session(cx);
                                 cx.notify();
-                                let _ = window;
                             }),
                         )
-                        .child("×"),
+                        .child(
+                            svg()
+                                .path("phosphor/x.svg")
+                                .size(px(10.0))
+                                .text_color(theme.muted_foreground.opacity(0.6)),
+                        ),
                 )
             } else {
                 None

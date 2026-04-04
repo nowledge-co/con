@@ -922,6 +922,7 @@ impl Render for AgentPanel {
                                                     ElementId::Name(format!("thinking-md-{msg_idx}").into()),
                                                     display_text,
                                                 )
+                                                .selectable(true)
                                                 .style(chat_markdown_style())
                                                 .text_xs()
                                             ),
@@ -946,6 +947,7 @@ impl Render for AgentPanel {
                                     ElementId::Name(format!("msg-md-{msg_idx}").into()),
                                     content,
                                 )
+                                .selectable(true)
                                 .style(chat_markdown_style())
                                 .text_size(px(14.5))
                             ),
@@ -1107,6 +1109,7 @@ impl Render for AgentPanel {
                                                         ),
                                                         md,
                                                     )
+                                                    .selectable(true)
                                                     .style(chat_markdown_style())
                                                     .text_xs()
                                                 ),
@@ -1201,6 +1204,7 @@ impl Render for AgentPanel {
                                         ),
                                         md,
                                     )
+                                    .selectable(true)
                                     .style(chat_markdown_style())
                                     .text_xs()
                                 ),

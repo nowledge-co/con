@@ -163,6 +163,20 @@ impl TerminalPane {
         }
     }
 
+    /// Tell the ghostty surface whether it has keyboard focus.
+    /// No-op for legacy terminals (GPUI handles focus internally).
+    pub fn set_ghostty_focus(&self, _focused: bool, _cx: &App) {
+        match self {
+            Self::Legacy(_) => {}
+            #[cfg(target_os = "macos")]
+            Self::Ghostty(e) => {
+                if let Some(terminal) = e.read(_cx).terminal() {
+                    terminal.set_focus(_focused);
+                }
+            }
+        }
+    }
+
     // ── GPUI integration ────────────────────────────────────
 
     pub fn entity_id(&self) -> EntityId {
