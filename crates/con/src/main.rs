@@ -1,7 +1,11 @@
+// Suppress warnings from objc 0.2's `sel_impl!` and `class!` macros
+// checking `cfg(feature = "cargo-clippy")`.
+#![allow(unexpected_cfgs)]
+
 mod agent_panel;
 mod assets;
 mod command_palette;
-#[cfg(all(target_os = "macos", feature = "ghostty"))]
+#[cfg(target_os = "macos")]
 mod ghostty_view;
 mod input_bar;
 mod pane_tree;

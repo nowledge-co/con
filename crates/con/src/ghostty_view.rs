@@ -11,7 +11,7 @@
 //! sequences), so application cursor mode, kitty keyboard protocol, and
 //! ghostty key bindings all work correctly.
 
-#[cfg(all(target_os = "macos", feature = "ghostty"))]
+#[cfg(target_os = "macos")]
 use std::os::raw::c_void;
 use std::sync::Arc;
 
@@ -19,13 +19,13 @@ use con_ghostty::ffi;
 use con_ghostty::{GhosttyApp, GhosttyTerminal, MouseButton};
 use gpui::*;
 
-#[cfg(all(target_os = "macos", feature = "ghostty"))]
+#[cfg(target_os = "macos")]
 use cocoa::base::{id, NO, YES};
-#[cfg(all(target_os = "macos", feature = "ghostty"))]
+#[cfg(target_os = "macos")]
 use cocoa::foundation::NSRect;
-#[cfg(all(target_os = "macos", feature = "ghostty"))]
+#[cfg(target_os = "macos")]
 use objc::{class, msg_send, sel, sel_impl};
-#[cfg(all(target_os = "macos", feature = "ghostty"))]
+#[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
 
 /// Emitted when the terminal title changes.
@@ -47,7 +47,7 @@ pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
-    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    #[cfg(target_os = "macos")]
     nsview: Option<id>,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
@@ -94,7 +94,7 @@ impl GhosttyView {
             app,
             terminal: None,
             focus_handle: cx.focus_handle(),
-            #[cfg(all(target_os = "macos", feature = "ghostty"))]
+            #[cfg(target_os = "macos")]
             nsview: None,
             initialized: false,
             last_bounds: None,
@@ -119,18 +119,12 @@ impl GhosttyView {
         self.terminal.as_ref().is_some_and(|t| t.is_alive())
     }
 
-    pub fn send_text(&self, text: &str) {
-        if let Some(ref terminal) = self.terminal {
-            terminal.send_text(text);
-        }
-    }
-
     #[allow(dead_code)]
     pub fn selection_text(&self) -> Option<String> {
         self.terminal.as_ref().and_then(|t| t.selection_text())
     }
 
-    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    #[cfg(target_os = "macos")]
     fn ensure_initialized(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
         if self.initialized {
             return;
@@ -197,7 +191,7 @@ impl GhosttyView {
         }
     }
 
-    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    #[cfg(target_os = "macos")]
     fn update_frame(&mut self, bounds: Bounds<Pixels>) {
         if self.last_bounds.as_ref() == Some(&bounds) {
             return;
@@ -231,7 +225,7 @@ impl GhosttyView {
     }
 
     fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
-        #[cfg(all(target_os = "macos", feature = "ghostty"))]
+        #[cfg(target_os = "macos")]
         {
             self.ensure_initialized(bounds, window);
             self.update_frame(bounds);
@@ -240,7 +234,7 @@ impl GhosttyView {
 
     /// Show or hide the native NSView. Used to manage z-order when
     /// GPUI overlays (settings, command palette) need to appear on top.
-    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    #[cfg(target_os = "macos")]
     pub fn set_visible(&self, visible: bool) {
         if let Some(nsview) = self.nsview {
             unsafe {
@@ -398,7 +392,7 @@ fn gpui_key_to_keycode(key: &str) -> Option<u32> {
 
 impl Drop for GhosttyView {
     fn drop(&mut self) {
-        #[cfg(all(target_os = "macos", feature = "ghostty"))]
+        #[cfg(target_os = "macos")]
         if let Some(nsview) = self.nsview.take() {
             unsafe {
                 let _: () = msg_send![nsview, removeFromSuperview];

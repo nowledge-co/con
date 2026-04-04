@@ -15,7 +15,7 @@ use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, InputChanged, TerminalView};
 use con_terminal::TerminalTheme;
 
-#[cfg(all(target_os = "macos", feature = "ghostty"))]
+#[cfg(target_os = "macos")]
 use crate::ghostty_view::{GhosttyFocusChanged, GhosttyProcessExited, GhosttyTitleChanged, GhosttyView};
 use crate::{CloseTab, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
 use con_core::config::Config;
@@ -61,17 +61,17 @@ pub struct ConWorkspace {
     /// Current terminal color theme
     terminal_theme: TerminalTheme,
     /// Whether to use ghostty backend for new terminals
-    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    #[cfg(target_os = "macos")]
     use_ghostty: bool,
     /// Shared ghostty app instance (macOS only, lazy-initialized)
-    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    #[cfg(target_os = "macos")]
     ghostty_app: Option<std::sync::Arc<con_ghostty::GhosttyApp>>,
 }
 
 // ── Theme conversion ──────────────────────────────────────────
 
 /// Convert con's TerminalTheme to ghostty's TerminalColors.
-#[cfg(all(target_os = "macos", feature = "ghostty"))]
+#[cfg(target_os = "macos")]
 fn theme_to_ghostty_colors(theme: &TerminalTheme) -> con_ghostty::TerminalColors {
     let mut palette = [[0u8; 3]; 16];
     for (i, c) in theme.ansi.iter().enumerate() {
@@ -109,7 +109,7 @@ fn make_legacy_terminal(
     pane
 }
 
-#[cfg(all(target_os = "macos", feature = "ghostty"))]
+#[cfg(target_os = "macos")]
 fn make_ghostty_terminal(
     app: &std::sync::Arc<con_ghostty::GhosttyApp>,
     window: &mut Window,
@@ -132,7 +132,7 @@ impl ConWorkspace {
         let session = Session::load().unwrap_or_default();
 
         // Eagerly initialize ghostty if configured, so all terminals use the same backend.
-        #[cfg(all(target_os = "macos", feature = "ghostty"))]
+        #[cfg(target_os = "macos")]
         let (use_ghostty, ghostty_app) = {
             if config.terminal.use_ghostty() {
                 let colors = theme_to_ghostty_colors(&terminal_theme);
@@ -151,7 +151,7 @@ impl ConWorkspace {
         // Closure to create a terminal with the correct backend for this session.
         #[allow(unused_mut)]
         let mut make_terminal = |cwd: Option<&str>, window: &mut Window, cx: &mut Context<Self>| -> TerminalPane {
-            #[cfg(all(target_os = "macos", feature = "ghostty"))]
+            #[cfg(target_os = "macos")]
             if let Some(ref app) = ghostty_app {
                 return make_ghostty_terminal(app, window, cx);
             }
@@ -328,9 +328,9 @@ impl ConWorkspace {
             suggestion_engine,
             suggestion_tx,
             terminal_theme,
-            #[cfg(all(target_os = "macos", feature = "ghostty"))]
+            #[cfg(target_os = "macos")]
             use_ghostty,
-            #[cfg(all(target_os = "macos", feature = "ghostty"))]
+            #[cfg(target_os = "macos")]
             ghostty_app,
         }
     }
@@ -342,7 +342,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TerminalPane {
-        #[cfg(all(target_os = "macos", feature = "ghostty"))]
+        #[cfg(target_os = "macos")]
         if self.use_ghostty {
             // Lazy-init the shared ghostty app
             if self.ghostty_app.is_none() {
@@ -595,6 +595,7 @@ impl ConWorkspace {
                 });
             }
             "quit" => {
+                self.cancel_all_sessions();
                 cx.quit();
             }
             _ => {}
@@ -657,7 +658,7 @@ impl ConWorkspace {
             }
         }
         // Update ghostty app-level config with full color palette
-        #[cfg(all(target_os = "macos", feature = "ghostty"))]
+        #[cfg(target_os = "macos")]
         if let Some(ref app) = self.ghostty_app {
             let colors = theme_to_ghostty_colors(&theme);
             if let Err(e) = app.update_colors(&colors) {
@@ -869,6 +870,7 @@ impl ConWorkspace {
         // detect completion via cursor stability or timeout.
         let fallback_response_tx = req.response_tx;
         let grid = pane.as_grid(cx);
+        let pane_for_fallback = pane.clone();
         cx.spawn(async move |_this, cx| {
             // Wait for the command to start producing output
             cx.background_executor()
@@ -926,8 +928,10 @@ impl ConWorkspace {
                 let g = grid.lock();
                 g.recent_lines(50).join("\n")
             } else {
-                // Ghostty: no text extraction available
-                "(output capture not available for ghostty backend)".to_string()
+                // Ghostty: read screen text via the workspace's App context
+                _this.update(cx, |_ws, cx| {
+                    pane_for_fallback.recent_lines(50, cx).join("\n")
+                }).unwrap_or_default()
             };
             let _ = fallback_response_tx.try_send(TerminalExecResponse {
                 output,
@@ -1248,6 +1252,7 @@ impl ConWorkspace {
             self.close_tab(&CloseTab, window, cx);
         } else {
             // Last pane in last tab — quit the app
+            self.cancel_all_sessions();
             cx.quit();
         }
         cx.notify();
@@ -1360,6 +1365,14 @@ impl ConWorkspace {
         self.active_terminal().focus(window, cx);
     }
 
+    /// Cancel all pending agent operations across all tabs.
+    /// Must be called before cx.quit() to prevent shutdown hang.
+    fn cancel_all_sessions(&self) {
+        for tab in &self.tabs {
+            tab.session.cancel_current();
+        }
+    }
+
     /// Show or hide all ghostty NSViews across all tabs.
     /// Used for z-order management when GPUI overlays (modals) appear.
     fn set_ghostty_views_visible(&self, visible: bool, cx: &App) {
@@ -1372,7 +1385,7 @@ impl ConWorkspace {
 
     // ── Ghostty event handlers ──────────────────────────────
 
-    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn on_ghostty_focus_changed(
         &mut self,
         entity: &Entity<GhosttyView>,
@@ -1389,7 +1402,7 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn on_ghostty_process_exited(
         &mut self,
         _entity: &Entity<GhosttyView>,
@@ -1406,12 +1419,13 @@ impl ConWorkspace {
             self.close_tab(&CloseTab, window, cx);
         } else {
             // Last pane in last tab — quit the app
+            self.cancel_all_sessions();
             cx.quit();
         }
         cx.notify();
     }
 
-    #[cfg(all(target_os = "macos", feature = "ghostty"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn on_ghostty_title_changed(
         &mut self,
         _entity: &Entity<GhosttyView>,
