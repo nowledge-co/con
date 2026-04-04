@@ -1864,7 +1864,8 @@ impl Render for ConWorkspace {
                 .child(
                     svg()
                         .path("phosphor/plus.svg")
-                        .size(px(14.0)),
+                        .size(px(14.0))
+                        .text_color(theme.muted_foreground),
                 ),
         );
 
@@ -1896,7 +1897,12 @@ impl Render for ConWorkspace {
                 .child(
                     svg()
                         .path(panel_icon)
-                        .size(px(14.0)),
+                        .size(px(14.0))
+                        .text_color(if self.agent_panel_open {
+                            theme.primary
+                        } else {
+                            theme.muted_foreground
+                        }),
                 ),
         );
 

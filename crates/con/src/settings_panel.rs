@@ -543,7 +543,7 @@ impl SettingsPanel {
                     this.paste_theme_from_clipboard(window, cx);
                 }),
             )
-            .child(svg().path("phosphor/copy.svg").size(px(13.0)))
+            .child(svg().path("phosphor/clipboard-text.svg").size(px(13.0)).text_color(theme.primary))
             .child("Paste config");
 
         // Custom theme preview card + action buttons
@@ -570,7 +570,7 @@ impl SettingsPanel {
                         this.apply_custom_theme(cx);
                     }),
                 )
-                .child(svg().path("phosphor/check.svg").size(px(11.0)))
+                .child(svg().path("phosphor/check.svg").size(px(11.0)).text_color(theme.primary_foreground))
                 .child("Apply & Save");
             let theme = cx.theme();
             let preview_btn = div()
@@ -594,7 +594,7 @@ impl SettingsPanel {
                         }
                     }),
                 )
-                .child(svg().path("phosphor/eye.svg").size(px(11.0)))
+                .child(svg().path("phosphor/eye.svg").size(px(11.0)).text_color(theme.muted_foreground))
                 .child("Preview");
             Some(
                 div()
@@ -675,6 +675,32 @@ impl SettingsPanel {
         content = content.child(card(theme).child(theme_card_inner));
 
         // ── Import from ghostty.style ──
+
+        // "Browse themes" link button — opens system browser
+        let browse_btn = div()
+            .id("browse-ghostty-style")
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .h(px(32.0))
+            .px(px(12.0))
+            .rounded(px(6.0))
+            .cursor_pointer()
+            .bg(theme.muted.opacity(0.10))
+            .text_color(theme.foreground)
+            .text_size(px(12.0))
+            .font_weight(FontWeight::MEDIUM)
+            .hover(|s| s.bg(theme.muted.opacity(0.18)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _, _, cx| {
+                    cx.open_url("https://ghostty-style.vercel.app/");
+                }),
+            )
+            .child(svg().path("phosphor/arrow-square-out.svg").size(px(13.0)).text_color(theme.muted_foreground))
+            .child("Browse Ghostty Style Catalog");
+
+        let theme = cx.theme();
         let mut import_section = div()
             .px(px(16.0))
             .py(px(14.0))
@@ -687,88 +713,29 @@ impl SettingsPanel {
                     .font_weight(FontWeight::MEDIUM)
                     .child("Import Theme"),
             )
-            // Step-by-step instructions
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme.muted_foreground)
+                    .line_height(px(18.0))
+                    .child("Find a theme you like, copy its configuration, then paste it here."),
+            )
+            // Action row: browse + name input + paste
             .child(
                 div()
                     .flex()
-                    .flex_col()
+                    .items_center()
                     .gap(px(8.0))
+                    .child(browse_btn)
                     .child(
                         div()
-                            .flex()
-                            .items_start()
-                            .gap(px(8.0))
+                            .flex_1()
                             .child(
-                                div()
-                                    .size(px(18.0))
-                                    .rounded_full()
-                                    .bg(theme.primary.opacity(0.1))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .flex_shrink_0()
-                                    .text_size(px(10.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.primary)
-                                    .child("1"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .text_color(theme.muted_foreground)
-                                    .line_height(px(18.0))
-                                    .child("Browse themes at ghostty.style and copy the configuration"),
+                                Input::new(&custom_theme_name_input)
+                                    .appearance(false),
                             ),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .items_start()
-                            .gap(px(8.0))
-                            .child(
-                                div()
-                                    .size(px(18.0))
-                                    .rounded_full()
-                                    .bg(theme.primary.opacity(0.1))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .flex_shrink_0()
-                                    .text_size(px(10.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.primary)
-                                    .child("2"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .text_color(theme.muted_foreground)
-                                    .line_height(px(18.0))
-                                    .child("Name your theme below and click Paste to import"),
-                            ),
-                    ),
-            )
-            // Name input + paste button — stacked for full width
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(
-                                        Input::new(&custom_theme_name_input)
-                                            .appearance(false),
-                                    ),
-                            )
-                            .child(paste_btn),
-                    ),
+                    .child(paste_btn),
             );
 
         // Live preview of pasted theme
@@ -790,32 +757,7 @@ impl SettingsPanel {
             );
         }
 
-        // Credits
-        import_section = import_section.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .text_size(px(10.0))
-                .text_color(theme.muted_foreground.opacity(0.35))
-                .child("Compatible with themes from ghostty.style and iTerm2-Color-Schemes"),
-        );
-
         content = content.child(card(theme).child(import_section));
-
-        // ── Theme directory hint ──
-        let theme_dir = if cfg!(target_os = "macos") {
-            "~/Library/Application Support/con/themes/"
-        } else {
-            "~/.config/con/themes/"
-        };
-        content = content.child(
-            div()
-                .text_size(px(10.0))
-                .text_color(theme.muted_foreground.opacity(0.35))
-                .mt(px(4.0))
-                .child(format!("Drop ghostty-format theme files in {theme_dir} to install manually.")),
-        );
 
         content
     }
