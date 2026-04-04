@@ -671,6 +671,11 @@ impl AgentHarness {
         self.config.auto_approve_tools = enabled;
     }
 
+    /// Display name for the active model (e.g. "claude-sonnet-4-6").
+    pub fn active_model_name(&self) -> String {
+        self.config.effective_model(&self.config.provider).to_string()
+    }
+
     pub fn skill_names(&self) -> Vec<String> {
         self.skills.names()
     }

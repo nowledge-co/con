@@ -105,6 +105,14 @@ impl Conversation {
         }
     }
 
+    /// Truncate conversation to keep only the first `n` messages.
+    /// Preserves the system message at index 0 if present.
+    pub fn truncate_to(&mut self, n: usize) {
+        if n < self.messages.len() {
+            self.messages.truncate(n);
+        }
+    }
+
     pub fn last_user_message(&self) -> Option<&Message> {
         self.messages
             .iter()

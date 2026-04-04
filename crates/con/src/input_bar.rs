@@ -324,23 +324,21 @@ impl Render for InputBar {
             None
         };
 
-        // Send button — circular, prominent
-        let send_btn_size = 30.0;
+        // Send button — circular, refined
         let send_button = div()
             .id("send-button")
             .flex()
             .items_center()
             .justify_center()
-            .h(px(send_btn_size))
-            .w(px(send_btn_size))
-            .rounded(px(send_btn_size / 2.0))
+            .size(px(28.0))
+            .rounded_full()
             .cursor_pointer()
             .bg(theme.primary)
             .hover(|s| s.bg(theme.primary_hover))
             .child(
                 svg()
                     .path("phosphor/arrow-up.svg")
-                    .size(px(15.0))
+                    .size(px(14.0))
                     .text_color(theme.primary_foreground),
             )
             .on_mouse_down(
@@ -354,20 +352,20 @@ impl Render for InputBar {
             .flex()
             .flex_col()
             .bg(theme.title_bar)
-            .font_family("Ioskeley Mono")
+            .font_family(".SystemUIFont")
             .text_size(px(13.0))
             .on_key_down(cx.listener(|_this, event: &KeyDownEvent, _window, cx| {
                 if event.keystroke.key == "escape" {
                     cx.emit(EscapeInput);
                 }
             }))
-            // Main row — input field with subtle background container
+            // Main row
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .h(px(48.0))
-                    .px(px(10.0))
+                    .h(px(44.0))
+                    .px(px(12.0))
                     .gap(px(6.0))
                     .child(mode_pill)
                     .child(
@@ -375,10 +373,11 @@ impl Render for InputBar {
                             .flex_1()
                             .flex()
                             .items_center()
-                            .h(px(34.0))
+                            .h(px(32.0))
                             .px(px(4.0))
-                            .rounded(px(8.0))
+                            .rounded(px(6.0))
                             .bg(theme.background)
+                            .font_family("Ioskeley Mono")
                             .child(
                                 Input::new(&self.input_state)
                                     .appearance(false)
@@ -393,20 +392,20 @@ impl Render for InputBar {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(20.0))
+                    .h(px(18.0))
                     .px(px(14.0))
-                    .pb(px(6.0))
+                    .pb(px(4.0))
                     .child(
                         div()
-                            .text_size(px(11.0))
-                            .text_color(theme.muted_foreground.opacity(0.5))
+                            .text_size(px(10.5))
+                            .text_color(theme.muted_foreground.opacity(0.4))
                             .child(cwd),
                     )
                     .child(div().flex_1())
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.35))
+                            .text_color(theme.muted_foreground.opacity(0.25))
                             .child("↵ send"),
                     ),
             )
