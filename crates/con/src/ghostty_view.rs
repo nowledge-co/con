@@ -19,6 +19,9 @@ use con_ghostty::ffi;
 use con_ghostty::{GhosttyApp, GhosttyTerminal, MouseButton};
 use gpui::*;
 
+// Actions to intercept Tab/Shift-Tab before Root's focus-cycling handler.
+actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
+
 #[cfg(target_os = "macos")]
 use cocoa::base::{id, NO, YES};
 #[cfg(target_os = "macos")]
@@ -53,6 +56,16 @@ pub struct GhosttyView {
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
     last_title: Option<String>,
+}
+
+/// Register ghostty key bindings. Call once at startup.
+pub fn init(cx: &mut App) {
+    // Bind Tab/Shift-Tab to our consume actions within the GhosttyTerminal context.
+    // This prevents Root's Tab handler from intercepting Tab when the terminal is focused.
+    cx.bind_keys([
+        KeyBinding::new("tab", ConsumeTab, Some("GhosttyTerminal")),
+        KeyBinding::new("shift-tab", ConsumeTabPrev, Some("GhosttyTerminal")),
+    ]);
 }
 
 impl GhosttyView {
@@ -414,7 +427,40 @@ impl Render for GhosttyView {
 
         div()
             .size_full()
+            .key_context("GhosttyTerminal")
             .track_focus(&focus)
+            // Consume Tab/Shift-Tab so Root's focus cycling doesn't intercept them.
+            // The actual Tab key is forwarded to ghostty via on_key_down below.
+            .on_action(cx.listener(|this, _: &ConsumeTab, _window, _cx| {
+                // Send Tab to terminal
+                if let Some(terminal) = &this.terminal {
+                    let key_event = ffi::ghostty_input_key_s {
+                        action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
+                        mods: 0,
+                        consumed_mods: 0,
+                        keycode: 0x30, // Tab
+                        text: b"\t\0".as_ptr() as *const _,
+                        unshifted_codepoint: '\t' as u32,
+                        composing: false,
+                    };
+                    terminal.send_key(key_event);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ConsumeTabPrev, _window, _cx| {
+                // Send Shift-Tab (backtab) to terminal
+                if let Some(terminal) = &this.terminal {
+                    let key_event = ffi::ghostty_input_key_s {
+                        action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
+                        mods: ffi::GHOSTTY_MODS_SHIFT,
+                        consumed_mods: 0,
+                        keycode: 0x30, // Tab
+                        text: std::ptr::null(),
+                        unshifted_codepoint: '\t' as u32,
+                        composing: false,
+                    };
+                    terminal.send_key(key_event);
+                }
+            }))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
