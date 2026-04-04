@@ -5,7 +5,7 @@ const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 
-use crate::agent_panel::{AgentPanel, CancelRequest, EnableAutoApprove, LoadConversation, NewConversation, PanelState};
+use crate::agent_panel::{AgentPanel, CancelRequest, EnableAutoApprove, LoadConversation, NewConversation, PanelState, RerunFromMessage};
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
 use crate::pane_tree::{PaneTree, SplitDirection};
@@ -248,6 +248,8 @@ impl ConWorkspace {
         cx.subscribe_in(&agent_panel, window, Self::on_cancel_request)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_enable_auto_approve)
+            .detach();
+        cx.subscribe_in(&agent_panel, window, Self::on_rerun_from_message)
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_select)
             .detach();
@@ -518,6 +520,25 @@ impl ConWorkspace {
         _cx: &mut Context<Self>,
     ) {
         self.harness.set_auto_approve(true);
+    }
+
+    fn on_rerun_from_message(
+        &mut self,
+        _panel: &Entity<AgentPanel>,
+        event: &RerunFromMessage,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The panel already truncated its messages and re-added the user message.
+        // Now sync the underlying conversation and re-send to agent.
+        let panel_msg_count = self.agent_panel.read(cx).state().message_count();
+        // Truncate conversation to match panel state (minus the re-added user message)
+        let conv = self.tabs[self.active_tab].session.conversation();
+        conv.lock().truncate_to(panel_msg_count.saturating_sub(1));
+
+        let context = self.build_agent_context(cx);
+        let session = &self.tabs[self.active_tab].session;
+        self.harness.send_message(session, event.content.clone(), context);
     }
 
     fn on_sidebar_select(
@@ -1188,31 +1209,40 @@ impl ConWorkspace {
     }
 
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs.len() <= 1 {
+        self.close_tab_by_index(self.active_tab, window, cx);
+    }
+
+    fn close_tab_by_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() <= 1 || index >= self.tabs.len() {
             return;
         }
         // Save the closing tab's conversation
         {
-            let conv = self.tabs[self.active_tab].session.conversation();
+            let conv = self.tabs[index].session.conversation();
             let _ = conv.lock().save();
         }
         // Hide closing tab's ghostty NSViews
-        for t in self.tabs[self.active_tab].pane_tree.all_terminals() {
+        for t in self.tabs[index].pane_tree.all_terminals() {
             t.set_native_view_visible(false, cx);
             t.set_ghostty_focus(false, cx);
         }
-        self.tabs.remove(self.active_tab);
+        let was_active = index == self.active_tab;
+        self.tabs.remove(index);
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
+        } else if self.active_tab > index {
+            self.active_tab -= 1;
         }
-        // Swap new active tab's panel state into the panel
-        let incoming = std::mem::replace(
-            &mut self.tabs[self.active_tab].panel_state,
-            PanelState::new(),
-        );
-        self.agent_panel.update(cx, |panel, cx| {
-            panel.swap_state(incoming, cx);
-        });
+        // Swap new active tab's panel state into the panel if needed
+        if was_active {
+            let incoming = std::mem::replace(
+                &mut self.tabs[self.active_tab].panel_state,
+                PanelState::new(),
+            );
+            self.agent_panel.update(cx, |panel, cx| {
+                panel.swap_state(incoming, cx);
+            });
+        }
         // Show and focus new active tab's ghostty views
         for t in self.tabs[self.active_tab].pane_tree.all_terminals() {
             t.set_native_view_visible(true, cx);
@@ -1572,6 +1602,12 @@ impl Render for ConWorkspace {
             bar.set_cwd(display_cwd);
         });
 
+        // Sync model name to agent panel header
+        let model_name = self.harness.active_model_name();
+        self.agent_panel.update(cx, |panel, _cx| {
+            panel.set_model_name(model_name);
+        });
+
         let theme = cx.theme();
 
         let pane_tree_rendered = {
@@ -1601,25 +1637,33 @@ impl Render for ConWorkspace {
             .child(terminal_area);
 
         if self.agent_panel_open {
-            // Draggable divider between terminal area and agent panel
+            // Draggable divider — 8px hit target with centered visual line
             main_area = main_area
                 .child(
                     div()
                         .id("agent-panel-divider")
-                        .w(px(4.0))
+                        .group("divider")
+                        .w(px(8.0))
                         .h_full()
                         .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_col_resize()
-                        .hover(|s| s.bg(theme.primary.opacity(0.06)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
                                 this.agent_panel_drag =
                                     Some((f32::from(event.position.x), this.agent_panel_width));
                             }),
+                        )
+                        // Visible line — subtle at rest, accent on hover
+                        .child(
+                            div()
+                                .w(px(1.0))
+                                .h_full()
+                                .bg(theme.foreground.opacity(0.08))
+                                .group_hover("divider", |s| s.bg(theme.primary.opacity(0.5)).w(px(2.0))),
                         ),
                 )
                 .child(
@@ -1631,17 +1675,17 @@ impl Render for ConWorkspace {
                 );
         }
 
-        // Tab bar — macOS-style with close buttons and quiet active treatment
+        // Tab bar — flat, borderless, macOS-native feel
         let tab_count = self.tabs.len();
         let mut tab_bar = div()
             .id("tab-bar")
             .flex()
-            .h(px(36.0))
+            .h(px(38.0))
             .bg(theme.title_bar)
             .items_end()
             .pl(px(78.0)) // leave room for traffic lights
             .pr(px(8.0))
-            .gap(px(1.0))
+            .gap(px(0.0))
             .on_click(|event, window, _cx| {
                 if event.click_count() == 2 {
                     window.titlebar_double_click();
@@ -1674,8 +1718,9 @@ impl Render for ConWorkspace {
                     .items_center()
                     .justify_center()
                     .size(px(18.0))
+                    .flex_shrink_0()
                     .rounded(px(4.0))
-                    .ml(px(4.0))
+                    .ml(px(2.0))
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.muted.opacity(0.25)));
                 // Only show on hover for inactive tabs
@@ -1689,53 +1734,14 @@ impl Render for ConWorkspace {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, window, cx| {
-                                if this.tabs.len() <= 1 {
-                                    return;
-                                }
-                                // Save the closing tab's conversation
-                                {
-                                    let conv = this.tabs[index].session.conversation();
-                                    let _ = conv.lock().save();
-                                }
-                                // Hide closing tab's ghostty NSViews
-                                for t in this.tabs[index].pane_tree.all_terminals() {
-                                    t.set_native_view_visible(false, cx);
-                                    t.set_ghostty_focus(false, cx);
-                                }
-                                let was_active = index == this.active_tab;
-                                this.tabs.remove(index);
-                                if this.active_tab >= this.tabs.len() {
-                                    this.active_tab = this.tabs.len() - 1;
-                                } else if this.active_tab > index {
-                                    this.active_tab -= 1;
-                                }
-                                // If the active tab was closed, swap new active's state into the panel
-                                if was_active {
-                                    let incoming = std::mem::replace(
-                                        &mut this.tabs[this.active_tab].panel_state,
-                                        PanelState::new(),
-                                    );
-                                    this.agent_panel.update(cx, |panel, cx| {
-                                        panel.swap_state(incoming, cx);
-                                    });
-                                }
-                                // Show and focus new active tab's views
-                                for t in this.tabs[this.active_tab].pane_tree.all_terminals() {
-                                    t.set_native_view_visible(true, cx);
-                                }
-                                let focused = this.tabs[this.active_tab].pane_tree.focused_terminal();
-                                focused.set_ghostty_focus(true, cx);
-                                focused.focus(window, cx);
-                                this.sync_sidebar(cx);
-                                this.save_session(cx);
-                                cx.notify();
+                                this.close_tab_by_index(index, window, cx);
                             }),
                         )
                         .child(
                             svg()
                                 .path("phosphor/x.svg")
-                                .size(px(10.0))
-                                .text_color(theme.muted_foreground.opacity(0.6)),
+                                .size(px(12.0))
+                                .text_color(theme.muted_foreground),
                         ),
                 )
             } else {
@@ -1748,32 +1754,43 @@ impl Render for ConWorkspace {
                 .flex()
                 .items_center()
                 .px(px(12.0))
-                .h(px(30.0))
-                .rounded(px(6.0))
-                .mb(px(2.0))
-                .text_size(px(12.0))
-                .max_w(px(180.0))
+                .h(px(32.0))
+                .text_size(px(12.5))
+                .max_w(px(200.0))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.activate_tab(index, window, cx);
-                }));
+                }))
+                // Middle-click to close tab (browser convention)
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, window, cx| {
+                        this.close_tab_by_index(index, window, cx);
+                    }),
+                );
 
             if is_active {
+                // Active tab: rounded top corners, connects flush to content area below
                 tab_el = tab_el
+                    .rounded_t(px(8.0))
                     .bg(theme.background)
                     .text_color(theme.foreground)
                     .font_weight(FontWeight::MEDIUM);
             } else {
+                // Inactive tab: fully rounded, subtle hover
                 tab_el = tab_el
-                    .text_color(theme.muted_foreground.opacity(0.6))
-                    .hover(|s| s.bg(theme.secondary));
+                    .rounded(px(6.0))
+                    .mb(px(2.0))
+                    .text_color(theme.muted_foreground.opacity(0.55))
+                    .hover(|s| s.bg(theme.muted.opacity(0.08)));
             }
 
             let mut tab_content = div()
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .overflow_x_hidden();
+                .w_full()
+                .min_w_0();
 
             // Attention dot for tabs with pending agent activity
             if needs_attention {
@@ -1781,6 +1798,7 @@ impl Render for ConWorkspace {
                     div()
                         .size(px(6.0))
                         .rounded_full()
+                        .flex_shrink_0()
                         .bg(theme.primary),
                 );
             }
@@ -1798,7 +1816,15 @@ impl Render for ConWorkspace {
                     }),
             );
 
-            tab_content = tab_content.child(display_title);
+            // Title — flexible, truncates with overflow
+            tab_content = tab_content.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_x_hidden()
+                    .whitespace_nowrap()
+                    .child(display_title),
+            );
 
             if let Some(close) = close_button {
                 tab_content = tab_content.child(close);
@@ -1814,20 +1840,52 @@ impl Render for ConWorkspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(24.0))
-                .mb(px(4.0))
-                .ml(px(2.0))
-                .rounded(px(5.0))
+                .size(px(26.0))
+                .mb(px(3.0))
+                .ml(px(4.0))
+                .rounded(px(6.0))
                 .cursor_pointer()
-                .text_color(theme.muted_foreground.opacity(0.4))
-                .hover(|s| s.bg(theme.secondary).text_color(theme.muted_foreground))
+                .text_color(theme.foreground.opacity(0.45))
+                .hover(|s| s.bg(theme.muted.opacity(0.12)).text_color(theme.foreground.opacity(0.9)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
                 .child(
                     svg()
                         .path("phosphor/plus.svg")
-                        .size(px(12.0)),
+                        .size(px(14.0)),
+                ),
+        );
+
+        // Spacer pushes right-side controls to the edge
+        tab_bar = tab_bar.child(div().flex_1());
+
+        // Agent panel toggle button
+        let panel_icon = "phosphor/columns.svg";
+        tab_bar = tab_bar.child(
+            div()
+                .id("toggle-agent-panel")
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(26.0))
+                .mb(px(3.0))
+                .mr(px(4.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .text_color(if self.agent_panel_open {
+                    theme.primary
+                } else {
+                    theme.foreground.opacity(0.45)
+                })
+                .hover(|s| s.bg(theme.muted.opacity(0.12)).text_color(theme.foreground.opacity(0.9)))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
+                }))
+                .child(
+                    svg()
+                        .path(panel_icon)
+                        .size(px(14.0)),
                 ),
         );
 

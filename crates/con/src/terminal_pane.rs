@@ -172,6 +172,8 @@ impl TerminalPane {
             Self::Ghostty(e) => {
                 if let Some(terminal) = e.read(_cx).terminal() {
                     terminal.set_focus(_focused);
+                    // Trigger redraw so the cursor state (visible/hidden) updates immediately
+                    terminal.refresh();
                 }
             }
         }
