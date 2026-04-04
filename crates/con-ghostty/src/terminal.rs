@@ -495,6 +495,92 @@ impl GhosttyTerminal {
         Some(result)
     }
 
+    /// Read visible screen text, returning the last `max_lines` lines.
+    ///
+    /// Uses ghostty's `read_text` API with a viewport-sized selection to
+    /// extract the current terminal content. This enables agent tools to
+    /// read ghostty terminal output.
+    pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
+        let size = self.size();
+        if size.columns == 0 || size.rows == 0 {
+            return Vec::new();
+        }
+
+        // Select the entire viewport (visible area only)
+        let selection = ffi::ghostty_selection_s {
+            top_left: ffi::ghostty_point_s {
+                tag: ffi::ghostty_point_tag_e::GHOSTTY_POINT_VIEWPORT,
+                coord: ffi::ghostty_point_coord_e::GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0,
+            },
+            bottom_right: ffi::ghostty_point_s {
+                tag: ffi::ghostty_point_tag_e::GHOSTTY_POINT_VIEWPORT,
+                coord: ffi::ghostty_point_coord_e::GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: (size.columns - 1) as u32,
+                y: (size.rows - 1) as u32,
+            },
+            rectangle: false,
+        };
+
+        match self.read_text(selection) {
+            Some(text) => {
+                let lines: Vec<String> = text.lines().map(String::from).collect();
+                if lines.len() > max_lines {
+                    lines[lines.len() - max_lines..].to_vec()
+                } else {
+                    lines
+                }
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Read recent lines including scrollback, returning the last `max_lines`.
+    ///
+    /// Uses SCREEN coordinates to access the full scrollback buffer,
+    /// not just the visible viewport.
+    pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {
+        let size = self.size();
+        if size.columns == 0 || size.rows == 0 {
+            return Vec::new();
+        }
+
+        // Select from far back in scrollback to current viewport bottom.
+        // SCREEN coordinates cover the full scrollback buffer.
+        let selection = ffi::ghostty_selection_s {
+            top_left: ffi::ghostty_point_s {
+                tag: ffi::ghostty_point_tag_e::GHOSTTY_POINT_SCREEN,
+                coord: ffi::ghostty_point_coord_e::GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0,
+            },
+            bottom_right: ffi::ghostty_point_s {
+                tag: ffi::ghostty_point_tag_e::GHOSTTY_POINT_SCREEN,
+                coord: ffi::ghostty_point_coord_e::GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: (size.columns - 1) as u32,
+                // Use a large Y to capture all scrollback
+                y: u32::MAX,
+            },
+            rectangle: false,
+        };
+
+        match self.read_text(selection) {
+            Some(text) => {
+                let lines: Vec<String> = text.lines().map(String::from).collect();
+                if lines.len() > max_lines {
+                    lines[lines.len() - max_lines..].to_vec()
+                } else {
+                    lines
+                }
+            }
+            None => {
+                // Fallback: try viewport if screen selection fails
+                self.read_screen_text(max_lines)
+            }
+        }
+    }
+
     /// Check and clear the needs_render flag.
     pub fn take_needs_render(&self) -> bool {
         let mut state = self.state.lock();
