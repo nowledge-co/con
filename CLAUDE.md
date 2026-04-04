@@ -51,7 +51,7 @@ cargo test --workspace # test
 
 - **Font**: IoskeleyMono (embedded, all weights) for terminal chrome — tabs, sidebar, input bar. System font (.SystemUIFont / SF Pro) for AI panel prose text. Code blocks use IoskeleyMono via `mono_font.family` in theme JSON.
 - **Default theme**: Flexoki Light. Dark available as Flexoki Dark.
-- **Icons**: Phosphor Icons (phosphoricons.com). SVGs in `assets/phosphor/`.
+- **Icons**: Phosphor Icons only (phosphoricons.com). Copy SVGs from `3pp/phosphor-icons/SVGs/regular/` into `assets/icons/phosphor/`. Never draw icons manually — always use the Phosphor library. Reference as `"phosphor/icon-name.svg"` in code.
 - **Borderless**: No `border_1()`, `border_r_1()`, etc. Use opacity-based fills for surface separation.
 - **Shadowless**: No `shadow_sm()`, `shadow_lg()`, etc. Use bg opacity for elevation.
 - **Color by meaning only**: Monochrome surfaces by default. Accent color for semantic states (focus, active, warning, error).

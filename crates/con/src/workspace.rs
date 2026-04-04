@@ -1209,6 +1209,24 @@ impl ConWorkspace {
     }
 
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        // If the active tab has multiple panes, close the focused pane first.
+        // Only close the entire tab when it's down to a single pane.
+        let tab = &mut self.tabs[self.active_tab];
+        if tab.pane_tree.pane_count() > 1 {
+            // Hide the ghostty NSView of the pane being closed
+            let closing = tab.pane_tree.focused_terminal();
+            closing.set_native_view_visible(false, cx);
+            closing.set_ghostty_focus(false, cx);
+
+            tab.pane_tree.close_focused();
+
+            // Focus the new focused pane
+            let new_focus = tab.pane_tree.focused_terminal();
+            new_focus.set_ghostty_focus(true, cx);
+            new_focus.focus(window, cx);
+            cx.notify();
+            return;
+        }
         self.close_tab_by_index(self.active_tab, window, cx);
     }
 
@@ -1838,9 +1856,8 @@ impl Render for ConWorkspace {
                 .ml(px(4.0))
                 .rounded(px(6.0))
                 .cursor_pointer()
-                .bg(theme.muted.opacity(0.06))
-                .text_color(theme.foreground.opacity(0.55))
-                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground.opacity(0.9)))
+                .text_color(theme.muted_foreground)
+                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
@@ -1855,7 +1872,7 @@ impl Render for ConWorkspace {
         tab_bar = tab_bar.child(div().flex_1());
 
         // Agent panel toggle button
-        let panel_icon = "phosphor/columns.svg";
+        let panel_icon = "phosphor/sidebar-simple.svg";
         tab_bar = tab_bar.child(
             div()
                 .id("toggle-agent-panel")
@@ -1867,17 +1884,12 @@ impl Render for ConWorkspace {
                 .mr(px(4.0))
                 .rounded(px(6.0))
                 .cursor_pointer()
-                .bg(if self.agent_panel_open {
-                    theme.primary.opacity(0.10)
-                } else {
-                    theme.muted.opacity(0.06)
-                })
                 .text_color(if self.agent_panel_open {
                     theme.primary
                 } else {
-                    theme.foreground.opacity(0.55)
+                    theme.muted_foreground
                 })
-                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground.opacity(0.9)))
+                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
                 }))

@@ -125,8 +125,9 @@ impl CommandPalette {
             self.selected_index = 0;
             self.query.update(cx, |s, cx| {
                 s.set_value("", window, cx);
+                // Focus the input directly so the user can type immediately
+                s.focus(window, cx);
             });
-            self.focus_handle.focus(window, cx);
         }
         cx.notify();
     }

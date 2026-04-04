@@ -136,7 +136,7 @@ impl PanelState {
         self.status = AgentStatus::Thinking;
         if let Some(last) = self.messages.last_mut() {
             last.steps.push(StepEntry {
-                icon: "phosphor/oven.svg",
+                icon: "phosphor/circle-notch.svg",
                 label: step.to_string(),
                 detail: None,
                 status: StepStatus::Complete,
@@ -594,7 +594,7 @@ impl AgentPanel {
             return Some((tool_icon(&tc.tool_name), label));
         }
         match self.state.status {
-            AgentStatus::Thinking => Some(("phosphor/oven.svg", "Thinking…")),
+            AgentStatus::Thinking => Some(("phosphor/circle-notch.svg", "Thinking…")),
             AgentStatus::Responding => Some(("phosphor/pencil-simple.svg", "Writing…")),
             AgentStatus::Idle => None,
         }
@@ -1106,7 +1106,7 @@ impl Render for AgentPanel {
                         .pb(px(2.0))
                         .child(
                             svg()
-                                .path("phosphor/oven.svg")
+                                .path("phosphor/circle-notch.svg")
                                 .size(px(14.0))
                                 .text_color(theme.primary),
                         )

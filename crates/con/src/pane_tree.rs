@@ -94,7 +94,6 @@ impl PaneTree {
     }
 
     /// Close the focused pane, returning true if the tree still has panes
-    #[allow(dead_code)]
     pub fn close_focused(&mut self) -> bool {
         if self.pane_count() <= 1 {
             return false;

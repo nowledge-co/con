@@ -1268,9 +1268,8 @@ impl Render for SettingsPanel {
             .absolute()
             .size_full()
             .bg(theme.background.opacity(0.6))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                this.visible = false;
-                cx.notify();
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                this.save(window, cx);
             }));
 
         // Card — centered with flex centering
@@ -1299,8 +1298,7 @@ impl Render for SettingsPanel {
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         match event.keystroke.key.as_str() {
                             "escape" => {
-                                this.visible = false;
-                                cx.notify();
+                                this.save(window, cx);
                             }
                             "enter" if event.keystroke.modifiers.platform => {
                                 this.save(window, cx);
@@ -1328,7 +1326,7 @@ impl Render for SettingsPanel {
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(theme.muted_foreground.opacity(0.5))
-                                    .child("⌘↵ save · Esc close"),
+                                    .child("Esc save & close"),
                             ),
                     )
                     // Error banner
