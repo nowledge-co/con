@@ -275,7 +275,7 @@ impl Render for CommandPalette {
             .occlude()
             .absolute()
             .size_full()
-            .bg(rgba(0x00000088))
+            .bg(theme.background.opacity(0.7))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {

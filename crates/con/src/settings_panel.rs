@@ -68,6 +68,11 @@ pub struct SettingsPanel {
     font_size_input: Entity<InputState>,
     scrollback_input: Entity<InputState>,
     save_error: Option<String>,
+
+    // Theme import
+    custom_theme_name_input: Entity<InputState>,
+    custom_theme_preview: Option<con_terminal::TerminalTheme>,
+    custom_theme_status: Option<String>,
 }
 
 const ALL_PROVIDERS: &[ProviderKind] = &[
@@ -154,6 +159,11 @@ impl SettingsPanel {
             s.set_value(&config.terminal.scrollback_lines.to_string(), window, cx);
             s
         });
+        let custom_theme_name_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("my-theme", window, cx);
+            s
+        });
 
         Self {
             visible: false,
@@ -172,6 +182,9 @@ impl SettingsPanel {
             font_size_input,
             scrollback_input,
             save_error: None,
+            custom_theme_name_input,
+            custom_theme_preview: None,
+            custom_theme_status: None,
         }
     }
 
@@ -200,6 +213,109 @@ impl SettingsPanel {
         self.api_key_input.update(cx, |s, cx| s.set_value(&key_val, window, cx));
         self.base_url_input.update(cx, |s, cx| s.set_value(&pc.base_url.clone().unwrap_or_default(), window, cx));
         self.max_tokens_input.update(cx, |s, cx| s.set_value(&pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(), window, cx));
+    }
+
+    /// Parse a ghostty config from clipboard and show a live preview.
+    fn paste_theme_from_clipboard(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let text = match cx.read_from_clipboard().and_then(|c| c.text().map(|s| s.to_string())) {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => {
+                self.custom_theme_status = Some("Error: clipboard is empty".into());
+                cx.notify();
+                return;
+            }
+        };
+
+        // Get theme name from input, fallback to "custom"
+        let name_raw = self.custom_theme_name_input.read(cx).value().to_string();
+        let name = if name_raw.trim().is_empty() {
+            "custom".to_string()
+        } else {
+            name_raw.trim().to_lowercase().replace(' ', "-")
+        };
+
+        match con_terminal::TerminalTheme::from_ghostty_format(&name, &text) {
+            Some(theme) => {
+                self.custom_theme_status = Some(format!(
+                    "Parsed \"{}\" — {} colors detected",
+                    display_theme_name(&name),
+                    theme.ansi.len()
+                ));
+                self.custom_theme_preview = Some(theme);
+            }
+            None => {
+                self.custom_theme_status = Some(
+                    "Error: could not parse config. Need background, foreground, and palette entries.".into()
+                );
+                self.custom_theme_preview = None;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Save the custom theme to the user themes directory and apply it.
+    fn apply_custom_theme(&mut self, cx: &mut Context<Self>) {
+        let preview = match &self.custom_theme_preview {
+            Some(t) => t.clone(),
+            None => return,
+        };
+
+        // Determine theme directory
+        let theme_dir = if cfg!(target_os = "macos") {
+            std::env::var("HOME").ok().map(|h| {
+                std::path::PathBuf::from(h)
+                    .join("Library/Application Support/con/themes")
+            })
+        } else {
+            std::env::var("XDG_CONFIG_HOME")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".config")))
+                .map(|p| p.join("con/themes"))
+        };
+
+        let dir = match theme_dir {
+            Some(d) => d,
+            None => {
+                self.custom_theme_status = Some("Error: could not determine themes directory".into());
+                cx.notify();
+                return;
+            }
+        };
+
+        // Create directory if needed
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.custom_theme_status = Some(format!("Error: {}", e));
+            cx.notify();
+            return;
+        }
+
+        // Read the config text from clipboard again for saving
+        let text = match cx.read_from_clipboard().and_then(|c| c.text().map(|s| s.to_string())) {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => {
+                self.custom_theme_status = Some("Error: clipboard content lost. Paste again.".into());
+                cx.notify();
+                return;
+            }
+        };
+
+        let file_path = dir.join(&preview.name);
+        if let Err(e) = std::fs::write(&file_path, &text) {
+            self.custom_theme_status = Some(format!("Error: {}", e));
+            cx.notify();
+            return;
+        }
+
+        // Apply the theme
+        self.config.terminal.theme = preview.name.clone();
+        cx.emit(ThemePreview(preview.name.clone()));
+        self.custom_theme_status = Some(format!(
+            "Saved to {} and applied!",
+            file_path.display()
+        ));
+        self.custom_theme_preview = None;
+        cx.notify();
     }
 
     /// Read current per-provider input fields into a ProviderConfig.
@@ -327,7 +443,7 @@ impl SettingsPanel {
                 div()
                     .size(px(18.0))
                     .rounded_full()
-                    .bg(gpui::white())
+                    .bg(theme.background)
                     .mt(px(2.0))
                     .ml(if is_on { px(20.0) } else { px(2.0) }),
             )
@@ -349,7 +465,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("AGENT"))
+                    .child(group_label("AGENT", &theme))
                     .child(
                         card(theme)
                             .child(
@@ -379,180 +495,444 @@ impl SettingsPanel {
     }
 
     fn render_appearance(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let current_theme = &self.config.terminal.theme;
+        let current_theme = self.config.terminal.theme.clone();
         let all_themes = con_terminal::TerminalTheme::all_available();
 
-        section_content("Appearance", "Customize the look and feel.", &theme)
-            .child(
-                card(&theme)
+        // Split into built-in and user themes
+        let builtin_names: Vec<&str> = con_terminal::TerminalTheme::available().to_vec();
+        let mut builtin_themes = Vec::new();
+        let mut user_themes = Vec::new();
+        for t in all_themes.iter() {
+            if builtin_names.contains(&t.name.as_str()) {
+                builtin_themes.push(t);
+            } else {
+                user_themes.push(t);
+            }
+        }
+        let has_user_themes = !user_themes.is_empty();
+        let total_count = builtin_themes.len() + user_themes.len();
+
+        // Build theme grids first (these need &mut cx for listeners)
+        let builtin_grid = self.render_theme_grid(&builtin_themes, &current_theme, cx);
+        let user_grid = if has_user_themes {
+            Some(self.render_theme_grid(&user_themes, &current_theme, cx))
+        } else {
+            None
+        };
+
+        // Build import section buttons (need cx.listener)
+        let custom_theme_name_input = self.custom_theme_name_input.clone();
+        let theme = cx.theme();
+        let paste_btn = div()
+            .id("paste-theme-btn")
+            .flex()
+            .items_center()
+            .gap(px(5.0))
+            .h(px(32.0))
+            .px(px(12.0))
+            .rounded(px(6.0))
+            .cursor_pointer()
+            .bg(theme.primary.opacity(0.08))
+            .text_color(theme.primary)
+            .text_size(px(11.5))
+            .font_weight(FontWeight::MEDIUM)
+            .hover(|s| s.bg(theme.primary.opacity(0.15)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.paste_theme_from_clipboard(window, cx);
+                }),
+            )
+            .child(svg().path("phosphor/copy.svg").size(px(13.0)))
+            .child("Paste config");
+
+        // Custom theme preview card + action buttons
+        let preview_area = if let Some(ref preview) = self.custom_theme_preview {
+            let card = self.render_single_theme_card(preview, false, cx);
+            let theme = cx.theme();
+            let apply_btn = div()
+                .id("apply-custom-theme")
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .h(px(28.0))
+                .px(px(10.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .bg(theme.primary)
+                .text_color(theme.primary_foreground)
+                .text_size(px(11.0))
+                .font_weight(FontWeight::MEDIUM)
+                .hover(|s| s.bg(theme.primary_hover))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.apply_custom_theme(cx);
+                    }),
+                )
+                .child(svg().path("phosphor/check.svg").size(px(11.0)))
+                .child("Apply & Save");
+            let theme = cx.theme();
+            let preview_btn = div()
+                .id("preview-custom-theme")
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .h(px(28.0))
+                .px(px(10.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .bg(theme.muted.opacity(0.08))
+                .text_color(theme.muted_foreground)
+                .text_size(px(11.0))
+                .hover(|s| s.bg(theme.muted.opacity(0.15)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        if let Some(ref preview) = this.custom_theme_preview {
+                            cx.emit(ThemePreview(preview.name.clone()));
+                        }
+                    }),
+                )
+                .child(svg().path("phosphor/eye.svg").size(px(11.0)))
+                .child("Preview");
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(card)
                     .child(
                         div()
-                            .px(px(16.0))
-                            .py(px(12.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.0))
+                            .child(apply_btn)
+                            .child(preview_btn),
+                    ),
+            )
+        } else {
+            None
+        };
+
+        // Now all mutable borrows are done — get theme for pure layout
+        let theme = cx.theme();
+
+        let mut content = section_content("Appearance", "Customize the look and feel.", theme);
+
+        // ── Built-in themes ──
+        let mut theme_card_inner = div()
+            .px(px(16.0))
+            .py(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .mb(px(12.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Terminal Theme"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(theme.muted_foreground.opacity(0.5))
+                            .child(format!("{total_count} themes")),
+                    ),
+            )
+            .child(builtin_grid);
+
+        // User-installed themes
+        if let Some(user_grid) = user_grid {
+            theme_card_inner = theme_card_inner.child(
+                div()
+                    .mt(px(16.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .mb(px(10.0))
+                            .child(
+                                svg()
+                                    .path("phosphor/folder.svg")
+                                    .size(px(12.0))
+                                    .text_color(theme.muted_foreground.opacity(0.5)),
+                            )
                             .child(
                                 div()
-                                    .text_sm()
-                                    .mb(px(12.0))
-                                    .child("Terminal Theme"),
-                            )
-                            .child({
-                                let mut grid = div()
-                                    .flex()
-                                    .flex_wrap()
-                                    .gap(px(10.0));
+                                    .text_size(px(10.5))
+                                    .text_color(theme.muted_foreground.opacity(0.6))
+                                    .child("Installed"),
+                            ),
+                    )
+                    .child(user_grid),
+            );
+        }
+        content = content.child(card(theme).child(theme_card_inner));
 
-                                for term_theme in all_themes.iter() {
-                                    let name = term_theme.name.as_str();
-                                    let is_sel = name == current_theme.as_str();
-                                    let theme_name = name.to_string();
-                                    let bg = term_theme.background;
-                                    let fg = term_theme.foreground;
-                                    let bg_gpui = gpui::rgb(bg.to_u32());
-                                    let fg_gpui = gpui::rgb(fg.to_u32());
-                                    let green = gpui::rgb(term_theme.ansi[2].to_u32());
-                                    let cyan = gpui::rgb(term_theme.ansi[6].to_u32());
-                                    let blue = gpui::rgb(term_theme.ansi[4].to_u32());
-                                    let yellow = gpui::rgb(term_theme.ansi[3].to_u32());
-                                    let red = gpui::rgb(term_theme.ansi[1].to_u32());
-                                    let magenta = gpui::rgb(term_theme.ansi[5].to_u32());
-
-                                    // Mini terminal preview — ghostty.style inspired
-                                    // Simulated terminal with multiple output lines
-                                    let terminal_preview = div()
-                                        .flex()
-                                        .flex_col()
-                                        .bg(bg_gpui)
-                                        .rounded_t(px(8.0))
-                                        .px(px(8.0))
-                                        .pt(px(6.0))
-                                        .pb(px(6.0))
-                                        .gap(px(1.0))
-                                        .font_family("Ioskeley Mono")
-                                        .text_size(px(8.0))
-                                        .line_height(px(12.0))
-                                        // Title bar dots
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .gap(px(3.0))
-                                                .pb(px(4.0))
-                                                .child(div().size(px(5.0)).rounded_full().bg(red))
-                                                .child(div().size(px(5.0)).rounded_full().bg(yellow))
-                                                .child(div().size(px(5.0)).rounded_full().bg(green)),
-                                        )
-                                        // Line 1: prompt + command
-                                        .child(
-                                            div().flex().gap(px(3.0))
-                                                .child(div().text_color(green).child("$"))
-                                                .child(div().text_color(cyan).child("git"))
-                                                .child(div().text_color(fg_gpui).child("log --oneline")),
-                                        )
-                                        // Line 2: git output
-                                        .child(
-                                            div().flex().gap(px(3.0))
-                                                .child(div().text_color(yellow).child("a1b2c3d"))
-                                                .child(div().text_color(fg_gpui).child("feat: init")),
-                                        )
-                                        // Line 3: another line
-                                        .child(
-                                            div().flex().gap(px(3.0))
-                                                .child(div().text_color(yellow).child("e4f5g6h"))
-                                                .child(div().text_color(fg_gpui).child("fix: theme")),
-                                        )
-                                        // Line 4: new prompt
-                                        .child(
-                                            div().flex().gap(px(3.0))
-                                                .child(div().text_color(green).child("$"))
-                                                .child(div().text_color(blue).child("ls"))
-                                                .child(div().text_color(fg_gpui).child("src/")),
-                                        )
-                                        // Line 5: ls output
-                                        .child(
-                                            div().flex().gap(px(4.0))
-                                                .child(div().text_color(blue).child("lib/"))
-                                                .child(div().text_color(magenta).child("main.rs"))
-                                                .child(div().text_color(fg_gpui).child("README")),
-                                        );
-
-                                    // Palette strip — all 16 colors as continuous blocks
-                                    let mut palette_strip = div()
-                                        .flex()
-                                        .h(px(4.0));
-
-                                    for idx in 0..16 {
-                                        let c = term_theme.ansi[idx];
-                                        palette_strip = palette_strip.child(
-                                            div()
-                                                .flex_1()
-                                                .h_full()
-                                                .bg(gpui::rgb(c.to_u32())),
-                                        );
-                                    }
-
-                                    grid = grid.child(
-                                        div()
-                                            .id(SharedString::from(format!("term-theme-{name}")))
-                                            .cursor_pointer()
-                                            .w(px(150.0))
-                                            .flex()
-                                            .flex_col()
-                                            .rounded(px(10.0))
-                                            .overflow_hidden()
-                                            .bg(if is_sel {
-                                                theme.primary.opacity(0.10)
-                                            } else {
-                                                theme.muted.opacity(0.04)
-                                            })
-                                            .hover(|s| s.bg(theme.primary.opacity(0.06)))
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |this, _, _, cx| {
-                                                    this.config.terminal.theme = theme_name.clone();
-                                                    cx.emit(ThemePreview(theme_name.clone()));
-                                                    cx.notify();
-                                                }),
-                                            )
-                                            // Terminal preview area
-                                            .child(terminal_preview)
-                                            // Color palette strip
-                                            .child(palette_strip)
-                                            // Label row
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .gap(px(4.0))
-                                                    .h(px(26.0))
-                                                    .text_size(px(10.5))
-                                                    .font_weight(if is_sel {
-                                                        FontWeight::SEMIBOLD
-                                                    } else {
-                                                        FontWeight::MEDIUM
-                                                    })
-                                                    .text_color(if is_sel {
-                                                        theme.primary
-                                                    } else {
-                                                        theme.muted_foreground
-                                                    })
-                                                    .children(if is_sel {
-                                                        Some(
-                                                            svg()
-                                                                .path("phosphor/check.svg")
-                                                                .size(px(10.0))
-                                                                .text_color(theme.primary),
-                                                        )
-                                                    } else {
-                                                        None
-                                                    })
-                                                    .child(display_theme_name(name)),
-                                            ),
-                                    );
-                                }
-                                grid
-                            }),
+        // ── Import from ghostty.style ──
+        let mut import_section = div()
+            .px(px(16.0))
+            .py(px(14.0))
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Import Theme"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(9.5))
+                            .text_color(theme.muted_foreground.opacity(0.4))
+                            .child("ghostty format"),
                     ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme.muted_foreground.opacity(0.6))
+                    .line_height(px(16.0))
+                    .child("Copy a theme configuration from ghostty.style, then paste it here. Uses the same format as Ghostty's config."),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(32.0))
+                            .child(
+                                Input::new(&custom_theme_name_input)
+                                    .appearance(false),
+                            ),
+                    )
+                    .child(paste_btn),
+            );
+
+        // Live preview of pasted theme
+        if let Some(preview_area) = preview_area {
+            import_section = import_section.child(preview_area);
+        }
+
+        // Status message
+        if let Some(ref status) = self.custom_theme_status {
+            import_section = import_section.child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(if status.starts_with("Error") {
+                        theme.danger
+                    } else {
+                        theme.success
+                    })
+                    .child(status.clone()),
+            );
+        }
+
+        // ghostty.style credit
+        import_section = import_section.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .pt(px(4.0))
+                .text_size(px(10.0))
+                .text_color(theme.muted_foreground.opacity(0.4))
+                .child("Themes from")
+                .child(
+                    div()
+                        .text_color(theme.primary.opacity(0.6))
+                        .child("ghostty.style"),
+                )
+                .child("·")
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground.opacity(0.35))
+                        .child("iTerm2-Color-Schemes (MIT)"),
+                ),
+        );
+
+        content = content.child(card(theme).child(import_section));
+
+        // ── Theme directory hint ──
+        let theme_dir = if cfg!(target_os = "macos") {
+            "~/Library/Application Support/con/themes/"
+        } else {
+            "~/.config/con/themes/"
+        };
+        content = content.child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme.muted_foreground.opacity(0.35))
+                .mt(px(4.0))
+                .child(format!("Drop ghostty-format theme files in {theme_dir} to install manually.")),
+        );
+
+        content
+    }
+
+    /// Render a grid of theme preview cards.
+    fn render_theme_grid(
+        &self,
+        themes: &[&con_terminal::TerminalTheme],
+        current_theme: &str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let mut grid = div().flex().flex_wrap().gap(px(10.0));
+        for term_theme in themes.iter() {
+            let is_sel = term_theme.name.as_str() == current_theme;
+            grid = grid.child(self.render_single_theme_card(term_theme, is_sel, cx));
+        }
+        grid
+    }
+
+    /// Render a single theme preview card.
+    fn render_single_theme_card(
+        &self,
+        term_theme: &con_terminal::TerminalTheme,
+        is_sel: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = cx.theme();
+        let name = term_theme.name.clone();
+        let theme_name = name.clone();
+        let bg = term_theme.background;
+        let fg = term_theme.foreground;
+        let bg_gpui = gpui::rgb(bg.to_u32());
+        let fg_gpui = gpui::rgb(fg.to_u32());
+        let green = gpui::rgb(term_theme.ansi[2].to_u32());
+        let cyan = gpui::rgb(term_theme.ansi[6].to_u32());
+        let blue = gpui::rgb(term_theme.ansi[4].to_u32());
+        let yellow = gpui::rgb(term_theme.ansi[3].to_u32());
+        let red = gpui::rgb(term_theme.ansi[1].to_u32());
+        let magenta = gpui::rgb(term_theme.ansi[5].to_u32());
+
+        let terminal_preview = div()
+            .flex()
+            .flex_col()
+            .bg(bg_gpui)
+            .rounded_t(px(8.0))
+            .px(px(8.0))
+            .pt(px(6.0))
+            .pb(px(6.0))
+            .gap(px(1.0))
+            .font_family("Ioskeley Mono")
+            .text_size(px(8.0))
+            .line_height(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(3.0))
+                    .pb(px(4.0))
+                    .child(div().size(px(5.0)).rounded_full().bg(red))
+                    .child(div().size(px(5.0)).rounded_full().bg(yellow))
+                    .child(div().size(px(5.0)).rounded_full().bg(green)),
+            )
+            .child(
+                div().flex().gap(px(3.0))
+                    .child(div().text_color(green).child("$"))
+                    .child(div().text_color(cyan).child("git"))
+                    .child(div().text_color(fg_gpui).child("log --oneline")),
+            )
+            .child(
+                div().flex().gap(px(3.0))
+                    .child(div().text_color(yellow).child("a1b2c3d"))
+                    .child(div().text_color(fg_gpui).child("feat: init")),
+            )
+            .child(
+                div().flex().gap(px(3.0))
+                    .child(div().text_color(yellow).child("e4f5g6h"))
+                    .child(div().text_color(fg_gpui).child("fix: theme")),
+            )
+            .child(
+                div().flex().gap(px(3.0))
+                    .child(div().text_color(green).child("$"))
+                    .child(div().text_color(blue).child("ls"))
+                    .child(div().text_color(fg_gpui).child("src/")),
+            )
+            .child(
+                div().flex().gap(px(4.0))
+                    .child(div().text_color(blue).child("lib/"))
+                    .child(div().text_color(magenta).child("main.rs"))
+                    .child(div().text_color(fg_gpui).child("README")),
+            );
+
+        let mut palette_strip = div().flex().h(px(4.0));
+        for idx in 0..16 {
+            let c = term_theme.ansi[idx];
+            palette_strip = palette_strip.child(
+                div().flex_1().h_full().bg(gpui::rgb(c.to_u32())),
+            );
+        }
+
+        let display_name = display_theme_name(&name);
+
+        div()
+            .id(SharedString::from(format!("term-theme-{name}")))
+            .cursor_pointer()
+            .w(px(150.0))
+            .flex()
+            .flex_col()
+            .rounded(px(10.0))
+            .overflow_hidden()
+            .bg(if is_sel {
+                theme.primary.opacity(0.10)
+            } else {
+                theme.muted.opacity(0.04)
+            })
+            .hover(|s| s.bg(theme.primary.opacity(0.06)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.config.terminal.theme = theme_name.clone();
+                    cx.emit(ThemePreview(theme_name.clone()));
+                    cx.notify();
+                }),
+            )
+            .child(terminal_preview)
+            .child(palette_strip)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(4.0))
+                    .h(px(26.0))
+                    .text_size(px(10.5))
+                    .font_weight(if is_sel {
+                        FontWeight::SEMIBOLD
+                    } else {
+                        FontWeight::MEDIUM
+                    })
+                    .text_color(if is_sel {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .children(if is_sel {
+                        Some(
+                            svg()
+                                .path("phosphor/check.svg")
+                                .size(px(10.0))
+                                .text_color(theme.primary),
+                        )
+                    } else {
+                        None
+                    })
+                    .child(display_name),
             )
     }
 
@@ -586,7 +966,7 @@ impl SettingsPanel {
                     div()
                         .size(px(5.0))
                         .rounded_full()
-                        .bg(if is_selected { gpui::white() } else { theme.transparent }),
+                        .bg(if is_selected { theme.primary_foreground } else { theme.transparent }),
                 );
 
             let row = div()
@@ -671,7 +1051,7 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .child(group_label("MODEL"))
+            .child(group_label("MODEL", &theme))
             .child(model_card_content);
 
         // Right column — model + config + advanced
@@ -686,7 +1066,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("CONFIGURATION"))
+                    .child(group_label("CONFIGURATION", &theme))
                     .child(
                         card(theme)
                             .child(row_field("API Key", &api_key_input))
@@ -699,7 +1079,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("ADVANCED"))
+                    .child(group_label("ADVANCED", &theme))
                     .child(
                         card(theme)
                             .child(row_field("Max Tokens", &max_tokens_input))
@@ -714,7 +1094,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("SUGGESTIONS"))
+                    .child(group_label("SUGGESTIONS", &theme))
                     .child(
                         card(theme)
                             .child(row_field("Model", &suggestion_model_input)),
@@ -736,7 +1116,7 @@ impl SettingsPanel {
                             .gap(px(8.0))
                             .w(px(200.0))
                             .flex_shrink_0()
-                            .child(group_label("PROVIDER"))
+                            .child(group_label("PROVIDER", &theme))
                             .child(provider_list),
                     )
                     // Right: model + config + advanced
@@ -751,7 +1131,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("GENERAL"))
+                    .child(group_label("GENERAL", &theme))
                     .child(
                         card(theme)
                             .child(key_row("New Tab", "⌘T", theme))
@@ -770,7 +1150,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("PANES"))
+                    .child(group_label("PANES", &theme))
                     .child(
                         card(theme)
                             .child(key_row("Split Right", "⌘D", theme))
@@ -785,7 +1165,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("TERMINAL"))
+                    .child(group_label("TERMINAL", &theme))
                     .child(
                         card(theme)
                             .child(key_row("Clear", "⌘K", theme))
@@ -887,7 +1267,7 @@ impl Render for SettingsPanel {
             .occlude()
             .absolute()
             .size_full()
-            .bg(rgba(0x00000055))
+            .bg(theme.background.opacity(0.6))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                 this.visible = false;
                 cx.notify();
@@ -959,8 +1339,8 @@ impl Render for SettingsPanel {
                             .mx_4()
                             .mt_2()
                             .rounded_md()
-                            .bg(gpui::red())
-                            .text_color(gpui::white())
+                            .bg(theme.danger)
+                            .text_color(theme.danger_foreground)
                             .text_xs()
                             .child(format!("Save failed: {}", err))
                     }))
@@ -1011,11 +1391,11 @@ fn section_content(title: &str, subtitle: &str, theme: &gpui_component::Theme) -
         )
 }
 
-fn group_label(text: &str) -> Div {
+fn group_label(text: &str, theme: &gpui_component::Theme) -> Div {
     div()
         .text_size(px(10.0))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(gpui::hsla(0.0, 0.0, 0.50, 0.7))
+        .text_color(theme.muted_foreground.opacity(0.6))
         .px(px(4.0))
         .pt(px(4.0))
         .child(text.to_string())
