@@ -696,8 +696,8 @@ impl ConWorkspace {
                 log::error!("Failed to update ghostty colors: {}", e);
             }
         }
-        // Sync GPUI UI theme (dark/light) with terminal theme
-        crate::theme::sync_gpui_mode(&theme.name, window, cx);
+        // Sync GPUI UI theme colors with terminal theme
+        crate::theme::sync_gpui_theme(&theme, window, cx);
     }
 
     fn on_input_escape(

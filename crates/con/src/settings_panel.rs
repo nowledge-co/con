@@ -676,64 +676,72 @@ impl SettingsPanel {
 
         // ── Import from ghostty.style ──
 
-        // "Browse themes" link button — opens system browser
-        let browse_btn = div()
-            .id("browse-ghostty-style")
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .h(px(32.0))
-            .px(px(12.0))
-            .rounded(px(6.0))
-            .cursor_pointer()
-            .bg(theme.muted.opacity(0.10))
-            .text_color(theme.foreground)
-            .text_size(px(12.0))
-            .font_weight(FontWeight::MEDIUM)
-            .hover(|s| s.bg(theme.muted.opacity(0.18)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _, _, cx| {
-                    cx.open_url("https://ghostty-style.vercel.app/");
-                }),
-            )
-            .child(svg().path("phosphor/arrow-square-out.svg").size(px(13.0)).text_color(theme.muted_foreground))
-            .child("Browse Ghostty Style Catalog");
-
         let theme = cx.theme();
         let mut import_section = div()
             .px(px(16.0))
             .py(px(14.0))
             .flex()
             .flex_col()
-            .gap(px(14.0))
+            .gap(px(12.0))
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
                     .child("Import Theme"),
             )
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(theme.muted_foreground)
-                    .line_height(px(18.0))
-                    .child("Find a theme you like, copy its configuration, then paste it here."),
-            )
-            // Action row: browse + name input + paste
+            // Step 1: Browse — descriptive text with inline link
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(browse_btn)
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme.muted_foreground)
+                            .child("Browse themes at"),
+                    )
+                    .child(
+                        div()
+                            .id("ghostty-style-link")
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .cursor_pointer()
+                            .text_size(px(12.0))
+                            .text_color(theme.primary)
+                            .hover(|s| s.text_decoration_1())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_, _, _, cx| {
+                                    cx.open_url("https://ghostty-style.vercel.app/");
+                                }),
+                            )
+                            .child("Ghostty Style Catalog")
+                            .child(
+                                svg()
+                                    .path("phosphor/arrow-square-out.svg")
+                                    .size(px(11.0))
+                                    .text_color(theme.primary),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme.muted_foreground)
+                            .child("then paste the config here."),
+                    ),
+            )
+            // Step 2: Name + Paste action row
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
                     .child(
                         div()
                             .flex_1()
-                            .child(
-                                Input::new(&custom_theme_name_input)
-                                    .appearance(false),
-                            ),
+                            .child(Input::new(&custom_theme_name_input)),
                     )
                     .child(paste_btn),
             );
@@ -924,7 +932,7 @@ impl SettingsPanel {
         let temperature_input = self.temperature_input.clone();
         let suggestion_model_input = self.suggestion_model_input.clone();
 
-        // Provider list — compact pill-style rows
+        // Provider list — clean selection rows
         let mut provider_list = div()
             .flex()
             .flex_col()
@@ -938,12 +946,11 @@ impl SettingsPanel {
 
             let row = div()
                 .id(SharedString::from(format!("prov-{label}")))
-                .h(px(28.0))
+                .h(px(30.0))
                 .mx(px(4.0))
-                .px(px(10.0))
+                .px(px(12.0))
                 .flex()
                 .items_center()
-                .gap(px(7.0))
                 .rounded(px(6.0))
                 .cursor_pointer()
                 .bg(if is_selected { theme.primary.opacity(0.10) } else { theme.transparent })
@@ -953,14 +960,7 @@ impl SettingsPanel {
                 }))
                 .child(
                     div()
-                        .size(px(6.0))
-                        .rounded_full()
-                        .flex_shrink_0()
-                        .bg(if is_selected { theme.primary } else { theme.transparent }),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
+                        .text_size(px(12.5))
                         .font_weight(if is_selected { FontWeight::MEDIUM } else { FontWeight::NORMAL })
                         .text_color(if is_selected { theme.foreground } else { theme.muted_foreground })
                         .child(label),
