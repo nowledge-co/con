@@ -1637,33 +1637,26 @@ impl Render for ConWorkspace {
             .child(terminal_area);
 
         if self.agent_panel_open {
-            // Draggable divider — 8px hit target with centered visual line
+            // Draggable divider — matches pane divider style
             main_area = main_area
                 .child(
                     div()
                         .id("agent-panel-divider")
-                        .group("divider")
-                        .w(px(8.0))
+                        .w(px(6.0))
                         .h_full()
                         .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_col_resize()
+                        .bg(theme.title_bar)
+                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
                                 this.agent_panel_drag =
                                     Some((f32::from(event.position.x), this.agent_panel_width));
                             }),
-                        )
-                        // Visible line — subtle at rest, accent on hover
-                        .child(
-                            div()
-                                .w(px(1.0))
-                                .h_full()
-                                .bg(theme.foreground.opacity(0.08))
-                                .group_hover("divider", |s| s.bg(theme.primary.opacity(0.5)).w(px(2.0))),
                         ),
                 )
                 .child(
@@ -1845,8 +1838,9 @@ impl Render for ConWorkspace {
                 .ml(px(4.0))
                 .rounded(px(6.0))
                 .cursor_pointer()
-                .text_color(theme.foreground.opacity(0.45))
-                .hover(|s| s.bg(theme.muted.opacity(0.12)).text_color(theme.foreground.opacity(0.9)))
+                .bg(theme.muted.opacity(0.06))
+                .text_color(theme.foreground.opacity(0.55))
+                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground.opacity(0.9)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
@@ -1873,12 +1867,17 @@ impl Render for ConWorkspace {
                 .mr(px(4.0))
                 .rounded(px(6.0))
                 .cursor_pointer()
+                .bg(if self.agent_panel_open {
+                    theme.primary.opacity(0.10)
+                } else {
+                    theme.muted.opacity(0.06)
+                })
                 .text_color(if self.agent_panel_open {
                     theme.primary
                 } else {
-                    theme.foreground.opacity(0.45)
+                    theme.foreground.opacity(0.55)
                 })
-                .hover(|s| s.bg(theme.muted.opacity(0.12)).text_color(theme.foreground.opacity(0.9)))
+                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground.opacity(0.9)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
                 }))
