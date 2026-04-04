@@ -62,6 +62,9 @@ pub struct InputBar {
     skills: Vec<SkillEntry>,
     /// Index of the highlighted skill in the filtered list (for arrow-key nav)
     skill_selection: usize,
+    /// Tracks whether shift was held on the last enter keystroke.
+    /// Set by observe_keystrokes (fires before PressEnter), consumed by PressEnter handler.
+    shift_enter: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -74,10 +77,22 @@ impl InputBar {
         });
 
         let _subscriptions = vec![
+            // Track shift state on enter keystrokes — fires BEFORE PressEnter
+            cx.observe_keystrokes(|this, event, _window, _cx| {
+                if event.keystroke.key == "enter" {
+                    this.shift_enter = event.keystroke.modifiers.shift;
+                }
+            }),
             cx.subscribe_in(&input_state, window, {
                 move |this, _, ev: &InputEvent, window, cx| {
                     match ev {
-                        InputEvent::PressEnter { secondary: false } => {
+                        InputEvent::PressEnter { .. } => {
+                            if this.shift_enter {
+                                // Shift+Enter: newline already inserted by auto_grow
+                                this.shift_enter = false;
+                                return;
+                            }
+
                             // Regular Enter: undo the newline auto_grow inserted, then submit
                             this.input_state.update(cx, |s, cx| {
                                 let cursor = s.cursor();
@@ -101,9 +116,6 @@ impl InputBar {
                                 }
                             }
                         }
-                        InputEvent::PressEnter { secondary: true } => {
-                            // Shift+Enter: newline already inserted by auto_grow
-                        }
                         _ => {}
                     }
                 }
@@ -119,6 +131,7 @@ impl InputBar {
             focused_pane_id: 0,
             skills: Vec::new(),
             skill_selection: 0,
+            shift_enter: false,
             _subscriptions,
         }
     }

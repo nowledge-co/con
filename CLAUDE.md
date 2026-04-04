@@ -32,8 +32,17 @@ kingston/
 │   ├── con-agent/     # AI harness (Rig 0.34, tools, conversation)
 │   └── con-cli/       # CLI + socket client (stub)
 ├── postmortem/        # Integration & incident postmortems
-└── assets/            # Themes, fonts, icons
+├── assets/            # Themes, fonts, icons
+└── 3pp/               # Third-party source (READ-ONLY reference, .gitignored)
 ```
+
+## 3pp Policy
+
+The `3pp/` directory contains third-party source checkouts for **read-only reference only**. It is `.gitignored` — never modify, commit, or depend on files in `3pp/`.
+
+- All third-party dependencies come from **crates.io** (or git URLs in Cargo.toml).
+- If a 3pp library has a bug, **upstream the fix** to the library's GitHub repo. Do not patch locally.
+- `3pp/` exists solely so you can read and study how dependencies work internally.
 
 ## Build
 
