@@ -79,6 +79,11 @@ impl SkillRegistry {
         self.skills.keys().cloned().collect()
     }
 
+    /// Return (name, description) pairs for all registered skills.
+    pub fn summaries(&self) -> Vec<(String, String)> {
+        self.skills.values().map(|s| (s.name.clone(), s.description.clone())).collect()
+    }
+
     /// Load skills from an AGENTS.md file.
     /// AGENTS.md format:
     /// ```text

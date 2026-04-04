@@ -73,6 +73,9 @@ pub struct SettingsPanel {
     custom_theme_name_input: Entity<InputState>,
     custom_theme_preview: Option<con_terminal::TerminalTheme>,
     custom_theme_status: Option<String>,
+
+    // Keybindings — which binding is being recorded (field name, e.g. "new_tab")
+    recording_key: Option<String>,
 }
 
 const ALL_PROVIDERS: &[ProviderKind] = &[
@@ -185,6 +188,7 @@ impl SettingsPanel {
             custom_theme_name_input,
             custom_theme_preview: None,
             custom_theme_status: None,
+            recording_key: None,
         }
     }
 
@@ -201,6 +205,7 @@ impl SettingsPanel {
             self.auto_approve = agent.auto_approve_tools;
             self.font_size_input.update(cx, |s, cx| s.set_value(&self.config.terminal.font_size.to_string(), window, cx));
             self.scrollback_input.update(cx, |s, cx| s.set_value(&self.config.terminal.scrollback_lines.to_string(), window, cx));
+            self.recording_key = None;
             self.focus_handle.focus(window, cx);
         }
         cx.notify();
@@ -372,6 +377,8 @@ impl SettingsPanel {
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
         self.config.terminal.scrollback_lines = scrollback_text.parse().unwrap_or(10_000);
 
+        // Keybindings are updated directly via record_keystroke — no reading needed
+
         match self.persist_config() {
             Ok(()) => {
                 self.save_error = None;
@@ -386,8 +393,62 @@ impl SettingsPanel {
         cx.notify();
     }
 
+    /// Record a keystroke for the binding currently being recorded.
+    fn record_keystroke(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
+        let field = match &self.recording_key {
+            Some(f) => f.clone(),
+            None => return,
+        };
+
+        // Don't record bare modifier keys or escape (used to cancel)
+        let key = &keystroke.key;
+        if matches!(key.as_str(), "shift" | "control" | "alt" | "meta" | "fn" | "escape") {
+            if key == "escape" {
+                self.recording_key = None;
+                cx.notify();
+            }
+            return;
+        }
+
+        // Build GPUI binding format: cmd-shift-k
+        let binding = keystroke_to_binding(keystroke);
+
+        // Write directly into config
+        match field.as_str() {
+            "new_tab" => self.config.keybindings.new_tab = binding,
+            "close_tab" => self.config.keybindings.close_tab = binding,
+            "settings" => self.config.keybindings.settings = binding,
+            "command_palette" => self.config.keybindings.command_palette = binding,
+            "toggle_agent" => self.config.keybindings.toggle_agent = binding,
+            "focus_input" => self.config.keybindings.focus_input = binding,
+            "split_right" => self.config.keybindings.split_right = binding,
+            "split_down" => self.config.keybindings.split_down = binding,
+            "quit" => self.config.keybindings.quit = binding,
+            _ => {}
+        }
+        self.recording_key = None;
+        cx.notify();
+    }
+
+    /// Get the current value of a keybinding by field name.
+    fn binding_value(&self, field: &str) -> &str {
+        match field {
+            "new_tab" => &self.config.keybindings.new_tab,
+            "close_tab" => &self.config.keybindings.close_tab,
+            "settings" => &self.config.keybindings.settings,
+            "command_palette" => &self.config.keybindings.command_palette,
+            "toggle_agent" => &self.config.keybindings.toggle_agent,
+            "focus_input" => &self.config.keybindings.focus_input,
+            "split_right" => &self.config.keybindings.split_right,
+            "split_down" => &self.config.keybindings.split_down,
+            "quit" => &self.config.keybindings.quit,
+            _ => "",
+        }
+    }
+
     pub fn agent_config(&self) -> &AgentConfig { &self.config.agent }
     pub fn terminal_config(&self) -> &con_core::config::TerminalConfig { &self.config.terminal }
+    pub fn keybinding_config(&self) -> &con_core::config::KeybindingConfig { &self.config.keybindings }
 
     fn persist_config(&self) -> anyhow::Result<()> {
         let path = Config::config_path();
@@ -1096,26 +1157,95 @@ impl SettingsPanel {
             )
     }
 
-    fn render_keys(&self, theme: &gpui_component::Theme) -> Div {
-        section_content("Keyboard Shortcuts", "View and customize key bindings.", theme)
+    fn render_keys(&mut self, cx: &mut Context<Self>) -> Div {
+        let recording = self.recording_key.clone();
+
+        // Editable keybinding definitions: (label, field_name)
+        let general_keys: &[(&str, &str)] = &[
+            ("New Tab", "new_tab"),
+            ("Close Tab", "close_tab"),
+            ("Settings", "settings"),
+            ("Command Palette", "command_palette"),
+            ("Toggle Agent", "toggle_agent"),
+            ("Focus Input", "focus_input"),
+            ("Quit", "quit"),
+        ];
+
+        let pane_keys: &[(&str, &str)] = &[
+            ("Split Right", "split_right"),
+            ("Split Down", "split_down"),
+        ];
+
+        let build_card = |keys: &[(&str, &str)], recording: &Option<String>, this: &mut Self, cx: &mut Context<Self>| -> Div {
+            let theme = cx.theme();
+            let mut c = card(theme);
+            for (i, (label, field)) in keys.iter().enumerate() {
+                if i > 0 {
+                    c = c.child(row_separator(theme));
+                }
+                let value = this.binding_value(field).to_string();
+                let is_recording = recording.as_deref() == Some(*field);
+                let display = if is_recording {
+                    "Press shortcut...".to_string()
+                } else {
+                    format_keybinding_display(&value)
+                };
+                let field_str = field.to_string();
+                c = c.child(
+                    div()
+                        .id(SharedString::from(format!("key-{field}")))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px(px(16.0))
+                        .h(px(36.0))
+                        .child(div().text_sm().child(label.to_string()))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("key-badge-{field}")))
+                                .h(px(24.0))
+                                .px(px(9.0))
+                                .flex()
+                                .items_center()
+                                .rounded(px(5.0))
+                                .cursor_pointer()
+                                .bg(if is_recording {
+                                    theme.primary.opacity(0.12)
+                                } else {
+                                    theme.muted.opacity(0.15)
+                                })
+                                .text_size(px(11.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(if is_recording {
+                                    theme.primary
+                                } else {
+                                    theme.muted_foreground
+                                })
+                                .hover(|s| s.bg(theme.primary.opacity(0.10)).text_color(theme.primary))
+                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                    this.recording_key = Some(field_str.clone());
+                                    cx.notify();
+                                }))
+                                .child(display),
+                        ),
+                );
+            }
+            c
+        };
+
+        let general_card = build_card(general_keys, &recording, self, cx);
+        let pane_card_keys = pane_keys;
+        let pane_card = build_card(pane_card_keys, &recording, self, cx);
+
+        let theme = cx.theme();
+        section_content("Keyboard Shortcuts", "Click a shortcut to record a new key combination.", theme)
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
                     .child(group_label("General", &theme))
-                    .child(
-                        card(theme)
-                            .child(key_row("New Tab", "⌘T", theme))
-                            .child(row_separator(theme))
-                            .child(key_row("Close Tab", "⌘W", theme))
-                            .child(row_separator(theme))
-                            .child(key_row("Settings", "⌘,", theme))
-                            .child(row_separator(theme))
-                            .child(key_row("Command Palette", "⇧⌘P", theme))
-                            .child(row_separator(theme))
-                            .child(key_row("Toggle Agent", "⌘L", theme)),
-                    ),
+                    .child(general_card),
             )
             .child(
                 div()
@@ -1123,12 +1253,9 @@ impl SettingsPanel {
                     .flex_col()
                     .gap(px(8.0))
                     .child(group_label("Panes", &theme))
+                    .child(pane_card)
                     .child(
                         card(theme)
-                            .child(key_row("Split Right", "⌘D", theme))
-                            .child(row_separator(theme))
-                            .child(key_row("Split Down", "⇧⌘D", theme))
-                            .child(row_separator(theme))
                             .child(key_row("Close Pane", "⌃D", theme)),
                     ),
             )
@@ -1140,8 +1267,6 @@ impl SettingsPanel {
                     .child(group_label("Terminal", &theme))
                     .child(
                         card(theme)
-                            .child(key_row("Clear", "⌘K", theme))
-                            .child(row_separator(theme))
                             .child(key_row("Copy", "⌘C", theme))
                             .child(row_separator(theme))
                             .child(key_row("Paste", "⌘V", theme))
@@ -1177,8 +1302,7 @@ impl Render for SettingsPanel {
             }
             SettingsSection::Models => self.render_ai(cx),
             SettingsSection::Keys => {
-                let theme = cx.theme();
-                self.render_keys(theme)
+                self.render_keys(cx)
             }
         };
 
@@ -1268,6 +1392,11 @@ impl Render for SettingsPanel {
                     .occlude()
                     .track_focus(&self.focus_handle)
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        // If recording a keybinding, capture the keystroke
+                        if this.recording_key.is_some() {
+                            this.record_keystroke(&event.keystroke, cx);
+                            return;
+                        }
                         match event.keystroke.key.as_str() {
                             "escape" => {
                                 this.save(window, cx);
@@ -1399,6 +1528,53 @@ fn row_field(label: &str, input: &Entity<InputState>) -> Div {
         .child(
             div().flex_1().min_w(px(160.0)).child(Input::new(input)),
         )
+}
+
+/// Convert a GPUI Keystroke to the binding format string (e.g. "cmd-shift-d").
+fn keystroke_to_binding(ks: &gpui::Keystroke) -> String {
+    let mut parts = Vec::new();
+    if ks.modifiers.platform { parts.push("cmd"); }
+    if ks.modifiers.control { parts.push("ctrl"); }
+    if ks.modifiers.alt { parts.push("alt"); }
+    if ks.modifiers.shift { parts.push("shift"); }
+    parts.push(&ks.key);
+    parts.join("-")
+}
+
+/// Convert a GPUI binding string (e.g. "cmd-shift-d") to display format ("⇧⌘D").
+fn format_keybinding_display(binding: &str) -> String {
+    let parts: Vec<&str> = binding.split('-').collect();
+    if parts.is_empty() {
+        return binding.to_string();
+    }
+    let mut display = String::new();
+    // Modifier order for display: ⌃⌥⇧⌘ (standard macOS ordering)
+    let modifiers = &parts[..parts.len() - 1];
+    if modifiers.contains(&"ctrl") { display.push('⌃'); }
+    if modifiers.contains(&"alt") { display.push('⌥'); }
+    if modifiers.contains(&"shift") { display.push('⇧'); }
+    if modifiers.contains(&"cmd") { display.push('⌘'); }
+    if let Some(key) = parts.last() {
+        // Special key display names
+        let display_key = match *key {
+            "backspace" => "⌫",
+            "delete" => "⌦",
+            "enter" => "↵",
+            "tab" => "⇥",
+            "space" => "Space",
+            "up" => "↑",
+            "down" => "↓",
+            "left" => "←",
+            "right" => "→",
+            _ => "",
+        };
+        if display_key.is_empty() {
+            display.push_str(&key.to_uppercase());
+        } else {
+            display.push_str(display_key);
+        }
+    }
+    display
 }
 
 fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {

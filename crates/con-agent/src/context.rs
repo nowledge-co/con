@@ -27,8 +27,8 @@ pub struct TerminalContext {
     pub tmux_session: Option<String>,
     /// Contents of AGENTS.md in the cwd (if present)
     pub agents_md: Option<String>,
-    /// Available skills
-    pub skills: Vec<String>,
+    /// Available skills: (name, description) pairs
+    pub skills: Vec<(String, String)>,
     /// Recent command blocks from OSC 133 shell integration
     pub command_history: Vec<CommandBlockInfo>,
     /// Other (non-focused) panes in the current tab.
@@ -239,10 +239,11 @@ impl TerminalContext {
         }
 
         if !self.skills.is_empty() {
-            prompt.push_str(&format!(
-                "\nAvailable skills: {}\n",
-                self.skills.join(", ")
-            ));
+            prompt.push_str("\n<skills>\nThe user can invoke these skills with /name. When a skill is invoked, follow its intent:\n");
+            for (name, desc) in &self.skills {
+                prompt.push_str(&format!("  /{name} — {desc}\n"));
+            }
+            prompt.push_str("</skills>\n");
         }
 
         prompt

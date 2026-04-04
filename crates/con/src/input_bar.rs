@@ -45,6 +45,13 @@ pub struct PaneInfo {
     pub is_alive: bool,
 }
 
+/// A skill available for slash-command completion.
+#[derive(Clone)]
+pub struct SkillEntry {
+    pub name: String,
+    pub description: String,
+}
+
 pub struct InputBar {
     input_state: Entity<InputState>,
     mode: InputMode,
@@ -52,6 +59,9 @@ pub struct InputBar {
     panes: Vec<PaneInfo>,
     selected_pane_ids: Vec<usize>,
     focused_pane_id: usize,
+    skills: Vec<SkillEntry>,
+    /// Index of the highlighted skill in the filtered list (for arrow-key nav)
+    skill_selection: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -83,6 +93,8 @@ impl InputBar {
             panes: Vec::new(),
             selected_pane_ids: Vec::new(),
             focused_pane_id: 0,
+            skills: Vec::new(),
+            skill_selection: 0,
             _subscriptions,
         }
     }
@@ -116,6 +128,41 @@ impl InputBar {
         self.focused_pane_id = focused_id;
         let valid_ids: Vec<usize> = self.panes.iter().map(|p| p.id).collect();
         self.selected_pane_ids.retain(|id| valid_ids.contains(id));
+    }
+
+    pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
+        self.skills = skills;
+    }
+
+    /// Return matching skills if the input starts with `/`.
+    /// Public so the workspace can render the popup at overlay level.
+    pub fn filtered_skills(&self, cx: &App) -> Vec<&SkillEntry> {
+        let text = self.input_state.read(cx).value().to_string();
+        let trimmed = text.trim();
+        if !trimmed.starts_with('/') {
+            return Vec::new();
+        }
+        let query = &trimmed[1..].to_lowercase();
+        if query.contains(' ') {
+            // Already has args — no autocomplete
+            return Vec::new();
+        }
+        self.skills
+            .iter()
+            .filter(|s| query.is_empty() || s.name.to_lowercase().starts_with(query))
+            .collect()
+    }
+
+    pub fn skill_selection(&self) -> usize {
+        self.skill_selection
+    }
+
+    pub fn complete_skill(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_state.update(cx, |s, cx| {
+            s.set_value(&format!("/{name} "), window, cx);
+        });
+        self.skill_selection = 0;
+        cx.notify();
     }
 
     pub fn cycle_mode(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -354,9 +401,38 @@ impl Render for InputBar {
             .bg(theme.title_bar)
             .font_family(".SystemUIFont")
             .text_size(px(13.0))
-            .on_key_down(cx.listener(|_this, event: &KeyDownEvent, _window, cx| {
-                if event.keystroke.key == "escape" {
-                    cx.emit(EscapeInput);
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let matches = this.filtered_skills(cx);
+                let has_completions = !matches.is_empty();
+                match event.keystroke.key.as_str() {
+                    "escape" => {
+                        if has_completions {
+                            // Clear the slash prefix to dismiss completions
+                            this.input_state.update(cx, |s, cx| s.set_value("", window, cx));
+                            this.skill_selection = 0;
+                            cx.notify();
+                        } else {
+                            cx.emit(EscapeInput);
+                        }
+                    }
+                    "tab" if has_completions => {
+                        // Tab completes the selected skill
+                        let idx = this.skill_selection.min(matches.len().saturating_sub(1));
+                        let name = matches[idx].name.clone();
+                        this.complete_skill(&name, window, cx);
+                    }
+                    "tab" if !event.keystroke.modifiers.shift => {
+                        this.cycle_mode(window, cx);
+                    }
+                    "up" if has_completions => {
+                        this.skill_selection = this.skill_selection.saturating_sub(1);
+                        cx.notify();
+                    }
+                    "down" if has_completions => {
+                        this.skill_selection = (this.skill_selection + 1).min(matches.len().saturating_sub(1));
+                        cx.notify();
+                    }
+                    _ => {}
                 }
             }))
             // Main row
@@ -406,7 +482,7 @@ impl Render for InputBar {
                         div()
                             .text_size(px(10.0))
                             .text_color(theme.muted_foreground.opacity(0.25))
-                            .child("↵ send"),
+                            .child("/ skills  ⇥ mode  ↵ send"),
                     ),
             )
     }

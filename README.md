@@ -1,96 +1,61 @@
-# con
+<p align="center">
+  <img src="assets/Con-macOS-Dark-256x256@2x.png" width="120" alt="con logo">
+</p>
+<h1 align="center">con</h1>
+<p align="center"><strong>The terminal emulator with a built-in AI harness, nothing more</strong></p>
 
-A terminal for people who live in the terminal.
+<p align="center">
+  Open source. Fast. Terminal-first.
+</p>
 
-GPU-accelerated. AI-native. Open source. Written in Rust.
+<p align="center">
+  Built for local coding, SSH, tmux, Codex, Claude Code, and agent-native workflows.
+</p>
+
+
+
+<p align="center">
+  <a href="https://opensource.org/licenses/MIT">
+    <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg">
+  </a>
+  <a href="https://github.com/nowledge-co/con/releases">
+    <img alt="Releases" src="https://img.shields.io/badge/Releases-download-black">
+  </a>
+</p>
 
 ## Why con?
 
-The terminal hasn't changed much in forty years. The AI era bolted chat interfaces onto the side, but the terminal itself stayed the same — a passive rectangle waiting for keystrokes.
+If you're an old-school terminal user and only want enough AI harness when needed, `con` is for you.
 
-con treats the terminal and the agent as one thing. The agent lives inside the terminal. It can see what you see, read what's on screen, run commands where you run them. No context-switching. No copy-pasting output into a chat window. No explaining to the AI what just happened — it was right there.
+Think of it like a beloved old beast with modern Bluetooth done right — or a truck lover who still wants an electric future.
 
-We were inspired by [Warp](https://www.warp.dev/) and [cmux](https://github.com/nickthecook/cmux). Warp proved that the terminal could be rethought as a modern product. cmux showed that multiplexing and scripting could be unified. con takes a different path: instead of reimagining the terminal as a notebook or a script runner, we kept it as a terminal — and gave it a brain.
+If you want more than Con, go for [Warp](https://www.warp.dev/).
 
-## What you get
+If you want less than Con, you probably already have more ideas than us ;).
 
-- **Full terminal emulation** — Truecolor, scrollback, mouse, clipboard, alternate screen, bracketed paste, DEC private modes. Ghostty's Metal-rendered backend on macOS, a pure-Rust VTE fallback everywhere else.
-- **Built-in AI agent** — 13+ providers (Anthropic, OpenAI, DeepSeek, Ollama, and more). The agent reads your terminal, knows your working directory and git branch, and runs commands with your approval.
-- **One input bar** — Type a shell command or ask the AI a question. con figures out which one you meant. Or switch modes explicitly with Tab.
-- **Tool transparency** — Every tool call is visible. Execution time, arguments, output — nothing hidden. Dangerous operations require explicit approval.
-- **Skills** — `/explain`, `/fix`, `/commit`, `/test`, `/review`. Extend with your own via `AGENTS.md`.
-- **Per-tab sessions** — Each tab owns its conversation and context. Switch tabs while the agent works.
-- **12 built-in themes** — Flexoki, Catppuccin, Tokyo Night, Dracula, Nord, Rose Pine, Gruvbox, Solarized, One Half Dark, Kanagawa Wave, Everforest. Sourced from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) via [ghostty.style](https://ghostty.style).
+## What it does
 
-## Getting started
+- a terminal emulator
+- built-in AI harness aware of panes within a tab
+- works well with `ssh`, `tmux`, `opencode`,`codex`, and `claude code`
 
-### Prerequisites
+## Status
 
-- Rust (stable, edition 2024)
-- cmake
+`con` is in active pre-release development.
 
-### Build and run
+Best-supported target today: **macOS**.
 
-```bash
-git clone https://github.com/nickthecook/kingston.git
-cd kingston
-cargo run -p con
-```
+## Download
 
-### Configure
+Grab the latest binary from [Releases](https://github.com/nowledge-co/con/releases).
 
-`~/.config/con/config.toml`. Or hit **Cmd+,**.
+If you want to build from source or hack on `con`, see `HACKING.md`.
 
-```toml
-[terminal]
-font-size = 14
-theme = "flexoki-dark"
+## Docs
 
-[agent]
-provider = "anthropic"
-api_key_env = "ANTHROPIC_API_KEY"
-```
-
-## Keyboard shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| Cmd+T | New tab |
-| Cmd+W | Close tab |
-| Cmd+1-9 | Switch to tab |
-| Cmd+Shift+[ / ] | Previous / next tab |
-| Cmd+L | Toggle agent panel |
-| Cmd+, | Settings |
-| Cmd+K | Clear terminal |
-| Cmd+C / Cmd+V | Copy / paste |
-| Tab (in input bar) | Cycle input mode |
-
-## Architecture
-
-Four crates, clear boundaries:
-
-| Crate | Responsibility |
-|-------|---------------|
-| **con** | GPUI app shell — window, tabs, panels, input bar |
-| **con-core** | Shared glue — agent harness, config, session management |
-| **con-terminal** | Terminal emulation — VT parser, PTY, grid, keyboard encoding |
-| **con-agent** | AI harness — Rig, tool definitions, conversation, skills |
-
-The agent harness runs on a shared tokio runtime with per-tab sessions. Events flow from agent to UI via crossbeam channels. Tool calls go through a PromptHook lifecycle that emits events at every step — the UI is never in the dark about what the agent is doing.
-
-## Standing on the shoulders of giants
-
-con wouldn't exist without these projects:
-
-- **[Ghostty](https://ghostty.org/)** / **[libghostty](https://github.com/ghostty-org/ghostty)** — Terminal emulation on macOS via the Ghostty C API with Metal rendering
-- **[GPUI](https://github.com/longbridgeapp/gpui-component)** — GPU-accelerated UI framework, community edition of the engine behind [Zed](https://zed.dev)
-- **[Rig](https://github.com/0xPlaygrounds/rig)** — Rust AI framework powering the agent harness across 13+ LLM providers
-- **[vte](https://github.com/alacritty/vte)** — VT parser from Alacritty, used in the cross-platform fallback backend
-- **[portable-pty](https://github.com/wez/wezterm/tree/main/pty)** — Cross-platform PTY layer from WezTerm
-- **[Phosphor Icons](https://phosphoricons.com/)** — Icon set used throughout the UI
-- **[Flexoki](https://stephango.com/flexoki)** — Default color theme by Steph Ango
-- **[ghostty.style](https://ghostty.style)** — Theme preview inspiration and color schemes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
+- `DESIGN.md` — vision and architecture
+- `HACKING.md` — build and contributor quickstart
 
 ## License
 
-MIT
+[MIT](LICENSE)

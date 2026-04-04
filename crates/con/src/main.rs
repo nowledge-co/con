@@ -20,7 +20,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use workspace::ConWorkspace;
 
-actions!(con, [Quit, NewTab, ToggleAgentPanel, CloseTab, SplitRight, SplitDown, Undo, Redo, Cut, Copy, Paste, SelectAll]);
+actions!(con, [Quit, NewTab, ToggleAgentPanel, CloseTab, SplitRight, SplitDown, FocusInput, Undo, Redo, Cut, Copy, Paste, SelectAll]);
 
 /// Set the macOS dock icon at runtime (for `cargo run` — bundled apps use Info.plist).
 #[cfg(target_os = "macos")]
@@ -75,8 +75,9 @@ fn main() {
             KeyBinding::new(&kb.close_tab, CloseTab, None),
             KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
             KeyBinding::new(&kb.command_palette, command_palette::ToggleCommandPalette, None),
-            KeyBinding::new("cmd-d", SplitRight, None),
-            KeyBinding::new("cmd-shift-d", SplitDown, None),
+            KeyBinding::new(&kb.split_right, SplitRight, None),
+            KeyBinding::new(&kb.split_down, SplitDown, None),
+            KeyBinding::new(&kb.focus_input, FocusInput, None),
         ]);
 
         cx.on_action::<Quit>(|_, cx| {

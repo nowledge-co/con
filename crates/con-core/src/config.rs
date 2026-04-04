@@ -54,6 +54,9 @@ fn default_new_tab() -> String { "cmd-t".into() }
 fn default_close_tab() -> String { "cmd-w".into() }
 fn default_settings() -> String { "cmd-,".into() }
 fn default_quit() -> String { "cmd-q".into() }
+fn default_split_right() -> String { "cmd-d".into() }
+fn default_split_down() -> String { "cmd-shift-d".into() }
+fn default_focus_input() -> String { "cmd-k".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -64,6 +67,9 @@ pub struct KeybindingConfig {
     pub close_tab: String,
     pub settings: String,
     pub quit: String,
+    pub split_right: String,
+    pub split_down: String,
+    pub focus_input: String,
 }
 
 impl Default for KeybindingConfig {
@@ -75,6 +81,9 @@ impl Default for KeybindingConfig {
             close_tab: default_close_tab(),
             settings: default_settings(),
             quit: default_quit(),
+            split_right: default_split_right(),
+            split_down: default_split_down(),
+            focus_input: default_focus_input(),
         }
     }
 }

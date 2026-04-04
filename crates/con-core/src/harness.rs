@@ -374,7 +374,7 @@ impl AgentHarness {
             ssh_host,
             tmux_session,
             agents_md,
-            skills: self.skills.names(),
+            skills: self.skills.summaries(),
             command_history,
             other_panes,
             git_diff,
@@ -511,7 +511,7 @@ impl AgentHarness {
             ssh_host,
             tmux_session,
             agents_md,
-            skills: self.skills.names(),
+            skills: self.skills.summaries(),
             command_history: Vec::new(), // ghostty doesn't track command blocks
             other_panes,
             git_diff,
@@ -678,6 +678,10 @@ impl AgentHarness {
 
     pub fn skill_names(&self) -> Vec<String> {
         self.skills.names()
+    }
+
+    pub fn skill_summaries(&self) -> Vec<(String, String)> {
+        self.skills.summaries()
     }
 }
 

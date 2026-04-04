@@ -136,7 +136,7 @@ impl PanelState {
         self.status = AgentStatus::Thinking;
         if let Some(last) = self.messages.last_mut() {
             last.steps.push(StepEntry {
-                icon: "phosphor/circle-notch.svg",
+                icon: "phosphor/brain.svg",
                 label: step.to_string(),
                 detail: None,
                 status: StepStatus::Complete,
@@ -594,7 +594,7 @@ impl AgentPanel {
             return Some((tool_icon(&tc.tool_name), label));
         }
         match self.state.status {
-            AgentStatus::Thinking => Some(("phosphor/circle-notch.svg", "Thinking…")),
+            AgentStatus::Thinking => Some(("phosphor/brain.svg", "Thinking…")),
             AgentStatus::Responding => Some(("phosphor/pencil-simple.svg", "Writing…")),
             AgentStatus::Idle => None,
         }
@@ -1097,22 +1097,22 @@ impl Render for AgentPanel {
                 // ── Assistant message ──
                 let assistant_content_for_copy: String = msg.content.clone();
 
-                // Header row
+                // Header row — oven icon + "Con" label
                 msg_el = msg_el.child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(5.0))
+                        .gap(px(6.0))
                         .pb(px(2.0))
                         .child(
                             svg()
-                                .path("phosphor/circle-notch.svg")
-                                .size(px(14.0))
+                                .path("phosphor/oven.svg")
+                                .size(px(15.0))
                                 .text_color(theme.primary),
                         )
                         .child(
                             div()
-                                .text_size(px(12.0))
+                                .text_size(px(12.5))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.primary)
                                 .child("Con"),
@@ -1135,7 +1135,7 @@ impl Render for AgentPanel {
                                 .id(SharedString::from(format!("thinking-toggle-{msg_idx}")))
                                 .flex()
                                 .items_center()
-                                .gap(px(4.0))
+                                .gap(px(5.0))
                                 .pl(px(20.0))
                                 .cursor_pointer()
                                 .text_xs()
@@ -1149,6 +1149,12 @@ impl Render for AgentPanel {
                                         }
                                         cx.notify();
                                     }),
+                                )
+                                .child(
+                                    svg()
+                                        .path("phosphor/brain.svg")
+                                        .size(px(12.0))
+                                        .text_color(theme.primary.opacity(0.6)),
                                 )
                                 .child(
                                     svg()
@@ -1167,15 +1173,18 @@ impl Render for AgentPanel {
                             };
                             msg_el = msg_el.child(
                                 div()
-                                    .pl(px(24.0))
-                                    .ml(px(4.0))
+                                    .ml(px(24.0))
+                                    .pl(px(12.0))
+                                    .border_l_1()
+                                    .border_color(theme.primary.opacity(0.15))
+                                    .max_h(px(256.0))
+                                    .overflow_y_hidden()
                                     .child(
                                         div()
-                                            .pl(px(8.0))
                                             .py(px(4.0))
                                             .text_xs()
                                             .line_height(px(18.0))
-                                            .text_color(theme.muted_foreground.opacity(0.7))
+                                            .text_color(theme.muted_foreground.opacity(0.65))
                                             .child(
                                                 TextView::markdown(
                                                     ElementId::Name(format!("thinking-md-{msg_idx}").into()),
@@ -1300,7 +1309,9 @@ impl Render for AgentPanel {
                         .flex()
                         .flex_col()
                         .ml(px(20.0))
-                        .pl(px(12.0));
+                        .pl(px(12.0))
+                        .border_l_1()
+                        .border_color(theme.muted.opacity(0.15));
 
                     for (step_idx, step) in msg.steps.iter().enumerate() {
                         let status_color = match step.status {
@@ -1461,7 +1472,9 @@ impl Render for AgentPanel {
                 .px(px(12.0))
                 .py(px(10.0))
                 .rounded(px(8.0))
-                .bg(theme.secondary.opacity(0.5))
+                .border_1()
+                .border_color(theme.muted.opacity(0.12))
+                .bg(theme.muted.opacity(0.04))
                 // Header row
                 .child(
                     div()
@@ -1750,21 +1763,28 @@ impl Render for AgentPanel {
         let mut header_left = div()
             .flex()
             .items_center()
-            .gap(px(6.0))
-            // Status dot
+            .gap(px(7.0))
+            // Oven icon
             .child(
-                div()
-                    .size(px(6.0))
-                    .rounded_full()
-                    .bg(status_dot_color),
+                svg()
+                    .path("phosphor/oven.svg")
+                    .size(px(14.0))
+                    .text_color(theme.primary),
             )
-            // Model name as primary label
+            // Model name
             .child(
                 div()
                     .text_size(px(12.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.foreground.opacity(0.7))
                     .child(model_display),
+            )
+            // Status dot — animated when active
+            .child(
+                div()
+                    .size(px(6.0))
+                    .rounded_full()
+                    .bg(status_dot_color),
             );
 
         // Auto-approve badge

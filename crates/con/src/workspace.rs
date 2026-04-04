@@ -17,7 +17,7 @@ use con_terminal::TerminalTheme;
 
 #[cfg(target_os = "macos")]
 use crate::ghostty_view::{GhosttyFocusChanged, GhosttyProcessExited, GhosttyTitleChanged, GhosttyView};
-use crate::{CloseTab, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
+use crate::{CloseTab, FocusInput, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
 use con_core::config::Config;
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
@@ -49,6 +49,7 @@ pub struct ConWorkspace {
     /// Tracks whether a modal was open on the last render, so we can
     /// restore terminal focus when a modal dismisses itself internally.
     modal_was_open: bool,
+    ghostty_hidden: bool,
     /// Shared bridge between divider on_mouse_down (plain Fn closure) and
     /// workspace's entity-level drag handler. Persists across render cycles.
     pending_drag_init: std::sync::Arc<std::sync::Mutex<Option<(usize, f32)>>>,
@@ -334,6 +335,7 @@ impl ConWorkspace {
             agent_panel_open,
             agent_panel_width,
             modal_was_open: false,
+            ghostty_hidden: false,
             pending_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
             agent_panel_drag: None,
             suggestion_engine,
@@ -654,6 +656,20 @@ impl ConWorkspace {
                 self.apply_terminal_theme(new_theme, window, cx);
             }
         }
+
+        // Re-apply keybindings at runtime so changes take effect immediately
+        let kb = settings.read(cx).keybinding_config().clone();
+        cx.bind_keys([
+            KeyBinding::new(&kb.quit, crate::Quit, None),
+            KeyBinding::new(&kb.new_tab, crate::NewTab, None),
+            KeyBinding::new(&kb.toggle_agent, crate::ToggleAgentPanel, None),
+            KeyBinding::new(&kb.close_tab, crate::CloseTab, None),
+            KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
+            KeyBinding::new(&kb.command_palette, crate::command_palette::ToggleCommandPalette, None),
+            KeyBinding::new(&kb.split_right, crate::SplitRight, None),
+            KeyBinding::new(&kb.split_down, crate::SplitDown, None),
+            KeyBinding::new(&kb.focus_input, crate::FocusInput, None),
+        ]);
 
         // Settings panel closes on save — restore terminal focus
         self.focus_terminal(window, cx);
@@ -1123,6 +1139,15 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn focus_input(
+        &mut self,
+        _: &FocusInput,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.input_bar.focus_handle(cx).focus(window, cx);
+    }
+
     fn toggle_command_palette(
         &mut self,
         _: &ToggleCommandPalette,
@@ -1570,13 +1595,19 @@ impl Render for ConWorkspace {
 
         // If a modal was dismissed internally (escape/backdrop), restore terminal focus
         let is_modal_open = self.is_modal_open(cx);
+        let has_skill_popup = !self.input_bar.read(cx).filtered_skills(cx).is_empty();
+        let needs_ghostty_hidden = is_modal_open || has_skill_popup;
+
         if self.modal_was_open && !is_modal_open {
             self.focus_terminal(window, cx);
-            // Restore ghostty NSViews that were hidden for z-order
-            self.set_ghostty_views_visible(true, cx);
-        } else if !self.modal_was_open && is_modal_open {
-            // Hide ghostty NSViews so GPUI overlays render on top
+        }
+        // Manage ghostty NSView visibility separately — hide for modals AND skill popup
+        if needs_ghostty_hidden && !self.ghostty_hidden {
             self.set_ghostty_views_visible(false, cx);
+            self.ghostty_hidden = true;
+        } else if !needs_ghostty_hidden && self.ghostty_hidden {
+            self.set_ghostty_views_visible(true, cx);
+            self.ghostty_hidden = false;
         }
         self.modal_was_open = is_modal_open;
 
@@ -1615,9 +1646,14 @@ impl Render for ConWorkspace {
             })
             .unwrap_or_else(|| "~".to_string());
 
+        let skill_entries: Vec<crate::input_bar::SkillEntry> = self.harness.skill_summaries()
+            .into_iter()
+            .map(|(name, desc)| crate::input_bar::SkillEntry { name, description: desc })
+            .collect();
         self.input_bar.update(cx, |bar, _cx| {
             bar.set_panes(pane_infos, focused_pane_id);
             bar.set_cwd(display_cwd);
+            bar.set_skills(skill_entries);
         });
 
         // Sync model name to agent panel header
@@ -1873,7 +1909,7 @@ impl Render for ConWorkspace {
         tab_bar = tab_bar.child(div().flex_1());
 
         // Agent panel toggle button
-        let panel_icon = "phosphor/sidebar-simple.svg";
+        let panel_icon = "phosphor/oven.svg";
         tab_bar = tab_bar.child(
             div()
                 .id("toggle-agent-panel")
@@ -1999,6 +2035,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(Self::split_right))
             .on_action(cx.listener(Self::split_down))
+            .on_action(cx.listener(Self::focus_input))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Don't handle workspace shortcuts when a modal overlay is open
                 if this.settings_panel.read(cx).is_visible()
@@ -2044,6 +2081,68 @@ impl Render for ConWorkspace {
             .child(tab_bar)
             .child(main_area)
             .child(self.input_bar.clone());
+
+        // Skill autocomplete popup — rendered at workspace level above ghostty
+        if has_skill_popup {
+            let theme = cx.theme();
+            let skills = self.input_bar.read(cx).filtered_skills(cx)
+                .into_iter().map(|s| (s.name.clone(), s.description.clone())).collect::<Vec<_>>();
+            let sel = self.input_bar.read(cx).skill_selection();
+            let sel = sel.min(skills.len().saturating_sub(1));
+
+            let mut popup = div()
+                .absolute()
+                .bottom(px(66.0)) // above input bar (44 + 22 status row)
+                .left(px(12.0))
+                .right(px(12.0))
+                .flex()
+                .flex_col()
+                .rounded(px(8.0))
+                .bg(theme.background)
+                .py(px(4.0))
+                .font_family(".SystemUIFont");
+
+            for (i, (name, desc)) in skills.iter().enumerate() {
+                let is_sel = i == sel;
+                let name_clone = name.clone();
+                popup = popup.child(
+                    div()
+                        .id(SharedString::from(format!("skill-{name}")))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .h(px(30.0))
+                        .mx(px(4.0))
+                        .px(px(10.0))
+                        .rounded(px(6.0))
+                        .cursor_pointer()
+                        .bg(if is_sel { theme.primary.opacity(0.10) } else { theme.transparent })
+                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
+                        .on_mouse_down(MouseButton::Left, {
+                            let input_bar = self.input_bar.clone();
+                            cx.listener(move |_this, _, window, cx| {
+                                input_bar.update(cx, |bar, cx| {
+                                    bar.complete_skill(&name_clone, window, cx);
+                                });
+                            })
+                        })
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(if is_sel { theme.primary } else { theme.foreground })
+                                .child(format!("/{name}")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme.muted_foreground.opacity(0.6))
+                                .child(desc.clone()),
+                        ),
+                );
+            }
+            root = root.child(popup);
+        }
 
         let settings_visible = self.settings_panel.read(cx).is_visible();
         if settings_visible {

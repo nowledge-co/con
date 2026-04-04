@@ -2,6 +2,8 @@
 
 All notable changes to con are documented here.
 
+con is still pre-release, so entries may group larger areas of work while the product shape is stabilizing.
+
 ## [Unreleased]
 
 ### Added
