@@ -342,6 +342,10 @@ impl GhosttyTerminal {
     }
 
     /// Send UTF-8 text input to the terminal (for composed/IME text).
+    ///
+    /// Note: this uses `ghostty_surface_text` which is the IME/compose pipeline.
+    /// It handles printable characters but NOT control characters like `\n` or `\r`.
+    /// For writing command strings with newlines, use `write_to_pty` instead.
     pub fn send_text(&self, text: &str) {
         if let Ok(cstr) = CString::new(text) {
             let len = cstr.as_bytes().len(); // excludes NUL, matches original text
@@ -349,6 +353,36 @@ impl GhosttyTerminal {
         }
         // If text contains NUL bytes, we silently drop it — this matches
         // terminal semantics where NUL in text input is meaningless.
+    }
+
+    /// Write raw bytes to the terminal, correctly routing text through
+    /// `ghostty_surface_text` and control characters through `ghostty_surface_key`.
+    ///
+    /// This is the ghostty equivalent of writing to a PTY fd — it handles
+    /// the split between ghostty's IME text pipeline and its key event pipeline
+    /// that callers shouldn't need to know about.
+    pub fn write_to_pty(&self, data: &[u8]) {
+        let text = String::from_utf8_lossy(data);
+        let mut pending_text = String::new();
+
+        for ch in text.chars() {
+            if let Some(key_event) = char_to_key_event(ch) {
+                // Flush any pending printable text first
+                if !pending_text.is_empty() {
+                    self.send_text(&pending_text);
+                    pending_text.clear();
+                }
+                // Send the control character as a key event
+                self.send_key(key_event);
+            } else {
+                pending_text.push(ch);
+            }
+        }
+
+        // Flush remaining text
+        if !pending_text.is_empty() {
+            self.send_text(&pending_text);
+        }
     }
 
     /// Send a mouse button event.
@@ -514,6 +548,31 @@ pub enum MouseButton {
     Left,
     Right,
     Middle,
+}
+
+// ── Control character → key event mapping ────────────────────
+//
+// ghostty_surface_text is the IME text input pipeline and only handles
+// printable characters. Control characters (Enter, Tab, Escape, etc.)
+// must go through ghostty_surface_key with the appropriate macOS keycode.
+
+fn char_to_key_event(ch: char) -> Option<ffi::ghostty_input_key_s> {
+    let keycode = match ch {
+        '\n' | '\r' => 0x24, // kVK_Return
+        '\t' => 0x30,        // kVK_Tab
+        '\x1b' => 0x35,      // kVK_Escape
+        '\x7f' => 0x33,      // kVK_Delete (backspace)
+        _ => return None,
+    };
+    Some(ffi::ghostty_input_key_s {
+        action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
+        mods: 0,
+        consumed_mods: 0,
+        keycode,
+        text: std::ptr::null(),
+        unshifted_codepoint: 0,
+        composing: false,
+    })
 }
 
 // ── C callback implementations ──────────────────────────────

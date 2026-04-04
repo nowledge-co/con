@@ -78,14 +78,16 @@ impl TerminalPane {
 
     // ── Mutations ───────────────────────────────────────────
 
-    /// Write bytes to the terminal. For ghostty, interprets as UTF-8 text.
+    /// Write bytes to the terminal PTY. Handles control characters correctly
+    /// for both legacy (raw PTY fd) and ghostty (text + key event split).
     pub fn write(&self, data: &[u8], cx: &App) {
         match self {
             Self::Legacy(e) => e.read(cx).write_to_pty(data),
             #[cfg(all(target_os = "macos", feature = "ghostty"))]
             Self::Ghostty(e) => {
-                let text = String::from_utf8_lossy(data);
-                e.read(cx).send_text(&text);
+                if let Some(terminal) = e.read(cx).terminal() {
+                    terminal.write_to_pty(data);
+                }
             }
         }
     }
