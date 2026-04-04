@@ -1,10 +1,15 @@
 use gpui::*;
 use gpui_component::{
+    ActiveTheme, Icon,
+    button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
-    ActiveTheme,
+    tab::{Tab, TabBar},
 };
 
 actions!(input_bar, [SubmitInput, EscapeInput]);
+
+pub struct SkillAutocompleteChanged;
+impl EventEmitter<SkillAutocompleteChanged> for InputBar {}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputMode {
@@ -27,6 +32,22 @@ impl InputMode {
             Self::Smart => "Auto",
             Self::Shell => "Shell",
             Self::Agent => "Agent",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Smart => 0,
+            Self::Shell => 1,
+            Self::Agent => 2,
+        }
+    }
+
+    fn from_index(index: usize) -> Self {
+        match index {
+            1 => Self::Shell,
+            2 => Self::Agent,
+            _ => Self::Smart,
         }
     }
 }
@@ -86,6 +107,17 @@ impl InputBar {
             cx.subscribe_in(&input_state, window, {
                 move |this, _, ev: &InputEvent, window, cx| {
                     match ev {
+                        InputEvent::Change => {
+                            let matches = this.filtered_skills(cx);
+                            if matches.is_empty() {
+                                this.skill_selection = 0;
+                            } else {
+                                this.skill_selection =
+                                    this.skill_selection.min(matches.len().saturating_sub(1));
+                            }
+                            cx.emit(SkillAutocompleteChanged);
+                            cx.notify();
+                        }
                         InputEvent::PressEnter { .. } => {
                             if this.shift_enter {
                                 // Shift+Enter: newline already inserted by auto_grow
@@ -199,6 +231,7 @@ impl InputBar {
             s.set_value(&format!("/{name} "), window, cx);
         });
         self.skill_selection = 0;
+        cx.emit(SkillAutocompleteChanged);
         cx.notify();
     }
 
@@ -227,14 +260,6 @@ impl InputBar {
         cx.notify();
     }
 
-    fn mode_color(&self, cx: &App) -> Hsla {
-        match self.mode {
-            InputMode::Smart => cx.theme().muted_foreground,
-            InputMode::Shell => cx.theme().success,
-            InputMode::Agent => cx.theme().primary,
-        }
-    }
-
     #[allow(dead_code)]
     fn placeholder(&self) -> &str {
         match self.mode {
@@ -256,46 +281,33 @@ impl Focusable for InputBar {
 
 impl Render for InputBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mode_label = self.mode.label().to_string();
-        let mode_color = self.mode_color(cx);
         let theme = cx.theme();
         let has_multiple_panes = self.panes.len() > 1;
         let cwd = self.cwd.clone();
 
-        // All interactive controls share this height
-        let control_h = 28.0;
+        let control_h = px(32.0);
+        let pill_h = px(28.0);
+        let control_radius = px(10.0);
+        let inner_radius = px(8.0);
 
-        // Mode pill — compact, quiet
-        let mode_pill = div()
-            .id("mode-pill")
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(control_h))
-            .px(px(10.0))
-            .rounded(px(6.0))
-            .cursor_pointer()
-            .bg(mode_color.opacity(0.10))
-            .text_size(px(11.0))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(mode_color)
-            .hover(|s| s.bg(mode_color.opacity(0.18)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.cycle_mode(window, cx);
-                }),
-            )
-            .child(mode_label);
+        let mode_tabs = div().w(px(176.0)).child(
+            TabBar::new("mode-tabs")
+                .segmented()
+                .selected_index(self.mode.index())
+                .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                    this.mode = InputMode::from_index(*ix);
+                    cx.notify();
+                }))
+                .child(Tab::new().label(InputMode::Smart.label()).flex_1())
+                .child(Tab::new().label(InputMode::Shell.label()).flex_1())
+                .child(Tab::new().label(InputMode::Agent.label()).flex_1()),
+        );
 
         // Pane selector — visible when multiple panes exist
-        let all_selected = !self.panes.is_empty()
-            && self.selected_pane_ids.len() == self.panes.len();
+        let all_selected =
+            !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len();
         let pane_area = if has_multiple_panes {
-            let mut pills = div()
-                .flex()
-                .items_center()
-                .gap(px(3.0));
+            let mut pills = div().flex().items_center().gap(px(2.0));
 
             for pane in &self.panes {
                 let pane_id = pane.id;
@@ -334,9 +346,9 @@ impl Render for InputBar {
                     .flex()
                     .items_center()
                     .gap(px(5.0))
-                    .h(px(control_h))
+                    .h(pill_h)
                     .px(px(10.0))
-                    .rounded(px(6.0))
+                    .rounded(inner_radius)
                     .text_size(px(11.0))
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
@@ -350,10 +362,12 @@ impl Render for InputBar {
                     } else {
                         theme.muted_foreground.opacity(0.6)
                     })
-                    .hover(|s| if is_target {
-                        s
-                    } else {
-                        s.bg(theme.muted.opacity(0.10))
+                    .hover(|s| {
+                        if is_target {
+                            s
+                        } else {
+                            s.bg(theme.muted.opacity(0.10))
+                        }
                     })
                     .on_mouse_down(
                         MouseButton::Left,
@@ -362,12 +376,7 @@ impl Render for InputBar {
                         }),
                     )
                     // Status dot
-                    .child(
-                        div()
-                            .size(px(6.0))
-                            .rounded_full()
-                            .bg(dot_color)
-                    )
+                    .child(div().size(px(6.0)).rounded_full().bg(dot_color))
                     .child(label);
 
                 pills = pills.child(pill);
@@ -379,14 +388,22 @@ impl Render for InputBar {
                 .flex()
                 .items_center()
                 .justify_center()
-                .h(px(control_h))
+                .h(pill_h)
                 .px(px(8.0))
-                .rounded(px(6.0))
+                .rounded(inner_radius)
                 .text_size(px(10.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
-                .bg(if all_selected { theme.primary.opacity(0.12) } else { theme.transparent })
-                .text_color(if all_selected { theme.primary } else { theme.muted_foreground.opacity(0.4) })
+                .bg(if all_selected {
+                    theme.primary.opacity(0.12)
+                } else {
+                    theme.transparent
+                })
+                .text_color(if all_selected {
+                    theme.primary
+                } else {
+                    theme.muted_foreground.opacity(0.4)
+                })
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -400,6 +417,10 @@ impl Render for InputBar {
                 div()
                     .flex()
                     .items_center()
+                    .h(control_h)
+                    .px(px(2.0))
+                    .rounded(control_radius)
+                    .bg(theme.background.opacity(0.70))
                     .gap(px(2.0))
                     .child(pills)
                     .child(all_btn),
@@ -408,23 +429,11 @@ impl Render for InputBar {
             None
         };
 
-        // Send button — circular, refined
-        let send_button = div()
-            .id("send-button")
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(28.0))
-            .rounded_full()
-            .cursor_pointer()
-            .bg(theme.primary)
-            .hover(|s| s.bg(theme.primary_hover))
-            .child(
-                svg()
-                    .path("phosphor/arrow-up.svg")
-                    .size(px(14.0))
-                    .text_color(theme.primary_foreground),
-            )
+        let send_button = Button::new("send-button")
+            .icon(Icon::default().path("phosphor/arrow-up.svg"))
+            .primary()
+            .rounded(px(16.0))
+            .tooltip("Send")
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _, _, cx| {
@@ -445,8 +454,10 @@ impl Render for InputBar {
                     "escape" => {
                         if has_completions {
                             // Clear the slash prefix to dismiss completions
-                            this.input_state.update(cx, |s, cx| s.set_value("", window, cx));
+                            this.input_state
+                                .update(cx, |s, cx| s.set_value("", window, cx));
                             this.skill_selection = 0;
+                            cx.emit(SkillAutocompleteChanged);
                             cx.notify();
                         } else {
                             cx.emit(EscapeInput);
@@ -463,10 +474,13 @@ impl Render for InputBar {
                     }
                     "up" if has_completions => {
                         this.skill_selection = this.skill_selection.saturating_sub(1);
+                        cx.emit(SkillAutocompleteChanged);
                         cx.notify();
                     }
                     "down" if has_completions => {
-                        this.skill_selection = (this.skill_selection + 1).min(matches.len().saturating_sub(1));
+                        this.skill_selection =
+                            (this.skill_selection + 1).min(matches.len().saturating_sub(1));
+                        cx.emit(SkillAutocompleteChanged);
                         cx.notify();
                     }
                     _ => {}
@@ -481,16 +495,16 @@ impl Render for InputBar {
                     .px(px(12.0))
                     .py(px(6.0))
                     .gap(px(6.0))
-                    .child(mode_pill)
+                    .child(mode_tabs)
                     .child(
                         div()
                             .flex_1()
                             .flex()
                             .items_center()
-                            .min_h(px(32.0))
-                            .px(px(4.0))
-                            .rounded(px(6.0))
-                            .bg(theme.background)
+                            .min_h(control_h)
+                            .px(px(8.0))
+                            .rounded(control_radius)
+                            .bg(theme.background.opacity(0.82))
                             .font_family("Ioskeley Mono")
                             .child(
                                 Input::new(&self.input_state)

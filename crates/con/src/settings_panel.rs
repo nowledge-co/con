@@ -2,13 +2,14 @@ use con_agent::{AgentConfig, ProviderConfig, ProviderKind, SuggestionModelConfig
 use con_core::Config;
 use gpui::*;
 
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
-use gpui_component::{ActiveTheme, input::Input};
+use gpui_component::list::ListItem;
+use gpui_component::stepper::{Stepper, StepperItem};
+use gpui_component::switch::Switch;
+use gpui_component::{ActiveTheme, Icon, Selectable as _, Sizable as _, input::Input};
 
-actions!(
-    settings,
-    [ToggleSettings, SaveSettings, DismissSettings]
-);
+actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
 /// Emitted when the user selects a different terminal theme for live preview.
 pub struct ThemePreview(pub String);
@@ -108,7 +109,11 @@ impl SettingsPanel {
         let api_key_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("sk-... or env var like ANTHROPIC_API_KEY", window, cx);
-            let val = pc.api_key.clone().or_else(|| pc.api_key_env.clone()).unwrap_or_default();
+            let val = pc
+                .api_key
+                .clone()
+                .or_else(|| pc.api_key_env.clone())
+                .unwrap_or_default();
             s.set_value(&val, window, cx);
             s
         });
@@ -121,7 +126,11 @@ impl SettingsPanel {
         let max_tokens_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Provider default", window, cx);
-            s.set_value(&pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(), window, cx);
+            s.set_value(
+                &pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(),
+                window,
+                cx,
+            );
             s
         });
         let max_turns_input = cx.new(|cx| {
@@ -164,7 +173,7 @@ impl SettingsPanel {
         });
         let custom_theme_name_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
-            s.set_placeholder("Theme name, e.g. nord", window, cx);
+            s.set_placeholder("Save as, e.g. flexoki-amber", window, cx);
             s
         });
 
@@ -199,12 +208,34 @@ impl SettingsPanel {
             self.selected_provider = agent.provider.clone();
             let pc = agent.providers.get_or_default(&self.selected_provider);
             self.load_provider_inputs(&pc, window, cx);
-            self.max_turns_input.update(cx, |s, cx| s.set_value(&agent.max_turns.to_string(), window, cx));
-            self.temperature_input.update(cx, |s, cx| s.set_value(&agent.temperature.map(|t| t.to_string()).unwrap_or_default(), window, cx));
-            self.suggestion_model_input.update(cx, |s, cx| s.set_value(&agent.suggestion_model.model.clone().unwrap_or_default(), window, cx));
+            self.max_turns_input.update(cx, |s, cx| {
+                s.set_value(&agent.max_turns.to_string(), window, cx)
+            });
+            self.temperature_input.update(cx, |s, cx| {
+                s.set_value(
+                    &agent.temperature.map(|t| t.to_string()).unwrap_or_default(),
+                    window,
+                    cx,
+                )
+            });
+            self.suggestion_model_input.update(cx, |s, cx| {
+                s.set_value(
+                    &agent.suggestion_model.model.clone().unwrap_or_default(),
+                    window,
+                    cx,
+                )
+            });
             self.auto_approve = agent.auto_approve_tools;
-            self.font_size_input.update(cx, |s, cx| s.set_value(&self.config.terminal.font_size.to_string(), window, cx));
-            self.scrollback_input.update(cx, |s, cx| s.set_value(&self.config.terminal.scrollback_lines.to_string(), window, cx));
+            self.font_size_input.update(cx, |s, cx| {
+                s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
+            });
+            self.scrollback_input.update(cx, |s, cx| {
+                s.set_value(
+                    &self.config.terminal.scrollback_lines.to_string(),
+                    window,
+                    cx,
+                )
+            });
             self.recording_key = None;
             self.focus_handle.focus(window, cx);
         }
@@ -212,20 +243,44 @@ impl SettingsPanel {
     }
 
     /// Load a provider's config into the per-provider input fields.
-    fn load_provider_inputs(&self, pc: &ProviderConfig, window: &mut Window, cx: &mut Context<Self>) {
-        self.model_input.update(cx, |s, cx| s.set_value(&pc.model.clone().unwrap_or_default(), window, cx));
-        let key_val = pc.api_key.clone().or_else(|| pc.api_key_env.clone()).unwrap_or_default();
-        self.api_key_input.update(cx, |s, cx| s.set_value(&key_val, window, cx));
-        self.base_url_input.update(cx, |s, cx| s.set_value(&pc.base_url.clone().unwrap_or_default(), window, cx));
-        self.max_tokens_input.update(cx, |s, cx| s.set_value(&pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(), window, cx));
+    fn load_provider_inputs(
+        &self,
+        pc: &ProviderConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.model_input.update(cx, |s, cx| {
+            s.set_value(&pc.model.clone().unwrap_or_default(), window, cx)
+        });
+        let key_val = pc
+            .api_key
+            .clone()
+            .or_else(|| pc.api_key_env.clone())
+            .unwrap_or_default();
+        self.api_key_input
+            .update(cx, |s, cx| s.set_value(&key_val, window, cx));
+        self.base_url_input.update(cx, |s, cx| {
+            s.set_value(&pc.base_url.clone().unwrap_or_default(), window, cx)
+        });
+        self.max_tokens_input.update(cx, |s, cx| {
+            s.set_value(
+                &pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(),
+                window,
+                cx,
+            )
+        });
     }
 
     /// Parse a ghostty config from clipboard and show a live preview.
     fn paste_theme_from_clipboard(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let text = match cx.read_from_clipboard().and_then(|c| c.text().map(|s| s.to_string())) {
+        let text = match cx
+            .read_from_clipboard()
+            .and_then(|c| c.text().map(|s| s.to_string()))
+        {
             Some(t) if !t.trim().is_empty() => t,
             _ => {
-                self.custom_theme_status = Some("Error: clipboard is empty".into());
+                self.custom_theme_status =
+                    Some("Error: clipboard is empty. Copy a Ghostty theme first.".into());
                 cx.notify();
                 return;
             }
@@ -242,7 +297,7 @@ impl SettingsPanel {
         match con_terminal::TerminalTheme::from_ghostty_format(&name, &text) {
             Some(theme) => {
                 self.custom_theme_status = Some(format!(
-                    "Parsed \"{}\" — {} colors detected",
+                    "Loaded \"{}\" from the clipboard. {} ANSI colors are ready to preview.",
                     display_theme_name(&name),
                     theme.ansi.len()
                 ));
@@ -250,7 +305,7 @@ impl SettingsPanel {
             }
             None => {
                 self.custom_theme_status = Some(
-                    "Error: could not parse config. Need background, foreground, and palette entries.".into()
+                    "Error: couldn't read a Ghostty theme. Include background, foreground, and palette entries.".into()
                 );
                 self.custom_theme_preview = None;
             }
@@ -267,22 +322,26 @@ impl SettingsPanel {
 
         // Determine theme directory
         let theme_dir = if cfg!(target_os = "macos") {
-            std::env::var("HOME").ok().map(|h| {
-                std::path::PathBuf::from(h)
-                    .join("Library/Application Support/con/themes")
-            })
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join("Library/Application Support/con/themes"))
         } else {
             std::env::var("XDG_CONFIG_HOME")
                 .ok()
                 .map(std::path::PathBuf::from)
-                .or_else(|| std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".config")))
+                .or_else(|| {
+                    std::env::var("HOME")
+                        .ok()
+                        .map(|h| std::path::PathBuf::from(h).join(".config"))
+                })
                 .map(|p| p.join("con/themes"))
         };
 
         let dir = match theme_dir {
             Some(d) => d,
             None => {
-                self.custom_theme_status = Some("Error: could not determine themes directory".into());
+                self.custom_theme_status =
+                    Some("Error: could not determine themes directory".into());
                 cx.notify();
                 return;
             }
@@ -296,10 +355,14 @@ impl SettingsPanel {
         }
 
         // Read the config text from clipboard again for saving
-        let text = match cx.read_from_clipboard().and_then(|c| c.text().map(|s| s.to_string())) {
+        let text = match cx
+            .read_from_clipboard()
+            .and_then(|c| c.text().map(|s| s.to_string()))
+        {
             Some(t) if !t.trim().is_empty() => t,
             _ => {
-                self.custom_theme_status = Some("Error: clipboard content lost. Paste again.".into());
+                self.custom_theme_status =
+                    Some("Error: the clipboard changed before save. Load the theme again.".into());
                 cx.notify();
                 return;
             }
@@ -315,10 +378,7 @@ impl SettingsPanel {
         // Apply the theme
         self.config.terminal.theme = preview.name.clone();
         cx.emit(ThemePreview(preview.name.clone()));
-        self.custom_theme_status = Some(format!(
-            "Saved to {} and applied!",
-            file_path.display()
-        ));
+        self.custom_theme_status = Some(format!("Saved and applied: {}", file_path.display()));
         self.custom_theme_preview = None;
         cx.notify();
     }
@@ -327,7 +387,9 @@ impl SettingsPanel {
     fn read_provider_inputs(&self, cx: &App) -> ProviderConfig {
         let key_text = self.api_key_input.read(cx).value().to_string();
         let is_env_var = !key_text.is_empty()
-            && key_text.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
+            && key_text
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
 
         let (api_key, api_key_env) = if key_text.is_empty() {
             (None, None)
@@ -342,11 +404,23 @@ impl SettingsPanel {
         let max_tokens_text = self.max_tokens_input.read(cx).value().to_string();
 
         ProviderConfig {
-            model: if model_text.is_empty() { None } else { Some(model_text) },
+            model: if model_text.is_empty() {
+                None
+            } else {
+                Some(model_text)
+            },
             api_key,
             api_key_env,
-            base_url: if base_url_text.is_empty() { None } else { Some(base_url_text) },
-            max_tokens: if max_tokens_text.is_empty() { None } else { max_tokens_text.parse().ok() },
+            base_url: if base_url_text.is_empty() {
+                None
+            } else {
+                Some(base_url_text)
+            },
+            max_tokens: if max_tokens_text.is_empty() {
+                None
+            } else {
+                max_tokens_text.parse().ok()
+            },
         }
     }
 
@@ -368,11 +442,19 @@ impl SettingsPanel {
         // Update global fields
         self.config.agent.provider = self.selected_provider.clone();
         self.config.agent.max_turns = max_turns_text.parse().unwrap_or(10);
-        self.config.agent.temperature = if temperature_text.is_empty() { None } else { temperature_text.parse().ok() };
+        self.config.agent.temperature = if temperature_text.is_empty() {
+            None
+        } else {
+            temperature_text.parse().ok()
+        };
         self.config.agent.auto_approve_tools = self.auto_approve;
         self.config.agent.suggestion_model = SuggestionModelConfig {
             provider: None,
-            model: if suggestion_model_text.is_empty() { None } else { Some(suggestion_model_text) },
+            model: if suggestion_model_text.is_empty() {
+                None
+            } else {
+                Some(suggestion_model_text)
+            },
         };
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
         self.config.terminal.scrollback_lines = scrollback_text.parse().unwrap_or(10_000);
@@ -402,7 +484,10 @@ impl SettingsPanel {
 
         // Don't record bare modifier keys or escape (used to cancel)
         let key = &keystroke.key;
-        if matches!(key.as_str(), "shift" | "control" | "alt" | "meta" | "fn" | "escape") {
+        if matches!(
+            key.as_str(),
+            "shift" | "control" | "alt" | "meta" | "fn" | "escape"
+        ) {
             if key == "escape" {
                 self.recording_key = None;
                 cx.notify();
@@ -446,10 +531,18 @@ impl SettingsPanel {
         }
     }
 
-    pub fn agent_config(&self) -> &AgentConfig { &self.config.agent }
-    pub fn terminal_config(&self) -> &con_core::config::TerminalConfig { &self.config.terminal }
-    pub fn keybinding_config(&self) -> &con_core::config::KeybindingConfig { &self.config.keybindings }
-    pub fn skills_config(&self) -> &con_core::config::SkillsConfig { &self.config.skills }
+    pub fn agent_config(&self) -> &AgentConfig {
+        &self.config.agent
+    }
+    pub fn terminal_config(&self) -> &con_core::config::TerminalConfig {
+        &self.config.terminal
+    }
+    pub fn keybinding_config(&self) -> &con_core::config::KeybindingConfig {
+        &self.config.keybindings
+    }
+    pub fn skills_config(&self) -> &con_core::config::SkillsConfig {
+        &self.config.skills
+    }
 
     fn persist_config(&self) -> anyhow::Result<()> {
         let path = Config::config_path();
@@ -474,7 +567,10 @@ impl SettingsPanel {
     ) {
         // Save current provider's inputs into the providers map
         let current_pc = self.read_provider_inputs(cx);
-        self.config.agent.providers.set(&self.selected_provider, current_pc);
+        self.config
+            .agent
+            .providers
+            .set(&self.selected_provider, current_pc);
 
         // Switch to new provider
         self.selected_provider = provider.clone();
@@ -488,29 +584,16 @@ impl SettingsPanel {
     // ── Section content ──────────────────────────────────────────
 
     fn render_general(&mut self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
         let font_size_input = self.font_size_input.clone();
         let scrollback_input = self.scrollback_input.clone();
 
         // Auto-approve toggle
         let is_on = self.auto_approve;
-        let toggle = div()
-            .id("auto-approve-toggle")
-            .w(px(40.0))
-            .h(px(22.0))
-            .rounded(px(11.0))
-            .cursor_pointer()
-            .bg(if is_on { theme.primary } else { theme.muted.opacity(0.25) })
-            .child(
-                div()
-                    .size(px(18.0))
-                    .rounded_full()
-                    .bg(theme.background)
-                    .mt(px(2.0))
-                    .ml(if is_on { px(20.0) } else { px(2.0) }),
-            )
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                this.auto_approve = !this.auto_approve;
+        let toggle = Switch::new("auto-approve-toggle")
+            .checked(is_on)
+            .small()
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.auto_approve = *checked;
                 cx.notify();
             }));
 
@@ -525,8 +608,11 @@ impl SettingsPanel {
             "project",
             &project_paths,
             &[
+                ("skills", "con"),
+                (".con/skills", "con local"),
                 (".claude/skills", "Claude Code"),
                 (".agents/skills", "Agents"),
+                (".codex/skills", "Codex"),
             ],
             cx,
         );
@@ -534,8 +620,10 @@ impl SettingsPanel {
             "global",
             &global_paths,
             &[
+                ("~/.config/con/skills", "con"),
                 ("~/.claude/skills", "Claude Code"),
-                ("~/.config/agents/skills", "Agents"),
+                ("~/.agents/skills", "Agents"),
+                ("~/.codex/skills", "Codex"),
             ],
             cx,
         );
@@ -555,29 +643,30 @@ impl SettingsPanel {
                     .gap(px(8.0))
                     .child(group_label("Agent", &theme))
                     .child(
-                        card(theme)
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .px(px(16.0))
-                                    .h(px(44.0))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(2.0))
-                                            .child(div().text_sm().child("Auto-approve tools"))
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .text_color(theme.muted_foreground)
-                                                    .child("Allow agent to run tools without confirmation"),
-                                            ),
-                                    )
-                                    .child(toggle),
-                            ),
+                        card(theme).child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .px(px(16.0))
+                                .h(px(44.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.0))
+                                        .child(div().text_sm().child("Auto-approve tools"))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .text_color(theme.muted_foreground)
+                                                .child(
+                                                    "Allow agent to run tools without confirmation",
+                                                ),
+                                        ),
+                                )
+                                .child(toggle),
+                        ),
                     ),
             )
             // Skills paths
@@ -602,11 +691,7 @@ impl SettingsPanel {
                                             .flex()
                                             .items_center()
                                             .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .child("Project paths"),
-                                            )
+                                            .child(div().text_sm().child("Project paths"))
                                             .child(
                                                 div()
                                                     .text_size(px(10.0))
@@ -637,11 +722,7 @@ impl SettingsPanel {
                                             .flex()
                                             .items_center()
                                             .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .child("Global paths"),
-                                            )
+                                            .child(div().text_sm().child("Global paths"))
                                             .child(
                                                 div()
                                                     .text_size(px(10.0))
@@ -773,11 +854,7 @@ impl SettingsPanel {
                             .size(px(10.0))
                             .text_color(muted_fg),
                     )
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .child(label),
-                    )
+                    .child(div().text_size(px(10.0)).child(label))
                     .into_any_element()
             })
             .collect()
@@ -833,101 +910,182 @@ impl SettingsPanel {
 
         // Build import section buttons (need cx.listener)
         let custom_theme_name_input = self.custom_theme_name_input.clone();
-        let theme = cx.theme();
-        let paste_btn = div()
-            .id("paste-theme-btn")
-            .flex()
-            .items_center()
-            .gap(px(5.0))
-            .h(px(32.0))
-            .px(px(12.0))
-            .rounded(px(6.0))
-            .cursor_pointer()
-            .bg(theme.primary.opacity(0.08))
-            .text_color(theme.primary)
-            .text_size(px(11.5))
-            .font_weight(FontWeight::MEDIUM)
-            .hover(|s| s.bg(theme.primary.opacity(0.15)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.paste_theme_from_clipboard(window, cx);
-                }),
-            )
-            .child(svg().path("phosphor/clipboard-text.svg").size(px(13.0)).text_color(theme.primary))
-            .child("Paste config");
-
-        // Custom theme preview card + action buttons
-        let preview_area = if let Some(ref preview) = self.custom_theme_preview {
-            let card = self.render_single_theme_card(preview, false, cx);
-            let theme = cx.theme();
-            let apply_btn = div()
-                .id("apply-custom-theme")
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .h(px(28.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .cursor_pointer()
-                .bg(theme.primary)
-                .text_color(theme.primary_foreground)
-                .text_size(px(11.0))
-                .font_weight(FontWeight::MEDIUM)
-                .hover(|s| s.bg(theme.primary_hover))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        this.apply_custom_theme(cx);
-                    }),
-                )
-                .child(svg().path("phosphor/check.svg").size(px(11.0)).text_color(theme.primary_foreground))
-                .child("Apply & Save");
-            let theme = cx.theme();
-            let preview_btn = div()
-                .id("preview-custom-theme")
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .h(px(28.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .cursor_pointer()
-                .bg(theme.muted.opacity(0.08))
-                .text_color(theme.muted_foreground)
-                .text_size(px(11.0))
-                .hover(|s| s.bg(theme.muted.opacity(0.15)))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        if let Some(ref preview) = this.custom_theme_preview {
-                            cx.emit(ThemePreview(preview.name.clone()));
-                        }
-                    }),
-                )
-                .child(svg().path("phosphor/eye.svg").size(px(11.0)).text_color(theme.muted_foreground))
-                .child("Preview");
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.0))
-                    .child(card)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.0))
-                            .child(apply_btn)
-                            .child(preview_btn),
-                    ),
-            )
+        let import_progress = if self.custom_theme_preview.is_some() {
+            2
+        } else if !custom_theme_name_input.read(cx).value().trim().is_empty() {
+            1
         } else {
-            None
+            0
         };
+        let paste_btn = Button::new("paste-theme-btn")
+            .label("Load Clipboard Theme")
+            .icon(Icon::default().path("phosphor/clipboard-text.svg"))
+            .small()
+            .primary()
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.paste_theme_from_clipboard(window, cx);
+            }));
+        let open_catalog_btn = Button::new("ghostty-style-link")
+            .label("Open Ghostty Style")
+            .icon(Icon::default().path("phosphor/arrow-square-out.svg"))
+            .small()
+            .ghost()
+            .on_click(cx.listener(|_, _, _, cx| {
+                cx.open_url("https://ghostty-style.vercel.app/");
+            }));
+
+        let preview_card = self
+            .custom_theme_preview
+            .as_ref()
+            .map(|preview| self.render_single_theme_card(preview, false, cx));
 
         // Now all mutable borrows are done — get theme for pure layout
         let theme = cx.theme();
+
+        let load_step_body: Option<AnyElement> = if let Some(card) = preview_card {
+            let apply_btn = Button::new("apply-custom-theme")
+                .label("Save & Apply")
+                .icon(Icon::default().path("phosphor/check.svg"))
+                .small()
+                .primary()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.apply_custom_theme(cx);
+                }));
+            let preview_btn = Button::new("preview-custom-theme")
+                .label("Preview Only")
+                .icon(Icon::default().path("phosphor/eye.svg"))
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(ref preview) = this.custom_theme_preview {
+                        cx.emit(ThemePreview(preview.name.clone()));
+                    }
+                }));
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.0))
+                    .child(paste_btn)
+                    .child(
+                        div()
+                            .p(px(12.0))
+                            .rounded(px(10.0))
+                            .bg(theme.muted.opacity(0.08))
+                            .flex()
+                            .items_start()
+                            .gap(px(12.0))
+                            .child(card)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.5))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme.primary)
+                                            .child("PREVIEW"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .line_height(px(17.0))
+                                            .text_color(theme.muted_foreground.opacity(0.7))
+                                            .child(
+                                                "Check the palette in-context first, then save it once the terminal chrome and ANSI colors feel balanced.",
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(8.0))
+                                            .child(apply_btn)
+                                            .child(preview_btn),
+                                    ),
+                            ),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            Some(paste_btn.into_any_element())
+        };
+
+        let import_section = div()
+            .px(px(18.0))
+            .py(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(16.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Import Theme"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .line_height(px(18.0))
+                            .text_color(theme.muted_foreground.opacity(0.72))
+                            .child("Import any Ghostty-style theme through a guided flow, preview it inside con, then keep only the palettes worth saving."),
+                    ),
+            )
+            .child(
+                Stepper::new("theme-import-stepper")
+                    .vertical()
+                    .small()
+                    .selected_index(import_progress)
+                    .item(import_step_item(
+                        "Find a theme",
+                        "Open Ghostty Style and copy the config block for the palette you want to bring over.",
+                        Some(open_catalog_btn.into_any_element()),
+                        theme,
+                    ))
+                    .item(import_step_item(
+                        "Name it",
+                        "This becomes the saved theme name inside con, so make it easy to recognize later.",
+                        Some(Input::new(&custom_theme_name_input).into_any_element()),
+                        theme,
+                    ))
+                    .item(import_step_item(
+                        "Load and review",
+                        "Pull the copied config from the clipboard, inspect the preview, then save it once it looks right.",
+                        load_step_body,
+                        theme,
+                    )),
+            );
+
+        let mut import_section = import_section;
+
+        if let Some(ref status) = self.custom_theme_status {
+            import_section = import_section.child(
+                div()
+                    .px(px(12.0))
+                    .py(px(10.0))
+                    .rounded(px(8.0))
+                    .bg(if status.starts_with("Error") {
+                        theme.danger.opacity(0.08)
+                    } else {
+                        theme.success.opacity(0.08)
+                    })
+                    .text_size(px(11.0))
+                    .line_height(px(17.0))
+                    .text_color(if status.starts_with("Error") {
+                        theme.danger
+                    } else {
+                        theme.success
+                    })
+                    .child(status.clone()),
+            );
+        }
 
         let mut content = section_content("Appearance", "Customize the look and feel.", theme);
 
@@ -984,98 +1142,6 @@ impl SettingsPanel {
             );
         }
         content = content.child(card(theme).child(theme_card_inner));
-
-        // ── Import from ghostty.style ──
-
-        let theme = cx.theme();
-        let mut import_section = div()
-            .px(px(16.0))
-            .py(px(14.0))
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Import Theme"),
-            )
-            // Step 1: Browse — descriptive text with inline link
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(theme.muted_foreground)
-                            .child("Browse themes at"),
-                    )
-                    .child(
-                        div()
-                            .id("ghostty-style-link")
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .cursor_pointer()
-                            .text_size(px(12.0))
-                            .text_color(theme.primary)
-                            .hover(|s| s.text_decoration_1())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|_, _, _, cx| {
-                                    cx.open_url("https://ghostty-style.vercel.app/");
-                                }),
-                            )
-                            .child("Ghostty Style Catalog")
-                            .child(
-                                svg()
-                                    .path("phosphor/arrow-square-out.svg")
-                                    .size(px(11.0))
-                                    .text_color(theme.primary),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(theme.muted_foreground)
-                            .child("then paste the config here."),
-                    ),
-            )
-            // Step 2: Name + Paste action row
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(Input::new(&custom_theme_name_input)),
-                    )
-                    .child(paste_btn),
-            );
-
-        // Live preview of pasted theme
-        if let Some(preview_area) = preview_area {
-            import_section = import_section.child(preview_area);
-        }
-
-        // Status message
-        if let Some(ref status) = self.custom_theme_status {
-            import_section = import_section.child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(if status.starts_with("Error") {
-                        theme.danger
-                    } else {
-                        theme.success
-                    })
-                    .child(status.clone()),
-            );
-        }
-
         content = content.child(card(theme).child(import_section));
 
         content
@@ -1139,29 +1205,39 @@ impl SettingsPanel {
                     .child(div().size(px(5.0)).rounded_full().bg(green)),
             )
             .child(
-                div().flex().gap(px(3.0))
+                div()
+                    .flex()
+                    .gap(px(3.0))
                     .child(div().text_color(green).child("$"))
                     .child(div().text_color(cyan).child("git"))
                     .child(div().text_color(fg_gpui).child("log --oneline")),
             )
             .child(
-                div().flex().gap(px(3.0))
+                div()
+                    .flex()
+                    .gap(px(3.0))
                     .child(div().text_color(yellow).child("a1b2c3d"))
                     .child(div().text_color(fg_gpui).child("feat: init")),
             )
             .child(
-                div().flex().gap(px(3.0))
+                div()
+                    .flex()
+                    .gap(px(3.0))
                     .child(div().text_color(yellow).child("e4f5g6h"))
                     .child(div().text_color(fg_gpui).child("fix: theme")),
             )
             .child(
-                div().flex().gap(px(3.0))
+                div()
+                    .flex()
+                    .gap(px(3.0))
                     .child(div().text_color(green).child("$"))
                     .child(div().text_color(blue).child("ls"))
                     .child(div().text_color(fg_gpui).child("src/")),
             )
             .child(
-                div().flex().gap(px(4.0))
+                div()
+                    .flex()
+                    .gap(px(4.0))
                     .child(div().text_color(blue).child("lib/"))
                     .child(div().text_color(magenta).child("main.rs"))
                     .child(div().text_color(fg_gpui).child("README")),
@@ -1170,9 +1246,7 @@ impl SettingsPanel {
         let mut palette_strip = div().flex().h(px(4.0));
         for idx in 0..16 {
             let c = term_theme.ansi[idx];
-            palette_strip = palette_strip.child(
-                div().flex_1().h_full().bg(gpui::rgb(c.to_u32())),
-            );
+            palette_strip = palette_strip.child(div().flex_1().h_full().bg(gpui::rgb(c.to_u32())));
         }
 
         let display_name = display_theme_name(&name);
@@ -1242,169 +1316,354 @@ impl SettingsPanel {
         let max_turns_input = self.max_turns_input.clone();
         let temperature_input = self.temperature_input.clone();
         let suggestion_model_input = self.suggestion_model_input.clone();
+        let provider_name = provider_label(&self.selected_provider);
+        let provider_summary_text = provider_summary(&self.selected_provider);
+        let models = provider_models(&self.selected_provider);
+        let current_model = self.model_input.read(cx).value().to_string();
 
-        // Provider list — clean selection rows
-        let mut provider_list = div()
-            .flex()
-            .flex_col()
-            .rounded(px(8.0))
-            .bg(theme.muted.opacity(0.08))
-            .py(px(4.0));
+        let mut provider_list = div().flex().flex_col().gap(px(4.0));
         for provider in ALL_PROVIDERS.iter() {
             let is_selected = *provider == self.selected_provider;
             let label = provider_label(provider);
             let provider_clone = provider.clone();
+            let subtitle = provider_summary(provider);
+            let known_models = provider_models(provider).len();
 
             let row = div()
-                .id(SharedString::from(format!("prov-{label}")))
-                .h(px(30.0))
-                .mx(px(4.0))
-                .px(px(12.0))
-                .flex()
-                .items_center()
-                .rounded(px(6.0))
-                .cursor_pointer()
-                .bg(if is_selected { theme.primary.opacity(0.10) } else { theme.transparent })
-                .hover(|s| s.bg(theme.muted.opacity(0.12)))
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                    this.select_provider(provider_clone.clone(), window, cx);
-                }))
+                .rounded(px(10.0))
+                .overflow_hidden()
+                .bg(if is_selected {
+                    theme.primary.opacity(0.07)
+                } else {
+                    theme.muted.opacity(0.04)
+                })
                 .child(
-                    div()
-                        .text_size(px(12.5))
-                        .font_weight(if is_selected { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                        .text_color(if is_selected { theme.foreground } else { theme.muted_foreground })
-                        .child(label),
+                    ListItem::new(SharedString::from(format!("prov-{label}")))
+                        .selected(is_selected)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.select_provider(provider_clone.clone(), window, cx);
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_start()
+                                .justify_between()
+                                .gap(px(10.0))
+                                .w_full()
+                                .py(px(3.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_start()
+                                        .gap(px(10.0))
+                                        .child(div().mt(px(3.0)).size(px(7.0)).rounded_full().bg(
+                                            if is_selected {
+                                                theme.primary
+                                            } else {
+                                                theme.muted_foreground.opacity(0.18)
+                                            },
+                                        ))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(2.0))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.5))
+                                                        .font_weight(if is_selected {
+                                                            FontWeight::SEMIBOLD
+                                                        } else {
+                                                            FontWeight::MEDIUM
+                                                        })
+                                                        .text_color(if is_selected {
+                                                            theme.foreground
+                                                        } else {
+                                                            theme.muted_foreground
+                                                        })
+                                                        .child(label),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.5))
+                                                        .line_height(px(16.0))
+                                                        .text_color(
+                                                            theme.muted_foreground.opacity(0.55),
+                                                        )
+                                                        .child(subtitle),
+                                                ),
+                                        ),
+                                )
+                                .child(info_badge(
+                                    if known_models == 0 {
+                                        "Custom".to_string()
+                                    } else {
+                                        known_models.to_string()
+                                    },
+                                    theme,
+                                )),
+                        ),
                 );
 
             provider_list = provider_list.child(row);
         }
 
-        // Model: text input + clickable suggestion chips
-        let models = provider_models(&self.selected_provider);
-        let current_model = self.model_input.read(cx).value().to_string();
+        let model_count_badge = if models.is_empty() {
+            "Custom".to_string()
+        } else {
+            format!("{} known", models.len())
+        };
 
-        let mut model_card_content = card(theme)
-            .child(
-                div()
-                    .px(px(12.0))
-                    .py(px(10.0))
-                    .child(Input::new(&model_input)),
-            );
+        let provider_card = card(theme).child(
+            div()
+                .px(px(16.0))
+                .py(px(16.0))
+                .flex()
+                .flex_col()
+                .gap(px(14.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme.primary)
+                                        .child("ACTIVE PROVIDER"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(18.0))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(provider_name),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .line_height(px(18.0))
+                                        .text_color(theme.muted_foreground.opacity(0.7))
+                                        .child(provider_summary_text),
+                                ),
+                        )
+                        .child(info_badge(model_count_badge.clone(), theme)),
+                )
+                .child(
+                    div().flex().flex_wrap().gap(px(6.0)).children([
+                        info_badge(
+                            if self.base_url_input.read(cx).value().is_empty() {
+                                "Default endpoint".to_string()
+                            } else {
+                                "Custom endpoint".to_string()
+                            },
+                            theme,
+                        )
+                        .into_any_element(),
+                        info_badge(
+                            if self.api_key_input.read(cx).value().is_empty() {
+                                "No key set".to_string()
+                            } else {
+                                "Credential configured".to_string()
+                            },
+                            theme,
+                        )
+                        .into_any_element(),
+                    ]),
+                ),
+        );
 
-        // Clickable suggestion chips for providers with known models
+        let mut model_card_content = card(theme).child(
+            div()
+                .px(px(16.0))
+                .py(px(16.0))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Model"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .line_height(px(18.0))
+                                        .text_color(theme.muted_foreground.opacity(0.7))
+                                        .child("Set an explicit model or leave it blank to follow the provider default."),
+                                ),
+                        )
+                        .child(info_badge(model_count_badge.clone(), theme)),
+                )
+                .child(Input::new(&model_input)),
+        );
+
         if !models.is_empty() {
             let mut chips = div()
                 .flex()
                 .flex_wrap()
-                .gap(px(5.0))
-                .px(px(12.0))
-                .pb(px(10.0));
+                .gap(px(6.0))
+                .px(px(16.0))
+                .pb(px(16.0));
 
             for model in models {
                 let model_name = model.to_string();
                 let model_clone = model_name.clone();
                 let is_active = current_model == model_name;
                 chips = chips.child(
-                    div()
-                        .id(SharedString::from(format!("model-{model_name}")))
-                        .px(px(8.0))
-                        .h(px(26.0))
-                        .flex()
-                        .items_center()
-                        .rounded(px(5.0))
-                        .text_size(px(11.0))
-                        .cursor_pointer()
-                        .bg(if is_active { theme.primary.opacity(0.15) } else { theme.muted.opacity(0.06) })
-                        .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
-                        .hover(|s| s.bg(theme.muted.opacity(0.18)).text_color(theme.foreground))
-                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                    Button::new(SharedString::from(format!("model-{model_name}")))
+                        .label(model_name)
+                        .small()
+                        .ghost()
+                        .selected(is_active)
+                        .on_click(cx.listener(move |this, _, window, cx| {
                             this.model_input.update(cx, |s, cx| {
                                 s.set_value(&model_clone, window, cx);
                             });
                             cx.notify();
-                        }))
-                        .child(model_name),
+                        })),
                 );
             }
             model_card_content = model_card_content.child(chips);
-        };
+        }
 
-        let model_section = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .child(group_label("Model", &theme))
-            .child(model_card_content);
-
-        // Right column — model + config + advanced
         let right_col = div()
             .flex()
             .flex_col()
             .flex_1()
-            .gap(px(16.0))
-            .child(model_section)
+            .gap(px(14.0))
+            .child(provider_card)
+            .child(model_card_content)
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(group_label("Connection", &theme))
-                    .child(
-                        card(theme)
-                            .child(row_field("API Key", &api_key_input))
-                            .child(row_separator(theme))
-                            .child(row_field("Base URL", &base_url_input)),
-                    ),
+                card(theme).child(
+                    div()
+                        .px(px(16.0))
+                        .py(px(16.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(14.0))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Connection"),
+                        )
+                        .child(stacked_input_field(
+                            "API Key",
+                            "Paste a key directly, or enter an env var like ANTHROPIC_API_KEY.",
+                            &api_key_input,
+                            theme,
+                        ))
+                        .child(stacked_input_field(
+                            "Base URL",
+                            "Leave blank to use the provider's default endpoint.",
+                            &base_url_input,
+                            theme,
+                        )),
+                ),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(group_label("Advanced", &theme))
-                    .child(
-                        card(theme)
-                            .child(row_field("Max Tokens", &max_tokens_input))
-                            .child(row_separator(theme))
-                            .child(row_field("Max Turns", &max_turns_input))
-                            .child(row_separator(theme))
-                            .child(row_field("Temperature", &temperature_input)),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(group_label("Suggestions", &theme))
-                    .child(
-                        card(theme)
-                            .child(row_field("Model", &suggestion_model_input)),
-                    ),
+                card(theme).child(
+                    div()
+                        .px(px(16.0))
+                        .py(px(16.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(14.0))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Advanced"),
+                        )
+                        .child(stacked_input_field(
+                            "Max Tokens",
+                            "Optional per-provider ceiling for generated tokens.",
+                            &max_tokens_input,
+                            theme,
+                        ))
+                        .child(stacked_input_field(
+                            "Max Turns",
+                            "How many tool-use turns the agent can take before it must stop.",
+                            &max_turns_input,
+                            theme,
+                        ))
+                        .child(stacked_input_field(
+                            "Temperature",
+                            "Leave blank for the provider default. Lower is steadier; higher is looser.",
+                            &temperature_input,
+                            theme,
+                        ))
+                        .child(stacked_input_field(
+                            "Suggestion Model",
+                            "Optional lightweight model for shell suggestions. Blank means reuse the main model.",
+                            &suggestion_model_input,
+                            theme,
+                        )),
+                ),
             );
 
-        // Two-column layout: providers left, config right
-        section_content("Models", "Choose your AI provider, model, and connection settings.", theme)
+        let provider_column = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .w(px(240.0))
+            .flex_shrink_0()
+            .child(group_label("Provider", &theme))
             .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .gap(px(20.0))
-                    // Left: provider list
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.0))
-                            .w(px(170.0))
-                            .flex_shrink_0()
-                            .child(group_label("Provider", &theme))
-                            .child(provider_list),
-                    )
-                    // Right: model + config + advanced
-                    .child(right_col),
-            )
+                card(theme).child(
+                    div()
+                        .px(px(10.0))
+                        .py(px(10.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .px(px(2.0))
+                                .text_size(px(11.5))
+                                .line_height(px(18.0))
+                                .text_color(theme.muted_foreground.opacity(0.7))
+                                .child("Pick the provider first, then tune the model and endpoint on the right."),
+                        )
+                        .child(provider_list),
+                ),
+            );
+
+        section_content(
+            "Models",
+            "Choose a provider, lock in a model, and tune the endpoint details without leaving the terminal.",
+            theme,
+        )
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .gap(px(20.0))
+                .child(provider_column)
+                .child(right_col),
+        )
     }
 
     fn render_keys(&mut self, cx: &mut Context<Self>) -> Div {
@@ -1421,12 +1680,14 @@ impl SettingsPanel {
             ("Quit", "quit"),
         ];
 
-        let pane_keys: &[(&str, &str)] = &[
-            ("Split Right", "split_right"),
-            ("Split Down", "split_down"),
-        ];
+        let pane_keys: &[(&str, &str)] =
+            &[("Split Right", "split_right"), ("Split Down", "split_down")];
 
-        let build_card = |keys: &[(&str, &str)], recording: &Option<String>, this: &mut Self, cx: &mut Context<Self>| -> Div {
+        let build_card = |keys: &[(&str, &str)],
+                          recording: &Option<String>,
+                          this: &mut Self,
+                          cx: &mut Context<Self>|
+         -> Div {
             let theme = cx.theme();
             let mut c = card(theme);
             for (i, (label, field)) in keys.iter().enumerate() {
@@ -1471,11 +1732,16 @@ impl SettingsPanel {
                                 } else {
                                     theme.muted_foreground
                                 })
-                                .hover(|s| s.bg(theme.primary.opacity(0.10)).text_color(theme.primary))
-                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                                    this.recording_key = Some(field_str.clone());
-                                    cx.notify();
-                                }))
+                                .hover(|s| {
+                                    s.bg(theme.primary.opacity(0.10)).text_color(theme.primary)
+                                })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.recording_key = Some(field_str.clone());
+                                        cx.notify();
+                                    }),
+                                )
                                 .child(display),
                         ),
                 );
@@ -1488,42 +1754,43 @@ impl SettingsPanel {
         let pane_card = build_card(pane_card_keys, &recording, self, cx);
 
         let theme = cx.theme();
-        section_content("Keyboard Shortcuts", "Click a shortcut to record a new key combination.", theme)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(group_label("General", &theme))
-                    .child(general_card),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(group_label("Panes", &theme))
-                    .child(pane_card)
-                    .child(
-                        card(theme)
-                            .child(key_row("Close Pane", "⌃D", theme)),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(group_label("Terminal", &theme))
-                    .child(
-                        card(theme)
-                            .child(key_row("Copy", "⌘C", theme))
-                            .child(row_separator(theme))
-                            .child(key_row("Paste", "⌘V", theme))
-                            .child(row_separator(theme))
-                            .child(key_row("Select All", "⌘A", theme)),
-                    ),
-            )
+        section_content(
+            "Keyboard Shortcuts",
+            "Click a shortcut to record a new key combination.",
+            theme,
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("General", &theme))
+                .child(general_card),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Panes", &theme))
+                .child(pane_card)
+                .child(card(theme).child(key_row("Close Pane", "⌃D", theme))),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Terminal", &theme))
+                .child(
+                    card(theme)
+                        .child(key_row("Copy", "⌘C", theme))
+                        .child(row_separator(theme))
+                        .child(key_row("Paste", "⌘V", theme))
+                        .child(row_separator(theme))
+                        .child(key_row("Select All", "⌘A", theme)),
+                ),
+        )
     }
 }
 
@@ -1547,13 +1814,9 @@ impl Render for SettingsPanel {
         // Render content first (AI needs &mut self)
         let content = match active {
             SettingsSection::General => self.render_general(cx),
-            SettingsSection::Appearance => {
-                self.render_appearance(cx)
-            }
+            SettingsSection::Appearance => self.render_appearance(cx),
             SettingsSection::Models => self.render_ai(cx),
-            SettingsSection::Keys => {
-                self.render_keys(cx)
-            }
+            SettingsSection::Keys => self.render_keys(cx),
         };
 
         let theme = cx.theme();
@@ -1583,19 +1846,44 @@ impl Render for SettingsPanel {
                     .rounded(px(6.0))
                     .cursor_pointer()
                     .text_size(px(13.0))
-                    .bg(if is_active { theme.muted.opacity(0.15) } else { theme.transparent })
-                    .text_color(if is_active { theme.foreground } else { theme.muted_foreground })
-                    .font_weight(if is_active { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                    .hover(|s| if is_active { s } else { s.bg(theme.muted.opacity(0.08)) })
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                        this.active_section = section_val;
-                        cx.notify();
-                    }))
+                    .bg(if is_active {
+                        theme.muted.opacity(0.15)
+                    } else {
+                        theme.transparent
+                    })
+                    .text_color(if is_active {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .font_weight(if is_active {
+                        FontWeight::MEDIUM
+                    } else {
+                        FontWeight::NORMAL
+                    })
+                    .hover(|s| {
+                        if is_active {
+                            s
+                        } else {
+                            s.bg(theme.muted.opacity(0.08))
+                        }
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.active_section = section_val;
+                            cx.notify();
+                        }),
+                    )
                     .child(
                         svg()
                             .path(section.icon())
                             .size(px(15.0))
-                            .text_color(if is_active { theme.foreground } else { theme.muted_foreground }),
+                            .text_color(if is_active {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            }),
                     )
                     .child(section.label()),
             );
@@ -1614,9 +1902,12 @@ impl Render for SettingsPanel {
             .absolute()
             .size_full()
             .bg(theme.background.opacity(0.6))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                this.save(window, cx);
-            }));
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.save(window, cx);
+                }),
+            );
 
         // Card — centered with flex centering
         let card = div()
@@ -1717,35 +2008,32 @@ impl Render for SettingsPanel {
 // ── Reusable building blocks ──────────────────────────────────────
 
 fn section_content(title: &str, subtitle: &str, theme: &gpui_component::Theme) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(16.0))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(title.to_string()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(subtitle.to_string()),
-                ),
-        )
+    div().flex().flex_col().gap(px(18.0)).child(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .text_size(px(18.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title.to_string()),
+            )
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .line_height(px(18.0))
+                    .text_color(theme.muted_foreground.opacity(0.72))
+                    .child(subtitle.to_string()),
+            ),
+    )
 }
 
 fn group_label(text: &str, theme: &gpui_component::Theme) -> Div {
     div()
-        .text_size(px(11.0))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(theme.muted_foreground.opacity(0.5))
+        .text_size(px(10.5))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme.muted_foreground.opacity(0.52))
         .px(px(2.0))
         .pb(px(2.0))
         .child(text.to_string())
@@ -1755,13 +2043,13 @@ fn card(theme: &gpui_component::Theme) -> Div {
     div()
         .flex()
         .flex_col()
-        .rounded(px(8.0))
-        .bg(theme.muted.opacity(0.08))
+        .rounded(px(10.0))
+        .overflow_hidden()
+        .bg(theme.background.opacity(0.74))
 }
 
 fn row_separator(_theme: &gpui_component::Theme) -> Div {
-    // Borderless design — use vertical spacing instead of separator lines
-    div().h(px(1.0))
+    div().h(px(6.0))
 }
 
 fn row_field(label: &str, input: &Entity<InputState>) -> Div {
@@ -1772,21 +2060,103 @@ fn row_field(label: &str, input: &Entity<InputState>) -> Div {
         .gap(px(12.0))
         .px(px(16.0))
         .h(px(44.0))
+        .child(div().text_sm().flex_shrink_0().child(label.to_string()))
+        .child(div().flex_1().min_w(px(160.0)).child(Input::new(input)))
+}
+
+fn stacked_input_field(
+    label: &str,
+    hint: &str,
+    input: &Entity<InputState>,
+    theme: &gpui_component::Theme,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
         .child(
-            div().text_sm().flex_shrink_0().child(label.to_string()),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label.to_string()),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .line_height(px(16.0))
+                        .text_color(theme.muted_foreground.opacity(0.65))
+                        .child(hint.to_string()),
+                ),
+        )
+        .child(Input::new(input))
+}
+
+fn info_badge(text: impl Into<String>, theme: &gpui_component::Theme) -> Div {
+    div()
+        .h(px(24.0))
+        .px(px(8.0))
+        .flex()
+        .items_center()
+        .rounded(px(7.0))
+        .bg(theme.muted.opacity(0.10))
+        .text_size(px(10.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.muted_foreground.opacity(0.7))
+        .child(text.into())
+}
+
+fn import_step_item(
+    title: &str,
+    description: &str,
+    body: Option<AnyElement>,
+    theme: &gpui_component::Theme,
+) -> StepperItem {
+    let mut content = div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(
+            div()
+                .text_size(px(12.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.foreground)
+                .child(title.to_string()),
         )
         .child(
-            div().flex_1().min_w(px(160.0)).child(Input::new(input)),
-        )
+            div()
+                .text_size(px(11.5))
+                .line_height(px(18.0))
+                .text_color(theme.muted_foreground.opacity(0.7))
+                .child(description.to_string()),
+        );
+
+    if let Some(body) = body {
+        content = content.child(div().pt(px(2.0)).child(body));
+    }
+
+    StepperItem::new().child(content)
 }
 
 /// Convert a GPUI Keystroke to the binding format string (e.g. "cmd-shift-d").
 fn keystroke_to_binding(ks: &gpui::Keystroke) -> String {
     let mut parts = Vec::new();
-    if ks.modifiers.platform { parts.push("cmd"); }
-    if ks.modifiers.control { parts.push("ctrl"); }
-    if ks.modifiers.alt { parts.push("alt"); }
-    if ks.modifiers.shift { parts.push("shift"); }
+    if ks.modifiers.platform {
+        parts.push("cmd");
+    }
+    if ks.modifiers.control {
+        parts.push("ctrl");
+    }
+    if ks.modifiers.alt {
+        parts.push("alt");
+    }
+    if ks.modifiers.shift {
+        parts.push("shift");
+    }
     parts.push(&ks.key);
     parts.join("-")
 }
@@ -1800,10 +2170,18 @@ fn format_keybinding_display(binding: &str) -> String {
     let mut display = String::new();
     // Modifier order for display: ⌃⌥⇧⌘ (standard macOS ordering)
     let modifiers = &parts[..parts.len() - 1];
-    if modifiers.contains(&"ctrl") { display.push('⌃'); }
-    if modifiers.contains(&"alt") { display.push('⌥'); }
-    if modifiers.contains(&"shift") { display.push('⇧'); }
-    if modifiers.contains(&"cmd") { display.push('⌘'); }
+    if modifiers.contains(&"ctrl") {
+        display.push('⌃');
+    }
+    if modifiers.contains(&"alt") {
+        display.push('⌥');
+    }
+    if modifiers.contains(&"shift") {
+        display.push('⇧');
+    }
+    if modifiers.contains(&"cmd") {
+        display.push('⌘');
+    }
     if let Some(key) = parts.last() {
         // Special key display names
         let display_key = match *key {
@@ -1834,9 +2212,7 @@ fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
         .justify_between()
         .px(px(16.0))
         .h(px(36.0))
-        .child(
-            div().text_sm().child(action.to_string()),
-        )
+        .child(div().text_sm().child(action.to_string()))
         .child(
             div()
                 .h(px(22.0))
@@ -1869,6 +2245,24 @@ fn provider_label(provider: &ProviderKind) -> &'static str {
     }
 }
 
+fn provider_summary(provider: &ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Anthropic => "Balanced frontier models with strong coding and reasoning.",
+        ProviderKind::OpenAI => "General-purpose flagship and reasoning models from OpenAI.",
+        ProviderKind::OpenAICompatible => "Bring your own OpenAI-style endpoint and model catalog.",
+        ProviderKind::DeepSeek => "Fast, affordable chat and reasoning models.",
+        ProviderKind::Groq => "Low-latency inference with open model serving.",
+        ProviderKind::Cohere => "Enterprise-friendly language and retrieval models.",
+        ProviderKind::Gemini => "Google multimodal models with strong broad capability.",
+        ProviderKind::Ollama => "Run local models on this machine via Ollama.",
+        ProviderKind::OpenRouter => "Route across many providers through one API.",
+        ProviderKind::Perplexity => "Search-oriented models with web-grounded answers.",
+        ProviderKind::Mistral => "Compact European foundation models and endpoints.",
+        ProviderKind::Together => "Hosted open models with broad model variety.",
+        ProviderKind::XAI => "xAI-hosted Grok models and compatible endpoints.",
+    }
+}
+
 /// Model lists sourced from models.dev (3pp/models.dev/providers/*/models/).
 fn provider_models(provider: &ProviderKind) -> &'static [&'static str] {
     match provider {
@@ -1896,10 +2290,7 @@ fn provider_models(provider: &ProviderKind) -> &'static [&'static str] {
             "o1",
             "o1-pro",
         ],
-        ProviderKind::DeepSeek => &[
-            "deepseek-chat",
-            "deepseek-reasoner",
-        ],
+        ProviderKind::DeepSeek => &["deepseek-chat", "deepseek-reasoner"],
         ProviderKind::Groq => &[
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
