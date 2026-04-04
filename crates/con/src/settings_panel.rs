@@ -17,7 +17,7 @@ pub struct ThemePreview(pub String);
 enum SettingsSection {
     General,
     Appearance,
-    AI,
+    Models,
     Keys,
 }
 
@@ -26,7 +26,7 @@ impl SettingsSection {
         match self {
             Self::General => "General",
             Self::Appearance => "Appearance",
-            Self::AI => "AI",
+            Self::Models => "Models",
             Self::Keys => "Keys",
         }
     }
@@ -35,7 +35,7 @@ impl SettingsSection {
         match self {
             Self::General => "phosphor/sliders.svg",
             Self::Appearance => "phosphor/sun.svg",
-            Self::AI => "phosphor/robot.svg",
+            Self::Models => "phosphor/robot.svg",
             Self::Keys => "phosphor/keyboard.svg",
         }
     }
@@ -44,7 +44,7 @@ impl SettingsSection {
 const ALL_SECTIONS: &[SettingsSection] = &[
     SettingsSection::General,
     SettingsSection::Appearance,
-    SettingsSection::AI,
+    SettingsSection::Models,
     SettingsSection::Keys,
 ];
 
@@ -161,7 +161,7 @@ impl SettingsPanel {
         });
         let custom_theme_name_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
-            s.set_placeholder("my-theme", window, cx);
+            s.set_placeholder("Theme name, e.g. nord", window, cx);
             s
         });
 
@@ -453,7 +453,7 @@ impl SettingsPanel {
             }));
 
         let theme = cx.theme();
-        section_content("General", "Terminal and editor settings.", theme)
+        section_content("General", "Terminal and agent behavior.", theme)
             .child(
                 card(theme)
                     .child(row_field("Font Size", &font_size_input))
@@ -465,7 +465,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("AGENT", &theme))
+                    .child(group_label("Agent", &theme))
                     .child(
                         card(theme)
                             .child(
@@ -680,47 +680,95 @@ impl SettingsPanel {
             .py(px(14.0))
             .flex()
             .flex_col()
-            .gap(px(12.0))
+            .gap(px(14.0))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Import Theme"),
+            )
+            // Step-by-step instructions
             .child(
                 div()
                     .flex()
-                    .items_center()
+                    .flex_col()
                     .gap(px(8.0))
                     .child(
                         div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Import Theme"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(9.5))
-                            .text_color(theme.muted_foreground.opacity(0.4))
-                            .child("ghostty format"),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(theme.muted_foreground.opacity(0.6))
-                    .line_height(px(16.0))
-                    .child("Copy a theme configuration from ghostty.style, then paste it here. Uses the same format as Ghostty's config."),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .h(px(32.0))
+                            .flex()
+                            .items_start()
+                            .gap(px(8.0))
                             .child(
-                                Input::new(&custom_theme_name_input)
-                                    .appearance(false),
+                                div()
+                                    .size(px(18.0))
+                                    .rounded_full()
+                                    .bg(theme.primary.opacity(0.1))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .flex_shrink_0()
+                                    .text_size(px(10.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.primary)
+                                    .child("1"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(theme.muted_foreground)
+                                    .line_height(px(18.0))
+                                    .child("Browse themes at ghostty.style and copy the configuration"),
                             ),
                     )
-                    .child(paste_btn),
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .size(px(18.0))
+                                    .rounded_full()
+                                    .bg(theme.primary.opacity(0.1))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .flex_shrink_0()
+                                    .text_size(px(10.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.primary)
+                                    .child("2"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(theme.muted_foreground)
+                                    .line_height(px(18.0))
+                                    .child("Name your theme below and click Paste to import"),
+                            ),
+                    ),
+            )
+            // Name input + paste button — stacked for full width
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(
+                                        Input::new(&custom_theme_name_input)
+                                            .appearance(false),
+                                    ),
+                            )
+                            .child(paste_btn),
+                    ),
             );
 
         // Live preview of pasted theme
@@ -732,7 +780,7 @@ impl SettingsPanel {
         if let Some(ref status) = self.custom_theme_status {
             import_section = import_section.child(
                 div()
-                    .text_size(px(10.5))
+                    .text_size(px(11.0))
                     .text_color(if status.starts_with("Error") {
                         theme.danger
                     } else {
@@ -742,27 +790,15 @@ impl SettingsPanel {
             );
         }
 
-        // ghostty.style credit
+        // Credits
         import_section = import_section.child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(5.0))
-                .pt(px(4.0))
                 .text_size(px(10.0))
-                .text_color(theme.muted_foreground.opacity(0.4))
-                .child("Themes from")
-                .child(
-                    div()
-                        .text_color(theme.primary.opacity(0.6))
-                        .child("ghostty.style"),
-                )
-                .child("·")
-                .child(
-                    div()
-                        .text_color(theme.muted_foreground.opacity(0.35))
-                        .child("iTerm2-Color-Schemes (MIT)"),
-                ),
+                .text_color(theme.muted_foreground.opacity(0.35))
+                .child("Compatible with themes from ghostty.style and iTerm2-Color-Schemes"),
         );
 
         content = content.child(card(theme).child(import_section));
@@ -946,55 +982,49 @@ impl SettingsPanel {
         let temperature_input = self.temperature_input.clone();
         let suggestion_model_input = self.suggestion_model_input.clone();
 
-        // Provider list — compact rows
-        let mut provider_list = card(theme);
-        let provider_count = ALL_PROVIDERS.len();
-        for (idx, provider) in ALL_PROVIDERS.iter().enumerate() {
+        // Provider list — compact pill-style rows
+        let mut provider_list = div()
+            .flex()
+            .flex_col()
+            .rounded(px(8.0))
+            .bg(theme.muted.opacity(0.08))
+            .py(px(4.0));
+        for provider in ALL_PROVIDERS.iter() {
             let is_selected = *provider == self.selected_provider;
             let label = provider_label(provider);
             let provider_clone = provider.clone();
 
-            let indicator = div()
-                .size(px(14.0))
-                .rounded_full()
-                .flex_shrink_0()
-                .bg(if is_selected { theme.primary } else { theme.muted.opacity(0.12) })
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .size(px(5.0))
-                        .rounded_full()
-                        .bg(if is_selected { theme.primary_foreground } else { theme.transparent }),
-                );
-
             let row = div()
                 .id(SharedString::from(format!("prov-{label}")))
-                .h(px(32.0))
-                .px(px(12.0))
+                .h(px(28.0))
+                .mx(px(4.0))
+                .px(px(10.0))
                 .flex()
                 .items_center()
-                .gap(px(8.0))
+                .gap(px(7.0))
+                .rounded(px(6.0))
                 .cursor_pointer()
-                .bg(if is_selected { theme.primary.opacity(0.08) } else { theme.transparent })
-                .hover(|s| s.bg(theme.muted.opacity(0.1)))
+                .bg(if is_selected { theme.primary.opacity(0.10) } else { theme.transparent })
+                .hover(|s| s.bg(theme.muted.opacity(0.12)))
                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                     this.select_provider(provider_clone.clone(), window, cx);
                 }))
-                .child(indicator)
+                .child(
+                    div()
+                        .size(px(6.0))
+                        .rounded_full()
+                        .flex_shrink_0()
+                        .bg(if is_selected { theme.primary } else { theme.transparent }),
+                )
                 .child(
                     div()
                         .text_size(px(12.0))
                         .font_weight(if is_selected { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                        .text_color(theme.foreground)
+                        .text_color(if is_selected { theme.foreground } else { theme.muted_foreground })
                         .child(label),
                 );
 
             provider_list = provider_list.child(row);
-            if idx + 1 < provider_count {
-                provider_list = provider_list.child(row_separator(theme));
-            }
         }
 
         // Model: text input + clickable suggestion chips
@@ -1051,7 +1081,7 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .child(group_label("MODEL", &theme))
+            .child(group_label("Model", &theme))
             .child(model_card_content);
 
         // Right column — model + config + advanced
@@ -1066,7 +1096,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("CONFIGURATION", &theme))
+                    .child(group_label("Connection", &theme))
                     .child(
                         card(theme)
                             .child(row_field("API Key", &api_key_input))
@@ -1079,7 +1109,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("ADVANCED", &theme))
+                    .child(group_label("Advanced", &theme))
                     .child(
                         card(theme)
                             .child(row_field("Max Tokens", &max_tokens_input))
@@ -1094,7 +1124,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("SUGGESTIONS", &theme))
+                    .child(group_label("Suggestions", &theme))
                     .child(
                         card(theme)
                             .child(row_field("Model", &suggestion_model_input)),
@@ -1102,7 +1132,7 @@ impl SettingsPanel {
             );
 
         // Two-column layout: providers left, config right
-        section_content("AI", "Configure your AI provider and model.", theme)
+        section_content("Models", "Choose your AI provider, model, and connection settings.", theme)
             .child(
                 div()
                     .flex()
@@ -1114,9 +1144,9 @@ impl SettingsPanel {
                             .flex()
                             .flex_col()
                             .gap(px(8.0))
-                            .w(px(200.0))
+                            .w(px(170.0))
                             .flex_shrink_0()
-                            .child(group_label("PROVIDER", &theme))
+                            .child(group_label("Provider", &theme))
                             .child(provider_list),
                     )
                     // Right: model + config + advanced
@@ -1131,7 +1161,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("GENERAL", &theme))
+                    .child(group_label("General", &theme))
                     .child(
                         card(theme)
                             .child(key_row("New Tab", "⌘T", theme))
@@ -1150,7 +1180,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("PANES", &theme))
+                    .child(group_label("Panes", &theme))
                     .child(
                         card(theme)
                             .child(key_row("Split Right", "⌘D", theme))
@@ -1165,7 +1195,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("TERMINAL", &theme))
+                    .child(group_label("Terminal", &theme))
                     .child(
                         card(theme)
                             .child(key_row("Clear", "⌘K", theme))
@@ -1203,7 +1233,7 @@ impl Render for SettingsPanel {
             SettingsSection::Appearance => {
                 self.render_appearance(cx)
             }
-            SettingsSection::AI => self.render_ai(cx),
+            SettingsSection::Models => self.render_ai(cx),
             SettingsSection::Keys => {
                 let theme = cx.theme();
                 self.render_keys(theme)
@@ -1357,6 +1387,7 @@ impl Render for SettingsPanel {
             .id("settings-overlay")
             .absolute()
             .size_full()
+            .font_family(".SystemUIFont")
             .child(backdrop)
             .child(card)
     }
@@ -1391,11 +1422,11 @@ fn section_content(title: &str, subtitle: &str, theme: &gpui_component::Theme) -
 
 fn group_label(text: &str, theme: &gpui_component::Theme) -> Div {
     div()
-        .text_size(px(10.0))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(theme.muted_foreground.opacity(0.6))
-        .px(px(4.0))
-        .pt(px(4.0))
+        .text_size(px(11.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.muted_foreground.opacity(0.5))
+        .px(px(2.0))
+        .pb(px(2.0))
         .child(text.to_string())
 }
 
