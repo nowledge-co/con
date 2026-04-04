@@ -728,6 +728,42 @@ fn path_executables() -> &'static HashSet<String> {
     })
 }
 
+/// Discover shell aliases by running `alias` in the user's login shell.
+/// Cached on first call. Returns empty set on failure (no blocking, no panic).
+fn shell_aliases() -> &'static HashSet<String> {
+    static CACHE: OnceLock<HashSet<String>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+        let output = std::process::Command::new(&shell)
+            .args(["-ic", "alias"])
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok();
+        let mut aliases = HashSet::new();
+        if let Some(out) = output {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                // zsh: "name=value" or "name='value'"
+                // bash: "alias name='value'"
+                let line = line.trim();
+                let name_part = if let Some(rest) = line.strip_prefix("alias ") {
+                    rest
+                } else {
+                    line
+                };
+                if let Some((name, _)) = name_part.split_once('=') {
+                    let name = name.trim();
+                    if !name.is_empty() && is_command_shaped(name) {
+                        aliases.insert(name.to_string());
+                    }
+                }
+            }
+        }
+        log::info!("[classify] discovered {} shell aliases", aliases.len());
+        aliases
+    })
+}
+
 /// Returns true if a token looks like a valid command name:
 /// lowercase alphanumeric, hyphens, underscores, dots — no spaces.
 fn is_command_shaped(word: &str) -> bool {
@@ -763,6 +799,11 @@ fn looks_like_command(input: &str, is_remote: bool) -> bool {
 
     // Shell builtins (these are never NL — "cd", "export", etc.)
     if SHELL_BUILTINS.contains(&first_word) {
+        return true;
+    }
+
+    // Shell aliases (ll, la, gs, gst, etc.) — discovered from user's shell config
+    if shell_aliases().contains(first_word) {
         return true;
     }
 
