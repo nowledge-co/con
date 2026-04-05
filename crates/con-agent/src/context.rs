@@ -2,6 +2,11 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::control::{
+    PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneControlState,
+    PaneVisibleTarget, PaneVisibleTargetKind,
+};
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PaneMode {
@@ -778,7 +783,7 @@ pub fn shell_metadata_is_fresh(
 }
 
 pub fn direct_terminal_exec_is_safe(runtime: &PaneRuntimeState) -> bool {
-    runtime.mode == PaneMode::Shell && runtime.shell_metadata_fresh
+    PaneControlState::from_runtime(runtime).allows_visible_shell_exec()
 }
 
 /// Terminal context extracted for the AI agent.
@@ -806,6 +811,8 @@ pub struct TerminalContext {
     pub focused_runtime_stack: Vec<PaneRuntimeScope>,
     /// Warnings that should constrain interpretation of the focused pane.
     pub focused_runtime_warnings: Vec<String>,
+    /// Typed control contract for the focused pane.
+    pub focused_control: PaneControlState,
     /// Current working directory (from OSC 7 or manual detection)
     pub cwd: Option<String>,
     /// Last N lines of terminal output
@@ -857,6 +864,7 @@ pub struct PaneSummary {
     pub mode: PaneMode,
     pub has_shell_integration: bool,
     pub shell_metadata_fresh: bool,
+    pub control: PaneControlState,
     pub agent_cli: Option<String>,
     pub active_scope: Option<PaneRuntimeScope>,
     pub evidence: Vec<PaneEvidence>,
@@ -887,6 +895,22 @@ fn format_scope_summary(scope: &PaneRuntimeScope) -> String {
     scope.summary()
 }
 
+fn format_control_channels(channels: &[PaneControlChannel]) -> String {
+    channels
+        .iter()
+        .map(|channel| channel.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_control_capabilities(capabilities: &[PaneControlCapability]) -> String {
+    capabilities
+        .iter()
+        .map(|capability| capability.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -909,6 +933,28 @@ impl TerminalContext {
             focused_shell_metadata_fresh: false,
             focused_runtime_stack: Vec::new(),
             focused_runtime_warnings: Vec::new(),
+            focused_control: PaneControlState {
+                address_space: PaneAddressSpace::ConPane,
+                visible_target: PaneVisibleTarget {
+                    kind: PaneVisibleTargetKind::UnknownTui,
+                    label: None,
+                    host: None,
+                },
+                channels: vec![
+                    PaneControlChannel::ReadScreen,
+                    PaneControlChannel::SearchScrollback,
+                    PaneControlChannel::RawInput,
+                ],
+                capabilities: vec![
+                    PaneControlCapability::ReadScreen,
+                    PaneControlCapability::SearchScrollback,
+                    PaneControlCapability::SendRawInput,
+                ],
+                notes: vec![
+                    "Pane control state is unavailable; treat the visible target as unknown."
+                        .to_string(),
+                ],
+            },
             cwd: None,
             recent_output: Vec::new(),
             last_command: None,
@@ -941,19 +987,19 @@ impl TerminalContext {
              For TASKS that modify state: verify context first, explain what you will do, then execute carefully.\n\n\
              ## Tools\n\n\
              <tools>\n\
-             - terminal_exec: Run a command visibly in a pane only when con has strong evidence that the visible target is a shell.\n\
+             - terminal_exec: Run a command visibly in a con pane only when that pane's control capabilities include `exec_visible_shell`.\n\
+               `pane_index` always addresses a con pane from list_panes. It never means a tmux pane, tmux window, editor buffer, or remote host.\n\
                Never use terminal_exec on tmux, vim, nvim, dashboards, or other TUIs unless a future tool explicitly supports that runtime.\n\
-               Use pane_index to target a specific con pane.\n\
                ALWAYS use absolute paths for executables when possible.\n\
                Check exit_code in the response — 0 means success, non-zero means failure.\n\
                If exit_code is null, shell integration may be absent or the command is still running.\n\n\
-             - batch_exec: Run commands on MULTIPLE panes in PARALLEL, but only on panes that are proven safe shell targets.\n\
+             - batch_exec: Run commands on MULTIPLE con panes in PARALLEL, but only on panes whose control capabilities include `exec_visible_shell`.\n\
                Fastest for multi-pane tasks\n\
                (e.g., \"check uptime on all servers\"). Returns results for each pane independently.\n\n\
              - shell_exec: Run a command in a hidden LOCAL subprocess on the con workspace machine. Output is NOT shown to the user.\n\
                Never use shell_exec to inspect or modify a remote SSH/tmux environment.\n\
                Prefer over terminal_exec only for local tasks such as git status, file searches, package lookups, and background ops.\n\n\
-             - list_panes: List all open panes with index, title, cwd, dimensions, hostname, shell integration status.\n\n\
+             - list_panes: List all open panes with runtime state plus control state: visible target kind, control channels, capabilities, and addressing notes.\n\n\
              - read_pane: Read last N lines from any pane (includes scrollback). Use to inspect output.\n\n\
              - send_keys: Send raw keystrokes to any pane. For TUI interaction: Ctrl-C (\\x03), arrows, Enter.\n\n\
              - search_panes: Search scrollback across all panes by regex. Find previous errors, output, etc.\n\n\
@@ -972,8 +1018,11 @@ impl TerminalContext {
              - Check is_alive before executing — false means PTY exited, commands will fail.\n\
              - If is_busy is true, a command is already running — wait or use a different pane.\n\
              - On SSH panes (hostname != null): commands execute on the REMOTE host, not locally.\n\
+             - Observation is not control. Seeing tmux, nvim, Codex CLI, or Claude Code does not mean con has a native control channel for it.\n\
+             - Addressing is layered. A con pane index is not a tmux pane id, tmux window index, editor buffer, or remote hostname.\n\
              - When pane mode is not `shell`, or shell metadata is marked stale, do NOT assume cwd/hostname/last_command describe the visible app.\n\
-             - terminal_exec and batch_exec are shell-only operations. For tmux, vim, htop, dashboards, and other TUIs: inspect the pane with read_pane/list_panes/send_keys before making claims or interacting.\n\
+             - terminal_exec and batch_exec are shell-only operations. Use them only when list_panes or the focused pane context exposes `exec_visible_shell`.\n\
+             - For tmux, vim, htop, dashboards, Codex CLI, Claude Code, and other TUIs: inspect first and respect the pane's available control channels.\n\
              - If a command fails (exit_code != 0), diagnose the error before retrying.\n\
              - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
              </safety>\n\n",
@@ -1009,6 +1058,23 @@ impl TerminalContext {
             ));
         }
         prompt.push_str("/>\n");
+        prompt.push_str(&format!(
+            "<focused_control address_space=\"{}\" visible_target=\"{}\" channels=\"{}\" capabilities=\"{}\"",
+            self.focused_control.address_space.as_str(),
+            xml_escape(&self.focused_control.visible_target.summary()),
+            xml_escape(&format_control_channels(&self.focused_control.channels)),
+            xml_escape(&format_control_capabilities(&self.focused_control.capabilities)),
+        ));
+        if let Some(host) = &self.focused_control.visible_target.host {
+            prompt.push_str(&format!(" target_host=\"{}\"", xml_escape(host)));
+        }
+        prompt.push_str("/>\n");
+        for note in &self.focused_control.notes {
+            prompt.push_str(&format!(
+                "<control_note>{}</control_note>\n",
+                xml_escape(note)
+            ));
+        }
         if !self.focused_runtime_stack.is_empty() {
             prompt.push_str("<runtime_stack>\n");
             for scope in &self.focused_runtime_stack {
@@ -1044,12 +1110,15 @@ impl TerminalContext {
             // Focused pane
             let cwd_label = self.cwd.as_deref().unwrap_or("?");
             prompt.push_str(&format!(
-                "  <pane index=\"{}\" focused=\"true\" cwd=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\" runtime=\"{}\"",
+                "  <pane index=\"{}\" focused=\"true\" cwd=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\" runtime=\"{}\" control_target=\"{}\" control_channels=\"{}\" control_capabilities=\"{}\"",
                 self.focused_pane_index,
                 xml_escape(cwd_label),
                 self.focused_pane_mode.as_str(),
                 self.focused_shell_metadata_fresh,
-                xml_escape(&format_runtime_stack(&self.focused_runtime_stack))
+                xml_escape(&format_runtime_stack(&self.focused_runtime_stack)),
+                xml_escape(&self.focused_control.visible_target.summary()),
+                xml_escape(&format_control_channels(&self.focused_control.channels)),
+                xml_escape(&format_control_capabilities(&self.focused_control.capabilities))
             ));
             if let Some(host) = &self.focused_hostname {
                 prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
@@ -1099,8 +1168,20 @@ impl TerminalContext {
                         )
                     })
                     .unwrap_or_default();
+                let control_target = format!(
+                    " control_target=\"{}\"",
+                    xml_escape(&pane.control.visible_target.summary())
+                );
+                let control_channels = format!(
+                    " control_channels=\"{}\"",
+                    xml_escape(&format_control_channels(&pane.control.channels))
+                );
+                let control_capabilities = format!(
+                    " control_capabilities=\"{}\"",
+                    xml_escape(&format_control_capabilities(&pane.control.capabilities))
+                );
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}{}/>\n",
+                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}{}{}{}{}/>\n",
                     pane.pane_index,
                     xml_escape(cwd),
                     pane.mode.as_str(),
@@ -1110,8 +1191,18 @@ impl TerminalContext {
                     active_scope,
                     busy,
                     stale,
-                    tmux
+                    tmux,
+                    control_target,
+                    control_channels,
+                    control_capabilities
                 ));
+                for note in &pane.control.notes {
+                    prompt.push_str(&format!(
+                        "  <pane_control_note index=\"{}\">{}</pane_control_note>\n",
+                        pane.pane_index,
+                        xml_escape(note)
+                    ));
+                }
             }
             prompt.push_str("</panes>\n");
         } else if let Some(cwd) = &self.cwd {
@@ -1218,6 +1309,8 @@ impl TerminalContext {
 
 #[cfg(test)]
 mod tests {
+    use crate::control::PaneControlState;
+
     use super::{
         PaneConfidence, PaneEvidenceSource, PaneMode, PaneObservationFrame, PaneRuntimeObserver,
         PaneRuntimeState, TerminalContext, detect_remote_host_hint, detect_tmux_session,
@@ -1454,6 +1547,19 @@ mod tests {
 
     #[test]
     fn system_prompt_marks_unknown_host_as_unknown_not_local() {
+        let runtime = PaneRuntimeState {
+            mode: PaneMode::Shell,
+            shell_metadata_fresh: false,
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
+            agent_cli: None,
+            tmux_session: None,
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: Vec::new(),
+            warnings: Vec::new(),
+        };
         let prompt = TerminalContext {
             focused_pane_index: 1,
             focused_hostname: None,
@@ -1465,6 +1571,7 @@ mod tests {
             focused_shell_metadata_fresh: false,
             focused_runtime_stack: Vec::new(),
             focused_runtime_warnings: Vec::new(),
+            focused_control: PaneControlState::from_runtime(&runtime),
             cwd: Some("/tmp".to_string()),
             recent_output: Vec::new(),
             last_command: None,

@@ -1,4 +1,5 @@
 pub mod context;
+pub mod control;
 pub mod conversation;
 pub mod hook;
 pub mod provider;
@@ -6,6 +7,10 @@ pub mod skills;
 pub mod tools;
 
 pub use context::TerminalContext;
+pub use control::{
+    PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneControlState,
+    PaneVisibleTarget, PaneVisibleTargetKind,
+};
 pub use conversation::{Conversation, ConversationSummary, Message, MessageRole};
 pub use hook::{ConHook, ToolApprovalDecision, is_dangerous};
 pub use provider::{

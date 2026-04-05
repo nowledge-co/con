@@ -245,7 +245,7 @@ When the focused pane is an SSH session, remote executables aren't on the local 
 
 The system prompt is built from a live pane snapshot, not process-wide environment variables. For the focused pane we derive host, title, pane mode (`shell`, `multiplexer`, `tui`, `unknown`), and whether shell metadata is fresh enough to trust for the visible app.
 
-When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, mode, and shell-metadata freshness. This lets the agent target the right pane(s) immediately — using `terminal_exec` with `pane_index` or `batch_exec` for parallel execution — without needing to call `list_panes` first.
+When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, mode, shell-metadata freshness, and typed control state. That control state includes the pane's address space, visible target, control channels, capabilities, and notes. This lets the agent target the right pane(s) immediately without confusing a con pane with a tmux pane or editor target.
 
 This matters for SSH, tmux, and full-screen TUIs:
 
@@ -256,4 +256,14 @@ This matters for SSH, tmux, and full-screen TUIs:
 
 con now keeps a per-pane runtime observer for each tab. The observer persists pane-local facts across sparse frames, invalidates them when a fresh shell returns, and exposes merged runtime state to the prompt, `list_panes`, the sidebar, and smart-input classification.
 
+On top of that observer, con now derives a typed `PaneControlState` for each pane. This is the shared contract for prompt writing, `list_panes`, and visible-exec guards:
+
+- `address_space` says what `pane_index` actually refers to
+- `visible_target` says what app or runtime is currently in front
+- `control_channels` say how con may act
+- `control_capabilities` say what is allowed right now
+- `control_notes` explain important limits such as "this is tmux inside a con pane"
+
 What is still missing is stronger backend truth for foreground runtime identity. The next layer is not more local heuristics; it is an upstream Ghostty observability contract for explicit foreground process and semantic prompt state. See `docs/impl/pane-runtime-observer.md`.
+
+Separately, con also needs a control-plane split between visible shell execution, local hidden execution, tmux-native control, and raw TUI input. That design lives in `docs/impl/agent-runtime-control-plane.md`.

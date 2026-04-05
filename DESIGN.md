@@ -168,6 +168,24 @@ The architecture must model that explicitly.
 
 See `docs/impl/pane-runtime-observer.md`.
 
+### 3b. Agent Runtime Control Plane
+
+Observability alone is not enough.
+
+The agent also needs an explicit control plane that separates:
+
+- con pane addresses
+- nested runtime targets such as SSH scopes, tmux sessions, tmux panes, and editors
+- control channels such as visible shell exec, local hidden exec, tmux control, and raw TUI input
+
+This is the architectural boundary that prevents failures like:
+
+- running a local hidden command for a remote task
+- confusing a tmux pane with a con pane
+- typing shell commands into `nvim`
+
+The long-term tool model should therefore be split by control layer, not just by "pane plus command." See `docs/impl/agent-runtime-control-plane.md`.
+
 ### 4. AI Agent Harness: Rig
 
 **Why [Rig](https://rig.rs/) over alternatives:**

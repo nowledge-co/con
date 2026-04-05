@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::context::PaneMode;
+use crate::control::{
+    PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneVisibleTarget,
+};
 
 /// Error type for agent tool execution
 #[derive(Debug, thiserror::Error)]
@@ -125,7 +128,7 @@ impl Tool for TerminalExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute a command visibly in a con terminal pane only when the visible target is a proven shell. pane_index refers to a con pane from list_panes, not a tmux pane/window. For tmux, vim, nvim, and other TUIs, inspect first and use send_keys only when intentional.".to_string(),
+            description: "Execute a command visibly in a con terminal pane only when that pane's control_capabilities include exec_visible_shell. pane_index refers to a con pane from list_panes, not a tmux pane/window/editor target. For tmux, vim, nvim, Codex CLI, Claude Code, and other TUIs, inspect first and use send_keys only when intentional.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -691,6 +694,16 @@ pub struct PaneInfo {
     pub mode: PaneMode,
     /// Whether shell metadata like cwd and last_command is likely fresh for the visible app.
     pub shell_metadata_fresh: bool,
+    /// The only address space valid for pane_index today.
+    pub address_space: PaneAddressSpace,
+    /// The best-known visible target inside this con pane.
+    pub visible_target: PaneVisibleTarget,
+    /// Control channels con can use on this pane.
+    pub control_channels: Vec<PaneControlChannel>,
+    /// Capabilities currently available on this pane.
+    pub control_capabilities: Vec<PaneControlCapability>,
+    /// Addressing and control notes the agent should respect.
+    pub control_notes: Vec<String>,
     /// The top-most active runtime scope, when detected.
     pub active_scope: Option<crate::context::PaneRuntimeScope>,
     /// Detected external agent CLI, when visible.
@@ -773,7 +786,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, pane mode, host, active scope, runtime evidence, and whether shell metadata is fresh. Use this before inspecting tmux/TUI panes so you do not over-trust stale cwd or command metadata.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, runtime state, and control state: address space, visible target, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -917,7 +930,7 @@ impl Tool for SendKeysTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send raw keystrokes to a specific terminal pane. Use this for TUI interaction, sending Ctrl-C (as \\x03), Enter (as \\n), arrow keys, or any input to a running process. For running shell commands, prefer terminal_exec instead.".to_string(),
+            description: "Send raw keystrokes to a specific con terminal pane. This operates on the visible target exactly as a user would type, so it is appropriate for tmux, editors, and other TUIs when done intentionally. For shell commands, prefer terminal_exec only when the pane exposes exec_visible_shell.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1011,7 +1024,7 @@ impl Tool for BatchExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute commands across multiple con panes in PARALLEL, but only when each visible target is a proven shell. pane_index values come from list_panes and do not refer to tmux panes/windows.".to_string(),
+            description: "Execute commands across multiple con panes in PARALLEL, but only when each pane's control_capabilities include exec_visible_shell. pane_index values come from list_panes and do not refer to tmux panes/windows/editors.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

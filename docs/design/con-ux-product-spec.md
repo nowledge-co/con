@@ -482,6 +482,9 @@ The UI and the built-in agent should consume that same scope model.
 - When certainty is low, show less and say less.
 - When an action is remote-sensitive, approvals must make the remote scope explicit.
 - When an external agent CLI is active, con should support it with orientation, notifications, and safe approvals, not compete for control.
+- Never let one address space masquerade as another. A con pane, a tmux pane, and an editor buffer are different targets and must be surfaced that way.
+- Hidden local execution, visible shell execution, tmux-native control, and raw TUI input are different action types and must not share one generic "run command" path.
+- Tool availability should follow typed capabilities, not prose heuristics. If a pane does not expose `exec_visible_shell`, the product must not imply that command execution is available there.
 
 ### Minimum visible cues
 

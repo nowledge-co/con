@@ -335,6 +335,7 @@ impl AgentHarness {
         });
 
         let ssh_host = focused_runtime.remote_host.clone();
+        let focused_control = con_agent::control::PaneControlState::from_runtime(focused_runtime);
 
         TerminalContext {
             focused_pane_index,
@@ -347,6 +348,7 @@ impl AgentHarness {
             focused_shell_metadata_fresh: focused_runtime.shell_metadata_fresh,
             focused_runtime_stack: focused_runtime.scope_stack.clone(),
             focused_runtime_warnings: focused_runtime.warnings.clone(),
+            focused_control,
             cwd,
             recent_output: focused_observation.recent_output.clone(),
             last_command: focused_observation.last_command.clone(),

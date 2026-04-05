@@ -424,6 +424,7 @@ impl ConWorkspace {
                     }
                     let (observation, runtime) =
                         self.observe_terminal_runtime_for_tab(self.active_tab, terminal, 10, cx);
+                    let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
                         hostname: runtime.remote_host.clone(),
@@ -433,6 +434,7 @@ impl ConWorkspace {
                         mode: runtime.mode,
                         has_shell_integration: observation.has_shell_integration,
                         shell_metadata_fresh: runtime.shell_metadata_fresh,
+                        control,
                         agent_cli: runtime.agent_cli.clone(),
                         active_scope: runtime.active_scope.clone(),
                         evidence: runtime.evidence.clone(),
@@ -1034,19 +1036,39 @@ impl ConWorkspace {
         }
 
         let (_, runtime) = self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
-        if !con_agent::context::direct_terminal_exec_is_safe(&runtime) {
+        let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+        if !control.allows_visible_shell_exec() {
             let active_scope = runtime
                 .active_scope
                 .as_ref()
                 .map(con_agent::context::PaneRuntimeScope::summary)
                 .unwrap_or_else(|| runtime.mode.as_str().to_string());
             let host = runtime.remote_host.unwrap_or_else(|| "unknown".to_string());
+            let notes = if control.notes.is_empty() {
+                String::new()
+            } else {
+                format!("\nnotes:\n- {}", control.notes.join("\n- "))
+            };
             let output = format!(
-                "Refused to execute shell command in pane {} because the visible target is not a proven shell.\nmode: {}\nactive_scope: {}\nhost: {}\nUse list_panes/read_pane/send_keys to inspect or interact with tmux, nvim, or other TUIs.",
+                "Refused to execute shell command in pane {} because the visible target is not a proven shell.\nmode: {}\nactive_scope: {}\nhost: {}\nvisible_target: {}\ncontrol_channels: {}\ncontrol_capabilities: {}\nUse list_panes/read_pane/send_keys to inspect or interact with tmux, nvim, or other TUIs.{}",
                 target_pane_index,
                 runtime.mode.as_str(),
                 active_scope,
                 host,
+                control.visible_target.summary(),
+                control
+                    .channels
+                    .iter()
+                    .map(|channel| channel.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                control
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                notes,
             );
             let _ = req.response_tx.send(TerminalExecResponse {
                 output,
@@ -1132,6 +1154,7 @@ impl ConWorkspace {
                         let pid = pane_tree.pane_id_for_terminal(terminal).unwrap_or(idx);
                         let (observation, runtime) =
                             self.observe_terminal_runtime_for_tab(tab_idx, terminal, 12, cx);
+                        let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                         let title = observation
                             .title
                             .clone()
@@ -1150,6 +1173,11 @@ impl ConWorkspace {
                             hostname_source: runtime.remote_host_source,
                             mode: runtime.mode,
                             shell_metadata_fresh: runtime.shell_metadata_fresh,
+                            address_space: control.address_space,
+                            visible_target: control.visible_target.clone(),
+                            control_channels: control.channels.clone(),
+                            control_capabilities: control.capabilities.clone(),
+                            control_notes: control.notes.clone(),
                             active_scope: runtime.active_scope.clone(),
                             agent_cli: runtime.agent_cli.clone(),
                             evidence: runtime.evidence.clone(),

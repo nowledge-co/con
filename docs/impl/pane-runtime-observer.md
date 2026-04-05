@@ -533,3 +533,5 @@ This design avoids three long-term failures:
 3. scattering app-specific heuristics across prompts, tools, and UI labels
 
 That is the standard required if con wants real credibility in SSH, tmux, and external-agent workflows.
+
+The next paired layer is the control plane: how con safely acts on those observed runtimes without confusing con panes, tmux panes, shell execution, and TUI input. con now ships the first typed `PaneControlState` layer on top of the observer, and the longer-term design remains in `docs/impl/agent-runtime-control-plane.md`.
