@@ -421,7 +421,34 @@ fn looks_like_tmux_command(command: &str) -> bool {
 
 fn title_looks_like_tmux(title: &str) -> bool {
     let title_lower = title.to_ascii_lowercase();
-    title_lower.contains("tmux") || title_lower.contains("tmate")
+    if title_lower.contains("tmux") || title_lower.contains("tmate") {
+        return true;
+    }
+
+    // Detect tmux status indicators commonly embedded in terminal titles.
+    // tmux sets the window title to patterns like:
+    //   "haswell ❐ 0 ● 4 nvim"
+    //   "hostname ❐ session ● N window-name"
+    // The ❐ (U+2750) and similar box/window symbols are tmux indicators.
+    if title.contains('❐') || title.contains('❑') || title.contains('❏') {
+        return true;
+    }
+
+    // tmux window-list patterns in titles: "N window-name" with status symbols
+    // like ● (active), ○, ◉, * (classic tmux), - (last), # (flagged)
+    let tmux_window_markers = ['●', '○', '◉'];
+    let has_window_marker = tmux_window_markers.iter().any(|m| title.contains(*m));
+    if has_window_marker {
+        // Verify there's a digit before/near the marker, suggesting "N● name" or "N name"
+        let has_numbered_window = title
+            .split_whitespace()
+            .any(|token| token.chars().next().is_some_and(|c| c.is_ascii_digit()));
+        if has_numbered_window {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn line_looks_like_tmux_status(line: &str) -> bool {
@@ -430,6 +457,13 @@ fn line_looks_like_tmux_status(line: &str) -> bool {
         return false;
     }
 
+    // Modern tmux status bar indicators: ❐ (session), ↑ (uptime), ↗ (prefix)
+    // Example: "❐ 0  ↑ 63d 6h 21m  <4 nvim      ↗  | 11:31 | 05 Apr  w  haswell"
+    if line.contains('❐') || line.contains('❑') || line.contains('❏') {
+        return true;
+    }
+
+    // Classic tmux: "0:bash  1:vim*  2:htop-" with N:name patterns
     let tokens: Vec<&str> = line.split_whitespace().collect();
     let colon_windows = tokens
         .iter()
@@ -443,6 +477,7 @@ fn line_looks_like_tmux_status(line: &str) -> bool {
         return true;
     }
 
+    // Classic tmux: "0* bash  1 vim  2- htop" with number-name pairs
     let numbered_windows = tokens
         .windows(2)
         .filter(|pair| {
@@ -454,7 +489,25 @@ fn line_looks_like_tmux_status(line: &str) -> bool {
                     .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
         })
         .count();
-    numbered_windows >= 2
+    if numbered_windows >= 2 {
+        return true;
+    }
+
+    // Modern tmux with ● window markers: "1 model-serving  2 ops 3 nekomaster  4 nvim"
+    // or with ↑ uptime indicators
+    if line.contains('↑') && line.chars().any(|c| c.is_ascii_digit()) {
+        // ↑ followed by an uptime pattern like "63d" or "5h" is very tmux-specific
+        let has_uptime = tokens.iter().any(|token| {
+            token.ends_with('d') || token.ends_with('h') || token.ends_with('m')
+        }) && tokens
+            .iter()
+            .any(|token| token.chars().all(|c| c.is_ascii_digit()));
+        if has_uptime {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn local_hostname_aliases() -> &'static [String] {
@@ -558,7 +611,23 @@ fn host_candidate_from_tmux_status(line: &str) -> Option<String> {
 }
 
 fn host_candidate_from_title(title: &str) -> Option<String> {
-    host_candidate_from_user_at_host(title)
+    // Try user@host first (e.g. "user@myserver:~/dir")
+    if let Some(host) = host_candidate_from_user_at_host(title) {
+        return Some(host);
+    }
+
+    // Try tmux-style titles: "hostname ❐ 0 ● 4 nvim"
+    // The hostname is the first token, before the tmux session indicator.
+    if title_looks_like_tmux(title) {
+        let first_token = title.split_whitespace().next()?;
+        // The first token should look like a hostname, not a tmux artifact
+        let candidate = normalize_host_candidate(first_token)?;
+        if !is_local_hostname(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 fn detect_remote_host_hint(
@@ -1481,7 +1550,8 @@ mod tests {
     use super::{
         PaneConfidence, PaneEvidenceSource, PaneMode, PaneObservationFrame, PaneRuntimeObserver,
         PaneRuntimeState, TerminalContext, detect_remote_host_hint, detect_tmux_session,
-        direct_terminal_exec_is_safe, infer_pane_mode, shell_metadata_is_fresh,
+        direct_terminal_exec_is_safe, host_candidate_from_title, infer_pane_mode,
+        line_looks_like_tmux_status, shell_metadata_is_fresh, title_looks_like_tmux,
     };
 
     #[test]
@@ -2056,5 +2126,57 @@ mod tests {
             prompt.contains("MUST read_pane first"),
             "Verify-before-act should require read_pane before send_keys"
         );
+    }
+
+    // ── tmux/SSH detection tests ───────────────────────────────────
+
+    #[test]
+    fn title_detects_tmux_from_unicode_indicators() {
+        // Real-world tmux title from user's SSH session
+        assert!(title_looks_like_tmux("haswell ❐ 0 ● 4 nvim"));
+        // Classic tmux/tmate
+        assert!(title_looks_like_tmux("tmux: my-session"));
+        assert!(title_looks_like_tmux("tmate"));
+        // Other Unicode box symbols
+        assert!(title_looks_like_tmux("server ❑ 0 ○ 2 bash"));
+        assert!(title_looks_like_tmux("host ❏ 1 ◉ 3 htop"));
+        // Plain hostname — not tmux
+        assert!(!title_looks_like_tmux("haswell"));
+        assert!(!title_looks_like_tmux("user@server:/home"));
+        // nvim alone is not tmux
+        assert!(!title_looks_like_tmux("nvim test.sh"));
+    }
+
+    #[test]
+    fn status_line_detects_modern_tmux() {
+        // Real-world tmux status bar from user's session
+        assert!(line_looks_like_tmux_status(
+            " ❐ 0  ↑ 63d 6h 21m  <4 nvim      ↗  | 11:31 | 05 Apr  w  haswell "
+        ));
+        // Classic tmux status
+        assert!(line_looks_like_tmux_status("0:bash  1:vim*  2:htop-"));
+        // Plain text — not tmux
+        assert!(!line_looks_like_tmux_status("$ cargo test"));
+        assert!(!line_looks_like_tmux_status(""));
+    }
+
+    #[test]
+    fn host_extracted_from_tmux_title() {
+        // "haswell ❐ 0 ● 4 nvim" — hostname is "haswell"
+        let host = host_candidate_from_title("haswell ❐ 0 ● 4 nvim");
+        assert_eq!(host.as_deref(), Some("haswell"));
+    }
+
+    #[test]
+    fn host_extracted_from_user_at_host_title() {
+        // SSH sets titles like "user@myserver" (no colon in the token)
+        let host = host_candidate_from_title("user@myserver ~/project");
+        assert_eq!(host.as_deref(), Some("myserver"));
+    }
+
+    #[test]
+    fn no_host_from_plain_title() {
+        assert_eq!(host_candidate_from_title("nvim test.sh"), None);
+        assert_eq!(host_candidate_from_title("Terminal"), None);
     }
 }
