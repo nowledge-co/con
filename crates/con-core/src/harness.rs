@@ -573,6 +573,7 @@ impl AgentHarness {
             let htx = harness_tx.clone();
             let per_request_approval_tx = approval_tx.clone();
             let bridge = tokio::task::spawn_blocking(move || {
+                let bridge_start = std::time::Instant::now();
                 while let Ok(event) = agent_rx.recv() {
                     let mapped = match event {
                         AgentEvent::Thinking => HarnessEvent::Thinking,
@@ -607,7 +608,12 @@ impl AgentHarness {
                             tool_name,
                             result,
                         },
-                        AgentEvent::Done(m) => HarnessEvent::ResponseComplete(m),
+                        AgentEvent::Done(mut m) => {
+                            // Attach total request duration to the message
+                            let duration_ms = bridge_start.elapsed().as_millis() as u64;
+                            m.duration_ms = Some(duration_ms);
+                            HarnessEvent::ResponseComplete(m)
+                        }
                         AgentEvent::Error(e) => HarnessEvent::Error(e),
                     };
                     if htx.send(mapped).is_err() {
@@ -621,6 +627,7 @@ impl AgentHarness {
             let provider = AgentProvider::new(agent_config);
 
             log::info!("[harness] Calling provider.send()");
+            let request_start = std::time::Instant::now();
             match provider
                 .send(
                     &conv_snapshot,
@@ -633,10 +640,13 @@ impl AgentHarness {
                 )
                 .await
             {
-                Ok(assistant_msg) => {
+                Ok(mut assistant_msg) => {
+                    let duration_ms = request_start.elapsed().as_millis() as u64;
+                    assistant_msg.duration_ms = Some(duration_ms);
                     log::info!(
-                        "[harness] provider.send() completed: {} chars",
-                        assistant_msg.content.len()
+                        "[harness] provider.send() completed: {} chars in {}ms",
+                        assistant_msg.content.len(),
+                        duration_ms,
                     );
                     let mut conv = conversation.lock();
                     conv.add_message(assistant_msg);

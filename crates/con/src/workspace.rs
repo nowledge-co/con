@@ -7,6 +7,7 @@ const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, InlineInputSubmit,
+    InlineSkillAutocompleteChanged,
     LoadConversation, NewConversation, PanelState, RerunFromMessage,
 };
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
@@ -275,6 +276,8 @@ impl ConWorkspace {
         cx.subscribe_in(&agent_panel, window, Self::on_delete_conversation)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_inline_input_submit)
+            .detach();
+        cx.subscribe_in(&agent_panel, window, Self::on_inline_skill_autocomplete_changed)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_cancel_request)
             .detach();
@@ -602,6 +605,16 @@ impl ConWorkspace {
     ) {
         // Forward inline input as an agent message
         self.send_to_agent(&event.text, cx);
+        cx.notify();
+    }
+
+    fn on_inline_skill_autocomplete_changed(
+        &mut self,
+        _panel: &Entity<AgentPanel>,
+        _event: &InlineSkillAutocompleteChanged,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         cx.notify();
     }
 
@@ -994,7 +1007,7 @@ impl ConWorkspace {
             }
             HarnessEvent::ResponseComplete(msg) => {
                 self.agent_panel.update(cx, |panel, cx| {
-                    panel.complete_response(&msg.content, cx);
+                    panel.complete_response(&msg, cx);
                 });
             }
             HarnessEvent::Error(err) => {
@@ -1772,7 +1785,10 @@ impl Render for ConWorkspace {
         // If a modal was dismissed internally (escape/backdrop), restore terminal focus
         let is_modal_open = self.is_modal_open(cx);
         let has_skill_popup = !self.input_bar.read(cx).filtered_skills(cx).is_empty();
-        let needs_ghostty_hidden = is_modal_open || has_skill_popup;
+        let has_inline_skill_popup = self.agent_panel_open
+            && !self.input_bar_visible
+            && !self.agent_panel.read(cx).filtered_inline_skills(cx).is_empty();
+        let needs_ghostty_hidden = is_modal_open || has_skill_popup || has_inline_skill_popup;
 
         if self.modal_was_open && !is_modal_open {
             self.focus_terminal(window, cx);
@@ -1847,12 +1863,22 @@ impl Render for ConWorkspace {
             bar.set_skills(skill_entries);
         });
 
-        // Sync model name and inline input state to agent panel
+        // Sync model name, inline input, and skills to agent panel
         let model_name = self.harness.active_model_name();
         let show_inline = !self.input_bar_visible && self.agent_panel_open;
+        let panel_skills: Vec<crate::input_bar::SkillEntry> = self
+            .harness
+            .skill_summaries()
+            .into_iter()
+            .map(|(name, desc)| crate::input_bar::SkillEntry {
+                name,
+                description: desc,
+            })
+            .collect();
         self.agent_panel.update(cx, |panel, _cx| {
             panel.set_model_name(model_name);
             panel.set_show_inline_input(show_inline);
+            panel.set_skills(panel_skills);
         });
 
         let theme = cx.theme();
@@ -2343,6 +2369,87 @@ impl Render for ConWorkspace {
                             cx.listener(move |_this, _, window, cx| {
                                 input_bar.update(cx, |bar, cx| {
                                     bar.complete_skill(&name_clone, window, cx);
+                                });
+                            })
+                        })
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(if is_sel {
+                                    theme.primary
+                                } else {
+                                    theme.foreground
+                                })
+                                .child(format!("/{name}")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(theme.muted_foreground.opacity(0.68))
+                                .child(desc.clone()),
+                        ),
+                );
+            }
+            root = root.child(popup);
+        }
+
+        // Inline skill popup — rendered above the agent panel's inline input
+        if has_inline_skill_popup {
+            let theme = cx.theme();
+            let popup_bottom = self.agent_panel.read(cx).inline_skill_popup_offset(cx);
+            let skills = self
+                .agent_panel
+                .read(cx)
+                .filtered_inline_skills(cx)
+                .into_iter()
+                .map(|s| (s.name.clone(), s.description.clone()))
+                .collect::<Vec<_>>();
+            let sel = self.agent_panel.read(cx).inline_skill_selection();
+            let sel = sel.min(skills.len().saturating_sub(1));
+
+            let mut popup = div()
+                .absolute()
+                .bottom(popup_bottom)
+                .right(px(12.0))
+                .w(px(280.0))
+                .max_h(px(280.0))
+                .flex()
+                .flex_col()
+                .rounded(px(10.0))
+                .bg(theme.background.opacity(0.98))
+                .border_1()
+                .border_color(theme.muted.opacity(0.16))
+                .py(px(6.0))
+                .overflow_hidden()
+                .font_family(".SystemUIFont");
+
+            for (i, (name, desc)) in skills.iter().enumerate() {
+                let is_sel = i == sel;
+                let name_clone = name.clone();
+                popup = popup.child(
+                    div()
+                        .id(SharedString::from(format!("inline-skill-{name}")))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .mx(px(6.0))
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .rounded(px(8.0))
+                        .cursor_pointer()
+                        .bg(if is_sel {
+                            theme.primary.opacity(0.10)
+                        } else {
+                            theme.transparent
+                        })
+                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
+                        .on_mouse_down(MouseButton::Left, {
+                            let agent_panel = self.agent_panel.clone();
+                            cx.listener(move |_this, _, window, cx| {
+                                agent_panel.update(cx, |panel, cx| {
+                                    panel.complete_inline_skill(&name_clone, window, cx);
                                 });
                             })
                         })

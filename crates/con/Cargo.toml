@@ -29,6 +29,7 @@ uuid.workspace = true
 toml.workspace = true
 rust-embed.workspace = true
 dirs.workspace = true
+chrono.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 con-ghostty.workspace = true

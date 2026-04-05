@@ -39,6 +39,12 @@ pub struct Message {
     pub content: String,
     pub steps: Vec<AgentStep>,
     pub timestamp: DateTime<Utc>,
+    /// Model name that generated this response (assistant messages only)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Response duration in milliseconds (assistant messages only)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 impl Message {
@@ -49,6 +55,8 @@ impl Message {
             content: content.into(),
             steps: Vec::new(),
             timestamp: Utc::now(),
+            model: None,
+            duration_ms: None,
         }
     }
 
@@ -59,6 +67,8 @@ impl Message {
             content: content.into(),
             steps: Vec::new(),
             timestamp: Utc::now(),
+            model: None,
+            duration_ms: None,
         }
     }
 
@@ -69,7 +79,21 @@ impl Message {
             content: content.into(),
             steps: Vec::new(),
             timestamp: Utc::now(),
+            model: None,
+            duration_ms: None,
         }
+    }
+
+    /// Builder: attach model name to this message.
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Builder: attach duration to this message.
+    pub fn with_duration_ms(mut self, ms: u64) -> Self {
+        self.duration_ms = Some(ms);
+        self
     }
 }
 
@@ -181,6 +205,9 @@ pub struct ConversationSummary {
     pub title: String,
     pub created_at: DateTime<Utc>,
     pub message_count: usize,
+    /// Model from the first assistant message (if any)
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 impl Conversation {
@@ -240,11 +267,17 @@ impl Conversation {
                         }
                     })
                     .unwrap_or_else(|| "Empty conversation".to_string());
+                let model = conv
+                    .messages
+                    .iter()
+                    .find(|m| m.role == MessageRole::Assistant)
+                    .and_then(|m| m.model.clone());
                 Some(ConversationSummary {
                     id: conv.id,
                     title,
                     created_at: conv.created_at,
                     message_count: conv.messages.len(),
+                    model,
                 })
             })
             .collect();

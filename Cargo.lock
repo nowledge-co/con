@@ -1118,6 +1118,7 @@ name = "con"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "cocoa 0.26.0",
  "con-agent",
  "con-core",

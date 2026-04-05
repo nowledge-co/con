@@ -15,6 +15,10 @@ const THINKING_DISPLAY_LEN: usize = 2000;
 use con_agent::{ConversationSummary, ToolApprovalDecision};
 use con_core::harness::HarnessEvent;
 
+use chrono::Utc;
+
+use crate::input_bar::SkillEntry;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentStatus {
     Idle,
@@ -55,6 +59,9 @@ pub struct InlineInputSubmit {
     pub text: String,
 }
 impl EventEmitter<InlineInputSubmit> for AgentPanel {}
+
+pub struct InlineSkillAutocompleteChanged;
+impl EventEmitter<InlineSkillAutocompleteChanged> for AgentPanel {}
 
 pub struct CancelRequest;
 impl EventEmitter<CancelRequest> for AgentPanel {}
@@ -216,7 +223,12 @@ impl PanelState {
         }
     }
 
-    pub fn complete_response(&mut self, final_content: &str) {
+    pub fn complete_response(
+        &mut self,
+        final_content: &str,
+        model: Option<&str>,
+        duration_ms: Option<u64>,
+    ) {
         self.status = AgentStatus::Idle;
         if self.streaming {
             // Only overwrite streamed content if final_content is non-empty.
@@ -227,17 +239,29 @@ impl PanelState {
                     last.content = final_content.to_string();
                 }
             }
+            // Attach metadata to the last assistant message
+            if let Some(last) = self.messages.last_mut() {
+                if last.role == "assistant" {
+                    last.model = model.map(|s| s.to_string());
+                    last.duration_ms = duration_ms;
+                }
+            }
             self.streaming = false;
         } else if !final_content.is_empty() {
-            self.messages
-                .push(PanelMessage::new("assistant", final_content));
+            let mut msg = PanelMessage::new("assistant", final_content);
+            msg.model = model.map(|s| s.to_string());
+            msg.duration_ms = duration_ms;
+            self.messages.push(msg);
         }
         // Ensure a message exists for tool call steps even when no text was produced.
         // This happens when the agent only used tools without generating text output.
         if !self.tool_calls.is_empty()
             && self.messages.last().map_or(true, |m| m.role != "assistant")
         {
-            self.messages.push(PanelMessage::new("assistant", ""));
+            let mut msg = PanelMessage::new("assistant", "");
+            msg.model = model.map(|s| s.to_string());
+            msg.duration_ms = duration_ms;
+            self.messages.push(msg);
         }
         // Move active tool calls into the message's step timeline
         for tc in self.tool_calls.drain(..) {
@@ -300,7 +324,11 @@ impl PanelState {
                 self.complete_tool_call(&call_id, &result);
             }
             HarnessEvent::ResponseComplete(msg) => {
-                self.complete_response(&msg.content);
+                self.complete_response(
+                    &msg.content,
+                    msg.model.as_deref(),
+                    msg.duration_ms,
+                );
             }
             HarnessEvent::Error(err) => {
                 self.add_message("system", &format!("Error: {}", err));
@@ -330,6 +358,10 @@ pub struct AgentPanel {
     show_inline_input: bool,
     /// Input state for the inline input at bottom of agent panel
     inline_input_state: Option<Entity<InputState>>,
+    /// Skills available for /slash-command completion in inline input
+    skills: Vec<SkillEntry>,
+    /// Currently highlighted skill in inline autocomplete
+    inline_skill_selection: usize,
 }
 
 struct PanelMessage {
@@ -340,6 +372,10 @@ struct PanelMessage {
     thinking_collapsed: bool,
     steps: Vec<StepEntry>,
     steps_collapsed: bool,
+    /// Model name for assistant messages (e.g. "claude-sonnet-4-6")
+    model: Option<String>,
+    /// Response duration in milliseconds for assistant messages
+    duration_ms: Option<u64>,
 }
 
 /// A structured step entry (replaces raw Debug strings).
@@ -371,6 +407,8 @@ impl PanelMessage {
             thinking_collapsed: true,
             steps: Vec::new(),
             steps_collapsed: false,
+            model: None,
+            duration_ms: None,
         }
     }
 
@@ -393,6 +431,8 @@ impl AgentPanel {
             edit_input_state: None,
             show_inline_input: false,
             inline_input_state: None,
+            skills: Vec::new(),
+            inline_skill_selection: 0,
         }
     }
 
@@ -421,6 +461,8 @@ impl AgentPanel {
             edit_input_state: None,
             show_inline_input: false,
             inline_input_state: None,
+            skills: Vec::new(),
+            inline_skill_selection: 0,
         }
     }
 
@@ -517,6 +559,58 @@ impl AgentPanel {
 
     pub fn set_show_inline_input(&mut self, show: bool) {
         self.show_inline_input = show;
+    }
+
+    pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
+        self.skills = skills;
+    }
+
+    /// Return matching skills if the inline input text starts with `/`.
+    pub fn filtered_inline_skills(&self, cx: &App) -> Vec<&SkillEntry> {
+        let Some(ref input) = self.inline_input_state else {
+            return Vec::new();
+        };
+        let text = input.read(cx).value().to_string();
+        let trimmed = text.trim();
+        if !trimmed.starts_with('/') {
+            return Vec::new();
+        }
+        let query = &trimmed[1..].to_lowercase();
+        if query.contains(' ') {
+            return Vec::new();
+        }
+        self.skills
+            .iter()
+            .filter(|s| query.is_empty() || s.name.to_lowercase().starts_with(query))
+            .collect()
+    }
+
+    pub fn inline_skill_selection(&self) -> usize {
+        self.inline_skill_selection
+    }
+
+    pub fn inline_skill_popup_offset(&self, cx: &App) -> Pixels {
+        let Some(ref input) = self.inline_input_state else {
+            return px(48.0);
+        };
+        let rows = input.read(cx).value().lines().count().clamp(1, 4);
+        px(48.0 + (rows.saturating_sub(1) as f32 * 20.0))
+    }
+
+    pub fn complete_inline_skill(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ref input) = self.inline_input_state {
+            input.update(cx, |s, cx| {
+                s.set_value(&format!("/{name} "), window, cx);
+            });
+        }
+        self.inline_skill_selection = 0;
+        cx.emit(InlineSkillAutocompleteChanged);
+        cx.notify();
     }
 
     fn scroll_to_bottom(&self) {
@@ -632,8 +726,16 @@ impl AgentPanel {
         cx.notify();
     }
 
-    pub fn complete_response(&mut self, final_content: &str, cx: &mut Context<Self>) {
-        self.state.complete_response(final_content);
+    pub fn complete_response(
+        &mut self,
+        msg: &con_agent::Message,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.complete_response(
+            &msg.content,
+            msg.model.as_deref(),
+            msg.duration_ms,
+        );
         self.scroll_to_bottom();
         cx.notify();
     }
@@ -1015,11 +1117,36 @@ fn render_user_message_text(
 
 impl Render for AgentPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Pre-create inline input state before borrowing theme (needs &mut cx)
+        if self.show_inline_input && self.inline_input_state.is_none() {
+            let state = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Ask anything…")
+                    .auto_grow(1, 4)
+            });
+            cx.subscribe_in(&state, window, |this: &mut Self, _, ev: &InputEvent, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    let skills = this.filtered_inline_skills(cx);
+                    if skills.is_empty() {
+                        this.inline_skill_selection = 0;
+                    } else {
+                        this.inline_skill_selection =
+                            this.inline_skill_selection.min(skills.len().saturating_sub(1));
+                    }
+                    cx.emit(InlineSkillAutocompleteChanged);
+                    cx.notify();
+                }
+            })
+            .detach();
+            self.inline_input_state = Some(state);
+        }
+
         let theme = cx.theme();
 
         // ── Messages ──────────────────────────────────────────────
         let mut messages_area = div()
             .id("agent-messages")
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
@@ -1238,27 +1365,47 @@ impl Render for AgentPanel {
                 // ── Assistant message ──
                 let assistant_content_for_copy: String = msg.content.clone();
 
-                // Header row — oven icon + "Con" label
-                msg_el = msg_el.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .pb(px(2.0))
-                        .child(
-                            svg()
-                                .path("phosphor/oven.svg")
-                                .size(px(15.0))
-                                .text_color(theme.primary),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.primary)
-                                .child("Con"),
-                        ),
-                );
+                // Header row — oven icon + model name + duration
+                let msg_model = msg.model.as_deref().unwrap_or("");
+                let msg_duration_ms = msg.duration_ms;
+                let model_label = if msg_model.is_empty() {
+                    "Con".to_string()
+                } else {
+                    humanize_model_name(msg_model)
+                };
+                let mut header_row = div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .pb(px(2.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                svg()
+                                    .path("phosphor/oven.svg")
+                                    .size(px(15.0))
+                                    .text_color(theme.primary),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.primary)
+                                    .child(model_label),
+                            ),
+                    );
+                if let Some(dur) = msg_duration_ms {
+                    header_row = header_row.child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground.opacity(0.45))
+                            .child(format_duration_ms(dur)),
+                    );
+                }
+                msg_el = msg_el.child(header_row);
 
                 // Extended thinking (collapsible) — flat inline row
                 if let Some(thinking) = &msg.thinking {
@@ -1945,11 +2092,14 @@ impl Render for AgentPanel {
         if self.showing_history {
             let mut history = div()
                 .id("agent-history-list")
+                .relative()
                 .flex()
                 .flex_col()
                 .flex_1()
+                .min_h_0()
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll_handle)
+                .vertical_scrollbar(&self.scroll_handle)
                 .px(px(12.0))
                 .pt(px(8.0))
                 .gap(px(1.0));
@@ -1966,8 +2116,14 @@ impl Render for AgentPanel {
                 for (i, summary) in self.conversation_list.iter().enumerate() {
                     let conv_id = summary.id.clone();
                     let delete_id = summary.id.clone();
-                    let date = summary.created_at.format("%b %d, %H:%M").to_string();
+                    let date = format_conversation_date(summary);
                     let msg_count = summary.message_count;
+                    let model_part = summary
+                        .model
+                        .as_deref()
+                        .filter(|m| !m.is_empty())
+                        .map(|m| format!(" · {}", humanize_model_name(m)))
+                        .unwrap_or_default();
                     history = history.child(
                         div()
                             .id(SharedString::from(format!("conv-{i}")))
@@ -2007,7 +2163,7 @@ impl Render for AgentPanel {
                                         div()
                                             .text_xs()
                                             .text_color(theme.muted_foreground.opacity(0.6))
-                                            .child(format!("{date}  ·  {msg_count} messages")),
+                                            .child(format!("{date}{model_part}  ·  {msg_count} messages")),
                                     ),
                             )
                             .child(
@@ -2044,35 +2200,115 @@ impl Render for AgentPanel {
 
         // Inline input — shown when main input bar is hidden
         if self.show_inline_input {
-            let inline_input = self.inline_input_state.get_or_insert_with(|| {
-                cx.new(|cx| InputState::new(window, cx).placeholder("Ask anything…"))
-            }).clone();
+            // State was pre-created above before the theme borrow
+            let inline_input = self.inline_input_state.clone().unwrap();
+
+            let has_text = !inline_input.read(cx).value().trim().is_empty();
+            let has_skills = !self.filtered_inline_skills(cx).is_empty();
+
             panel = panel.child(
                 div()
                     .flex_shrink_0()
-                    .px(px(10.0))
+                    .border_t_1()
+                    .border_color(theme.border.opacity(0.15))
+                    .px(px(12.0))
                     .py(px(8.0))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                        if event.keystroke.key == "enter"
-                            && !event.keystroke.modifiers.shift
-                        {
+                        let key = event.keystroke.key.as_str();
+                        let has_completions = !this.filtered_inline_skills(cx).is_empty();
+
+                        if key == "tab" && has_completions {
+                            // Complete selected skill
+                            let skills = this.filtered_inline_skills(cx);
+                            let sel = this.inline_skill_selection.min(skills.len().saturating_sub(1));
+                            if let Some(skill) = skills.get(sel) {
+                                let name = skill.name.clone();
+                                this.complete_inline_skill(&name, window, cx);
+                            }
+                            cx.stop_propagation();
+                            return;
+                        }
+
+                        if key == "up" && has_completions {
+                            this.inline_skill_selection = this.inline_skill_selection.saturating_sub(1);
+                            cx.emit(InlineSkillAutocompleteChanged);
+                            cx.notify();
+                            cx.stop_propagation();
+                            return;
+                        }
+                        if key == "down" && has_completions {
+                            let max = this.filtered_inline_skills(cx).len().saturating_sub(1);
+                            this.inline_skill_selection = (this.inline_skill_selection + 1).min(max);
+                            cx.emit(InlineSkillAutocompleteChanged);
+                            cx.notify();
+                            cx.stop_propagation();
+                            return;
+                        }
+
+                        if key == "escape" && has_completions {
+                            // Clear the slash prefix
+                            if let Some(ref input) = this.inline_input_state {
+                                input.update(cx, |s, cx| s.set_value("", window, cx));
+                            }
+                            this.inline_skill_selection = 0;
+                            cx.emit(InlineSkillAutocompleteChanged);
+                            cx.notify();
+                            cx.stop_propagation();
+                            return;
+                        }
+
+                        if key == "enter" && !event.keystroke.modifiers.shift && !has_completions {
                             if let Some(ref input) = this.inline_input_state {
                                 let text = input.read(cx).text().to_string();
                                 if !text.trim().is_empty() {
-                                    // Clear the inline input — drop and recreate the state
-                                    this.inline_input_state = Some(cx.new(|cx| {
-                                        InputState::new(window, cx).placeholder("Ask anything…")
-                                    }));
+                                    input.update(cx, |s, cx| s.set_value("", window, cx));
                                     cx.emit(InlineInputSubmit { text });
                                 }
                             }
                         }
                     }))
                     .child(
-                        Input::new(&inline_input)
-                            .appearance(false)
-                            .cleanable(false)
-                            .small(),
+                        div()
+                            .flex()
+                            .items_end()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(
+                                        Input::new(&inline_input)
+                                            .appearance(false)
+                                            .cleanable(false),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .mb(px(2.0))
+                                    .child(
+                                        {
+                                            let mut btn = Button::new("inline-send")
+                                                .icon(Icon::default().path("phosphor/arrow-up.svg"))
+                                                .ghost()
+                                                .xsmall()
+                                                .rounded(px(99.0));
+                                            if has_text && !has_skills {
+                                                btn = btn.bg(theme.primary)
+                                                    .text_color(theme.primary_foreground);
+                                            }
+                                            btn
+                                        }
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                if let Some(ref input) = this.inline_input_state {
+                                                    let text = input.read(cx).text().to_string();
+                                                    if !text.trim().is_empty() {
+                                                        input.update(cx, |s, cx| s.set_value("", window, cx));
+                                                        cx.emit(InlineInputSubmit { text });
+                                                    }
+                                                }
+                                            })),
+                                    ),
+                            ),
                     ),
             );
         }
@@ -2111,4 +2347,31 @@ fn humanize_model_name(model: &str) -> String {
     }
     // Fallback: show as-is but truncated
     truncate_str(model, 24)
+}
+
+/// Format milliseconds into a human-readable duration string.
+fn format_duration_ms(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{}ms", ms)
+    } else if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else {
+        let mins = ms / 60_000;
+        let secs = (ms % 60_000) / 1000;
+        format!("{}m {}s", mins, secs)
+    }
+}
+
+/// Format a conversation date — "Today", "Yesterday", or "Apr 3" + time.
+fn format_conversation_date(summary: &ConversationSummary) -> String {
+    let now = Utc::now();
+    let today = now.date_naive();
+    let date = summary.created_at.date_naive();
+    if date == today {
+        format!("Today, {}", summary.created_at.format("%H:%M"))
+    } else if date == today - chrono::Duration::days(1) {
+        format!("Yesterday, {}", summary.created_at.format("%H:%M"))
+    } else {
+        summary.created_at.format("%b %d, %H:%M").to_string()
+    }
 }

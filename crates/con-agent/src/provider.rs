@@ -571,7 +571,8 @@ impl AgentProvider {
             ProviderKind::XAI => stream_with!(self.build_xai_client()?),
         };
 
-        let message = Message::assistant(&response);
+        let model_name = self.config.effective_model(kind).to_string();
+        let message = Message::assistant(&response).with_model(model_name);
         let _ = event_tx.send(AgentEvent::Done(message.clone()));
 
         Ok(message)
