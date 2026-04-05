@@ -75,7 +75,7 @@ dirs = "6"
 gethostname = "1"
 notify = "7.0.0"
 smallvec = "1"
-reqwest = { version = "0.12", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
 
 [workspace.lints.clippy]

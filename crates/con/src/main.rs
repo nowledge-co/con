@@ -8,6 +8,7 @@ mod command_palette;
 #[cfg(target_os = "macos")]
 mod ghostty_view;
 mod input_bar;
+mod model_registry;
 mod pane_tree;
 mod settings_panel;
 mod sidebar;
