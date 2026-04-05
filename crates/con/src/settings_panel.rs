@@ -8,6 +8,8 @@ use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _, input::Input};
 
+use crate::model_registry::ModelRegistry;
+
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
 /// Emitted when the user selects a different terminal theme for live preview.
@@ -109,6 +111,7 @@ impl SettingsPanel {
         let model_select = Self::make_model_select(
             &agent.provider,
             &pc.model,
+            &registry,
             window,
             cx,
         );
@@ -234,7 +237,7 @@ impl SettingsPanel {
             });
             self.auto_approve = agent.auto_approve_tools;
             self.model_select =
-                Self::make_model_select(&agent.provider, &pc.model, window, cx);
+                Self::make_model_select(&agent.provider, &pc.model, &self.registry, window, cx);
             self.font_size_input.update(cx, |s, cx| {
                 s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
             });
@@ -284,13 +287,11 @@ impl SettingsPanel {
     fn make_model_select(
         provider: &ProviderKind,
         current_model: &Option<String>,
+        registry: &ModelRegistry,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SelectState<SearchableVec<String>>> {
-        let models: Vec<String> = provider_models(provider)
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let models: Vec<String> = registry.models_for(provider);
         let selected_index = current_model.as_ref().and_then(|m| {
             models.iter().position(|item| item == m).map(IndexPath::new)
         });
@@ -625,7 +626,7 @@ impl SettingsPanel {
         self.load_provider_inputs(&pc, window, cx);
 
         // Rebuild model select for new provider
-        self.model_select = Self::make_model_select(&provider, &pc.model, window, cx);
+        self.model_select = Self::make_model_select(&provider, &pc.model, &self.registry, window, cx);
         cx.notify();
     }
 
@@ -1332,7 +1333,7 @@ impl SettingsPanel {
         let max_turns_input = self.max_turns_input.clone();
         let temperature_input = self.temperature_input.clone();
         let suggestion_model_input = self.suggestion_model_input.clone();
-        let models = provider_models(&self.selected_provider);
+        let models = self.registry.models_for(&self.selected_provider);
         let model_select = self.model_select.clone();
 
         let mut provider_list = div().flex().flex_col();
@@ -2205,93 +2206,6 @@ fn provider_label(provider: &ProviderKind) -> &'static str {
         ProviderKind::Mistral => "Mistral",
         ProviderKind::Together => "Together",
         ProviderKind::XAI => "xAI",
-    }
-}
-
-/// Model lists sourced from models.dev (3pp/models.dev/providers/*/models/).
-fn provider_models(provider: &ProviderKind) -> &'static [&'static str] {
-    match provider {
-        ProviderKind::Anthropic => &[
-            "claude-opus-4-6",
-            "claude-sonnet-4-6",
-            "claude-opus-4-5",
-            "claude-sonnet-4-5",
-            "claude-haiku-4-5",
-            "claude-opus-4-1",
-            "claude-sonnet-4-0",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
-        ],
-        ProviderKind::OpenAI => &[
-            "o4-mini",
-            "o3",
-            "o3-pro",
-            "o3-mini",
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "o1",
-            "o1-pro",
-        ],
-        ProviderKind::DeepSeek => &["deepseek-chat", "deepseek-reasoner"],
-        ProviderKind::Groq => &[
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "deepseek-r1-distill-llama-70b",
-            "qwen-qwq-32b",
-            "mistral-saba-24b",
-            "gemma2-9b-it",
-            "llama3-70b-8192",
-        ],
-        ProviderKind::Gemini => &[
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-2.0-flash",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
-        ],
-        ProviderKind::Mistral => &[
-            "mistral-large-latest",
-            "mistral-medium-latest",
-            "mistral-small-latest",
-            "codestral-latest",
-            "devstral-small-2505",
-            "mistral-nemo",
-        ],
-        ProviderKind::Cohere => &[
-            "command-a-03-2025",
-            "command-a-reasoning-08-2025",
-            "command-r-plus-08-2024",
-            "command-r-08-2024",
-        ],
-        ProviderKind::Perplexity => &[
-            "sonar-pro",
-            "sonar-reasoning-pro",
-            "sonar-deep-research",
-            "sonar",
-        ],
-        ProviderKind::XAI => &[
-            "grok-4",
-            "grok-4-fast",
-            "grok-3",
-            "grok-3-fast",
-            "grok-3-mini",
-            "grok-2",
-        ],
-        ProviderKind::Ollama => &[
-            "llama3.2",
-            "llama3.1",
-            "qwen2.5-coder",
-            "deepseek-v3",
-            "mistral",
-            "gemma3",
-            "codellama",
-        ],
-        // OpenAICompatible, OpenRouter, Together — user provides custom model
-        _ => &[],
     }
 }
 
