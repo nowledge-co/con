@@ -1005,12 +1005,13 @@ impl Render for AgentPanel {
             .flex()
             .flex_col()
             .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .vertical_scrollbar(&self.scroll_handle)
             .px(px(16.0))
             .pt(px(16.0))
-            .pb(px(24.0))
+            .pb(px(80.0))
             .gap(px(16.0));
 
         for (msg_idx, msg) in self.state.messages.iter().enumerate() {
@@ -1918,6 +1919,7 @@ impl Render for AgentPanel {
             .flex()
             .flex_col()
             .size_full()
+            .min_h_0()
             .bg(theme.title_bar)
             .font_family(".SystemUIFont")
             .child(header);
