@@ -1902,23 +1902,65 @@ impl Render for SettingsPanel {
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap(px(4.0))
-                                            .text_size(px(10.5))
-                                            .text_color(theme.muted_foreground.opacity(0.4))
+                                            .gap(px(8.0))
+                                            // Open config file link
                                             .child(
                                                 div()
-                                                    .h(px(18.0))
-                                                    .px(px(5.0))
+                                                    .id("open-config-file")
                                                     .flex()
                                                     .items_center()
-                                                    .rounded(px(4.0))
-                                                    .bg(theme.muted.opacity(0.12))
-                                                    .text_size(px(10.0))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(theme.muted_foreground.opacity(0.5))
-                                                    .child("Esc"),
+                                                    .gap(px(3.0))
+                                                    .cursor_pointer()
+                                                    .text_size(px(10.5))
+                                                    .text_color(theme.muted_foreground.opacity(0.4))
+                                                    .hover(|s| s.text_color(theme.muted_foreground.opacity(0.7)))
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(|_, _, _, cx| {
+                                                            let path = Config::config_path();
+                                                            // Ensure the file exists so the editor has something to open
+                                                            if !path.exists() {
+                                                                if let Some(parent) = path.parent() {
+                                                                    let _ = std::fs::create_dir_all(parent);
+                                                                }
+                                                                let _ = std::fs::write(&path, "");
+                                                            }
+                                                            cx.open_url(&format!("file://{}", path.display()));
+                                                        }),
+                                                    )
+                                                    .child(
+                                                        svg()
+                                                            .path("phosphor/file-text.svg")
+                                                            .size(px(12.0))
+                                                            .text_color(theme.muted_foreground.opacity(0.4)),
+                                                    )
+                                                    .child("config.toml"),
                                             )
-                                            .child("save & close"),
+                                            // Close button
+                                            .child(
+                                                div()
+                                                    .id("close-settings")
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .size(px(22.0))
+                                                    .rounded(px(6.0))
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(|this, _, window, cx| {
+                                                            this.save(window, cx);
+                                                            this.toggle(window, cx);
+                                                        }),
+                                                    )
+                                                    .child(
+                                                        svg()
+                                                            .path("phosphor/x.svg")
+                                                            .size(px(12.0))
+                                                            .text_color(theme.muted_foreground.opacity(0.5)),
+                                                    ),
+                                            ),
                                     ),
                             )
                             .child(
@@ -2252,9 +2294,11 @@ fn display_theme_name(name: &str) -> String {
         "rose-pine" => "Rose Pine".into(),
         "gruvbox-dark" => "Gruvbox Dark".into(),
         "solarized-dark" => "Solarized Dark".into(),
+        "solarized-light" => "Solarized Light".into(),
         "one-half-dark" => "One Half Dark".into(),
         "kanagawa-wave" => "Kanagawa Wave".into(),
         "everforest-dark" => "Everforest Dark".into(),
+        "everforest-light" => "Everforest Light".into(),
         // User themes: convert kebab-case to Title Case
         other => other
             .split('-')

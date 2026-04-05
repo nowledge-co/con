@@ -109,7 +109,7 @@ fn main() {
             Menu {
                 name: "con".into(),
                 items: vec![
-                    MenuItem::action("Settings...", settings_panel::ToggleSettings),
+                    MenuItem::action("Settings…", settings_panel::ToggleSettings),
                     MenuItem::separator(),
                     MenuItem::action("Quit con", Quit),
                 ],
@@ -120,6 +120,9 @@ fn main() {
                 items: vec![
                     MenuItem::action("New Tab", NewTab),
                     MenuItem::action("Close Tab", CloseTab),
+                    MenuItem::separator(),
+                    MenuItem::action("Split Right", SplitRight),
+                    MenuItem::action("Split Down", SplitDown),
                 ],
                 disabled: false,
             },
@@ -142,14 +145,8 @@ fn main() {
                 items: vec![
                     MenuItem::action("Toggle Agent Panel", ToggleAgentPanel),
                     MenuItem::action("Command Palette", command_palette::ToggleCommandPalette),
-                ],
-                disabled: false,
-            },
-            Menu {
-                name: "Terminal".into(),
-                items: vec![
-                    MenuItem::action("Split Right", SplitRight),
-                    MenuItem::action("Split Down", SplitDown),
+                    MenuItem::separator(),
+                    MenuItem::action("Focus Input", FocusInput),
                 ],
                 disabled: false,
             },

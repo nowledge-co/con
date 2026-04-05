@@ -380,6 +380,60 @@ impl TerminalTheme {
         }
     }
 
+    /// Everforest Light Medium — warm light theme with muted greens.
+    pub fn everforest_light() -> Self {
+        Self {
+            name: "everforest-light".into(),
+            foreground: Color::rgb(0x5C, 0x6A, 0x72),
+            background: Color::rgb(0xEF, 0xEB, 0xD4),
+            ansi: [
+                Color::rgb(0x7A, 0x84, 0x78), // black
+                Color::rgb(0xE6, 0x7E, 0x80), // red
+                Color::rgb(0x9A, 0xB3, 0x73), // green
+                Color::rgb(0xC1, 0xA2, 0x66), // yellow
+                Color::rgb(0x7F, 0xBB, 0xB3), // blue
+                Color::rgb(0xD6, 0x99, 0xB6), // magenta
+                Color::rgb(0x83, 0xC0, 0x92), // cyan
+                Color::rgb(0xB2, 0xAF, 0x9F), // white
+                Color::rgb(0xA6, 0xB0, 0xA0), // bright black
+                Color::rgb(0xF8, 0x55, 0x52), // bright red
+                Color::rgb(0x8D, 0xA1, 0x01), // bright green
+                Color::rgb(0xDF, 0xA0, 0x00), // bright yellow
+                Color::rgb(0x3A, 0x94, 0xC5), // bright blue
+                Color::rgb(0xDF, 0x69, 0xBA), // bright magenta
+                Color::rgb(0x35, 0xA7, 0x7C), // bright cyan
+                Color::rgb(0xFF, 0xFB, 0xEF), // bright white
+            ],
+        }
+    }
+
+    /// Solarized Light — Ethan Schoonover's iconic warm light palette.
+    pub fn solarized_light() -> Self {
+        Self {
+            name: "solarized-light".into(),
+            foreground: Color::rgb(0x65, 0x7B, 0x83),
+            background: Color::rgb(0xFD, 0xF6, 0xE3),
+            ansi: [
+                Color::rgb(0x07, 0x36, 0x42), // black
+                Color::rgb(0xDC, 0x32, 0x2F), // red
+                Color::rgb(0x85, 0x99, 0x00), // green
+                Color::rgb(0xB5, 0x89, 0x00), // yellow
+                Color::rgb(0x26, 0x8B, 0xD2), // blue
+                Color::rgb(0xD3, 0x36, 0x82), // magenta
+                Color::rgb(0x2A, 0xA1, 0x98), // cyan
+                Color::rgb(0xBB, 0xB5, 0xA2), // white
+                Color::rgb(0x00, 0x2B, 0x36), // bright black
+                Color::rgb(0xCB, 0x4B, 0x16), // bright red
+                Color::rgb(0x58, 0x6E, 0x75), // bright green
+                Color::rgb(0x65, 0x7B, 0x83), // bright yellow
+                Color::rgb(0x83, 0x94, 0x96), // bright blue
+                Color::rgb(0x6C, 0x71, 0xC4), // bright magenta
+                Color::rgb(0x93, 0xA1, 0xA1), // bright cyan
+                Color::rgb(0xFD, 0xF6, 0xE3), // bright white
+            ],
+        }
+    }
+
     /// Look up a built-in theme by name. Case-insensitive.
     pub fn by_name(name: &str) -> Option<Self> {
         match name.to_lowercase().as_str() {
@@ -392,9 +446,11 @@ impl TerminalTheme {
             "rose-pine" | "rosepine" => Some(Self::rose_pine()),
             "gruvbox-dark" | "gruvbox" => Some(Self::gruvbox_dark()),
             "solarized-dark" | "solarized" => Some(Self::solarized_dark()),
+            "solarized-light" => Some(Self::solarized_light()),
             "one-half-dark" | "onehalfdark" => Some(Self::one_half_dark()),
             "kanagawa-wave" | "kanagawa" => Some(Self::kanagawa_wave()),
             "everforest-dark" | "everforest" => Some(Self::everforest_dark()),
+            "everforest-light" => Some(Self::everforest_light()),
             _ => {
                 // Fall back to user themes from ~/.config/con/themes/
                 Self::load_user_themes()
@@ -431,9 +487,11 @@ impl TerminalTheme {
             "rose-pine",
             "gruvbox-dark",
             "solarized-dark",
+            "solarized-light",
             "one-half-dark",
             "kanagawa-wave",
             "everforest-dark",
+            "everforest-light",
         ]
     }
 

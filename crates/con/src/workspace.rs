@@ -26,7 +26,7 @@ use con_terminal::TerminalTheme;
 use crate::ghostty_view::{
     GhosttyFocusChanged, GhosttyProcessExited, GhosttyTitleChanged, GhosttyView,
 };
-use crate::{CloseTab, FocusInput, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
+use crate::{CloseTab, FocusInput, NewTab, Quit, SplitDown, SplitRight, ToggleAgentPanel};
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
@@ -1264,6 +1264,12 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_all_sessions();
+        self.save_session(cx);
+        cx.quit();
+    }
+
     fn focus_input(&mut self, _: &FocusInput, window: &mut Window, cx: &mut Context<Self>) {
         self.input_bar.focus_handle(cx).focus(window, cx);
     }
@@ -2138,6 +2144,7 @@ impl Render for ConWorkspace {
                     }
                 }),
             )
+            .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::toggle_agent_panel))
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::toggle_command_palette))
