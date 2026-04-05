@@ -12,10 +12,7 @@ pub struct PtySize {
 
 impl Default for PtySize {
     fn default() -> Self {
-        Self {
-            rows: 24,
-            cols: 80,
-        }
+        Self { rows: 24, cols: 80 }
     }
 }
 
@@ -62,7 +59,11 @@ impl Pty {
                 "/"
             });
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-        cmd.cwd(if working_dir == "/" { &home } else { working_dir });
+        cmd.cwd(if working_dir == "/" {
+            &home
+        } else {
+            working_dir
+        });
 
         let child = pair.slave.spawn_command(cmd)?;
         drop(pair.slave); // Close slave side in parent
@@ -132,11 +133,7 @@ impl Pty {
 
     /// Check if child is still running
     pub fn is_alive(&mut self) -> bool {
-        self.child
-            .try_wait()
-            .ok()
-            .flatten()
-            .is_none()
+        self.child.try_wait().ok().flatten().is_none()
     }
 }
 

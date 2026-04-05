@@ -32,7 +32,12 @@ pub fn init_theme(cx: &mut App, terminal_theme: &str) {
         ])
         .expect("Failed to register IoskeleyMono fonts");
 
-    for theme_json in [CON_DARK_THEME, CON_LIGHT_THEME, CATPPUCCIN_THEME, TOKYONIGHT_THEME] {
+    for theme_json in [
+        CON_DARK_THEME,
+        CON_LIGHT_THEME,
+        CATPPUCCIN_THEME,
+        TOKYONIGHT_THEME,
+    ] {
         ThemeRegistry::global_mut(cx)
             .load_themes_from_str(theme_json)
             .expect("Failed to load theme");
@@ -54,7 +59,11 @@ pub fn init_theme(cx: &mut App, terminal_theme: &str) {
 
 /// Switch the GPUI theme to match a terminal theme.
 /// Generates a dynamic GPUI theme from the terminal theme's colors.
-pub fn sync_gpui_theme(terminal_theme: &TerminalTheme, window: &mut gpui::Window, cx: &mut gpui::App) {
+pub fn sync_gpui_theme(
+    terminal_theme: &TerminalTheme,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) {
     apply_dynamic_theme(terminal_theme, cx);
     let mode = if terminal_theme.name.contains("light") {
         ThemeMode::Light
@@ -142,7 +151,11 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
     let primary_active = darken(cyan, 0.25);
 
     // Danger hover/active
-    let danger_hover = if is_dark { lighten(red, 0.1) } else { darken(red, 0.1) };
+    let danger_hover = if is_dark {
+        lighten(red, 0.1)
+    } else {
+        darken(red, 0.1)
+    };
     let danger_active = darken(red, 0.2);
 
     let theme_name = format!("con-gen-{}", tt.name);
@@ -297,7 +310,11 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         magenta_hex = hex(magenta),
         danger_hover_hex = hex(danger_hover),
         danger_active_hex = hex(danger_active),
-        orange_hex = hex_rgb(tt.ansi[9].r.max(tt.ansi[3].r), tt.ansi[9].g.min(tt.ansi[3].g), tt.ansi[9].b.min(tt.ansi[3].b)),
+        orange_hex = hex_rgb(
+            tt.ansi[9].r.max(tt.ansi[3].r),
+            tt.ansi[9].g.min(tt.ansi[3].g),
+            tt.ansi[9].b.min(tt.ansi[3].b)
+        ),
         purple_hex = hex(tt.ansi[13]),
         list_active = hex_alpha(cyan, 0x18),
         selection = hex_alpha(cyan, 0x28),

@@ -186,8 +186,7 @@ impl GhosttyApp {
             close_surface_cb: Some(close_surface_callback),
         });
 
-        let app =
-            unsafe { ffi::ghostty_app_new(&*runtime_config as *const _, config) };
+        let app = unsafe { ffi::ghostty_app_new(&*runtime_config as *const _, config) };
 
         // Ghostty clones the config — we must free the original.
         unsafe { ffi::ghostty_config_free(config) };
@@ -279,8 +278,7 @@ impl GhosttyApp {
             config.working_directory = s.as_ptr();
         }
 
-        let surface =
-            unsafe { ffi::ghostty_surface_new(self.app, &config as *const _) };
+        let surface = unsafe { ffi::ghostty_surface_new(self.app, &config as *const _) };
         if surface.is_null() {
             // Clean up the userdata we allocated
             unsafe { drop(Box::from_raw(surface_userdata as *mut StateRef)) };
@@ -441,12 +439,7 @@ impl GhosttyTerminal {
     }
 
     /// Send a mouse button event.
-    pub fn send_mouse_button(
-        &self,
-        pressed: bool,
-        button: MouseButton,
-        mods: i32,
-    ) -> bool {
+    pub fn send_mouse_button(&self, pressed: bool, button: MouseButton, mods: i32) -> bool {
         let state = if pressed {
             ffi::ghostty_input_mouse_state_e::GHOSTTY_MOUSE_PRESS
         } else {
@@ -454,12 +447,8 @@ impl GhosttyTerminal {
         };
         let btn = match button {
             MouseButton::Left => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_LEFT,
-            MouseButton::Right => {
-                ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_RIGHT
-            }
-            MouseButton::Middle => {
-                ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_MIDDLE
-            }
+            MouseButton::Right => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_RIGHT,
+            MouseButton::Middle => ffi::ghostty_input_mouse_button_e::GHOSTTY_MOUSE_MIDDLE,
         };
         unsafe { ffi::ghostty_surface_mouse_button(self.surface, state, btn, mods) }
     }
@@ -555,14 +544,12 @@ impl GhosttyTerminal {
             text: std::ptr::null(),
             text_len: 0,
         };
-        let ok =
-            unsafe { ffi::ghostty_surface_read_selection(self.surface, &mut text) };
+        let ok = unsafe { ffi::ghostty_surface_read_selection(self.surface, &mut text) };
         if !ok || text.text.is_null() || text.text_len == 0 {
             return None;
         }
         let result = unsafe {
-            let bytes =
-                std::slice::from_raw_parts(text.text as *const u8, text.text_len);
+            let bytes = std::slice::from_raw_parts(text.text as *const u8, text.text_len);
             String::from_utf8_lossy(bytes).into_owned()
         };
         unsafe { ffi::ghostty_surface_free_text(self.surface, &mut text) };
@@ -579,15 +566,12 @@ impl GhosttyTerminal {
             text: std::ptr::null(),
             text_len: 0,
         };
-        let ok = unsafe {
-            ffi::ghostty_surface_read_text(self.surface, selection, &mut text)
-        };
+        let ok = unsafe { ffi::ghostty_surface_read_text(self.surface, selection, &mut text) };
         if !ok || text.text.is_null() || text.text_len == 0 {
             return None;
         }
         let result = unsafe {
-            let bytes =
-                std::slice::from_raw_parts(text.text as *const u8, text.text_len);
+            let bytes = std::slice::from_raw_parts(text.text as *const u8, text.text_len);
             String::from_utf8_lossy(bytes).into_owned()
         };
         unsafe { ffi::ghostty_surface_free_text(self.surface, &mut text) };
@@ -781,9 +765,7 @@ fn char_to_key_event(ch: char) -> Option<ffi::ghostty_input_key_s> {
 /// Resolve per-surface state from a ghostty_target_s.
 /// For SURFACE-targeted actions, reads the surface's userdata.
 /// Returns None if the target is app-level or has no userdata.
-unsafe fn resolve_surface_state(
-    target: &ffi::ghostty_target_s,
-) -> Option<StateRef> {
+unsafe fn resolve_surface_state(target: &ffi::ghostty_target_s) -> Option<StateRef> {
     unsafe {
         if target.tag != ffi::ghostty_target_tag_e::GHOSTTY_TARGET_SURFACE {
             return None;
@@ -826,8 +808,7 @@ unsafe extern "C" fn action_callback(
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SET_TITLE => {
                 let title_ptr = action.action.set_title.title;
                 if !title_ptr.is_null() {
-                    let title =
-                        CStr::from_ptr(title_ptr).to_string_lossy().into_owned();
+                    let title = CStr::from_ptr(title_ptr).to_string_lossy().into_owned();
                     state.lock().title = Some(title);
                 }
                 true
@@ -835,8 +816,7 @@ unsafe extern "C" fn action_callback(
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_PWD => {
                 let pwd_ptr = action.action.pwd.pwd;
                 if !pwd_ptr.is_null() {
-                    let pwd =
-                        CStr::from_ptr(pwd_ptr).to_string_lossy().into_owned();
+                    let pwd = CStr::from_ptr(pwd_ptr).to_string_lossy().into_owned();
                     state.lock().pwd = Some(pwd);
                 }
                 true
@@ -847,18 +827,28 @@ unsafe extern "C" fn action_callback(
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_COMMAND_FINISHED => {
                 let cf = action.action.command_finished;
-                let exit_code = if cf.exit_code < 0 { None } else { Some(cf.exit_code as i32) };
+                let exit_code = if cf.exit_code < 0 {
+                    None
+                } else {
+                    Some(cf.exit_code as i32)
+                };
                 let duration = std::time::Duration::from_nanos(cf.duration);
                 let mut s = state.lock();
                 s.last_exit_code = exit_code;
                 s.last_command_duration = Some(duration);
-                s.command_finished_signal = Some(CommandFinishedSignal { exit_code, duration });
+                s.command_finished_signal = Some(CommandFinishedSignal {
+                    exit_code,
+                    duration,
+                });
                 s.is_busy = false;
                 // Append to command history ring buffer
                 if s.command_history.len() >= MAX_COMMAND_HISTORY {
                     s.command_history.remove(0);
                 }
-                s.command_history.push(CommandRecord { exit_code, duration });
+                s.command_history.push(CommandRecord {
+                    exit_code,
+                    duration,
+                });
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SHOW_CHILD_EXITED => {
@@ -873,7 +863,9 @@ unsafe extern "C" fn action_callback(
                 // macOS system beep
                 #[cfg(target_os = "macos")]
                 {
-                    unsafe extern "C" { fn NSBeep(); }
+                    unsafe extern "C" {
+                        fn NSBeep();
+                    }
                     NSBeep();
                 }
                 true
@@ -902,18 +894,22 @@ unsafe extern "C" fn read_clipboard_callback(
 
         #[cfg(target_os = "macos")]
         {
-            use objc::{class, msg_send, sel, sel_impl};
             use objc::runtime::Object;
+            use objc::{class, msg_send, sel, sel_impl};
 
             let pb: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
             // NSPasteboardTypeString = @"public.utf8-plain-text"
             let type_str = CString::new("public.utf8-plain-text").unwrap();
-            let ns_type: *mut Object = msg_send![class!(NSString), stringWithUTF8String: type_str.as_ptr()];
+            let ns_type: *mut Object =
+                msg_send![class!(NSString), stringWithUTF8String: type_str.as_ptr()];
             let text: *mut Object = msg_send![pb, stringForType: ns_type];
             if text.is_null() {
                 let empty = c"";
                 ffi::ghostty_surface_complete_clipboard_request(
-                    surface, empty.as_ptr(), request, false,
+                    surface,
+                    empty.as_ptr(),
+                    request,
+                    false,
                 );
                 return true;
             }
@@ -961,8 +957,8 @@ unsafe extern "C" fn write_clipboard_callback(
 
         #[cfg(target_os = "macos")]
         {
-            use objc::{class, msg_send, sel, sel_impl};
             use objc::runtime::Object;
+            use objc::{class, msg_send, sel, sel_impl};
 
             let items = std::slice::from_raw_parts(content, content_count);
 
@@ -979,11 +975,13 @@ unsafe extern "C" fn write_clipboard_callback(
                 let _: () = msg_send![pb, clearContents];
 
                 let cstr = CString::new(text.as_ref()).unwrap_or_default();
-                let ns_str: *mut Object = msg_send![class!(NSString), stringWithUTF8String: cstr.as_ptr()];
+                let ns_str: *mut Object =
+                    msg_send![class!(NSString), stringWithUTF8String: cstr.as_ptr()];
 
                 // NSPasteboardTypeString = @"public.utf8-plain-text"
                 let type_cstr = CString::new("public.utf8-plain-text").unwrap();
-                let ns_type: *mut Object = msg_send![class!(NSString), stringWithUTF8String: type_cstr.as_ptr()];
+                let ns_type: *mut Object =
+                    msg_send![class!(NSString), stringWithUTF8String: type_cstr.as_ptr()];
                 let _success: bool = msg_send![pb, setString: ns_str forType: ns_type];
                 return;
             }
@@ -991,10 +989,7 @@ unsafe extern "C" fn write_clipboard_callback(
     }
 }
 
-unsafe extern "C" fn close_surface_callback(
-    userdata: *mut c_void,
-    _process_alive: bool,
-) {
+unsafe extern "C" fn close_surface_callback(userdata: *mut c_void, _process_alive: bool) {
     // userdata here is the surface's userdata (per-surface StateRef)
     if userdata.is_null() {
         return;

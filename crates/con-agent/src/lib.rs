@@ -7,7 +7,7 @@ pub mod tools;
 
 pub use context::TerminalContext;
 pub use conversation::{Conversation, ConversationSummary, Message, MessageRole};
-pub use hook::{is_dangerous, ConHook, ToolApprovalDecision};
+pub use hook::{ConHook, ToolApprovalDecision, is_dangerous};
 pub use provider::{
     AgentConfig, AgentEvent, AgentProvider, ProviderConfig, ProviderKind, ProviderMap,
     SuggestionModelConfig,

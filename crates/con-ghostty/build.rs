@@ -54,10 +54,7 @@ fn main() {
 
     // Generate include path for FFI
     let include_dir = ghostty_dir.join("include");
-    println!(
-        "cargo:include={}",
-        include_dir.display()
-    );
+    println!("cargo:include={}", include_dir.display());
 }
 
 fn find_libghostty(ghostty_dir: &PathBuf) -> PathBuf {

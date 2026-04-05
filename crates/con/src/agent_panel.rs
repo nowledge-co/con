@@ -1,9 +1,11 @@
 use crossbeam_channel::Sender;
 use gpui::*;
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::clipboard::Clipboard;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::text::{TextView, TextViewStyle};
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, Icon, Sizable as _};
 
 /// Max lines to show for tool result previews in collapsed steps
 const TOOL_RESULT_PREVIEW_LINES: usize = 6;
@@ -57,7 +59,6 @@ pub struct RerunFromMessage {
     pub content: String,
 }
 impl EventEmitter<RerunFromMessage> for AgentPanel {}
-
 
 // ---------------------------------------------------------------------------
 // PanelState — per-tab conversation UI state (no GPUI dependency)
@@ -224,10 +225,7 @@ impl PanelState {
         // Ensure a message exists for tool call steps even when no text was produced.
         // This happens when the agent only used tools without generating text output.
         if !self.tool_calls.is_empty()
-            && self
-                .messages
-                .last()
-                .map_or(true, |m| m.role != "assistant")
+            && self.messages.last().map_or(true, |m| m.role != "assistant")
         {
             self.messages.push(PanelMessage::new("assistant", ""));
         }
@@ -269,13 +267,26 @@ impl PanelState {
             HarnessEvent::Token(token) => {
                 self.update_streaming(&token);
             }
-            HarnessEvent::ToolCallStart { call_id, tool_name, args } => {
+            HarnessEvent::ToolCallStart {
+                call_id,
+                tool_name,
+                args,
+            } => {
                 self.add_tool_call(&call_id, &tool_name, &args);
             }
-            HarnessEvent::ToolApprovalNeeded { call_id, tool_name, args, approval_tx } => {
+            HarnessEvent::ToolApprovalNeeded {
+                call_id,
+                tool_name,
+                args,
+                approval_tx,
+            } => {
                 self.add_pending_approval(&call_id, &tool_name, &args, approval_tx);
             }
-            HarnessEvent::ToolCallComplete { call_id, tool_name: _, result } => {
+            HarnessEvent::ToolCallComplete {
+                call_id,
+                tool_name: _,
+                result,
+            } => {
                 self.complete_tool_call(&call_id, &result);
             }
             HarnessEvent::ResponseComplete(msg) => {
@@ -415,15 +426,23 @@ impl AgentPanel {
     pub fn rerun_from(&mut self, msg_idx: usize, new_content: String, cx: &mut Context<Self>) {
         self.state.truncate_to(msg_idx);
         self.state.add_message("user", &new_content);
-        cx.emit(RerunFromMessage { content: new_content });
+        cx.emit(RerunFromMessage {
+            content: new_content,
+        });
         cx.notify();
     }
 
     /// Start inline editing of a user message.
-    fn start_editing(&mut self, msg_idx: usize, content: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_editing(
+        &mut self,
+        msg_idx: usize,
+        content: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let content = content.to_string();
         let input_state = cx.new(|cx| {
-            let mut s = InputState::new(window, cx);
+            let mut s = InputState::new(window, cx).auto_grow(1, 6);
             s.set_value(&content, window, cx);
             s
         });
@@ -434,7 +453,8 @@ impl AgentPanel {
                     this.submit_edit(cx);
                 }
             }
-        }).detach();
+        })
+        .detach();
         self.editing_msg_idx = Some(msg_idx);
         self.edit_input_state = Some(input_state);
         cx.notify();
@@ -442,7 +462,9 @@ impl AgentPanel {
 
     /// Submit the inline edit: truncate and rerun.
     fn submit_edit(&mut self, cx: &mut Context<Self>) {
-        if let (Some(msg_idx), Some(input_state)) = (self.editing_msg_idx, self.edit_input_state.as_ref()) {
+        if let (Some(msg_idx), Some(input_state)) =
+            (self.editing_msg_idx, self.edit_input_state.as_ref())
+        {
             let new_content = input_state.read(cx).value().to_string();
             self.editing_msg_idx = None;
             self.edit_input_state = None;
@@ -516,7 +538,8 @@ impl AgentPanel {
         approval_tx: Sender<ToolApprovalDecision>,
         cx: &mut Context<Self>,
     ) {
-        self.state.add_pending_approval(call_id, tool_name, args, approval_tx);
+        self.state
+            .add_pending_approval(call_id, tool_name, args, approval_tx);
         self.scroll_to_bottom();
         cx.notify();
     }
@@ -537,12 +560,22 @@ impl AgentPanel {
         });
         if let Some(last) = self.state.messages.last_mut() {
             let (status, label) = if allowed {
-                (StepStatus::Complete, format!("Allowed: {}", approval.tool_name))
+                (
+                    StepStatus::Complete,
+                    format!("Allowed: {}", approval.tool_name),
+                )
             } else {
-                (StepStatus::Denied, format!("Denied: {}", approval.tool_name))
+                (
+                    StepStatus::Denied,
+                    format!("Denied: {}", approval.tool_name),
+                )
             };
             last.steps.push(StepEntry {
-                icon: if allowed { "phosphor/check.svg" } else { "phosphor/x.svg" },
+                icon: if allowed {
+                    "phosphor/check.svg"
+                } else {
+                    "phosphor/x.svg"
+                },
                 label,
                 detail: None,
                 status,
@@ -609,13 +642,11 @@ impl AgentPanel {
 fn chat_markdown_style() -> TextViewStyle {
     TextViewStyle::default()
         .paragraph_gap(rems(0.75))
-        .heading_font_size(|level, _base| {
-            match level {
-                1 => px(17.0),
-                2 => px(15.5),
-                3 => px(14.5),
-                _ => px(14.0),
-            }
+        .heading_font_size(|level, _base| match level {
+            1 => px(17.0),
+            2 => px(15.5),
+            3 => px(14.5),
+            _ => px(14.0),
         })
 }
 
@@ -755,7 +786,10 @@ fn format_batch_result(value: &serde_json::Value) -> String {
         let idx = item.get("pane_index").and_then(|v| v.as_u64()).unwrap_or(0);
         let output = item.get("output").and_then(|v| v.as_str()).unwrap_or("");
         let exit_code = item.get("exit_code").and_then(|v| v.as_i64());
-        let error = item.get("error").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+        let error = item
+            .get("error")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
 
         if !out.is_empty() {
             out.push('\n');
@@ -825,17 +859,34 @@ fn format_list_panes_result(value: &serde_json::Value) -> String {
     for item in arr {
         let idx = item.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
         let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("?");
-        let focused = item.get("is_focused").and_then(|v| v.as_bool()).unwrap_or(false);
-        let busy = item.get("is_busy").and_then(|v| v.as_bool()).unwrap_or(false);
-        let alive = item.get("is_alive").and_then(|v| v.as_bool()).unwrap_or(true);
+        let focused = item
+            .get("is_focused")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let busy = item
+            .get("is_busy")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let alive = item
+            .get("is_alive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let hostname = item.get("hostname").and_then(|v| v.as_str());
         let cwd = item.get("cwd").and_then(|v| v.as_str());
 
         let mut flags = Vec::new();
-        if focused { flags.push("focused"); }
-        if busy { flags.push("busy"); }
-        if !alive { flags.push("dead"); }
-        if let Some(h) = hostname { flags.push(h); }
+        if focused {
+            flags.push("focused");
+        }
+        if busy {
+            flags.push("busy");
+        }
+        if !alive {
+            flags.push("dead");
+        }
+        if let Some(h) = hostname {
+            flags.push(h);
+        }
 
         let location = cwd.unwrap_or("");
         let flag_str = if flags.is_empty() {
@@ -864,7 +915,11 @@ fn format_search_result(value: &serde_json::Value) -> String {
                     out.push_str(&format!("pane {}:{}: {}\n", pane, line, text));
                 }
             }
-            if out.is_empty() { "(no matches)".to_string() } else { out.trim_end().to_string() }
+            if out.is_empty() {
+                "(no matches)".to_string()
+            } else {
+                out.trim_end().to_string()
+            }
         }
         _ => format_generic_result(value),
     }
@@ -887,6 +942,47 @@ fn result_preview(formatted: &str, max_lines: usize) -> String {
         let preview: String = lines[..max_lines].join("\n");
         format!("{}\n… {} more lines", preview, lines.len() - max_lines)
     }
+}
+
+fn render_user_message_text(
+    content: &str,
+    msg_idx: usize,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    if !content.contains('\n') {
+        return div()
+            .text_size(px(13.5))
+            .line_height(px(21.0))
+            .text_color(theme.foreground)
+            .child(content.to_string())
+            .into_any_element();
+    }
+
+    let mut block = div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .text_size(px(13.5))
+        .line_height(px(21.0))
+        .text_color(theme.foreground);
+
+    for (line_idx, line) in content.lines().enumerate() {
+        block = if line.is_empty() {
+            block.child(
+                div()
+                    .id(format!("user-msg-{msg_idx}-blank-{line_idx}"))
+                    .h(px(10.0)),
+            )
+        } else {
+            block.child(
+                div()
+                    .id(format!("user-msg-{msg_idx}-line-{line_idx}"))
+                    .child(line.to_string()),
+            )
+        };
+    }
+
+    block.into_any_element()
 }
 
 impl Render for AgentPanel {
@@ -944,11 +1040,13 @@ impl Render for AgentPanel {
                                         .rounded(px(12.0))
                                         .bg(theme.primary.opacity(0.07))
                                         .font_family("Ioskeley Mono")
-                                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                                            if event.keystroke.key == "escape" {
-                                                this.cancel_edit(cx);
-                                            }
-                                        }))
+                                        .on_key_down(cx.listener(
+                                            |this, event: &KeyDownEvent, _window, cx| {
+                                                if event.keystroke.key == "escape" {
+                                                    this.cancel_edit(cx);
+                                                }
+                                            },
+                                        ))
                                         .child(
                                             Input::new(edit_input)
                                                 .appearance(false)
@@ -963,7 +1061,9 @@ impl Render for AgentPanel {
                                         .gap(px(6.0))
                                         .child(
                                             div()
-                                                .id(ElementId::Name(format!("edit-cancel-{msg_idx}").into()))
+                                                .id(ElementId::Name(
+                                                    format!("edit-cancel-{msg_idx}").into(),
+                                                ))
                                                 .h(px(24.0))
                                                 .px(px(10.0))
                                                 .flex()
@@ -984,7 +1084,9 @@ impl Render for AgentPanel {
                                         )
                                         .child(
                                             div()
-                                                .id(ElementId::Name(format!("edit-submit-{msg_idx}").into()))
+                                                .id(ElementId::Name(
+                                                    format!("edit-submit-{msg_idx}").into(),
+                                                ))
                                                 .h(px(24.0))
                                                 .px(px(10.0))
                                                 .flex()
@@ -1008,77 +1110,17 @@ impl Render for AgentPanel {
                         );
                     }
                 } else {
-                    // ── Normal user message — right-aligned bubble with hover actions ──
+                    // ── Normal user message — right-aligned bubble with hover actions below ──
                     let user_content: String = msg.content.clone();
                     msg_el = msg_el.child(
                         div()
                             .id(ElementId::Name(format!("user-msg-{msg_idx}").into()))
                             .group("user-msg")
                             .flex()
+                            .flex_col()
                             .items_end()
-                            .justify_end()
-                            .gap(px(4.0))
-                            // Action buttons — appear on hover, left of bubble
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .items_center()
-                                    .gap(px(2.0))
-                                    .mb(px(4.0))
-                                    .invisible()
-                                    .group_hover("user-msg", |s| s.visible())
-                                    // Edit — opens inline editor
-                                    .child({
-                                        let content_for_edit = user_content.clone();
-                                        div()
-                                            .id(ElementId::Name(format!("edit-{msg_idx}").into()))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .size(px(22.0))
-                                            .rounded(px(4.0))
-                                            .cursor_pointer()
-                                            .hover(|s| s.bg(theme.muted.opacity(0.12)))
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |this, _, window, cx| {
-                                                    this.start_editing(msg_idx, &content_for_edit, window, cx);
-                                                }),
-                                            )
-                                            .child(
-                                                svg()
-                                                    .path("phosphor/pencil-simple.svg")
-                                                    .size(px(12.0))
-                                                    .text_color(theme.muted_foreground.opacity(0.5)),
-                                            )
-                                    })
-                                    // Rerun — immediate re-send with same content
-                                    .child({
-                                        let content_for_rerun = user_content.clone();
-                                        div()
-                                            .id(ElementId::Name(format!("rerun-{msg_idx}").into()))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .size(px(22.0))
-                                            .rounded(px(4.0))
-                                            .cursor_pointer()
-                                            .hover(|s| s.bg(theme.muted.opacity(0.12)))
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |this, _, _, cx| {
-                                                    this.rerun_from(msg_idx, content_for_rerun.clone(), cx);
-                                                }),
-                                            )
-                                            .child(
-                                                svg()
-                                                    .path("phosphor/play.svg")
-                                                    .size(px(12.0))
-                                                    .text_color(theme.muted_foreground.opacity(0.5)),
-                                            )
-                                    }),
-                            )
+                            .gap(px(3.0))
+                            // Bubble
                             .child(
                                 div()
                                     .max_w(rems(22.0))
@@ -1087,13 +1129,79 @@ impl Render for AgentPanel {
                                     .rounded(px(16.0))
                                     .rounded_tr(px(4.0))
                                     .bg(theme.primary.opacity(0.07))
-                                    .child(
+                                    .child(render_user_message_text(&user_content, msg_idx, theme)),
+                            )
+                            // Action row — appears on hover, below bubble
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(1.0))
+                                    .invisible()
+                                    .group_hover("user-msg", |s| s.visible())
+                                    // Edit
+                                    .child({
+                                        let content_for_edit = user_content.clone();
                                         div()
-                                            .text_size(px(13.5))
-                                            .line_height(px(21.0))
-                                            .text_color(theme.foreground)
-                                            .child(user_content),
-                                    ),
+                                            .id(ElementId::Name(format!("edit-{msg_idx}").into()))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .size(px(24.0))
+                                            .rounded(px(5.0))
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.start_editing(
+                                                        msg_idx,
+                                                        &content_for_edit,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child(
+                                                svg()
+                                                    .path("phosphor/pencil-simple.svg")
+                                                    .size(px(13.0))
+                                                    .text_color(
+                                                        theme.muted_foreground.opacity(0.4),
+                                                    ),
+                                            )
+                                    })
+                                    // Rerun
+                                    .child({
+                                        let content_for_rerun = user_content.clone();
+                                        div()
+                                            .id(ElementId::Name(format!("rerun-{msg_idx}").into()))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .size(px(24.0))
+                                            .rounded(px(5.0))
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, _, cx| {
+                                                    this.rerun_from(
+                                                        msg_idx,
+                                                        content_for_rerun.clone(),
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child(
+                                                svg()
+                                                    .path("phosphor/arrow-clockwise.svg")
+                                                    .size(px(13.0))
+                                                    .text_color(
+                                                        theme.muted_foreground.opacity(0.4),
+                                                    ),
+                                            )
+                                    }),
                             ),
                     );
                 }
@@ -1123,7 +1231,7 @@ impl Render for AgentPanel {
                         ),
                 );
 
-                // Extended thinking (collapsible)
+                // Extended thinking (collapsible) — flat inline row
                 if let Some(thinking) = &msg.thinking {
                     if !thinking.is_empty() {
                         let thinking_collapsed = msg.thinking_collapsed;
@@ -1132,75 +1240,107 @@ impl Render for AgentPanel {
                         } else {
                             "phosphor/caret-down.svg"
                         };
+                        // Show duration-style summary: word count as proxy
                         let word_count = thinking.split_whitespace().count();
+                        let thinking_summary = if word_count > 0 {
+                            format!("Thought · {} words", word_count)
+                        } else {
+                            "Thinking…".to_string()
+                        };
 
                         msg_el = msg_el.child(
                             div()
-                                .id(SharedString::from(format!("thinking-toggle-{msg_idx}")))
                                 .flex()
-                                .items_center()
-                                .gap(px(5.0))
-                                .pl(px(20.0))
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .hover(|s| s.text_color(theme.foreground))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, _, cx| {
-                                        if let Some(m) = this.state.messages.get_mut(msg_idx) {
-                                            m.thinking_collapsed = !m.thinking_collapsed;
-                                        }
-                                        cx.notify();
-                                    }),
-                                )
+                                .flex_col()
+                                .ml(px(20.0))
+                                // Toggle row
                                 .child(
-                                    svg()
-                                        .path("phosphor/brain.svg")
-                                        .size(px(12.0))
-                                        .text_color(theme.primary.opacity(0.6)),
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "thinking-toggle-{msg_idx}"
+                                        )))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.0))
+                                        .py(px(3.0))
+                                        .px(px(4.0))
+                                        .rounded(px(4.0))
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(theme.muted.opacity(0.06)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |this, _, _, cx| {
+                                                if let Some(m) =
+                                                    this.state.messages.get_mut(msg_idx)
+                                                {
+                                                    m.thinking_collapsed = !m.thinking_collapsed;
+                                                }
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(
+                                            svg()
+                                                .path("phosphor/brain.svg")
+                                                .size(px(12.0))
+                                                .text_color(theme.muted_foreground.opacity(0.5)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.5))
+                                                .text_color(theme.muted_foreground.opacity(0.6))
+                                                .flex_1()
+                                                .child(thinking_summary),
+                                        )
+                                        .child(
+                                            svg()
+                                                .path(chevron)
+                                                .size(px(10.0))
+                                                .text_color(theme.muted_foreground.opacity(0.35)),
+                                        ),
                                 )
-                                .child(
-                                    svg()
-                                        .path(chevron)
-                                        .size(px(10.0))
-                                        .text_color(theme.muted_foreground),
-                                )
-                                .child(format!("Thinking ({} words)", word_count)),
-                        );
-
-                        if !thinking_collapsed {
-                            let display_text: SharedString = if thinking.len() > THINKING_DISPLAY_LEN {
-                                format!("{}…", &thinking[..thinking.floor_char_boundary(THINKING_DISPLAY_LEN)]).into()
-                            } else {
-                                thinking.clone().into()
-                            };
-                            msg_el = msg_el.child(
-                                div()
-                                    .ml(px(24.0))
-                                    .pl(px(12.0))
-                                    .border_l_1()
-                                    .border_color(theme.primary.opacity(0.15))
-                                    .max_h(px(256.0))
-                                    .overflow_y_hidden()
-                                    .child(
+                                // Expanded content — no border, subtle bg
+                                .children(if !thinking_collapsed {
+                                    let display_text: SharedString =
+                                        if thinking.len() > THINKING_DISPLAY_LEN {
+                                            format!(
+                                                "{}…",
+                                                &thinking[..thinking
+                                                    .floor_char_boundary(THINKING_DISPLAY_LEN)]
+                                            )
+                                            .into()
+                                        } else {
+                                            thinking.clone().into()
+                                        };
+                                    Some(
                                         div()
-                                            .py(px(4.0))
+                                            .mx(px(4.0))
+                                            .mt(px(2.0))
+                                            .mb(px(4.0))
+                                            .px(px(10.0))
+                                            .py(px(6.0))
+                                            .rounded(px(6.0))
+                                            .bg(theme.muted.opacity(0.04))
+                                            .max_h(px(256.0))
+                                            .overflow_y_hidden()
                                             .text_xs()
                                             .line_height(px(18.0))
-                                            .text_color(theme.muted_foreground.opacity(0.65))
+                                            .text_color(theme.muted_foreground.opacity(0.6))
                                             .child(
                                                 TextView::markdown(
-                                                    ElementId::Name(format!("thinking-md-{msg_idx}").into()),
+                                                    ElementId::Name(
+                                                        format!("thinking-md-{msg_idx}").into(),
+                                                    ),
                                                     display_text,
                                                 )
                                                 .selectable(true)
                                                 .style(chat_markdown_style())
-                                                .text_xs()
+                                                .text_xs(),
                                             ),
-                                    ),
-                            );
-                        }
+                                    )
+                                } else {
+                                    None
+                                }),
+                        );
                     }
                 }
 
@@ -1221,49 +1361,22 @@ impl Render for AgentPanel {
                                 )
                                 .selectable(true)
                                 .style(chat_markdown_style())
-                                .text_size(px(14.5))
+                                .text_size(px(14.5)),
                             ),
                     );
 
-                    // Copy button — subtle, below content
+                    // Copy button — uses Clipboard component for copy-with-checkmark feedback
                     let content_for_clip = assistant_content_for_copy;
                     msg_el = msg_el.child(
-                        div()
-                            .pl(px(20.0))
-                            .child(
-                                div()
-                                    .id(ElementId::Name(format!("copy-asst-{msg_idx}").into()))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.0))
-                                    .h(px(20.0))
-                                    .px(px(6.0))
-                                    .rounded(px(4.0))
-                                    .cursor_pointer()
-                                    .text_size(px(10.0))
-                                    .text_color(theme.muted_foreground.opacity(0.35))
-                                    .hover(|s| s.bg(theme.muted.opacity(0.08)).text_color(theme.muted_foreground.opacity(0.7)))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |_this, _, _, cx| {
-                                            cx.write_to_clipboard(
-                                                ClipboardItem::new_string(content_for_clip.clone()),
-                                            );
-                                        }),
-                                    )
-                                    .child(
-                                        svg()
-                                            .path("phosphor/copy.svg")
-                                            .size(px(11.0))
-                                            .text_color(theme.muted_foreground.opacity(0.35)),
-                                    )
-                                    .child("Copy"),
-                            ),
+                        div().pl(px(20.0)).child(
+                            Clipboard::new(format!("copy-asst-{msg_idx}"))
+                                .value(SharedString::from(content_for_clip)),
+                        ),
                     );
                 }
             }
 
-            // ── Steps timeline (collapsible) ──
+            // ── Steps (flat inline rows, Cursor-inspired) ──
             if !msg.steps.is_empty() {
                 let step_count = msg.steps.len();
                 let collapsed = msg.steps_collapsed;
@@ -1273,19 +1386,19 @@ impl Render for AgentPanel {
                     "phosphor/caret-down.svg"
                 };
 
-                // Toggle header
+                // Toggle header — compact
                 msg_el = msg_el.child(
                     div()
                         .id(SharedString::from(format!("steps-toggle-{msg_idx}")))
                         .flex()
                         .items_center()
-                        .gap(px(5.0))
-                        .pl(px(16.0))
-                        .py(px(2.0))
+                        .gap(px(6.0))
+                        .ml(px(20.0))
+                        .py(px(3.0))
+                        .px(px(4.0))
+                        .rounded(px(4.0))
                         .cursor_pointer()
-                        .text_size(px(11.0))
-                        .text_color(theme.muted_foreground.opacity(0.6))
-                        .hover(|s| s.text_color(theme.foreground))
+                        .hover(|s| s.bg(theme.muted.opacity(0.06)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, _, cx| {
@@ -1297,68 +1410,66 @@ impl Render for AgentPanel {
                         )
                         .child(
                             svg()
-                                .path(chevron)
-                                .size(px(10.0))
+                                .path("phosphor/list.svg")
+                                .size(px(12.0))
                                 .text_color(theme.muted_foreground.opacity(0.5)),
                         )
-                        .child(format!(
-                            "{} step{}",
-                            step_count,
-                            if step_count == 1 { "" } else { "s" }
-                        )),
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(theme.muted_foreground.opacity(0.6))
+                                .flex_1()
+                                .child(format!(
+                                    "{} step{}",
+                                    step_count,
+                                    if step_count == 1 { "" } else { "s" }
+                                )),
+                        )
+                        .child(
+                            svg()
+                                .path(chevron)
+                                .size(px(10.0))
+                                .text_color(theme.muted_foreground.opacity(0.35)),
+                        ),
                 );
 
                 if !collapsed {
-                    let mut steps_el = div()
-                        .flex()
-                        .flex_col()
-                        .ml(px(20.0))
-                        .pl(px(12.0))
-                        .border_l_1()
-                        .border_color(theme.muted.opacity(0.15));
+                    let mut steps_el = div().flex().flex_col().ml(px(20.0));
 
                     for (step_idx, step) in msg.steps.iter().enumerate() {
-                        let status_color = match step.status {
-                            StepStatus::Running => theme.warning,
-                            StepStatus::Complete => theme.success,
-                            StepStatus::Denied => theme.danger,
+                        let icon_color = match step.status {
+                            StepStatus::Running => theme.warning.opacity(0.7),
+                            StepStatus::Complete => theme.muted_foreground.opacity(0.5),
+                            StepStatus::Denied => theme.danger.opacity(0.7),
                         };
 
                         let has_detail = step.detail.is_some();
                         let detail_collapsed = step.detail_collapsed;
 
-                        // Step header row
+                        // Step row — flat, no dots, no borders
                         let mut step_header = div()
                             .flex()
                             .items_center()
                             .gap(px(6.0))
                             .py(px(3.0))
                             .px(px(4.0))
-                            // Status dot
-                            .child(
-                                div()
-                                    .size(px(5.0))
-                                    .rounded_full()
-                                    .flex_shrink_0()
-                                    .bg(status_color),
-                            )
                             .child(
                                 svg()
                                     .path(step.icon)
-                                    .size(px(11.0))
+                                    .size(px(12.0))
                                     .flex_shrink_0()
-                                    .text_color(theme.muted_foreground.opacity(0.6)),
+                                    .text_color(icon_color),
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.muted_foreground.opacity(0.75))
+                                    .text_size(px(11.5))
+                                    .text_color(theme.muted_foreground.opacity(0.7))
                                     .overflow_x_hidden()
                                     .flex_1()
-                                    .child(truncate_str(&step.label, 50)),
+                                    .child(truncate_str(&step.label, 55)),
                             );
 
-                        // Duration badge
+                        // Duration — right-aligned, subtle
                         if let Some(dur) = step.duration {
                             let dur_text = if dur.as_secs() >= 60 {
                                 format!("{}m {}s", dur.as_secs() / 60, dur.as_secs() % 60)
@@ -1370,13 +1481,13 @@ impl Render for AgentPanel {
                             step_header = step_header.child(
                                 div()
                                     .flex_shrink_0()
-                                    .text_size(px(9.0))
-                                    .text_color(theme.muted_foreground.opacity(0.4))
+                                    .text_size(px(10.0))
+                                    .text_color(theme.muted_foreground.opacity(0.35))
                                     .child(dur_text),
                             );
                         }
 
-                        // Expand/collapse chevron
+                        // Chevron for expandable steps
                         if has_detail {
                             let detail_chevron = if detail_collapsed {
                                 "phosphor/caret-right.svg"
@@ -1386,9 +1497,9 @@ impl Render for AgentPanel {
                             step_header = step_header.child(
                                 svg()
                                     .path(detail_chevron)
-                                    .size(px(9.0))
+                                    .size(px(10.0))
                                     .flex_shrink_0()
-                                    .text_color(theme.muted_foreground.opacity(0.4)),
+                                    .text_color(theme.muted_foreground.opacity(0.35)),
                             );
                         }
 
@@ -1397,7 +1508,9 @@ impl Render for AgentPanel {
                         if has_detail {
                             step_el = step_el.child(
                                 step_header
-                                    .id(SharedString::from(format!("step-detail-{msg_idx}-{step_idx}")))
+                                    .id(SharedString::from(format!(
+                                        "step-detail-{msg_idx}-{step_idx}"
+                                    )))
                                     .cursor_pointer()
                                     .rounded(px(4.0))
                                     .hover(|s| s.bg(theme.muted.opacity(0.06)))
@@ -1417,35 +1530,33 @@ impl Render for AgentPanel {
                             step_el = step_el.child(step_header);
                         }
 
-                        // Expanded detail
+                        // Expanded detail — subtle bg, no border
                         if let Some(detail) = &step.detail {
                             if !detail_collapsed {
                                 let preview = result_preview(detail, TOOL_RESULT_PREVIEW_LINES);
                                 let md: SharedString = format!("```\n{preview}\n```").into();
                                 step_el = step_el.child(
                                     div()
-                                        .ml(px(18.0))
+                                        .ml(px(22.0))
                                         .mr(px(4.0))
                                         .mt(px(2.0))
                                         .mb(px(4.0))
+                                        .px(px(10.0))
+                                        .py(px(6.0))
                                         .rounded(px(6.0))
-                                        .bg(theme.muted.opacity(0.05))
+                                        .bg(theme.muted.opacity(0.04))
                                         .overflow_x_hidden()
                                         .child(
-                                            div()
-                                                .px(px(10.0))
-                                                .py(px(6.0))
-                                                .child(
-                                                    TextView::markdown(
-                                                        ElementId::Name(
-                                                            format!("step-result-{msg_idx}-{step_idx}").into(),
-                                                        ),
-                                                        md,
-                                                    )
-                                                    .selectable(true)
-                                                    .style(chat_markdown_style())
-                                                    .text_xs()
+                                            TextView::markdown(
+                                                ElementId::Name(
+                                                    format!("step-result-{msg_idx}-{step_idx}")
+                                                        .into(),
                                                 ),
+                                                md,
+                                            )
+                                            .selectable(true)
+                                            .style(chat_markdown_style())
+                                            .text_xs(),
                                         ),
                                 );
                             }
@@ -1460,112 +1571,98 @@ impl Render for AgentPanel {
             messages_area = messages_area.child(msg_el);
         }
 
-        // ── Active tool calls (live cards) ───────────────────────
-        for (tc_idx, tc) in self.state.tool_calls.iter().enumerate() {
-            let is_done = tc.result.is_some();
-            let icon = tool_icon(&tc.tool_name);
-            let args_display = format_tool_args(&tc.tool_name, &tc.args);
-            let human_name = humanize_tool_name(&tc.tool_name);
+        // ── Active tool calls (flat inline rows) ─────────────────
+        if !self.state.tool_calls.is_empty() {
+            let mut tc_container = div().flex().flex_col().ml(px(20.0));
 
-            let status_color = if is_done { theme.success } else { theme.warning };
+            for (tc_idx, tc) in self.state.tool_calls.iter().enumerate() {
+                let is_done = tc.result.is_some();
+                let icon = tool_icon(&tc.tool_name);
+                let args_display = format_tool_args(&tc.tool_name, &tc.args);
+                let human_name = humanize_tool_name(&tc.tool_name);
 
-            let mut tc_el = div()
-                .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .px(px(12.0))
-                .py(px(10.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.muted.opacity(0.12))
-                .bg(theme.muted.opacity(0.04))
-                // Header row
-                .child(
+                let icon_color = if is_done {
+                    theme.muted_foreground.opacity(0.5)
+                } else {
+                    theme.warning.opacity(0.7)
+                };
+
+                // Single row: icon + "Tool Name: args" + duration
+                let mut tc_row = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .py(px(3.0))
+                    .px(px(4.0))
+                    .child(
+                        svg()
+                            .path(icon)
+                            .size(px(12.0))
+                            .flex_shrink_0()
+                            .text_color(icon_color),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(theme.muted_foreground.opacity(0.7))
+                            .overflow_x_hidden()
+                            .flex_1()
+                            .child(format!(
+                                "{}: {}",
+                                human_name,
+                                truncate_str(&args_display, 45)
+                            )),
+                    );
+
+                // Duration
+                let dur = tc.duration.unwrap_or_else(|| tc.started_at.elapsed());
+                let dur_text = if dur.as_secs() >= 60 {
+                    format!("{}m {}s", dur.as_secs() / 60, dur.as_secs() % 60)
+                } else if dur.as_millis() >= 1000 {
+                    format!("{:.1}s", dur.as_secs_f64())
+                } else {
+                    format!("{}ms", dur.as_millis())
+                };
+                tc_row = tc_row.child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        // Status + icon combined
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .size(px(20.0))
-                                .rounded(px(4.0))
-                                .bg(status_color.opacity(0.10))
-                                .child(
-                                    svg()
-                                        .path(icon)
-                                        .size(px(12.0))
-                                        .text_color(status_color),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.foreground.opacity(0.85))
-                                .flex_1()
-                                .child(human_name),
-                        )
-                        // Elapsed / duration
-                        .child({
-                            let dur = tc.duration.unwrap_or_else(|| tc.started_at.elapsed());
-                            let dur_text = if dur.as_secs() >= 60 {
-                                format!("{}m {}s", dur.as_secs() / 60, dur.as_secs() % 60)
-                            } else if dur.as_millis() >= 1000 {
-                                format!("{:.1}s", dur.as_secs_f64())
-                            } else {
-                                format!("{}ms", dur.as_millis())
-                            };
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(10.0))
-                                .text_color(theme.muted_foreground.opacity(0.45))
-                                .child(dur_text)
-                        }),
-                )
-                // Args — monospace preview
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(theme.muted_foreground.opacity(0.7))
-                        .overflow_x_hidden()
-                        .font_family("Ioskeley Mono")
-                        .child(truncate_str(&args_display, 60)),
+                        .flex_shrink_0()
+                        .text_size(px(10.0))
+                        .text_color(theme.muted_foreground.opacity(0.35))
+                        .child(dur_text),
                 );
 
-            // Result — rendered as formatted code block
-            if let Some(result) = &tc.result {
-                let formatted = format_tool_result(&tc.tool_name, result);
-                let preview = result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES);
-                let md: SharedString = format!("```\n{preview}\n```").into();
-                tc_el = tc_el.child(
-                    div()
-                        .mt(px(2.0))
-                        .rounded(px(6.0))
-                        .bg(theme.muted.opacity(0.06))
-                        .overflow_x_hidden()
-                        .child(
-                            div()
-                                .px(px(10.0))
-                                .py(px(8.0))
-                                .child(
-                                    TextView::markdown(
-                                        ElementId::Name(
-                                            format!("tc-result-{tc_idx}").into(),
-                                        ),
-                                        md,
-                                    )
-                                    .selectable(true)
-                                    .style(chat_markdown_style())
-                                    .text_xs()
-                                ),
-                        ),
-                );
+                let mut tc_el = div().flex().flex_col().child(tc_row);
+
+                // Result preview — subtle bg block
+                if let Some(result) = &tc.result {
+                    let formatted = format_tool_result(&tc.tool_name, result);
+                    let preview = result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES);
+                    let md: SharedString = format!("```\n{preview}\n```").into();
+                    tc_el = tc_el.child(
+                        div()
+                            .ml(px(22.0))
+                            .mr(px(4.0))
+                            .mt(px(2.0))
+                            .mb(px(4.0))
+                            .px(px(10.0))
+                            .py(px(6.0))
+                            .rounded(px(6.0))
+                            .bg(theme.muted.opacity(0.04))
+                            .overflow_x_hidden()
+                            .child(
+                                TextView::markdown(
+                                    ElementId::Name(format!("tc-result-{tc_idx}").into()),
+                                    md,
+                                )
+                                .selectable(true)
+                                .style(chat_markdown_style())
+                                .text_xs(),
+                            ),
+                    );
+                }
+                tc_container = tc_container.child(tc_el);
             }
-            messages_area = messages_area.child(tc_el);
+            messages_area = messages_area.child(tc_container);
         }
 
         // ── Pending approvals ───────────────────────────────────
@@ -1606,16 +1703,13 @@ impl Render for AgentPanel {
                                 ),
                         )
                         .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground)
-                                        .child(format!("{} requires approval", human_tool)),
-                                ),
+                            div().flex().flex_col().child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.foreground)
+                                    .child(format!("{} requires approval", human_tool)),
+                            ),
                         ),
                 )
                 // Command preview — monospace code block style
@@ -1651,75 +1745,34 @@ impl Render for AgentPanel {
                         .flex()
                         .gap(px(6.0))
                         .justify_end()
-                        // Deny — ghost button
                         .child(
-                            div()
-                                .id(SharedString::from(format!("deny-{i}")))
-                                .h(px(28.0))
-                                .px(px(12.0))
-                                .flex()
-                                .items_center()
-                                .rounded(px(6.0))
-                                .text_size(px(11.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .cursor_pointer()
-                                .text_color(theme.muted_foreground)
-                                .hover(|s| s.bg(theme.danger.opacity(0.08)).text_color(theme.danger))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.resolve_approval(deny_idx, false, cx);
-                                    }),
-                                )
-                                .child("Deny"),
+                            Button::new(format!("deny-{i}"))
+                                .label("Deny")
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.resolve_approval(deny_idx, false, cx);
+                                })),
                         )
-                        // Allow — secondary
                         .child(
-                            div()
-                                .id(SharedString::from(format!("allow-{i}")))
-                                .h(px(28.0))
-                                .px(px(12.0))
-                                .flex()
-                                .items_center()
-                                .rounded(px(6.0))
-                                .text_size(px(11.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .cursor_pointer()
-                                .bg(theme.primary.opacity(0.10))
-                                .text_color(theme.primary)
-                                .hover(|s| s.bg(theme.primary.opacity(0.18)))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.resolve_approval(allow_idx, true, cx);
-                                    }),
-                                )
-                                .child("Allow"),
+                            Button::new(format!("allow-{i}"))
+                                .label("Allow")
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.resolve_approval(allow_idx, true, cx);
+                                })),
                         )
-                        // Allow All — primary solid
                         .child(
-                            div()
-                                .id(SharedString::from(format!("allow-all-{i}")))
-                                .h(px(28.0))
-                                .px(px(12.0))
-                                .flex()
-                                .items_center()
-                                .rounded(px(6.0))
-                                .text_size(px(11.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .cursor_pointer()
-                                .bg(theme.primary)
-                                .text_color(theme.primary_foreground)
-                                .hover(|s| s.bg(theme.primary_hover))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.auto_approve = true;
-                                        cx.emit(EnableAutoApprove);
-                                        this.resolve_all_approvals(cx);
-                                    }),
-                                )
-                                .child("Allow All"),
+                            Button::new(format!("allow-all-{i}"))
+                                .label("Allow All")
+                                .small()
+                                .primary()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.auto_approve = true;
+                                    cx.emit(EnableAutoApprove);
+                                    this.resolve_all_approvals(cx);
+                                })),
                         ),
                 );
 
@@ -1784,12 +1837,7 @@ impl Render for AgentPanel {
                     .child(model_display),
             )
             // Status dot — animated when active
-            .child(
-                div()
-                    .size(px(6.0))
-                    .rounded_full()
-                    .bg(status_dot_color),
-            );
+            .child(div().size(px(6.0)).rounded_full().bg(status_dot_color));
 
         // Auto-approve badge
         if self.auto_approve {
@@ -1815,46 +1863,41 @@ impl Render for AgentPanel {
             .flex_shrink_0()
             .child(header_left)
             .child({
-                let mut actions = div()
-                    .flex()
-                    .items_center()
-                    .gap(px(2.0));
+                let mut actions = div().flex().items_center().gap(px(2.0));
 
                 // Stop button — visible when agent is working
                 if self.state.status != AgentStatus::Idle {
                     actions = actions.child(
                         icon_button("agent-stop", "phosphor/stop.svg", theme)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    cx.emit(CancelRequest);
-                                    this.state.status = AgentStatus::Idle;
-                                    this.state.streaming = false;
-                                    cx.notify();
-                                }),
-                            ),
+                            .tooltip("Stop")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.emit(CancelRequest);
+                                this.state.status = AgentStatus::Idle;
+                                this.state.streaming = false;
+                                cx.notify();
+                            })),
                     );
                 }
 
                 actions
                     .child(
-                        icon_button("agent-history-toggle", "phosphor/clock-counter-clockwise.svg", theme)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.toggle_history(cx);
-                                }),
-                            ),
+                        icon_button(
+                            "agent-history-toggle",
+                            "phosphor/clock-counter-clockwise.svg",
+                            theme,
+                        )
+                        .tooltip("History")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_history(cx);
+                        })),
                     )
                     .child(
                         icon_button("agent-new-chat", "phosphor/plus.svg", theme)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    cx.emit(NewConversation);
-                                    this.clear_messages(cx);
-                                }),
-                            ),
+                            .tooltip("New Chat")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.emit(NewConversation);
+                                this.clear_messages(cx);
+                            })),
                     )
             });
 
@@ -1945,27 +1988,11 @@ impl Render for AgentPanel {
     }
 }
 
-fn icon_button(
-    id: &str,
-    icon_path: &str,
-    theme: &gpui_component::Theme,
-) -> Stateful<Div> {
-    let icon_path = SharedString::from(icon_path.to_string());
-    div()
-        .id(SharedString::from(id.to_string()))
-        .flex()
-        .items_center()
-        .justify_center()
-        .size(px(26.0))
-        .rounded(px(5.0))
-        .cursor_pointer()
-        .hover(|s| s.bg(theme.muted.opacity(0.10)))
-        .child(
-            svg()
-                .path(icon_path)
-                .size(px(13.0))
-                .text_color(theme.muted_foreground),
-        )
+fn icon_button(id: &str, icon_path: &str, _theme: &gpui_component::Theme) -> Button {
+    Button::new(SharedString::from(id.to_string()))
+        .icon(Icon::default().path(SharedString::from(icon_path.to_string())))
+        .ghost()
+        .xsmall()
 }
 
 /// Convert model ID to a human-readable short name.

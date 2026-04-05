@@ -140,10 +140,7 @@ impl TerminalContext {
         if total_panes > 1 {
             prompt.push_str("<panes>\n");
             // Focused pane
-            let host_label = self
-                .focused_hostname
-                .as_deref()
-                .unwrap_or("local");
+            let host_label = self.focused_hostname.as_deref().unwrap_or("local");
             let cwd_label = self.cwd.as_deref().unwrap_or("?");
             prompt.push_str(&format!(
                 "  <pane index=\"{}\" focused=\"true\" host=\"{}\" cwd=\"{}\"/>\n",
@@ -248,5 +245,4 @@ impl TerminalContext {
 
         prompt
     }
-
 }

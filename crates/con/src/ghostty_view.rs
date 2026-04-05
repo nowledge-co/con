@@ -23,7 +23,7 @@ use gpui::*;
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[cfg(target_os = "macos")]
-use cocoa::base::{id, NO, YES};
+use cocoa::base::{NO, YES, id};
 #[cfg(target_os = "macos")]
 use cocoa::foundation::NSRect;
 #[cfg(target_os = "macos")]
@@ -152,9 +152,7 @@ impl GhosttyView {
             };
 
         let parent_nsview = match raw_handle.as_raw() {
-            raw_window_handle::RawWindowHandle::AppKit(handle) => {
-                handle.ns_view.as_ptr() as id
-            }
+            raw_window_handle::RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr() as id,
             _ => return,
         };
 
@@ -180,8 +178,7 @@ impl GhosttyView {
         match self.app.new_surface(nsview as *mut c_void, scale, None) {
             Ok(terminal) => {
                 let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
-                let height_px =
-                    (f32::from(bounds.size.height) * self.scale_factor) as u32;
+                let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
                 terminal.set_size(width_px, height_px);
                 terminal.set_content_scale(scale);
                 terminal.set_focus(true);
@@ -192,7 +189,9 @@ impl GhosttyView {
                 // the coordinate flip and position the NSView correctly.
                 log::info!(
                     "Ghostty surface created: {}x{} px, scale {}",
-                    width_px, height_px, scale
+                    width_px,
+                    height_px,
+                    scale
                 );
             }
             Err(e) => {
@@ -296,12 +295,13 @@ impl GhosttyView {
         if let Some(keycode) = gpui_key_to_keycode(key_name) {
             // Build the text field: the character this key produces (if printable).
             // For non-printable keys (arrows, F-keys), text is null.
-            let text_string = keystroke
-                .key_char
-                .as_deref()
-                .or_else(|| {
-                    if key_name.len() == 1 { Some(key_name) } else { None }
-                });
+            let text_string = keystroke.key_char.as_deref().or_else(|| {
+                if key_name.len() == 1 {
+                    Some(key_name)
+                } else {
+                    None
+                }
+            });
             let cstr = text_string.and_then(|s| std::ffi::CString::new(s).ok());
             let text_ptr = cstr
                 .as_ref()
@@ -348,10 +348,18 @@ impl GhosttyView {
 
 fn gpui_mods_to_ghostty(mods: &Modifiers) -> i32 {
     let mut m: i32 = 0;
-    if mods.shift { m |= ffi::GHOSTTY_MODS_SHIFT; }
-    if mods.control { m |= ffi::GHOSTTY_MODS_CTRL; }
-    if mods.alt { m |= ffi::GHOSTTY_MODS_ALT; }
-    if mods.platform { m |= ffi::GHOSTTY_MODS_SUPER; }
+    if mods.shift {
+        m |= ffi::GHOSTTY_MODS_SHIFT;
+    }
+    if mods.control {
+        m |= ffi::GHOSTTY_MODS_CTRL;
+    }
+    if mods.alt {
+        m |= ffi::GHOSTTY_MODS_ALT;
+    }
+    if mods.platform {
+        m |= ffi::GHOSTTY_MODS_SUPER;
+    }
     m
 }
 
@@ -365,21 +373,55 @@ fn gpui_mods_to_ghostty(mods: &Modifiers) -> i32 {
 fn gpui_key_to_keycode(key: &str) -> Option<u32> {
     Some(match key {
         // Letters (macOS kVK_ANSI_* — NOT sequential, based on QWERTY position)
-        "a" => 0x00, "s" => 0x01, "d" => 0x02, "f" => 0x03,
-        "h" => 0x04, "g" => 0x05, "z" => 0x06, "x" => 0x07,
-        "c" => 0x08, "v" => 0x09, "b" => 0x0B, "q" => 0x0C,
-        "w" => 0x0D, "e" => 0x0E, "r" => 0x0F, "y" => 0x10,
-        "t" => 0x11, "o" => 0x1F, "u" => 0x20, "i" => 0x22,
-        "p" => 0x23, "l" => 0x25, "j" => 0x26, "k" => 0x28,
-        "n" => 0x2D, "m" => 0x2E,
+        "a" => 0x00,
+        "s" => 0x01,
+        "d" => 0x02,
+        "f" => 0x03,
+        "h" => 0x04,
+        "g" => 0x05,
+        "z" => 0x06,
+        "x" => 0x07,
+        "c" => 0x08,
+        "v" => 0x09,
+        "b" => 0x0B,
+        "q" => 0x0C,
+        "w" => 0x0D,
+        "e" => 0x0E,
+        "r" => 0x0F,
+        "y" => 0x10,
+        "t" => 0x11,
+        "o" => 0x1F,
+        "u" => 0x20,
+        "i" => 0x22,
+        "p" => 0x23,
+        "l" => 0x25,
+        "j" => 0x26,
+        "k" => 0x28,
+        "n" => 0x2D,
+        "m" => 0x2E,
         // Numbers
-        "1" => 0x12, "2" => 0x13, "3" => 0x14, "4" => 0x15,
-        "5" => 0x17, "6" => 0x16, "7" => 0x1A, "8" => 0x1C,
-        "9" => 0x19, "0" => 0x1D,
+        "1" => 0x12,
+        "2" => 0x13,
+        "3" => 0x14,
+        "4" => 0x15,
+        "5" => 0x17,
+        "6" => 0x16,
+        "7" => 0x1A,
+        "8" => 0x1C,
+        "9" => 0x19,
+        "0" => 0x1D,
         // Punctuation
-        "-" => 0x1B, "=" => 0x18, "[" => 0x21, "]" => 0x1E,
-        "\\" => 0x2A, ";" => 0x29, "'" => 0x27, "`" => 0x32,
-        "," => 0x2B, "." => 0x2F, "/" => 0x2C,
+        "-" => 0x1B,
+        "=" => 0x18,
+        "[" => 0x21,
+        "]" => 0x1E,
+        "\\" => 0x2A,
+        ";" => 0x29,
+        "'" => 0x27,
+        "`" => 0x32,
+        "," => 0x2B,
+        "." => 0x2F,
+        "/" => 0x2C,
         // Special keys
         "enter" | "return" => 0x24,
         "tab" => 0x30,
@@ -396,9 +438,18 @@ fn gpui_key_to_keycode(key: &str) -> Option<u32> {
         "left" => 0x7B,
         "right" => 0x7C,
         // Function keys
-        "f1" => 0x7A, "f2" => 0x78, "f3" => 0x63, "f4" => 0x76,
-        "f5" => 0x60, "f6" => 0x61, "f7" => 0x62, "f8" => 0x64,
-        "f9" => 0x65, "f10" => 0x6D, "f11" => 0x67, "f12" => 0x6F,
+        "f1" => 0x7A,
+        "f2" => 0x78,
+        "f3" => 0x63,
+        "f4" => 0x76,
+        "f5" => 0x60,
+        "f6" => 0x61,
+        "f7" => 0x62,
+        "f8" => 0x64,
+        "f9" => 0x65,
+        "f10" => 0x6D,
+        "f11" => 0x67,
+        "f12" => 0x6F,
         _ => return None,
     })
 }
@@ -484,30 +535,26 @@ impl Render for GhosttyView {
                     }
                 }),
             )
-            .on_mouse_move(cx.listener(
-                |this, event: &MouseMoveEvent, _window, _cx| {
-                    if let Some(ref terminal) = this.terminal {
-                        let (x, y) = this.view_local_px(event.position);
-                        terminal.send_mouse_pos(x, y, 0);
-                    }
-                },
-            ))
-            .on_scroll_wheel(cx.listener(
-                |this, event: &ScrollWheelEvent, _window, _cx| {
-                    if let Some(ref terminal) = this.terminal {
-                        let delta = match event.delta {
-                            ScrollDelta::Lines(d) => (f64::from(d.x), f64::from(d.y)),
-                            ScrollDelta::Pixels(d) => {
-                                // GPUI gives physical pixel deltas on Retina;
-                                // normalize to logical coordinates for ghostty.
-                                let scale = this.scale_factor as f64;
-                                (f64::from(d.x) / scale, f64::from(d.y) / scale)
-                            }
-                        };
-                        terminal.send_mouse_scroll(delta.0, delta.1, 0);
-                    }
-                },
-            ))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
+                if let Some(ref terminal) = this.terminal {
+                    let (x, y) = this.view_local_px(event.position);
+                    terminal.send_mouse_pos(x, y, 0);
+                }
+            }))
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, _cx| {
+                if let Some(ref terminal) = this.terminal {
+                    let delta = match event.delta {
+                        ScrollDelta::Lines(d) => (f64::from(d.x), f64::from(d.y)),
+                        ScrollDelta::Pixels(d) => {
+                            // GPUI gives physical pixel deltas on Retina;
+                            // normalize to logical coordinates for ghostty.
+                            let scale = this.scale_factor as f64;
+                            (f64::from(d.x) / scale, f64::from(d.y) / scale)
+                        }
+                    };
+                    terminal.send_mouse_scroll(delta.0, delta.1, 0);
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 this.handle_key_down(event);
                 cx.emit(GhosttyFocusChanged);

@@ -23,9 +23,9 @@ fn validate_path(raw: &str, allowed_root: &Path) -> Result<PathBuf, ToolError> {
     } else {
         allowed_root.join(raw)
     };
-    let canonical = path.canonicalize().map_err(|e| {
-        ToolError::CommandFailed(format!("path '{}': {}", raw, e))
-    })?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| ToolError::CommandFailed(format!("path '{}': {}", raw, e)))?;
     if !canonical.starts_with(allowed_root) {
         return Err(ToolError::CommandFailed(format!(
             "path '{}' is outside the allowed directory '{}'",
@@ -44,16 +44,16 @@ fn validate_path_for_write(raw: &str, allowed_root: &Path) -> Result<PathBuf, To
     } else {
         allowed_root.join(raw)
     };
-    let parent = path.parent().ok_or_else(|| {
-        ToolError::CommandFailed("invalid path: no parent directory".into())
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| ToolError::CommandFailed("invalid path: no parent directory".into()))?;
     // Create parent if needed, then canonicalize
     if !parent.exists() {
         std::fs::create_dir_all(parent)?;
     }
-    let canonical_parent = parent.canonicalize().map_err(|e| {
-        ToolError::CommandFailed(format!("parent of '{}': {}", raw, e))
-    })?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| ToolError::CommandFailed(format!("parent of '{}': {}", raw, e)))?;
     if !canonical_parent.starts_with(allowed_root) {
         return Err(ToolError::CommandFailed(format!(
             "path '{}' is outside the allowed directory '{}'",
@@ -61,9 +61,9 @@ fn validate_path_for_write(raw: &str, allowed_root: &Path) -> Result<PathBuf, To
             allowed_root.display()
         )));
     }
-    let file_name = path.file_name().ok_or_else(|| {
-        ToolError::CommandFailed("invalid path: no filename".into())
-    })?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| ToolError::CommandFailed("invalid path: no filename".into()))?;
     Ok(canonical_parent.join(file_name))
 }
 
@@ -287,8 +287,16 @@ impl Tool for FileReadTool {
         let path = validate_path(&args.path, &self.allowed_root)?;
         let content = std::fs::read_to_string(&path)?;
         let lines: Vec<&str> = content.lines().collect();
-        let start = args.start_line.unwrap_or(1).saturating_sub(1).min(lines.len());
-        let end = args.end_line.unwrap_or(lines.len()).min(lines.len()).max(start);
+        let start = args
+            .start_line
+            .unwrap_or(1)
+            .saturating_sub(1)
+            .min(lines.len());
+        let end = args
+            .end_line
+            .unwrap_or(lines.len())
+            .min(lines.len())
+            .max(start);
         Ok(lines[start..end].join("\n"))
     }
 }
@@ -320,7 +328,8 @@ impl Tool for FileWriteTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Write content to a file. Creates the file if it doesn't exist.".to_string(),
+            description: "Write content to a file. Creates the file if it doesn't exist."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -341,7 +350,11 @@ impl Tool for FileWriteTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = validate_path_for_write(&args.path, &self.allowed_root)?;
         std::fs::write(&path, &args.content)?;
-        Ok(format!("Wrote {} bytes to {}", args.content.len(), args.path))
+        Ok(format!(
+            "Wrote {} bytes to {}",
+            args.content.len(),
+            args.path
+        ))
     }
 }
 
@@ -768,10 +781,8 @@ impl Tool for ListPanesTool {
         log::info!("[list_panes] Got response");
 
         match response {
-            PaneResponse::PaneList(panes) => {
-                serde_json::to_string_pretty(&panes)
-                    .map_err(|e| ToolError::CommandFailed(e.to_string()))
-            }
+            PaneResponse::PaneList(panes) => serde_json::to_string_pretty(&panes)
+                .map_err(|e| ToolError::CommandFailed(e.to_string())),
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }
@@ -1011,7 +1022,10 @@ impl Tool for BatchExecTool {
             return Ok("[]".to_string());
         }
 
-        log::info!("[batch_exec] Executing {} commands in parallel", args.commands.len());
+        log::info!(
+            "[batch_exec] Executing {} commands in parallel",
+            args.commands.len()
+        );
 
         // Send all commands concurrently, collect response receivers
         let mut receivers = Vec::with_capacity(args.commands.len());
@@ -1032,8 +1046,8 @@ impl Tool for BatchExecTool {
         let results: Vec<BatchResult> = tokio::task::block_in_place(|| {
             receivers
                 .into_iter()
-                .map(|(pane_index, rx)| {
-                    match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+                .map(
+                    |(pane_index, rx)| match rx.recv_timeout(std::time::Duration::from_secs(60)) {
                         Ok(resp) => BatchResult {
                             pane_index,
                             output: resp.output,
@@ -1046,13 +1060,12 @@ impl Tool for BatchExecTool {
                             exit_code: None,
                             error: Some("Timed out (60s)".into()),
                         },
-                    }
-                })
+                    },
+                )
                 .collect()
         });
 
-        serde_json::to_string_pretty(&results)
-            .map_err(|e| ToolError::CommandFailed(e.to_string()))
+        serde_json::to_string_pretty(&results).map_err(|e| ToolError::CommandFailed(e.to_string()))
     }
 }
 
@@ -1166,10 +1179,22 @@ fn decode_key_escapes(input: &str) -> String {
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
             match bytes[i + 1] {
-                b'n' => { result.push(b'\n'); i += 2; }
-                b't' => { result.push(b'\t'); i += 2; }
-                b'r' => { result.push(b'\r'); i += 2; }
-                b'\\' => { result.push(b'\\'); i += 2; }
+                b'n' => {
+                    result.push(b'\n');
+                    i += 2;
+                }
+                b't' => {
+                    result.push(b'\t');
+                    i += 2;
+                }
+                b'r' => {
+                    result.push(b'\r');
+                    i += 2;
+                }
+                b'\\' => {
+                    result.push(b'\\');
+                    i += 2;
+                }
                 b'x' if i + 3 < bytes.len() => {
                     let hex = &input[i + 2..i + 4];
                     if let Ok(byte) = u8::from_str_radix(hex, 16) {
@@ -1180,7 +1205,10 @@ fn decode_key_escapes(input: &str) -> String {
                         i += 1;
                     }
                 }
-                _ => { result.push(bytes[i]); i += 1; }
+                _ => {
+                    result.push(bytes[i]);
+                    i += 1;
+                }
             }
         } else {
             result.push(bytes[i]);

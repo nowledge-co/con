@@ -1,12 +1,12 @@
 use con_agent::{
-    is_dangerous, AgentEvent, AgentProvider, Conversation, Message, PaneRequest, SkillRegistry,
-    TerminalContext, TerminalExecRequest, ToolApprovalDecision,
+    AgentEvent, AgentProvider, Conversation, Message, PaneRequest, SkillRegistry, TerminalContext,
+    TerminalExecRequest, ToolApprovalDecision, is_dangerous,
 };
 use con_terminal::Grid;
 use crossbeam_channel::{Receiver, Sender};
+use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::path::Path;
-use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
@@ -343,7 +343,16 @@ impl AgentHarness {
 
             let listing = output.or_else(|| {
                 std::process::Command::new("find")
-                    .args([".", "-maxdepth", "3", "-type", "f", "-not", "-path", "./.git/*"])
+                    .args([
+                        ".",
+                        "-maxdepth",
+                        "3",
+                        "-type",
+                        "f",
+                        "-not",
+                        "-path",
+                        "./.git/*",
+                    ])
                     .current_dir(dir)
                     .output()
                     .ok()
@@ -482,7 +491,16 @@ impl AgentHarness {
 
             let listing = output.or_else(|| {
                 std::process::Command::new("find")
-                    .args([".", "-maxdepth", "3", "-type", "f", "-not", "-path", "./.git/*"])
+                    .args([
+                        ".",
+                        "-maxdepth",
+                        "3",
+                        "-type",
+                        "f",
+                        "-not",
+                        "-path",
+                        "./.git/*",
+                    ])
                     .current_dir(dir)
                     .output()
                     .ok()
@@ -604,7 +622,15 @@ impl AgentHarness {
 
             log::info!("[harness] Calling provider.send()");
             match provider
-                .send(&conv_snapshot, &context, agent_tx, approval_rx, terminal_exec_tx, pane_tx, cancelled)
+                .send(
+                    &conv_snapshot,
+                    &context,
+                    agent_tx,
+                    approval_rx,
+                    terminal_exec_tx,
+                    pane_tx,
+                    cancelled,
+                )
                 .await
             {
                 Ok(assistant_msg) => {
@@ -648,6 +674,28 @@ impl AgentHarness {
         Some(skill.description.clone())
     }
 
+    pub fn display_label_for_user_message(&self, content: &str) -> Option<String> {
+        let mut skills = self.skills.list();
+        skills.sort_by_key(|skill| std::cmp::Reverse(skill.prompt_template.len()));
+
+        for skill in skills {
+            if content == skill.prompt_template {
+                return Some(format!("/{}", skill.name));
+            }
+
+            let prefix = format!("{}\n\nAdditional context: ", skill.prompt_template);
+            if let Some(rest) = content.strip_prefix(&prefix) {
+                let args = rest.trim();
+                if args.is_empty() {
+                    return Some(format!("/{}", skill.name));
+                }
+                return Some(format!("/{} {}", skill.name, args));
+            }
+        }
+
+        None
+    }
+
     /// Scan for skills from configured filesystem paths.
     /// Only rescans if the cwd has changed since the last scan.
     /// Returns true if skills were (re)loaded.
@@ -685,7 +733,9 @@ impl AgentHarness {
 
     /// Display name for the active model (e.g. "claude-sonnet-4-6").
     pub fn active_model_name(&self) -> String {
-        self.config.effective_model(&self.config.provider).to_string()
+        self.config
+            .effective_model(&self.config.provider)
+            .to_string()
     }
 
     pub fn skill_names(&self) -> Vec<String> {
@@ -701,12 +751,12 @@ impl AgentHarness {
 /// POSIX + bash/zsh builtins that users commonly type as standalone commands.
 const SHELL_BUILTINS: &[&str] = &[
     // POSIX required builtins
-    "cd", "echo", "eval", "exec", "exit", "export", "readonly", "return", "set", "shift",
-    "source", "test", "times", "trap", "type", "ulimit", "umask", "unset", "wait",
+    "cd", "echo", "eval", "exec", "exit", "export", "readonly", "return", "set", "shift", "source",
+    "test", "times", "trap", "type", "ulimit", "umask", "unset", "wait",
     // bash/zsh builtins commonly typed as commands
-    "alias", "bg", "bind", "builtin", "caller", "command", "compgen", "complete", "declare",
-    "dirs", "disown", "enable", "fc", "fg", "hash", "help", "history", "jobs", "let", "local",
-    "logout", "popd", "pushd", "read", "shopt", "suspend", "typeset", "unalias",
+    "alias", "bg", "bind", "builtin", "caller", "command", "compgen", "complete", "declare", "dirs",
+    "disown", "enable", "fc", "fg", "hash", "help", "history", "jobs", "let", "local", "logout",
+    "popd", "pushd", "read", "shopt", "suspend", "typeset", "unalias",
 ];
 
 /// Scan $PATH once and cache the set of executable names.
@@ -769,9 +819,9 @@ fn shell_aliases() -> &'static HashSet<String> {
 fn is_command_shaped(word: &str) -> bool {
     !word.is_empty()
         && word.len() <= 40
-        && word
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_' || b == b'.')
+        && word.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_' || b == b'.'
+        })
 }
 
 /// Detect whether input is a shell command or natural language.
@@ -815,17 +865,18 @@ fn looks_like_command(input: &str, is_remote: bool) -> bool {
     }
 
     // Explicit path invocation
-    if first_word.starts_with("./")
-        || first_word.starts_with('/')
-        || first_word.starts_with("~/")
-    {
+    if first_word.starts_with("./") || first_word.starts_with('/') || first_word.starts_with("~/") {
         return true;
     }
 
     // Env var assignment: VAR=value or VAR=value command
     if first_word.contains('=') {
         let (name, _) = first_word.split_once('=').unwrap();
-        if !name.is_empty() && name.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_') {
+        if !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        {
             return true;
         }
     }
@@ -910,7 +961,7 @@ fn has_natural_language_signals(input: &str) -> bool {
                 || w.contains('*')       // glob
                 || w.contains('=')       // assignment
                 || w.starts_with('"')    // quoted string
-                || w.starts_with('\'')   // quoted string
+                || w.starts_with('\'') // quoted string
         });
         if !has_shell_args {
             return true;

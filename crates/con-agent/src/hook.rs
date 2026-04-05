@@ -132,9 +132,7 @@ impl<M: CompletionModel> PromptHook<M> for ConHook {
                     d.reason
                         .unwrap_or_else(|| "User denied tool execution".to_string()),
                 ),
-                None => ToolCallHookAction::skip(
-                    "Tool approval timed out or cancelled",
-                ),
+                None => ToolCallHookAction::skip("Tool approval timed out or cancelled"),
             }
         }
     }
@@ -160,7 +158,9 @@ impl<M: CompletionModel> PromptHook<M> for ConHook {
         text_delta: &str,
         _aggregated_text: &str,
     ) -> impl Future<Output = HookAction> + Send {
-        let _ = self.event_tx.send(AgentEvent::Token(text_delta.to_string()));
+        let _ = self
+            .event_tx
+            .send(AgentEvent::Token(text_delta.to_string()));
         async { HookAction::cont() }
     }
 }

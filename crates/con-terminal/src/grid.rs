@@ -495,15 +495,18 @@ impl TerminalTheme {
     /// Returns theme names and parsed themes.
     pub fn load_user_themes() -> Vec<Self> {
         let dir = if cfg!(target_os = "macos") {
-            std::env::var("HOME").ok().map(|h| {
-                std::path::PathBuf::from(h)
-                    .join("Library/Application Support/con/themes")
-            })
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join("Library/Application Support/con/themes"))
         } else {
             std::env::var("XDG_CONFIG_HOME")
                 .ok()
                 .map(std::path::PathBuf::from)
-                .or_else(|| std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".config")))
+                .or_else(|| {
+                    std::env::var("HOME")
+                        .ok()
+                        .map(|h| std::path::PathBuf::from(h).join(".config"))
+                })
                 .map(|p| p.join("con/themes"))
         };
         let dir = match dir {
@@ -753,9 +756,7 @@ impl Grid {
             last_exit_code: None,
             current_dir: None,
             hostname: None,
-            local_hostname: gethostname::gethostname()
-                .to_string_lossy()
-                .to_string(),
+            local_hostname: gethostname::gethostname().to_string_lossy().to_string(),
             command_blocks: Vec::new(),
             command_start_row: None,
             scroll_top: 0,
@@ -771,7 +772,11 @@ impl Grid {
             kitty_flags_stack: Vec::new(),
             on_command_complete: None,
             ssh_target: None,
-            default_cell: Cell { c: ' ', style: default_style, wide: false },
+            default_cell: Cell {
+                c: ' ',
+                style: default_style,
+                wide: false,
+            },
         }
     }
 
@@ -982,7 +987,8 @@ impl Grid {
         if self.scrollback_offset == 0 {
             return self.cell(row, col);
         }
-        let scrollback_row = self.scrollback.len() as isize - self.scrollback_offset as isize + row as isize;
+        let scrollback_row =
+            self.scrollback.len() as isize - self.scrollback_offset as isize + row as isize;
         if scrollback_row >= 0 && (scrollback_row as usize) < self.scrollback.len() {
             let sb_row = scrollback_row as usize;
             if col < self.scrollback[sb_row].len() {
@@ -998,8 +1004,18 @@ impl Grid {
         static DEFAULT_CELL: Cell = Cell {
             c: ' ',
             style: Style {
-                fg: Color { r: 204, g: 204, b: 204, a: 255 },
-                bg: Color { r: 28, g: 27, b: 25, a: 255 },
+                fg: Color {
+                    r: 204,
+                    g: 204,
+                    b: 204,
+                    a: 255,
+                },
+                bg: Color {
+                    r: 28,
+                    g: 27,
+                    b: 25,
+                    a: 255,
+                },
                 bold: false,
                 italic: false,
                 underline: false,
@@ -1615,8 +1631,7 @@ impl Perform for Grid {
 
                                 // Fire the visible terminal tool callback if registered
                                 if let Some(callback) = self.on_command_complete.take() {
-                                    let output =
-                                        self.command_block_output(start_row, output_end);
+                                    let output = self.command_block_output(start_row, output_end);
                                     callback(output, exit_code);
                                 }
                             }
@@ -1637,7 +1652,11 @@ impl Perform for Grid {
         }
 
         let p = |i: usize, default: u16| -> u16 {
-            params_vec.get(i).copied().filter(|&v| v != 0).unwrap_or(default)
+            params_vec
+                .get(i)
+                .copied()
+                .filter(|&v| v != 0)
+                .unwrap_or(default)
         };
 
         match (action, intermediates) {
@@ -1729,7 +1748,9 @@ impl Perform for Grid {
             // DECSTBM — Set Scrolling Region
             ('r', []) => {
                 let top = (p(0, 1) as usize).saturating_sub(1);
-                let bottom = (p(1, self.rows as u16) as usize).saturating_sub(1).min(self.rows - 1);
+                let bottom = (p(1, self.rows as u16) as usize)
+                    .saturating_sub(1)
+                    .min(self.rows - 1);
                 self.scroll_top = top;
                 self.scroll_bottom = bottom;
                 self.cursor.row = 0;
@@ -1793,19 +1814,17 @@ impl Perform for Grid {
                 self.cursor.row = (p(0, 1) as usize).saturating_sub(1).min(self.rows - 1);
             }
             // TBC — Tab Clear
-            ('g', []) => {
-                match p(0, 0) {
-                    0 => {
-                        if self.cursor.col < self.tab_stops.len() {
-                            self.tab_stops[self.cursor.col] = false;
-                        }
+            ('g', []) => match p(0, 0) {
+                0 => {
+                    if self.cursor.col < self.tab_stops.len() {
+                        self.tab_stops[self.cursor.col] = false;
                     }
-                    3 => {
-                        self.tab_stops.fill(false);
-                    }
-                    _ => {}
                 }
-            }
+                3 => {
+                    self.tab_stops.fill(false);
+                }
+                _ => {}
+            },
             // DSR — Device Status Report
             ('n', []) => {
                 match p(0, 0) {
@@ -1815,7 +1834,8 @@ impl Perform for Grid {
                     }
                     6 => {
                         // CPR — Cursor Position Report
-                        let response = format!("\x1b[{};{}R", self.cursor.row + 1, self.cursor.col + 1);
+                        let response =
+                            format!("\x1b[{};{}R", self.cursor.row + 1, self.cursor.col + 1);
                         self.pending_responses.push(response.into_bytes());
                     }
                     _ => {}
@@ -1907,17 +1927,20 @@ impl Perform for Grid {
                 self.pending_responses.push(response.into_bytes());
             }
             // Cursor style (DECSCUSR)
-            ('q', [b' ']) => {
-                match p(0, 1) {
-                    0 | 1 => self.cursor.shape = CursorShape::Block,
-                    2 => self.cursor.shape = CursorShape::Block,
-                    3 | 4 => self.cursor.shape = CursorShape::Underline,
-                    5 | 6 => self.cursor.shape = CursorShape::Bar,
-                    _ => {}
-                }
-            }
+            ('q', [b' ']) => match p(0, 1) {
+                0 | 1 => self.cursor.shape = CursorShape::Block,
+                2 => self.cursor.shape = CursorShape::Block,
+                3 | 4 => self.cursor.shape = CursorShape::Underline,
+                5 | 6 => self.cursor.shape = CursorShape::Bar,
+                _ => {}
+            },
             _ => {
-                log::trace!("unhandled CSI: {:?} {:?} {:?}", params_vec, intermediates, action);
+                log::trace!(
+                    "unhandled CSI: {:?} {:?} {:?}",
+                    params_vec,
+                    intermediates,
+                    action
+                );
             }
         }
     }
@@ -1985,7 +2008,24 @@ fn extract_ssh_target(text: &str) -> Option<String> {
         }
         if part.starts_with('-') {
             // Flags that take a value argument
-            if matches!(*part, "-p" | "-i" | "-l" | "-o" | "-F" | "-J" | "-W" | "-L" | "-R" | "-D" | "-b" | "-c" | "-e" | "-m" | "-S" | "-w") {
+            if matches!(
+                *part,
+                "-p" | "-i"
+                    | "-l"
+                    | "-o"
+                    | "-F"
+                    | "-J"
+                    | "-W"
+                    | "-L"
+                    | "-R"
+                    | "-D"
+                    | "-b"
+                    | "-c"
+                    | "-e"
+                    | "-m"
+                    | "-S"
+                    | "-w"
+            ) {
                 skip_next = true;
             }
             continue;

@@ -122,7 +122,15 @@ impl TerminalView {
         scrollback_lines: usize,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::with_options(cols, rows, font_size, scrollback_lines, &TerminalTheme::default(), None, cx)
+        Self::with_options(
+            cols,
+            rows,
+            font_size,
+            scrollback_lines,
+            &TerminalTheme::default(),
+            None,
+            cx,
+        )
     }
 
     pub fn with_theme(
@@ -145,7 +153,12 @@ impl TerminalView {
         cwd: Option<&str>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let grid = Arc::new(Mutex::new(Grid::with_theme(cols, rows, scrollback_lines, theme)));
+        let grid = Arc::new(Mutex::new(Grid::with_theme(
+            cols,
+            rows,
+            scrollback_lines,
+            theme,
+        )));
         let pty_size = PtySize {
             rows: rows as u16,
             cols: cols as u16,
@@ -154,7 +167,11 @@ impl TerminalView {
         let pty = match Pty::spawn_in(pty_size, cwd) {
             Ok(pty) => pty,
             Err(e) if cwd.is_some() => {
-                log::warn!("PTY spawn failed in {:?}, falling back to $HOME: {}", cwd, e);
+                log::warn!(
+                    "PTY spawn failed in {:?}, falling back to $HOME: {}",
+                    cwd,
+                    e
+                );
                 Pty::spawn(pty_size).unwrap_or_else(|e2| {
                     panic!("Fatal: PTY spawn failed even with default cwd: {}", e2);
                 })
@@ -197,10 +214,13 @@ impl TerminalView {
                                 view.last_suggestion_input = current_input.clone();
                                 // Clear stale suggestion when input changes
                                 view.suggestion = None;
-                                cx.emit(InputChanged { input: current_input });
+                                cx.emit(InputChanged {
+                                    input: current_input,
+                                });
                             }
                             cx.notify();
-                        }).ok();
+                        })
+                        .ok();
                     }
                     Ok(PtyEvent::Exit(_)) => break,
                     Err(crossbeam_channel::TryRecvError::Empty) => {
@@ -277,7 +297,9 @@ impl TerminalView {
         // Find word boundaries (alphanumeric + underscore)
         let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '.';
 
-        let ch = grid.visible_cell(row, point.col.min(cols.saturating_sub(1))).c;
+        let ch = grid
+            .visible_cell(row, point.col.min(cols.saturating_sub(1)))
+            .c;
         let mut start_col = point.col.min(cols.saturating_sub(1));
         let mut end_col = start_col;
 
@@ -293,7 +315,10 @@ impl TerminalView {
         }
 
         Selection {
-            start: SelectionPoint { row, col: start_col },
+            start: SelectionPoint {
+                row,
+                col: start_col,
+            },
             end: SelectionPoint { row, col: end_col },
         }
     }
@@ -435,7 +460,9 @@ impl Render for TerminalView {
         let flush_run =
             |divs: &mut Vec<Div>, row: usize, col: usize, text: &str, style: &TextStyle| {
                 if !text.is_empty() {
-                    divs.push(make_text_div(row, col, text, style, cell_w, cell_h, font_sz));
+                    divs.push(make_text_div(
+                        row, col, text, style, cell_w, cell_h, font_sz,
+                    ));
                 }
             };
 
@@ -509,7 +536,10 @@ impl Render for TerminalView {
                         drop(grid);
                         this.selection = Some(Selection {
                             start: SelectionPoint { row, col: 0 },
-                            end: SelectionPoint { row, col: cols.saturating_sub(1) },
+                            end: SelectionPoint {
+                                row,
+                                col: cols.saturating_sub(1),
+                            },
                         });
                         this.selecting = false;
                         if let Some(text) = this.selected_text() {
@@ -592,10 +622,7 @@ impl Render for TerminalView {
                 if event.keystroke.modifiers.platform {
                     // Handle Cmd+V (paste) with bracketed paste support
                     if event.keystroke.key == "v" {
-                        if let Some(text) = cx
-                            .read_from_clipboard()
-                            .and_then(|clip| clip.text())
-                        {
+                        if let Some(text) = cx.read_from_clipboard().and_then(|clip| clip.text()) {
                             if !text.is_empty() {
                                 let bracketed = this.grid.lock().bracketed_paste;
                                 if bracketed {
@@ -704,8 +731,9 @@ impl Render for TerminalView {
                 let key_name = &event.keystroke.key;
                 // Use Kitty encoder when flags are active, fall back to standard
                 let bytes = if kitty_flags > 0 {
-                    con_terminal::InputEncoder::encode_key_kitty(key_name, mods)
-                        .or_else(|| con_terminal::InputEncoder::encode_key(key_name, mods, app_cursor_keys))
+                    con_terminal::InputEncoder::encode_key_kitty(key_name, mods).or_else(|| {
+                        con_terminal::InputEncoder::encode_key(key_name, mods, app_cursor_keys)
+                    })
                 } else {
                     con_terminal::InputEncoder::encode_key(key_name, mods, app_cursor_keys)
                 };
@@ -718,10 +746,8 @@ impl Render for TerminalView {
                 canvas(
                     move |bounds, window, cx| {
                         // Store the terminal origin for mouse coordinate conversion
-                        *terminal_origin_for_canvas.lock() = (
-                            f32::from(bounds.origin.x),
-                            f32::from(bounds.origin.y),
-                        );
+                        *terminal_origin_for_canvas.lock() =
+                            (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
 
                         // Detect if the available space requires a terminal resize.
                         let available_w: f32 = bounds.size.width.into();
@@ -801,7 +827,11 @@ impl Render for TerminalView {
                         }
 
                         // Cursor (hidden when scrolled into scrollback)
-                        if cursor_visible && !in_scrollback && cursor_row < rows && cursor_col < cols {
+                        if cursor_visible
+                            && !in_scrollback
+                            && cursor_row < rows
+                            && cursor_col < cols
+                        {
                             let cx_pos = origin.x + px(cursor_col as f32 * cell_w);
                             let cy_pos = origin.y + px(cursor_row as f32 * cell_h);
                             let (w, h) = match cursor_shape {
@@ -849,9 +879,7 @@ impl Render for TerminalView {
             let theme = cx.theme();
             for block in &visible_blocks {
                 // Show action bar if hovering within 1 row of the block's prompt row
-                if hovered_row <= block.viewport_row + 1
-                    && hovered_row + 2 >= block.viewport_row
-                {
+                if hovered_row <= block.viewport_row + 1 && hovered_row + 2 >= block.viewport_row {
                     let exit_color = match block.exit_code {
                         Some(0) => theme.success,
                         Some(_) => theme.danger,
@@ -877,12 +905,7 @@ impl Render for TerminalView {
                         .rounded(px(6.0))
                         .bg(theme.title_bar.opacity(0.95))
                         // Exit code dot
-                        .child(
-                            div()
-                                .size(px(6.0))
-                                .rounded_full()
-                                .bg(exit_color),
-                        )
+                        .child(div().size(px(6.0)).rounded_full().bg(exit_color))
                         // Copy output
                         .child(
                             div()
@@ -900,9 +923,7 @@ impl Render for TerminalView {
                                         let output = grid_for_copy
                                             .lock()
                                             .command_block_output(output_start, output_end);
-                                        cx.write_to_clipboard(
-                                            ClipboardItem::new_string(output),
-                                        );
+                                        cx.write_to_clipboard(ClipboardItem::new_string(output));
                                         let _ = this;
                                     }),
                                 )

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use rig::message::{Message as RigMessage, UserContent, AssistantContent, Text};
 use rig::OneOrMany;
+use rig::message::{AssistantContent, Message as RigMessage, Text, UserContent};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -96,7 +96,11 @@ impl Conversation {
         // but always preserve the first system message if present
         if self.messages.len() > MAX_HISTORY {
             let drain_count = self.messages.len() - MAX_HISTORY;
-            let start = if self.messages.first().is_some_and(|m| m.role == MessageRole::System) {
+            let start = if self
+                .messages
+                .first()
+                .is_some_and(|m| m.role == MessageRole::System)
+            {
                 1 // preserve system message at index 0
             } else {
                 0

@@ -84,25 +84,44 @@ impl SkillRegistry {
         count
     }
 
-    /// Scan a single directory for `*/SKILL.md` entries.
+    /// Scan a skill root for nested `SKILL.md` entries.
     fn scan_directory<F>(&mut self, dir: &Path, make_source: F)
     where
         F: Fn(PathBuf) -> SkillSource,
     {
+        self.scan_directory_recursive(dir, &make_source);
+    }
+
+    fn scan_directory_recursive<F>(&mut self, dir: &Path, make_source: &F)
+    where
+        F: Fn(PathBuf) -> SkillSource,
+    {
+        let skill_md = dir.join("SKILL.md");
+        if let Some(skill) = parse_skill_md(&skill_md, make_source(dir.to_path_buf())) {
+            self.skills.insert(skill.name.clone(), skill);
+            return;
+        }
+
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return, // directory doesn't exist — that's fine
         };
 
+        let mut child_dirs = Vec::new();
         for entry in entries.flatten() {
-            let skill_dir = entry.path();
-            if !skill_dir.is_dir() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() || !file_type.is_dir() {
                 continue;
             }
-            let skill_md = skill_dir.join("SKILL.md");
-            if let Some(skill) = parse_skill_md(&skill_md, make_source(skill_dir)) {
-                self.skills.insert(skill.name.clone(), skill);
-            }
+            child_dirs.push(path);
+        }
+        child_dirs.sort();
+
+        for child_dir in child_dirs {
+            self.scan_directory_recursive(&child_dir, make_source);
         }
     }
 
@@ -230,8 +249,7 @@ mod tests {
 
     #[test]
     fn frontmatter_with_quotes() {
-        let content =
-            "---\nname: \"quoted-skill\"\ndescription: 'Has quotes'\n---\n\nDo stuff.";
+        let content = "---\nname: \"quoted-skill\"\ndescription: 'Has quotes'\n---\n\nDo stuff.";
         let (fm, body) = parse_frontmatter(content).unwrap();
         assert_eq!(fm["name"], "quoted-skill");
         assert_eq!(fm["description"], "Has quotes");
@@ -251,5 +269,34 @@ mod tests {
         let (fm, body) = parse_frontmatter(content).unwrap();
         assert_eq!(fm["name"], "empty");
         assert!(body.trim().is_empty());
+    }
+
+    #[test]
+    fn scan_finds_nested_skill_directories() {
+        let root = std::env::temp_dir().join(format!("con-skill-scan-{}", uuid::Uuid::new_v4()));
+        let top_level = root.join("top-level");
+        let nested = root.join(".system").join("nested-skill");
+
+        std::fs::create_dir_all(&top_level).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            top_level.join("SKILL.md"),
+            "---\nname: top-level\ndescription: Top level\n---\n\nTop level prompt.",
+        )
+        .unwrap();
+        std::fs::write(
+            nested.join("SKILL.md"),
+            "---\nname: nested-skill\ndescription: Nested\n---\n\nNested prompt.",
+        )
+        .unwrap();
+
+        let mut registry = SkillRegistry::new();
+        let loaded = registry.scan(&[root.clone()], &[]);
+
+        assert_eq!(loaded, 2);
+        assert!(registry.get("top-level").is_some());
+        assert!(registry.get("nested-skill").is_some());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

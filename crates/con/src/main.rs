@@ -10,8 +10,8 @@ mod ghostty_view;
 mod input_bar;
 mod pane_tree;
 mod settings_panel;
-mod terminal_pane;
 mod sidebar;
+mod terminal_pane;
 mod terminal_view;
 mod theme;
 mod workspace;
@@ -20,7 +20,24 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use workspace::ConWorkspace;
 
-actions!(con, [Quit, NewTab, ToggleAgentPanel, CloseTab, SplitRight, SplitDown, FocusInput, Undo, Redo, Cut, Copy, Paste, SelectAll]);
+actions!(
+    con,
+    [
+        Quit,
+        NewTab,
+        ToggleAgentPanel,
+        CloseTab,
+        SplitRight,
+        SplitDown,
+        FocusInput,
+        Undo,
+        Redo,
+        Cut,
+        Copy,
+        Paste,
+        SelectAll
+    ]
+);
 
 /// Set the macOS dock icon at runtime (for `cargo run` — bundled apps use Info.plist).
 #[cfg(target_os = "macos")]
@@ -74,7 +91,11 @@ fn main() {
             KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
             KeyBinding::new(&kb.close_tab, CloseTab, None),
             KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
-            KeyBinding::new(&kb.command_palette, command_palette::ToggleCommandPalette, None),
+            KeyBinding::new(
+                &kb.command_palette,
+                command_palette::ToggleCommandPalette,
+                None,
+            ),
             KeyBinding::new(&kb.split_right, SplitRight, None),
             KeyBinding::new(&kb.split_down, SplitDown, None),
             KeyBinding::new(&kb.focus_input, FocusInput, None),
@@ -135,10 +156,7 @@ fn main() {
         ]);
 
         let window_options = WindowOptions {
-            window_bounds: Some(WindowBounds::centered(
-                size(px(1200.0), px(800.0)),
-                cx,
-            )),
+            window_bounds: Some(WindowBounds::centered(size(px(1200.0), px(800.0)), cx)),
             titlebar: Some(TitlebarOptions {
                 title: Some("con".into()),
                 appears_transparent: true,
@@ -150,14 +168,12 @@ fn main() {
         cx.spawn(async move |cx| {
             cx.open_window(window_options, |window, cx| {
                 let view = cx.new(|cx| ConWorkspace::new(config.clone(), window, cx));
-                cx.new(|cx| {
-                    gpui_component::Root::new(view, window, cx).bg(cx.theme().background)
-                })
+                cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().background))
             })
             .unwrap_or_else(|e| {
-                    eprintln!("Fatal: failed to open window: {}", e);
-                    std::process::exit(1);
-                });
+                eprintln!("Fatal: failed to open window: {}", e);
+                std::process::exit(1);
+            });
         })
         .detach();
     });

@@ -11,8 +11,8 @@ use rig::providers::{
 };
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::context::TerminalContext;
 use crate::conversation::{AgentStep, Conversation, Message};
@@ -317,9 +317,7 @@ impl AgentConfig {
 
     /// Effective base URL override for the given provider.
     pub fn effective_base_url(&self, kind: &ProviderKind) -> Option<&str> {
-        self.providers
-            .get(kind)
-            .and_then(|p| p.base_url.as_deref())
+        self.providers.get(kind).and_then(|p| p.base_url.as_deref())
     }
 
     /// Effective max tokens for the given provider.
@@ -515,7 +513,10 @@ impl AgentProvider {
             self.config.effective_model(kind),
         ))));
 
-        log::info!("[provider] auto_approve_tools = {}", self.config.auto_approve_tools);
+        log::info!(
+            "[provider] auto_approve_tools = {}",
+            self.config.auto_approve_tools
+        );
         let hook = ConHook::new(
             event_tx.clone(),
             approval_rx,
@@ -537,8 +538,17 @@ impl AgentProvider {
         macro_rules! stream_with {
             ($client:expr) => {
                 build_and_stream!(
-                    $client, self.config, kind, &system_prompt, &last_user_msg,
-                    chat_history, hook, terminal_exec_tx, pane_tx, &event_tx, &cancelled,
+                    $client,
+                    self.config,
+                    kind,
+                    &system_prompt,
+                    &last_user_msg,
+                    chat_history,
+                    hook,
+                    terminal_exec_tx,
+                    pane_tx,
+                    &event_tx,
+                    &cancelled,
                     workspace_root.clone()
                 )?
             };
@@ -753,7 +763,10 @@ impl AgentProvider {
         let pc = self.config.providers.get(kind);
 
         // 1. Direct api_key from provider config
-        if let Some(key) = pc.and_then(|p| p.api_key.as_ref()).filter(|k| !k.is_empty()) {
+        if let Some(key) = pc
+            .and_then(|p| p.api_key.as_ref())
+            .filter(|k| !k.is_empty())
+        {
             return Ok(key.clone());
         }
 
@@ -836,8 +849,7 @@ async fn consume_stream<R: Send + 'static>(
                                 text, ..
                             } = part
                             {
-                                let _ =
-                                    event_tx.send(AgentEvent::ThinkingDelta(text.clone()));
+                                let _ = event_tx.send(AgentEvent::ThinkingDelta(text.clone()));
                             }
                         }
                     }

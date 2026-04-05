@@ -3,12 +3,24 @@ use con_agent::AgentConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-fn default_font_family() -> String { "Ioskeley Mono".into() }
-fn default_font_size() -> f32 { 14.0 }
-fn default_theme() -> String { "flexoki-light".into() }
-fn default_scrollback() -> usize { 10_000 }
-fn default_cursor_style() -> String { "bar".into() }
-fn default_backend() -> String { "auto".into() }
+fn default_font_family() -> String {
+    "Ioskeley Mono".into()
+}
+fn default_font_size() -> f32 {
+    14.0
+}
+fn default_theme() -> String {
+    "flexoki-light".into()
+}
+fn default_scrollback() -> usize {
+    10_000
+}
+fn default_cursor_style() -> String {
+    "bar".into()
+}
+fn default_backend() -> String {
+    "auto".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -48,15 +60,33 @@ impl TerminalConfig {
     }
 }
 
-fn default_toggle_agent() -> String { "cmd-l".into() }
-fn default_command_palette() -> String { "cmd-shift-p".into() }
-fn default_new_tab() -> String { "cmd-t".into() }
-fn default_close_tab() -> String { "cmd-w".into() }
-fn default_settings() -> String { "cmd-,".into() }
-fn default_quit() -> String { "cmd-q".into() }
-fn default_split_right() -> String { "cmd-d".into() }
-fn default_split_down() -> String { "cmd-shift-d".into() }
-fn default_focus_input() -> String { "cmd-k".into() }
+fn default_toggle_agent() -> String {
+    "cmd-l".into()
+}
+fn default_command_palette() -> String {
+    "cmd-shift-p".into()
+}
+fn default_new_tab() -> String {
+    "cmd-t".into()
+}
+fn default_close_tab() -> String {
+    "cmd-w".into()
+}
+fn default_settings() -> String {
+    "cmd-,".into()
+}
+fn default_quit() -> String {
+    "cmd-q".into()
+}
+fn default_split_right() -> String {
+    "cmd-d".into()
+}
+fn default_split_down() -> String {
+    "cmd-shift-d".into()
+}
+fn default_focus_input() -> String {
+    "cmd-k".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -135,10 +165,7 @@ impl Default for SkillsConfig {
                 ".agents/skills".into(),
                 ".con/skills".into(),
             ],
-            global_paths: vec![
-                "~/.config/con/skills".into(),
-                "~/.agents/skills".into(),
-            ],
+            global_paths: vec!["~/.config/con/skills".into(), "~/.agents/skills".into()],
         }
     }
 }
@@ -165,10 +192,7 @@ impl SkillsConfig {
 
     /// Resolve project-local paths relative to a cwd.
     pub fn resolved_project_paths(&self, cwd: &std::path::Path) -> Vec<PathBuf> {
-        self.project_paths
-            .iter()
-            .map(|p| cwd.join(p))
-            .collect()
+        self.project_paths.iter().map(|p| cwd.join(p)).collect()
     }
 }
 

@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui_component::input::InputState;
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::{input::Input, ActiveTheme};
+use gpui_component::{ActiveTheme, input::Input};
 
 actions!(command_palette, [ToggleCommandPalette]);
 
@@ -312,8 +312,11 @@ impl Render for CommandPalette {
                     }
                     "up" => {
                         if count > 0 {
-                            this.selected_index =
-                                if this.selected_index == 0 { count - 1 } else { this.selected_index - 1 };
+                            this.selected_index = if this.selected_index == 0 {
+                                count - 1
+                            } else {
+                                this.selected_index - 1
+                            };
                             cx.notify();
                         }
                     }
@@ -326,11 +329,7 @@ impl Render for CommandPalette {
                     _ => {}
                 }
             }))
-            .child(
-                div()
-                    .p(px(12.0))
-                    .child(Input::new(&self.query)),
-            )
+            .child(div().p(px(12.0)).child(Input::new(&self.query)))
             .child(list);
 
         div()

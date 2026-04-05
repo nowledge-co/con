@@ -201,11 +201,7 @@ impl PaneTree {
     }
 
     /// Render the pane tree as a GPUI element.
-    pub fn render(
-        &self,
-        begin_drag_cb: impl Fn(SplitId, f32) + 'static,
-        cx: &App,
-    ) -> AnyElement {
+    pub fn render(&self, begin_drag_cb: impl Fn(SplitId, f32) + 'static, cx: &App) -> AnyElement {
         Self::render_node(
             &self.root,
             self.focused_pane_id,
@@ -395,12 +391,10 @@ impl PaneTree {
         let theme = cx.theme();
 
         match node {
-            PaneNode::Leaf { id: _, terminal } => {
-                div()
-                    .size_full()
-                    .child(terminal.render_child())
-                    .into_any_element()
-            }
+            PaneNode::Leaf { id: _, terminal } => div()
+                .size_full()
+                .child(terminal.render_child())
+                .into_any_element(),
             PaneNode::Split {
                 split_id,
                 direction,
@@ -419,8 +413,7 @@ impl PaneTree {
                 let first_el = Self::render_node(first, focused_id, has_splits, cb_first, cx);
                 let second_el = Self::render_node(second, focused_id, has_splits, cb_second, cx);
 
-                let divider_id =
-                    ElementId::Name(format!("divider-{}", sid).into());
+                let divider_id = ElementId::Name(format!("divider-{}", sid).into());
                 let divider = match dir {
                     SplitDirection::Horizontal => div()
                         .id(divider_id)
@@ -433,9 +426,12 @@ impl PaneTree {
                         .cursor_col_resize()
                         .bg(theme.title_bar)
                         .hover(|s| s.bg(theme.primary.opacity(0.08)))
-                        .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _window, _cx| {
-                            cb_divider(sid, f32::from(event.position.x));
-                        }),
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            move |event: &MouseDownEvent, _window, _cx| {
+                                cb_divider(sid, f32::from(event.position.x));
+                            },
+                        ),
                     SplitDirection::Vertical => div()
                         .id(divider_id)
                         .h(px(6.0))
@@ -447,9 +443,12 @@ impl PaneTree {
                         .cursor_row_resize()
                         .bg(theme.title_bar)
                         .hover(|s| s.bg(theme.primary.opacity(0.08)))
-                        .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _window, _cx| {
-                            cb_divider(sid, f32::from(event.position.y));
-                        }),
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            move |event: &MouseDownEvent, _window, _cx| {
+                                cb_divider(sid, f32::from(event.position.y));
+                            },
+                        ),
                 };
 
                 let make_pane = |child: AnyElement, basis: f32| -> Div {
@@ -492,22 +491,14 @@ impl PaneTree {
                     None
                 }
             }
-            PaneNode::Split { first, second, .. } => {
-                Self::find_focused_pane(first, window, cx)
-                    .or_else(|| Self::find_focused_pane(second, window, cx))
-            }
+            PaneNode::Split { first, second, .. } => Self::find_focused_pane(first, window, cx)
+                .or_else(|| Self::find_focused_pane(second, window, cx)),
         }
     }
 
-    fn check_terminal_pane_id(
-        node: &PaneNode,
-        entity_id: EntityId,
-        pane_id: PaneId,
-    ) -> bool {
+    fn check_terminal_pane_id(node: &PaneNode, entity_id: EntityId, pane_id: PaneId) -> bool {
         match node {
-            PaneNode::Leaf { id, terminal } => {
-                *id == pane_id && terminal.entity_id() == entity_id
-            }
+            PaneNode::Leaf { id, terminal } => *id == pane_id && terminal.entity_id() == entity_id,
             PaneNode::Split { first, second, .. } => {
                 Self::check_terminal_pane_id(first, entity_id, pane_id)
                     || Self::check_terminal_pane_id(second, entity_id, pane_id)

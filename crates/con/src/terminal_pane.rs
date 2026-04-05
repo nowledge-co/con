@@ -222,11 +222,11 @@ impl TerminalPane {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().content_lines(n),
             #[cfg(target_os = "macos")]
-            Self::Ghostty(e) => {
-                e.read(cx).terminal()
-                    .map(|t| t.read_screen_text(n))
-                    .unwrap_or_default()
-            }
+            Self::Ghostty(e) => e
+                .read(cx)
+                .terminal()
+                .map(|t| t.read_screen_text(n))
+                .unwrap_or_default(),
         }
     }
 
@@ -235,11 +235,11 @@ impl TerminalPane {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().recent_lines(n),
             #[cfg(target_os = "macos")]
-            Self::Ghostty(e) => {
-                e.read(cx).terminal()
-                    .map(|t| t.read_recent_lines(n))
-                    .unwrap_or_default()
-            }
+            Self::Ghostty(e) => e
+                .read(cx)
+                .terminal()
+                .map(|t| t.read_recent_lines(n))
+                .unwrap_or_default(),
         }
     }
 
@@ -266,10 +266,7 @@ impl TerminalPane {
 
     /// Take the command-finished signal from ghostty (consuming).
     /// Returns (exit_code, duration). Only available for ghostty panes.
-    pub fn take_command_finished(
-        &self,
-        cx: &App,
-    ) -> Option<(Option<i32>, std::time::Duration)> {
+    pub fn take_command_finished(&self, cx: &App) -> Option<(Option<i32>, std::time::Duration)> {
         match self {
             Self::Legacy(_) => None, // Legacy uses OSC 133 callback
             #[cfg(target_os = "macos")]
@@ -316,11 +313,11 @@ impl TerminalPane {
         match self {
             Self::Legacy(e) => e.read(cx).grid().lock().search_text(pattern, limit),
             #[cfg(target_os = "macos")]
-            Self::Ghostty(e) => {
-                e.read(cx).terminal()
-                    .map(|t| t.search_text(pattern, limit))
-                    .unwrap_or_default()
-            }
+            Self::Ghostty(e) => e
+                .read(cx)
+                .terminal()
+                .map(|t| t.search_text(pattern, limit))
+                .unwrap_or_default(),
         }
     }
 }
@@ -347,24 +344,12 @@ pub fn subscribe_terminal_pane(
         }
         #[cfg(target_os = "macos")]
         TerminalPane::Ghostty(entity) => {
-            cx.subscribe_in(
-                entity,
-                window,
-                ConWorkspace::on_ghostty_focus_changed,
-            )
-            .detach();
-            cx.subscribe_in(
-                entity,
-                window,
-                ConWorkspace::on_ghostty_process_exited,
-            )
-            .detach();
-            cx.subscribe_in(
-                entity,
-                window,
-                ConWorkspace::on_ghostty_title_changed,
-            )
-            .detach();
+            cx.subscribe_in(entity, window, ConWorkspace::on_ghostty_focus_changed)
+                .detach();
+            cx.subscribe_in(entity, window, ConWorkspace::on_ghostty_process_exited)
+                .detach();
+            cx.subscribe_in(entity, window, ConWorkspace::on_ghostty_title_changed)
+                .detach();
         }
     }
 }

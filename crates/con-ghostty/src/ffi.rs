@@ -105,7 +105,7 @@ pub type ghostty_input_scroll_mods_t = c_int;
 #[derive(Debug, Clone, Copy)]
 pub struct ghostty_input_key_s {
     pub action: ghostty_input_action_e,
-    pub mods: c_int,         // ghostty_input_mods_e bitmask
+    pub mods: c_int, // ghostty_input_mods_e bitmask
     pub consumed_mods: c_int,
     pub keycode: u32,
     pub text: *const c_char,
@@ -360,8 +360,7 @@ pub enum ghostty_clipboard_request_e {
 
 // ── Runtime config (callbacks for embedded apprt) ───────────
 
-pub type ghostty_runtime_wakeup_cb =
-    Option<unsafe extern "C" fn(userdata: *mut c_void)>;
+pub type ghostty_runtime_wakeup_cb = Option<unsafe extern "C" fn(userdata: *mut c_void)>;
 
 pub type ghostty_runtime_action_cb = Option<
     unsafe extern "C" fn(
@@ -462,11 +461,7 @@ unsafe extern "C" {
     // Surface size
     pub fn ghostty_surface_set_size(surface: ghostty_surface_t, w: u32, h: u32);
     pub fn ghostty_surface_size(surface: ghostty_surface_t) -> ghostty_surface_size_s;
-    pub fn ghostty_surface_set_content_scale(
-        surface: ghostty_surface_t,
-        x: c_double,
-        y: c_double,
-    );
+    pub fn ghostty_surface_set_content_scale(surface: ghostty_surface_t, x: c_double, y: c_double);
 
     // Surface focus / state
     pub fn ghostty_surface_set_focus(surface: ghostty_surface_t, focused: bool);
@@ -479,15 +474,8 @@ unsafe extern "C" {
     pub fn ghostty_surface_needs_confirm_quit(surface: ghostty_surface_t) -> bool;
 
     // Surface input
-    pub fn ghostty_surface_key(
-        surface: ghostty_surface_t,
-        key: ghostty_input_key_s,
-    ) -> bool;
-    pub fn ghostty_surface_text(
-        surface: ghostty_surface_t,
-        text: *const c_char,
-        len: usize,
-    );
+    pub fn ghostty_surface_key(surface: ghostty_surface_t, key: ghostty_input_key_s) -> bool;
+    pub fn ghostty_surface_text(surface: ghostty_surface_t, text: *const c_char, len: usize);
     pub fn ghostty_surface_mouse_button(
         surface: ghostty_surface_t,
         state: ghostty_input_mouse_state_e,
@@ -519,14 +507,8 @@ unsafe extern "C" {
         selection: ghostty_selection_s,
         text: *mut ghostty_text_s,
     ) -> bool;
-    pub fn ghostty_surface_free_text(
-        surface: ghostty_surface_t,
-        text: *mut ghostty_text_s,
-    );
-    pub fn ghostty_surface_update_config(
-        surface: ghostty_surface_t,
-        config: ghostty_config_t,
-    );
+    pub fn ghostty_surface_free_text(surface: ghostty_surface_t, text: *mut ghostty_text_s);
+    pub fn ghostty_surface_update_config(surface: ghostty_surface_t, config: ghostty_config_t);
 
     // Clipboard
     pub fn ghostty_surface_complete_clipboard_request(

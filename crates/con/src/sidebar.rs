@@ -137,13 +137,7 @@ impl Render for SessionSidebar {
                     } else {
                         theme.sidebar_foreground
                     })
-                    .hover(|s| {
-                        if is_active {
-                            s
-                        } else {
-                            s.bg(theme.secondary)
-                        }
-                    })
+                    .hover(|s| if is_active { s } else { s.bg(theme.secondary) })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |_this, _, _, cx| {
