@@ -36,10 +36,6 @@ gpui-component = { path = "3pp/gpui-component/crates/ui" }
 gpui-component-macros = { path = "3pp/gpui-component/crates/macros" }
 gpui-component-assets = { path = "3pp/gpui-component/crates/assets" }
 
-# Terminal
-vte = "0.15"
-portable-pty = "0.8"
-
 # AI Agent
 rig-core = { version = "0.34", default-features = false, features = ["rustls"] }
 

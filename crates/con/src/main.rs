@@ -13,7 +13,6 @@ mod pane_tree;
 mod settings_panel;
 mod sidebar;
 mod terminal_pane;
-mod terminal_view;
 mod theme;
 mod workspace;
 
@@ -64,6 +63,9 @@ fn set_dock_icon() {
 
 #[cfg(not(target_os = "macos"))]
 fn set_dock_icon() {}
+
+#[cfg(not(target_os = "macos"))]
+compile_error!("con currently requires macOS and the embedded Ghostty backend.");
 
 fn main() {
     env_logger::init();

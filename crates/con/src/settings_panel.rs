@@ -54,6 +54,7 @@ const ALL_SECTIONS: &[SettingsSection] = &[
 pub struct SettingsPanel {
     visible: bool,
     config: Config,
+    registry: ModelRegistry,
     focus_handle: FocusHandle,
     active_section: SettingsSection,
 
@@ -70,7 +71,6 @@ pub struct SettingsPanel {
     suggestion_model_input: Entity<InputState>,
 
     font_size_input: Entity<InputState>,
-    scrollback_input: Entity<InputState>,
     save_error: Option<String>,
 
     // Theme import
@@ -99,7 +99,12 @@ const ALL_PROVIDERS: &[ProviderKind] = &[
 ];
 
 impl SettingsPanel {
-    pub fn new(config: &Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        config: &Config,
+        registry: ModelRegistry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let agent = &config.agent;
         let pc = agent.providers.get_or_default(&agent.provider);
 
@@ -109,13 +114,8 @@ impl SettingsPanel {
             s.set_value(&pc.model.clone().unwrap_or_default(), window, cx);
             s
         });
-        let model_select = Self::make_model_select(
-            &agent.provider,
-            &pc.model,
-            &registry,
-            window,
-            cx,
-        );
+        let model_select =
+            Self::make_model_select(&agent.provider, &pc.model, &registry, window, cx);
         let api_key_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("sk-... or env var like ANTHROPIC_API_KEY", window, cx);
@@ -175,12 +175,6 @@ impl SettingsPanel {
             s.set_value(&config.terminal.font_size.to_string(), window, cx);
             s
         });
-        let scrollback_input = cx.new(|cx| {
-            let mut s = InputState::new(window, cx);
-            s.set_placeholder("10000", window, cx);
-            s.set_value(&config.terminal.scrollback_lines.to_string(), window, cx);
-            s
-        });
         let custom_theme_name_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Save as, e.g. flexoki-amber", window, cx);
@@ -190,6 +184,7 @@ impl SettingsPanel {
         Self {
             visible: false,
             config: config.clone(),
+            registry,
             focus_handle: cx.focus_handle(),
             active_section: SettingsSection::General,
             selected_provider: config.agent.provider.clone(),
@@ -203,7 +198,6 @@ impl SettingsPanel {
             auto_approve: config.agent.auto_approve_tools,
             suggestion_model_input,
             font_size_input,
-            scrollback_input,
             save_error: None,
             custom_theme_name_input,
             custom_theme_preview: None,
@@ -241,13 +235,6 @@ impl SettingsPanel {
                 Self::make_model_select(&agent.provider, &pc.model, &self.registry, window, cx);
             self.font_size_input.update(cx, |s, cx| {
                 s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
-            });
-            self.scrollback_input.update(cx, |s, cx| {
-                s.set_value(
-                    &self.config.terminal.scrollback_lines.to_string(),
-                    window,
-                    cx,
-                )
             });
             self.recording_key = None;
             self.focus_handle.focus(window, cx);
@@ -293,26 +280,26 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> Entity<SelectState<SearchableVec<String>>> {
         let models: Vec<String> = registry.models_for(provider);
-        let selected_index = current_model.as_ref().and_then(|m| {
-            models.iter().position(|item| item == m).map(IndexPath::new)
-        });
+        let selected_index = current_model
+            .as_ref()
+            .and_then(|m| models.iter().position(|item| item == m).map(IndexPath::new));
         let entity = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(models),
-                selected_index,
-                window,
-                cx,
-            )
-            .searchable(true)
+            SelectState::new(SearchableVec::new(models), selected_index, window, cx)
+                .searchable(true)
         });
-        cx.subscribe_in(&entity, window, |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
-            if let SelectEvent::Confirm(Some(value)) = ev {
-                this.model_input.update(cx, |s, cx| {
-                    s.set_value(value, window, cx);
-                });
-                cx.notify();
-            }
-        }).detach();
+        cx.subscribe_in(
+            &entity,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.model_input.update(cx, |s, cx| {
+                        s.set_value(value, window, cx);
+                    });
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
         entity
     }
 
@@ -478,7 +465,6 @@ impl SettingsPanel {
         let temperature_text = self.temperature_input.read(cx).value().to_string();
         let suggestion_model_text = self.suggestion_model_input.read(cx).value().to_string();
         let font_size_text = self.font_size_input.read(cx).value().to_string();
-        let scrollback_text = self.scrollback_input.read(cx).value().to_string();
 
         // Save current provider's per-provider fields into the map
         let pc = self.read_provider_inputs(cx);
@@ -502,7 +488,6 @@ impl SettingsPanel {
             },
         };
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
-        self.config.terminal.scrollback_lines = scrollback_text.parse().unwrap_or(10_000);
 
         // Keybindings are updated directly via record_keystroke — no reading needed
 
@@ -627,7 +612,8 @@ impl SettingsPanel {
         self.load_provider_inputs(&pc, window, cx);
 
         // Rebuild model select for new provider
-        self.model_select = Self::make_model_select(&provider, &pc.model, &self.registry, window, cx);
+        self.model_select =
+            Self::make_model_select(&provider, &pc.model, &self.registry, window, cx);
         cx.notify();
     }
 
@@ -635,7 +621,6 @@ impl SettingsPanel {
 
     fn render_general(&mut self, cx: &mut Context<Self>) -> Div {
         let font_size_input = self.font_size_input.clone();
-        let scrollback_input = self.scrollback_input.clone();
 
         // Auto-approve toggle
         let is_on = self.auto_approve;
@@ -684,7 +669,21 @@ impl SettingsPanel {
                 card(theme)
                     .child(row_field("Font Size", &font_size_input))
                     .child(row_separator(theme))
-                    .child(row_field("Scrollback Lines", &scrollback_input)),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px(px(16.0))
+                            .h(px(44.0))
+                            .child(div().text_sm().child("Scrollback"))
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(theme.muted_foreground)
+                                    .child("Managed by Ghostty"),
+                            ),
+                    ),
             )
             .child(
                 div()
@@ -1069,11 +1068,7 @@ impl SettingsPanel {
 
         // Preview card with save/preview actions
         if let Some(preview) = preview_actions {
-            import_section = import_section.child(
-                div()
-                    .pt(px(4.0))
-                    .child(preview),
-            );
+            import_section = import_section.child(div().pt(px(4.0)).child(preview));
         }
 
         if let Some(ref status) = self.custom_theme_status {
@@ -1427,16 +1422,11 @@ impl SettingsPanel {
                                 .flex()
                                 .items_center()
                                 .gap(px(6.0))
-                                .child(
-                                    div()
-                                        .size(px(6.0))
-                                        .rounded_full()
-                                        .bg(if has_key {
-                                            theme.success
-                                        } else {
-                                            theme.muted_foreground.opacity(0.2)
-                                        }),
-                                )
+                                .child(div().size(px(6.0)).rounded_full().bg(if has_key {
+                                    theme.success
+                                } else {
+                                    theme.muted_foreground.opacity(0.2)
+                                }))
                                 .child(
                                     div()
                                         .text_size(px(10.0))
@@ -1539,14 +1529,7 @@ impl SettingsPanel {
             .gap(px(6.0))
             .w(px(180.0))
             .flex_shrink_0()
-            .child(
-                card(theme).child(
-                    div()
-                        .px(px(4.0))
-                        .py(px(4.0))
-                        .child(provider_list),
-                ),
-            );
+            .child(card(theme).child(div().px(px(4.0)).py(px(4.0)).child(provider_list)));
 
         let models_layout = div()
             .flex()
@@ -1639,9 +1622,7 @@ impl SettingsPanel {
                                 } else {
                                     theme.muted_foreground
                                 })
-                                .hover(|s| {
-                                    s.bg(theme.muted.opacity(0.08))
-                                })
+                                .hover(|s| s.bg(theme.muted.opacity(0.08)))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -1809,20 +1790,16 @@ impl Render for SettingsPanel {
 
             if narrow {
                 // Icon-only mode: centered icon, no label
-                nav_item = nav_item
-                    .justify_center()
-                    .size(px(36.0))
-                    .mx_auto()
-                    .child(
-                        svg()
-                            .path(section.icon())
-                            .size(px(16.0))
-                            .text_color(if is_active {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            }),
-                    );
+                nav_item = nav_item.justify_center().size(px(36.0)).mx_auto().child(
+                    svg()
+                        .path(section.icon())
+                        .size(px(16.0))
+                        .text_color(if is_active {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        }),
+                );
             } else {
                 nav_item = nav_item
                     .gap(px(8.0))
@@ -1934,26 +1911,38 @@ impl Render for SettingsPanel {
                                                     .cursor_pointer()
                                                     .text_size(px(10.5))
                                                     .text_color(theme.muted_foreground.opacity(0.4))
-                                                    .hover(|s| s.text_color(theme.muted_foreground.opacity(0.7)))
+                                                    .hover(|s| {
+                                                        s.text_color(
+                                                            theme.muted_foreground.opacity(0.7),
+                                                        )
+                                                    })
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(|_, _, _, cx| {
                                                             let path = Config::config_path();
                                                             // Ensure the file exists so the editor has something to open
                                                             if !path.exists() {
-                                                                if let Some(parent) = path.parent() {
-                                                                    let _ = std::fs::create_dir_all(parent);
+                                                                if let Some(parent) = path.parent()
+                                                                {
+                                                                    let _ = std::fs::create_dir_all(
+                                                                        parent,
+                                                                    );
                                                                 }
                                                                 let _ = std::fs::write(&path, "");
                                                             }
-                                                            cx.open_url(&format!("file://{}", path.display()));
+                                                            cx.open_url(&format!(
+                                                                "file://{}",
+                                                                path.display()
+                                                            ));
                                                         }),
                                                     )
                                                     .child(
                                                         svg()
                                                             .path("phosphor/file-text.svg")
                                                             .size(px(12.0))
-                                                            .text_color(theme.muted_foreground.opacity(0.4)),
+                                                            .text_color(
+                                                                theme.muted_foreground.opacity(0.4),
+                                                            ),
                                                     )
                                                     .child("config.toml"),
                                             )
@@ -1979,16 +1968,14 @@ impl Render for SettingsPanel {
                                                         svg()
                                                             .path("phosphor/x.svg")
                                                             .size(px(12.0))
-                                                            .text_color(theme.muted_foreground.opacity(0.5)),
+                                                            .text_color(
+                                                                theme.muted_foreground.opacity(0.5),
+                                                            ),
                                                     ),
                                             ),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .h(px(1.0))
-                                    .bg(theme.muted.opacity(0.10)),
-                            ),
+                            .child(div().h(px(1.0)).bg(theme.muted.opacity(0.10))),
                     )
                     // Error banner
                     .children(self.save_error.as_ref().map(|err| {
@@ -2115,7 +2102,6 @@ fn stacked_input_field(
         .child(Input::new(input))
 }
 
-
 /// Convert a GPUI Keystroke to the binding format string (e.g. "cmd-shift-d").
 fn keystroke_to_binding(ks: &gpui::Keystroke) -> String {
     let mut parts = Vec::new();
@@ -2135,7 +2121,6 @@ fn keystroke_to_binding(ks: &gpui::Keystroke) -> String {
     parts.join("-")
 }
 
-
 fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
     div()
         .flex()
@@ -2144,17 +2129,15 @@ fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
         .px(px(16.0))
         .h(px(36.0))
         .child(div().text_sm().child(action.to_string()))
-        .child(
-            if let Ok(stroke) = Keystroke::parse(shortcut) {
-                Kbd::new(stroke).outline().into_any_element()
-            } else {
-                div()
-                    .text_size(px(11.0))
-                    .text_color(theme.muted_foreground)
-                    .child(shortcut.to_string())
-                    .into_any_element()
-            },
-        )
+        .child(if let Ok(stroke) = Keystroke::parse(shortcut) {
+            Kbd::new(stroke).outline().into_any_element()
+        } else {
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.muted_foreground)
+                .child(shortcut.to_string())
+                .into_any_element()
+        })
 }
 
 fn provider_label(provider: &ProviderKind) -> &'static str {

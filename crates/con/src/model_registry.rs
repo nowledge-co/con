@@ -58,17 +58,8 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
             "command-r-plus-08-2024",
             "command-r-08-2024",
         ],
-        ProviderKind::Perplexity => &[
-            "sonar-pro",
-            "sonar-reasoning-pro",
-            "sonar",
-        ],
-        ProviderKind::XAI => &[
-            "grok-4",
-            "grok-3",
-            "grok-3-mini",
-            "grok-2",
-        ],
+        ProviderKind::Perplexity => &["sonar-pro", "sonar-reasoning-pro", "sonar"],
+        ProviderKind::XAI => &["grok-4", "grok-3", "grok-3-mini", "grok-2"],
         ProviderKind::Ollama => &[
             "llama3.2",
             "llama3.1",
@@ -159,11 +150,6 @@ impl ModelRegistry {
             .collect()
     }
 
-    /// Whether the cache has been populated (even if stale).
-    pub fn is_loaded(&self) -> bool {
-        self.inner.lock().unwrap().is_some()
-    }
-
     /// Whether the cache is stale or empty and needs a refresh.
     pub fn needs_refresh(&self) -> bool {
         let guard = self.inner.lock().unwrap();
@@ -182,12 +168,7 @@ impl ModelRegistry {
             .timeout(Duration::from_secs(15))
             .build()?;
 
-        let resp: HashMap<String, ApiProvider> = client
-            .get(API_URL)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let resp: HashMap<String, ApiProvider> = client.get(API_URL).send().await?.json().await?;
 
         let mut models_map: HashMap<ProviderKind, Vec<String>> = HashMap::new();
 
@@ -211,10 +192,7 @@ impl ModelRegistry {
                 .collect();
 
             // Sort: tool_call capable first, then by context window descending
-            model_list.sort_by(|a, b| {
-                b.1.cmp(&a.1)
-                    .then_with(|| b.2.cmp(&a.2))
-            });
+            model_list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
 
             let ids: Vec<String> = model_list.into_iter().map(|(id, _, _)| id).collect();
             models_map.insert(kind, ids);

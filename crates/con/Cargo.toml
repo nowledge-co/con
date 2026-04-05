@@ -20,7 +20,6 @@ anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
 crossbeam-channel.workspace = true
-vte.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true

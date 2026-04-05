@@ -32,7 +32,6 @@ pub struct TabState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaneState {
     pub cwd: Option<String>,
-    pub scrollback_lines: usize,
 }
 
 impl Default for Session {
@@ -41,10 +40,7 @@ impl Default for Session {
             tabs: vec![TabState {
                 title: "Terminal".to_string(),
                 cwd: None,
-                panes: vec![PaneState {
-                    cwd: None,
-                    scrollback_lines: 0,
-                }],
+                panes: vec![PaneState { cwd: None }],
                 conversation_id: None,
             }],
             active_tab: 0,

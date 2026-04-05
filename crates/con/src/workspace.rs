@@ -14,16 +14,13 @@ use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette
 use crate::input_bar::{
     EscapeInput, InputBar, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
 };
+use crate::model_registry::ModelRegistry;
 use crate::pane_tree::{PaneTree, SplitDirection};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
-use crate::terminal_view::{
-    ClosePaneRequest, ExplainCommand, FocusChanged, InputChanged, TerminalView,
-};
 use con_terminal::TerminalTheme;
 
-#[cfg(target_os = "macos")]
 use crate::ghostty_view::{
     GhosttyFocusChanged, GhosttyProcessExited, GhosttyTitleChanged, GhosttyView,
 };
@@ -32,7 +29,6 @@ use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
 use con_core::session::Session;
-use con_core::suggestions::SuggestionEngine;
 
 struct Tab {
     pane_tree: PaneTree,
@@ -48,7 +44,6 @@ pub struct ConWorkspace {
     tabs: Vec<Tab>,
     active_tab: usize,
     font_size: f32,
-    scrollback_lines: usize,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -66,24 +61,15 @@ pub struct ConWorkspace {
     pending_drag_init: std::sync::Arc<std::sync::Mutex<Option<(usize, f32)>>>,
     /// Agent panel drag state: start X position and start width when drag began.
     agent_panel_drag: Option<(f32, f32)>,
-    /// Shell command suggestion engine (debounced AI completions)
-    suggestion_engine: SuggestionEngine,
-    /// Channel for sending suggestion results from the async engine back to GPUI
-    suggestion_tx: crossbeam_channel::Sender<(gpui::EntityId, String)>,
     /// Current terminal color theme
     terminal_theme: TerminalTheme,
-    /// Whether to use ghostty backend for new terminals
-    #[cfg(target_os = "macos")]
-    use_ghostty: bool,
-    /// Shared ghostty app instance (macOS only, lazy-initialized)
-    #[cfg(target_os = "macos")]
-    ghostty_app: Option<std::sync::Arc<con_ghostty::GhosttyApp>>,
+    /// Shared Ghostty app instance for all panes in this window.
+    ghostty_app: std::sync::Arc<con_ghostty::GhosttyApp>,
 }
 
 // ── Theme conversion ──────────────────────────────────────────
 
 /// Convert con's TerminalTheme to ghostty's TerminalColors.
-#[cfg(target_os = "macos")]
 fn theme_to_ghostty_colors(theme: &TerminalTheme) -> con_ghostty::TerminalColors {
     let mut palette = [[0u8; 3]; 16];
     for (i, c) in theme.ansi.iter().enumerate() {
@@ -101,35 +87,17 @@ fn theme_to_ghostty_colors(theme: &TerminalTheme) -> con_ghostty::TerminalColors
 // Standalone so they can be called both during ConWorkspace::new()
 // (before `self` exists) and from create_terminal() (after).
 
-fn make_legacy_terminal(
-    font_size: f32,
-    scrollback_lines: usize,
-    theme: &TerminalTheme,
-    cwd: Option<&str>,
-    window: &mut Window,
-    cx: &mut Context<ConWorkspace>,
-) -> TerminalPane {
-    let terminal_view = cx.new(|cx| {
-        if let Some(cwd) = cwd {
-            TerminalView::with_options(80, 24, font_size, scrollback_lines, theme, Some(cwd), cx)
-        } else {
-            TerminalView::with_theme(80, 24, font_size, scrollback_lines, theme, cx)
-        }
-    });
-    let pane = TerminalPane::Legacy(terminal_view);
-    subscribe_terminal_pane(&pane, window, cx);
-    pane
-}
-
-#[cfg(target_os = "macos")]
 fn make_ghostty_terminal(
     app: &std::sync::Arc<con_ghostty::GhosttyApp>,
+    cwd: Option<&str>,
+    font_size: f32,
     window: &mut Window,
     cx: &mut Context<ConWorkspace>,
 ) -> TerminalPane {
     let app = app.clone();
-    let view = cx.new(|cx| crate::ghostty_view::GhosttyView::new(app, cx));
-    let pane = TerminalPane::Ghostty(view);
+    let cwd = cwd.map(str::to_string);
+    let view = cx.new(|cx| crate::ghostty_view::GhosttyView::new(app, cwd, font_size, cx));
+    let pane = TerminalPane::new(view);
     subscribe_terminal_pane(&pane, window, cx);
     pane
 }
@@ -138,43 +106,28 @@ impl ConWorkspace {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
         let font_size = config.terminal.font_size;
-        let scrollback_lines = config.terminal.scrollback_lines;
         let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
         let session = Session::load().unwrap_or_default();
-
-        // Eagerly initialize ghostty if configured, so all terminals use the same backend.
-        #[cfg(target_os = "macos")]
-        let (use_ghostty, ghostty_app) = {
-            if config.terminal.use_ghostty() {
-                let colors = theme_to_ghostty_colors(&terminal_theme);
-                match con_ghostty::GhosttyApp::new(Some(&colors)) {
-                    Ok(app) => (true, Some(std::sync::Arc::new(app))),
-                    Err(e) => {
-                        log::error!("Failed to create ghostty app: {}. Using legacy backend.", e);
-                        (false, None)
-                    }
+        let colors = theme_to_ghostty_colors(&terminal_theme);
+        let ghostty_app = con_ghostty::GhosttyApp::new(Some(&colors))
+            .map(std::sync::Arc::new)
+            .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
+        let model_registry = ModelRegistry::new();
+        if model_registry.needs_refresh() {
+            let registry_for_fetch = model_registry.clone();
+            cx.spawn(async move |this, cx| {
+                if let Err(e) = registry_for_fetch.fetch().await {
+                    log::warn!("Failed to refresh model registry: {}", e);
+                    return;
                 }
-            } else {
-                (false, None)
-            }
-        };
+                let _ = this.update(cx, |_workspace, cx| cx.notify());
+            })
+            .detach();
+        }
 
-        // Closure to create a terminal with the correct backend for this session.
-        #[allow(unused_mut)]
-        let mut make_terminal =
+        let make_terminal =
             |cwd: Option<&str>, window: &mut Window, cx: &mut Context<Self>| -> TerminalPane {
-                #[cfg(target_os = "macos")]
-                if let Some(ref app) = ghostty_app {
-                    return make_ghostty_terminal(app, window, cx);
-                }
-                make_legacy_terminal(
-                    font_size,
-                    scrollback_lines,
-                    &terminal_theme,
-                    cwd,
-                    window,
-                    cx,
-                )
+                make_ghostty_terminal(&ghostty_app, cwd, font_size, window, cx)
             };
 
         let mut tabs: Vec<Tab> = session
@@ -245,7 +198,8 @@ impl ConWorkspace {
             panel
         });
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
-        let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
+        let registry = model_registry.clone();
+        let settings_panel = cx.new(|cx| SettingsPanel::new(&config, registry, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
         let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
             log::error!(
@@ -254,9 +208,6 @@ impl ConWorkspace {
             );
             panic!("Fatal: agent harness initialization failed: {}", e);
         });
-        let suggestion_engine = harness.suggestion_engine(300);
-        let (suggestion_tx, suggestion_rx) = crossbeam_channel::unbounded();
-
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
@@ -296,8 +247,7 @@ impl ConWorkspace {
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
             .detach();
 
-        // Poll all tabs' agent sessions + suggestions
-        let suggestion_rx_for_poll = suggestion_rx.clone();
+        // Poll all tabs' agent sessions.
         cx.spawn(async move |this, cx| {
             loop {
                 let mut got_event = false;
@@ -336,12 +286,6 @@ impl ConWorkspace {
                             workspace.handle_pane_request_for_tab(tab_idx, req, cx);
                         }
                     }
-
-                    // Apply suggestion results
-                    while let Ok((entity_id, suggestion)) = suggestion_rx_for_poll.try_recv() {
-                        got_event = true;
-                        workspace.apply_suggestion(entity_id, suggestion, cx);
-                    }
                 })
                 .ok();
 
@@ -372,7 +316,6 @@ impl ConWorkspace {
             tabs,
             active_tab,
             font_size,
-            scrollback_lines,
             agent_panel,
             input_bar,
             settings_panel,
@@ -385,51 +328,19 @@ impl ConWorkspace {
             ghostty_hidden: false,
             pending_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
             agent_panel_drag: None,
-            suggestion_engine,
-            suggestion_tx,
             terminal_theme,
-            #[cfg(target_os = "macos")]
-            use_ghostty,
-            #[cfg(target_os = "macos")]
             ghostty_app,
         }
     }
 
-    /// Create a new TerminalPane using the configured backend.
+    /// Create a new Ghostty terminal pane.
     fn create_terminal(
         &mut self,
         cwd: Option<&str>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TerminalPane {
-        #[cfg(target_os = "macos")]
-        if self.use_ghostty {
-            // Lazy-init the shared ghostty app
-            if self.ghostty_app.is_none() {
-                let colors = theme_to_ghostty_colors(&self.terminal_theme);
-                match con_ghostty::GhosttyApp::new(Some(&colors)) {
-                    Ok(app) => {
-                        self.ghostty_app = Some(std::sync::Arc::new(app));
-                    }
-                    Err(e) => {
-                        log::error!("Failed to create ghostty app: {}. Falling back to grid.", e);
-                        self.use_ghostty = false;
-                    }
-                }
-            }
-            if let Some(ref app) = self.ghostty_app {
-                let pane = make_ghostty_terminal(app, window, cx);
-                return pane;
-            }
-        }
-        make_legacy_terminal(
-            self.font_size,
-            self.scrollback_lines,
-            &self.terminal_theme,
-            cwd,
-            window,
-            cx,
-        )
+        make_ghostty_terminal(&self.ghostty_app, cwd, self.font_size, window, cx)
     }
 
     fn active_terminal(&self) -> &TerminalPane {
@@ -479,39 +390,22 @@ impl ConWorkspace {
             }
         }
 
-        // Build context via Grid if available (legacy), otherwise construct manually
-        if let Some(focused_grid) = focused.as_grid(cx) {
-            self.harness.build_context(
-                &focused_grid.lock(),
-                None,
-                focused_pane_index,
-                focused_hostname,
-                focused_meta.title,
-                focused_meta.mode,
-                focused_meta.has_shell_integration,
-                focused_meta.shell_metadata_fresh,
-                focused_meta.tmux_session,
-                other_pane_summaries,
-            )
-        } else {
-            // Ghostty: build context without Grid access
-            self.harness.build_context_from_snapshot(
-                &focused.content_lines(50, cx),
-                focused.current_dir(cx),
-                focused.last_command(cx),
-                focused.last_exit_code(cx),
-                focused.last_command_duration(cx).map(|d| d.as_secs_f64()),
-                focused.is_busy(cx),
-                focused_pane_index,
-                focused_hostname,
-                focused_meta.title,
-                focused_meta.mode,
-                focused_meta.has_shell_integration,
-                focused_meta.shell_metadata_fresh,
-                focused_meta.tmux_session,
-                other_pane_summaries,
-            )
-        }
+        self.harness.build_context_from_snapshot(
+            &focused.content_lines(50, cx),
+            focused.current_dir(cx),
+            focused.last_command(cx),
+            focused.last_exit_code(cx),
+            focused.last_command_duration(cx).map(|d| d.as_secs_f64()),
+            focused.is_busy(cx),
+            focused_pane_index,
+            focused_hostname,
+            focused_meta.title,
+            focused_meta.mode,
+            focused_meta.has_shell_integration,
+            focused_meta.shell_metadata_fresh,
+            focused_meta.tmux_session,
+            other_pane_summaries,
+        )
     }
 
     fn panel_state_from_conversation(&self, conv: &Conversation) -> PanelState {
@@ -823,7 +717,6 @@ impl ConWorkspace {
 
         let term_config = settings.read(cx).terminal_config().clone();
         self.font_size = term_config.font_size;
-        self.scrollback_lines = term_config.scrollback_lines;
 
         // Apply terminal theme if changed
         if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
@@ -884,13 +777,9 @@ impl ConWorkspace {
                 terminal.set_theme(&theme, cx);
             }
         }
-        // Update ghostty app-level config with full color palette
-        #[cfg(target_os = "macos")]
-        if let Some(ref app) = self.ghostty_app {
-            let colors = theme_to_ghostty_colors(&theme);
-            if let Err(e) = app.update_colors(&colors) {
-                log::error!("Failed to update ghostty colors: {}", e);
-            }
+        let colors = theme_to_ghostty_colors(&theme);
+        if let Err(e) = self.ghostty_app.update_colors(&colors) {
+            log::error!("Failed to update ghostty colors: {}", e);
         }
         // Sync GPUI UI theme colors with terminal theme
         crate::theme::sync_gpui_theme(&theme, window, cx);
@@ -1050,9 +939,8 @@ impl ConWorkspace {
     /// Handle a visible terminal execution request from the agent.
     ///
     /// Writes the command to the focused PTY so the user sees it execute.
-    /// Registers an OSC 133 completion callback to capture the output
-    /// and send it back to the tool. Falls back to a timeout-based capture
-    /// for shells without shell integration.
+    /// Uses Ghostty's COMMAND_FINISHED signal when available, with a bounded
+    /// recent-output fallback when shell integration is unavailable.
     fn handle_terminal_exec_request_for_tab(
         &mut self,
         tab_idx: usize,
@@ -1092,93 +980,36 @@ impl ConWorkspace {
         if pane.is_busy(cx) {
             log::warn!(
                 "[workspace] Executing on busy pane — a command is already in progress. \
-                 OSC 133 tracking may produce unexpected results."
+                 Command completion tracking may produce unexpected results."
             );
-        }
-
-        // For legacy terminals, register the OSC 133 completion callback.
-        // Ghostty doesn't support OSC 133 callbacks, so we rely solely on the fallback.
-        if let Some(grid) = pane.as_grid(cx) {
-            let response_tx = req.response_tx.clone();
-            grid.lock()
-                .set_command_complete_callback(Box::new(move |output, exit_code| {
-                    let _ = response_tx.send(TerminalExecResponse { output, exit_code });
-                }));
         }
 
         // Write the command to the PTY — user sees it execute in real time
         let cmd_with_newline = format!("{}\n", req.command);
         pane.write(cmd_with_newline.as_bytes(), cx);
 
-        // Fallback: if OSC 133 never fires (no shell integration, e.g. SSH or ghostty),
-        // detect completion via cursor stability or timeout.
         let fallback_response_tx = req.response_tx;
-        let grid = pane.as_grid(cx);
         let pane_for_fallback = pane.clone();
         cx.spawn(async move |_this, cx| {
-            // Wait for the command to start producing output
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(500))
                 .await;
 
-            let mut stable_count: u32 = 0;
-            let mut last_cursor = (usize::MAX, usize::MAX);
-            let required_stable = 2; // 2 × 500ms = 1s of no cursor movement
-
             for _ in 0..29 {
-                // Check if the OSC 133 callback already responded
-                if fallback_response_tx.is_full() {
+                let finished = _this
+                    .update(cx, |_ws, cx| pane_for_fallback.take_command_finished(cx))
+                    .ok()
+                    .flatten();
+
+                if let Some((exit_code, _duration)) = finished {
+                    let output = _this
+                        .update(cx, |_ws, cx| {
+                            pane_for_fallback.recent_lines(50, cx).join("\n")
+                        })
+                        .unwrap_or_default();
+                    let _ =
+                        fallback_response_tx.try_send(TerminalExecResponse { output, exit_code });
                     return;
-                }
-
-                if let Some(ref grid) = grid {
-                    let (done_osc, cursor_pos) = {
-                        let g = grid.lock();
-                        let osc_done = !g.is_busy() && g.last_prompt_row.is_some();
-                        let pos = (g.cursor.row, g.cursor.col);
-                        (osc_done, pos)
-                    };
-
-                    // Fast path: shell integration detected completion
-                    if done_osc {
-                        break;
-                    }
-
-                    // Slow path: cursor stability (for sessions without shell integration)
-                    if cursor_pos == last_cursor {
-                        stable_count += 1;
-                        if stable_count >= required_stable {
-                            break;
-                        }
-                    } else {
-                        stable_count = 0;
-                        last_cursor = cursor_pos;
-                    }
-                } else {
-                    // Ghostty: poll COMMAND_FINISHED action for reliable completion
-                    let finished = _this
-                        .update(cx, |_ws, cx| pane_for_fallback.take_command_finished(cx))
-                        .ok()
-                        .flatten();
-
-                    if let Some((exit_code, _duration)) = finished {
-                        // Command finished with exit code from shell integration
-                        let output = _this
-                            .update(cx, |_ws, cx| {
-                                pane_for_fallback.recent_lines(50, cx).join("\n")
-                            })
-                            .unwrap_or_default();
-                        let _ = fallback_response_tx
-                            .try_send(TerminalExecResponse { output, exit_code });
-                        return;
-                    }
-
-                    // Safety net: timeout after 29 × 500ms if no signal arrives
-                    // (e.g., shell without integration, or very long command)
-                    stable_count += 1;
-                    if stable_count >= 29 {
-                        break;
-                    }
                 }
 
                 cx.background_executor()
@@ -1186,18 +1017,11 @@ impl ConWorkspace {
                     .await;
             }
 
-            // If the callback already fired, try_send will fail (channel closed).
-            let output = if let Some(ref grid) = grid {
-                let g = grid.lock();
-                g.recent_lines(50).join("\n")
-            } else {
-                // Ghostty: read screen text via the workspace's App context
-                _this
-                    .update(cx, |_ws, cx| {
-                        pane_for_fallback.recent_lines(50, cx).join("\n")
-                    })
-                    .unwrap_or_default()
-            };
+            let output = _this
+                .update(cx, |_ws, cx| {
+                    pane_for_fallback.recent_lines(50, cx).join("\n")
+                })
+                .unwrap_or_default();
             let _ = fallback_response_tx.try_send(TerminalExecResponse {
                 output,
                 exit_code: None,
@@ -1342,6 +1166,15 @@ impl ConWorkspace {
         self.input_bar_visible = !self.input_bar_visible;
         if self.input_bar_visible {
             self.input_bar.focus_handle(cx).focus(window, cx);
+        } else if self.agent_panel_open {
+            let focused_inline = self
+                .agent_panel
+                .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
+            if !focused_inline {
+                self.active_terminal().focus(window, cx);
+            }
+        } else {
+            self.active_terminal().focus(window, cx);
         }
         self.save_session(cx);
         cx.notify();
@@ -1355,7 +1188,7 @@ impl ConWorkspace {
         // Drop runs (calling ghostty_surface_free) before cx.quit() exits the process.
         for tab in &self.tabs {
             for t in tab.pane_tree.all_terminals() {
-                t.set_ghostty_focus(false, cx);
+                t.set_focus_state(false, cx);
                 t.set_native_view_visible(false, cx);
             }
         }
@@ -1428,7 +1261,7 @@ impl ConWorkspace {
         // Hide old tab's ghostty NSViews and unfocus surfaces
         for t in self.tabs[old_active].pane_tree.all_terminals() {
             t.set_native_view_visible(false, cx);
-            t.set_ghostty_focus(false, cx);
+            t.set_focus_state(false, cx);
         }
 
         self.tabs.push(Tab {
@@ -1450,7 +1283,7 @@ impl ConWorkspace {
             .update(cx, |panel, cx| panel.swap_state(incoming, cx));
         self.tabs[old_active].panel_state = outgoing;
 
-        terminal.set_ghostty_focus(true, cx);
+        terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
         self.save_session(cx);
         cx.notify();
@@ -1464,13 +1297,13 @@ impl ConWorkspace {
             // Hide the ghostty NSView of the pane being closed
             let closing = tab.pane_tree.focused_terminal();
             closing.set_native_view_visible(false, cx);
-            closing.set_ghostty_focus(false, cx);
+            closing.set_focus_state(false, cx);
 
             tab.pane_tree.close_focused();
 
             // Focus the new focused pane
             let new_focus = tab.pane_tree.focused_terminal();
-            new_focus.set_ghostty_focus(true, cx);
+            new_focus.set_focus_state(true, cx);
             new_focus.focus(window, cx);
             cx.notify();
             return;
@@ -1490,7 +1323,7 @@ impl ConWorkspace {
         // Hide closing tab's ghostty NSViews
         for t in self.tabs[index].pane_tree.all_terminals() {
             t.set_native_view_visible(false, cx);
-            t.set_ghostty_focus(false, cx);
+            t.set_focus_state(false, cx);
         }
         let was_active = index == self.active_tab;
         self.tabs.remove(index);
@@ -1514,7 +1347,7 @@ impl ConWorkspace {
             t.set_native_view_visible(true, cx);
         }
         let focused = self.tabs[self.active_tab].pane_tree.focused_terminal();
-        focused.set_ghostty_focus(true, cx);
+        focused.set_focus_state(true, cx);
         focused.focus(window, cx);
         self.sync_sidebar(cx);
         self.save_session(cx);
@@ -1576,105 +1409,6 @@ impl ConWorkspace {
         self.split_pane(SplitDirection::Vertical, window, cx);
     }
 
-    pub(crate) fn on_close_pane_request(
-        &mut self,
-        _terminal: &Entity<TerminalView>,
-        _event: &ClosePaneRequest,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
-        if pane_tree.pane_count() > 1 {
-            pane_tree.close_focused();
-            let terminal = pane_tree.focused_terminal();
-            terminal.focus(window, cx);
-        } else if self.tabs.len() > 1 {
-            self.close_tab(&CloseTab, window, cx);
-        } else {
-            // Last pane in last tab — quit the app
-            self.cancel_all_sessions();
-            cx.quit();
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn on_focus_changed(
-        &mut self,
-        terminal: &Entity<TerminalView>,
-        _event: &FocusChanged,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let entity_id = terminal.entity_id();
-        let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
-        if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
-            pane_tree.focus(pane_id);
-            terminal.focus_handle(cx).focus(window, cx);
-        }
-        cx.notify();
-    }
-
-    fn apply_suggestion(
-        &mut self,
-        entity_id: gpui::EntityId,
-        suggestion: String,
-        cx: &mut Context<Self>,
-    ) {
-        // Find the terminal with this entity_id across all tabs
-        for tab in &self.tabs {
-            for terminal in tab.pane_tree.all_terminals() {
-                if terminal.entity_id() == entity_id {
-                    terminal.set_suggestion(Some(suggestion), cx);
-                    return;
-                }
-            }
-        }
-    }
-
-    pub(crate) fn on_input_changed(
-        &mut self,
-        terminal: &Entity<TerminalView>,
-        event: &InputChanged,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let entity_id = terminal.entity_id();
-        match &event.input {
-            Some(input) if input.len() >= 2 => {
-                let tx = self.suggestion_tx.clone();
-                self.suggestion_engine.request(input, move |suggestion| {
-                    let _ = tx.send((entity_id, suggestion));
-                });
-            }
-            _ => {
-                self.suggestion_engine.cancel();
-                // Clear any existing suggestion — find the pane and use TerminalPane API
-                for tab in &self.tabs {
-                    for pane in tab.pane_tree.all_terminals() {
-                        if pane.entity_id() == entity_id {
-                            pane.set_suggestion(None, cx);
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    pub(crate) fn on_explain_command(
-        &mut self,
-        _terminal: &Entity<TerminalView>,
-        event: &ExplainCommand,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let prompt = format!(
-            "Explain this command and its output:\n\nCommand: {}\n\nOutput:\n```\n{}\n```",
-            event.command, event.output
-        );
-        self.send_to_agent(&prompt, cx);
-    }
-
     fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.tabs.len() || index == self.active_tab {
             return;
@@ -1693,7 +1427,7 @@ impl ConWorkspace {
         // Hide old tab's ghostty NSViews and unfocus surfaces
         for terminal in self.tabs[old_active].pane_tree.all_terminals() {
             terminal.set_native_view_visible(false, cx);
-            terminal.set_ghostty_focus(false, cx);
+            terminal.set_focus_state(false, cx);
         }
 
         self.active_tab = index;
@@ -1704,7 +1438,7 @@ impl ConWorkspace {
             terminal.set_native_view_visible(true, cx);
         }
         let focused = self.tabs[index].pane_tree.focused_terminal();
-        focused.set_ghostty_focus(true, cx);
+        focused.set_focus_state(true, cx);
         focused.focus(window, cx);
 
         self.save_session(cx);
@@ -1745,8 +1479,7 @@ impl ConWorkspace {
 
     // ── Ghostty event handlers ──────────────────────────────
 
-    #[cfg(target_os = "macos")]
-    pub(crate) fn on_ghostty_focus_changed(
+    pub(crate) fn on_terminal_focus_changed(
         &mut self,
         entity: &Entity<GhosttyView>,
         _event: &GhosttyFocusChanged,
@@ -1762,8 +1495,7 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    #[cfg(target_os = "macos")]
-    pub(crate) fn on_ghostty_process_exited(
+    pub(crate) fn on_terminal_process_exited(
         &mut self,
         _entity: &Entity<GhosttyView>,
         _event: &GhosttyProcessExited,
@@ -1785,8 +1517,7 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    #[cfg(target_os = "macos")]
-    pub(crate) fn on_ghostty_title_changed(
+    pub(crate) fn on_terminal_title_changed(
         &mut self,
         _entity: &Entity<GhosttyView>,
         _event: &GhosttyTitleChanged,

@@ -12,14 +12,8 @@ fn default_font_size() -> f32 {
 fn default_theme() -> String {
     "flexoki-light".into()
 }
-fn default_scrollback() -> usize {
-    10_000
-}
 fn default_cursor_style() -> String {
     "bar".into()
-}
-fn default_backend() -> String {
-    "auto".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,10 +22,7 @@ pub struct TerminalConfig {
     pub font_family: String,
     pub font_size: f32,
     pub theme: String,
-    pub scrollback_lines: usize,
     pub cursor_style: String,
-    /// Terminal backend: "auto" (ghostty on macOS, grid elsewhere), "grid", or "ghostty" (macOS only).
-    pub backend: String,
 }
 
 impl Default for TerminalConfig {
@@ -40,22 +31,7 @@ impl Default for TerminalConfig {
             font_family: default_font_family(),
             font_size: default_font_size(),
             theme: default_theme(),
-            scrollback_lines: default_scrollback(),
             cursor_style: default_cursor_style(),
-            backend: default_backend(),
-        }
-    }
-}
-
-impl TerminalConfig {
-    /// Resolve the effective backend based on config value and platform.
-    /// Returns true if ghostty should be used.
-    pub fn use_ghostty(&self) -> bool {
-        match self.backend.as_str() {
-            "ghostty" => cfg!(target_os = "macos"),
-            "grid" => false,
-            // "auto" — use ghostty on macOS, grid elsewhere
-            _ => cfg!(target_os = "macos"),
         }
     }
 }

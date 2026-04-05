@@ -257,6 +257,7 @@ impl GhosttyApp {
         nsview: *mut c_void,
         scale_factor: f64,
         cwd: Option<&str>,
+        font_size: Option<f32>,
     ) -> Result<GhosttyTerminal, String> {
         // Per-surface state — stored as surface userdata so callbacks can
         // update the correct terminal's state.
@@ -272,6 +273,7 @@ impl GhosttyApp {
         config.userdata = surface_userdata;
         config.scale_factor = scale_factor;
         config.context = ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_TAB;
+        config.font_size = font_size.unwrap_or(14.0);
 
         let cwd_cstr = cwd.and_then(|s| CString::new(s).ok());
         if let Some(ref s) = cwd_cstr {

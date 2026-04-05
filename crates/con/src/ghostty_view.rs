@@ -50,6 +50,8 @@ pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
+    initial_cwd: Option<String>,
+    initial_font_size: f32,
     #[cfg(target_os = "macos")]
     nsview: Option<id>,
     initialized: bool,
@@ -69,7 +71,12 @@ pub fn init(cx: &mut App) {
 }
 
 impl GhosttyView {
-    pub fn new(app: Arc<GhosttyApp>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        app: Arc<GhosttyApp>,
+        cwd: Option<String>,
+        font_size: f32,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // Tick ghostty periodically. The update() closure runs on the main
         // thread, which is required for ghostty_app_tick (Metal rendering).
         cx.spawn(async move |this, cx| {
@@ -107,6 +114,8 @@ impl GhosttyView {
             app,
             terminal: None,
             focus_handle: cx.focus_handle(),
+            initial_cwd: cwd,
+            initial_font_size: font_size,
             #[cfg(target_os = "macos")]
             nsview: None,
             initialized: false,
@@ -175,7 +184,12 @@ impl GhosttyView {
         };
 
         let scale = self.scale_factor as f64;
-        match self.app.new_surface(nsview as *mut c_void, scale, None) {
+        match self.app.new_surface(
+            nsview as *mut c_void,
+            scale,
+            self.initial_cwd.as_deref(),
+            Some(self.initial_font_size),
+        ) {
             Ok(terminal) => {
                 let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
                 let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
