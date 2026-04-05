@@ -374,7 +374,9 @@ impl ConWorkspace {
                         con_agent::context::PaneRuntimeState::from_observation(&observation);
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
-                        hostname: observation.detected_remote_host.clone(),
+                        hostname: runtime.remote_host.clone(),
+                        hostname_confidence: runtime.remote_host_confidence,
+                        hostname_source: runtime.remote_host_source,
                         title: observation.title.clone(),
                         mode: runtime.mode,
                         has_shell_integration: observation.has_shell_integration,
@@ -1060,7 +1062,9 @@ impl ConWorkspace {
                             rows,
                             cols,
                             is_alive: terminal.is_alive(cx),
-                            hostname: observation.detected_remote_host,
+                            hostname: runtime.remote_host.clone(),
+                            hostname_confidence: runtime.remote_host_confidence,
+                            hostname_source: runtime.remote_host_source,
                             mode: runtime.mode,
                             shell_metadata_fresh: runtime.shell_metadata_fresh,
                             runtime_stack: runtime.scope_stack,

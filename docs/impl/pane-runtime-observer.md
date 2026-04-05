@@ -345,6 +345,12 @@ Also, Ghostty's OSC 7 handling validates the reported hostname against the local
 
 This matters because a product design that depends on remote hostname coming from Ghostty `PWD` is structurally unsound.
 
+Current con behavior reflects that limit:
+
+- remote host identity is merged from pane-local evidence, not OSC 7 alone
+- tmux status lines and pane titles can contribute advisory host hints
+- when no evidence survives that merge, the runtime model keeps host as `unknown` instead of collapsing to `local`
+
 ## Probe design
 
 The observer should run probes independently and merge their evidence.

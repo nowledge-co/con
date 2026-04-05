@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -117,6 +119,9 @@ pub struct PaneObservationFrame {
 pub struct PaneRuntimeState {
     pub mode: PaneMode,
     pub shell_metadata_fresh: bool,
+    pub remote_host: Option<String>,
+    pub remote_host_confidence: Option<PaneConfidence>,
+    pub remote_host_source: Option<PaneEvidenceSource>,
     pub tmux_session: Option<String>,
     pub scope_stack: Vec<PaneRuntimeScope>,
     pub warnings: Vec<String>,
@@ -124,6 +129,11 @@ pub struct PaneRuntimeState {
 
 impl PaneRuntimeState {
     pub fn from_observation(observation: &PaneObservationFrame) -> Self {
+        let remote_host_hint = detect_remote_host_hint(
+            observation.title.as_deref(),
+            observation.detected_remote_host.as_deref(),
+            &observation.recent_output,
+        );
         let tmux_scope = detect_tmux_scope(
             observation.title.as_deref(),
             observation.last_command.as_deref(),
@@ -162,13 +172,13 @@ impl PaneRuntimeState {
             });
         }
 
-        if let Some(host) = observation.detected_remote_host.clone() {
+        if let Some((host, confidence, evidence_source)) = remote_host_hint.clone() {
             scope_stack.push(PaneRuntimeScope {
                 kind: PaneScopeKind::RemoteShell,
                 label: None,
                 host: Some(host),
-                confidence: PaneConfidence::Advisory,
-                evidence_source: PaneEvidenceSource::Osc7,
+                confidence,
+                evidence_source,
             });
         }
 
@@ -209,15 +219,23 @@ impl PaneRuntimeState {
                     .to_string(),
             );
         }
-        if observation.detected_remote_host.is_some() {
+        if remote_host_hint.is_some() {
             warnings.push(
                 "Remote host identity is inferred from terminal metadata and should be verified before destructive actions.".to_string(),
             );
         }
 
+        let (remote_host, remote_host_confidence, remote_host_source) = match remote_host_hint {
+            Some((host, confidence, source)) => (Some(host), Some(confidence), Some(source)),
+            None => (None, None, None),
+        };
+
         Self {
             mode,
             shell_metadata_fresh,
+            remote_host,
+            remote_host_confidence,
+            remote_host_source,
             tmux_session,
             scope_stack,
             warnings,
@@ -269,6 +287,152 @@ fn line_looks_like_tmux_status(line: &str) -> bool {
         })
         .count();
     numbered_windows >= 2
+}
+
+fn local_hostname_aliases() -> &'static [String] {
+    static LOCAL_HOSTNAME_ALIASES: OnceLock<Vec<String>> = OnceLock::new();
+    LOCAL_HOSTNAME_ALIASES.get_or_init(|| {
+        let raw = gethostname::gethostname()
+            .to_string_lossy()
+            .trim()
+            .to_ascii_lowercase();
+        let mut aliases = Vec::new();
+        if !raw.is_empty() {
+            aliases.push(raw.clone());
+            if let Some(short) = raw.split('.').next() {
+                if !short.is_empty() {
+                    aliases.push(short.to_string());
+                }
+            }
+        }
+        aliases.sort();
+        aliases.dedup();
+        aliases
+    })
+}
+
+fn normalize_host_candidate(raw: &str) -> Option<String> {
+    let candidate = raw
+        .trim()
+        .trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '`' | '[' | ']' | '(' | ')' | '{' | '}' | '<' | '>' | ',' | ';'
+            )
+        })
+        .trim_matches('.');
+
+    if candidate.is_empty() || candidate.contains('/') || candidate.contains('\\') {
+        return None;
+    }
+
+    if candidate.starts_with('-')
+        || !candidate
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
+        return None;
+    }
+
+    let lower = candidate.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "localhost"
+            | "local"
+            | "terminal"
+            | "tmux"
+            | "tmate"
+            | "zellij"
+            | "vim"
+            | "nvim"
+            | "top"
+            | "htop"
+            | "nvtop"
+            | "claude"
+            | "codex"
+            | "opencode"
+    ) {
+        return None;
+    }
+
+    Some(candidate.to_string())
+}
+
+fn is_local_hostname(candidate: &str) -> bool {
+    let lower = candidate.to_ascii_lowercase();
+    local_hostname_aliases().iter().any(|alias| alias == &lower)
+}
+
+fn host_candidate_from_user_at_host(text: &str) -> Option<String> {
+    text.split_whitespace().find_map(|token| {
+        let (_, host) = token.rsplit_once('@')?;
+        let host = normalize_host_candidate(host)?;
+        (!is_local_hostname(&host)).then_some(host)
+    })
+}
+
+fn host_candidate_from_tmux_status(line: &str) -> Option<String> {
+    if !line_looks_like_tmux_status(line) {
+        return None;
+    }
+
+    line.split_whitespace().rev().find_map(|token| {
+        if token.contains(':')
+            || token
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, '*' | '-' | '.'))
+        {
+            return None;
+        }
+        let candidate = normalize_host_candidate(token)?;
+        (!is_local_hostname(&candidate)).then_some(candidate)
+    })
+}
+
+fn host_candidate_from_title(title: &str) -> Option<String> {
+    if let Some(host) = host_candidate_from_user_at_host(title) {
+        return Some(host);
+    }
+
+    if title.contains(char::is_whitespace) {
+        return None;
+    }
+
+    let candidate = normalize_host_candidate(title)?;
+    (!is_local_hostname(&candidate)).then_some(candidate)
+}
+
+fn detect_remote_host_hint(
+    title: Option<&str>,
+    osc7_host: Option<&str>,
+    recent_output: &[String],
+) -> Option<(String, PaneConfidence, PaneEvidenceSource)> {
+    if let Some(host) = osc7_host
+        .and_then(normalize_host_candidate)
+        .filter(|host| !is_local_hostname(host))
+    {
+        return Some((host, PaneConfidence::Advisory, PaneEvidenceSource::Osc7));
+    }
+
+    if let Some(host) = title.and_then(host_candidate_from_user_at_host) {
+        return Some((host, PaneConfidence::Advisory, PaneEvidenceSource::Title));
+    }
+
+    if let Some(host) = recent_output.iter().rev().find_map(|line| {
+        host_candidate_from_user_at_host(line).or_else(|| host_candidate_from_tmux_status(line))
+    }) {
+        return Some((
+            host,
+            PaneConfidence::Advisory,
+            PaneEvidenceSource::ScreenStructure,
+        ));
+    }
+
+    if let Some(host) = title.and_then(host_candidate_from_title) {
+        return Some((host, PaneConfidence::Advisory, PaneEvidenceSource::Title));
+    }
+
+    None
 }
 
 fn looks_like_dense_fullscreen_ui(recent_output: &[String]) -> bool {
@@ -466,8 +630,12 @@ pub fn shell_metadata_is_fresh(
 pub struct TerminalContext {
     /// 1-based index of the focused pane
     pub focused_pane_index: usize,
-    /// Remote hostname of the focused pane (None if local)
+    /// Effective remote hostname of the focused pane when detected.
     pub focused_hostname: Option<String>,
+    /// Confidence for the focused remote hostname, when known.
+    pub focused_hostname_confidence: Option<PaneConfidence>,
+    /// Evidence source for the focused remote hostname, when known.
+    pub focused_hostname_source: Option<PaneEvidenceSource>,
     /// Focused pane title if available.
     pub focused_title: Option<String>,
     /// Whether the focused pane looks like a shell, multiplexer, or TUI.
@@ -492,7 +660,7 @@ pub struct TerminalContext {
     pub last_command_duration_secs: Option<f64>,
     /// Git branch if in a repo
     pub git_branch: Option<String>,
-    /// SSH remote host (parsed from SSH_CONNECTION), if in an SSH session
+    /// Effective remote host for the focused pane, if detected.
     pub ssh_host: Option<String>,
     /// tmux session name, if inside tmux
     pub tmux_session: Option<String>,
@@ -523,8 +691,10 @@ pub struct CommandBlockInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaneSummary {
     pub pane_index: usize,
-    /// Remote hostname if this is an SSH session, None if local.
+    /// Effective remote hostname when detected.
     pub hostname: Option<String>,
+    pub hostname_confidence: Option<PaneConfidence>,
+    pub hostname_source: Option<PaneEvidenceSource>,
     pub title: Option<String>,
     pub mode: PaneMode,
     pub has_shell_integration: bool,
@@ -566,6 +736,8 @@ impl TerminalContext {
         Self {
             focused_pane_index: 1,
             focused_hostname: None,
+            focused_hostname_confidence: None,
+            focused_hostname_source: None,
             focused_title: None,
             focused_pane_mode: PaneMode::Unknown,
             focused_has_shell_integration: false,
@@ -648,6 +820,12 @@ impl TerminalContext {
         ));
         if let Some(host) = &self.focused_hostname {
             prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
+            if let Some(confidence) = self.focused_hostname_confidence {
+                prompt.push_str(&format!(" host_confidence=\"{}\"", confidence.as_str()));
+            }
+            if let Some(source) = self.focused_hostname_source {
+                prompt.push_str(&format!(" host_source=\"{}\"", source.as_str()));
+            }
         }
         if let Some(title) = &self.focused_title {
             prompt.push_str(&format!(" title=\"{}\"", xml_escape(title)));
@@ -689,20 +867,26 @@ impl TerminalContext {
         if total_panes > 1 {
             prompt.push_str("<panes>\n");
             // Focused pane
-            let host_label = self.focused_hostname.as_deref().unwrap_or("local");
             let cwd_label = self.cwd.as_deref().unwrap_or("?");
             prompt.push_str(&format!(
-                "  <pane index=\"{}\" focused=\"true\" host=\"{}\" cwd=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\" runtime=\"{}\"/>\n",
+                "  <pane index=\"{}\" focused=\"true\" cwd=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\" runtime=\"{}\"",
                 self.focused_pane_index,
-                xml_escape(host_label),
                 xml_escape(cwd_label),
                 self.focused_pane_mode.as_str(),
                 self.focused_shell_metadata_fresh,
                 xml_escape(&format_runtime_stack(&self.focused_runtime_stack))
             ));
+            if let Some(host) = &self.focused_hostname {
+                prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
+                if let Some(confidence) = self.focused_hostname_confidence {
+                    prompt.push_str(&format!(" host_confidence=\"{}\"", confidence.as_str()));
+                }
+            } else {
+                prompt.push_str(" host=\"unknown\"");
+            }
+            prompt.push_str("/>\n");
             // Other panes
             for pane in &self.other_panes {
-                let host = pane.hostname.as_deref().unwrap_or("local");
                 let cwd = pane.cwd.as_deref().unwrap_or("?");
                 let busy = if pane.is_busy { " busy=\"true\"" } else { "" };
                 let stale = if pane.shell_metadata_fresh {
@@ -715,13 +899,23 @@ impl TerminalContext {
                     .as_deref()
                     .map(|session| format!(" tmux=\"{}\"", xml_escape(session)))
                     .unwrap_or_default();
+                let host = pane
+                    .hostname
+                    .as_deref()
+                    .map(|host| format!(" host=\"{}\"", xml_escape(host)))
+                    .unwrap_or_else(|| " host=\"unknown\"".to_string());
+                let host_confidence = pane
+                    .hostname_confidence
+                    .map(|confidence| format!(" host_confidence=\"{}\"", confidence.as_str()))
+                    .unwrap_or_default();
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" host=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}/>\n",
+                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}/>\n",
                     pane.pane_index,
-                    xml_escape(host),
                     xml_escape(cwd),
                     pane.mode.as_str(),
                     xml_escape(&format_runtime_stack(&pane.runtime_stack)),
+                    host,
+                    host_confidence,
                     busy,
                     stale,
                     tmux
@@ -834,7 +1028,8 @@ impl TerminalContext {
 mod tests {
     use super::{
         PaneConfidence, PaneEvidenceSource, PaneMode, PaneObservationFrame, PaneRuntimeState,
-        detect_tmux_session, infer_pane_mode, shell_metadata_is_fresh,
+        TerminalContext, detect_remote_host_hint, detect_tmux_session, infer_pane_mode,
+        shell_metadata_is_fresh,
     };
 
     #[test]
@@ -898,6 +1093,86 @@ mod tests {
                 && scope.evidence_source == PaneEvidenceSource::CommandLine
                 && scope.confidence == PaneConfidence::Strong
         }));
+    }
+
+    #[test]
+    fn detects_remote_host_from_tmux_status_when_osc7_is_missing() {
+        let hint = detect_remote_host_hint(
+            Some("haswell"),
+            None,
+            &vec![
+                "nvtop 1.4.1".to_string(),
+                "0* 63d 3h 22m 1 model-serving 2 ops 3 nekomaster haswell".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            hint,
+            Some((
+                "haswell".to_string(),
+                PaneConfidence::Advisory,
+                PaneEvidenceSource::ScreenStructure,
+            ))
+        );
+    }
+
+    #[test]
+    fn runtime_state_uses_inferred_remote_host_without_osc7() {
+        let observation = PaneObservationFrame {
+            title: Some("haswell".to_string()),
+            cwd: Some("/home/w".to_string()),
+            recent_output: vec![
+                "nvtop 1.4.1".to_string(),
+                "0* 63d 3h 22m 1 model-serving 2 ops 3 nekomaster haswell".to_string(),
+            ],
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            detected_remote_host: None,
+            has_shell_integration: true,
+            is_alt_screen: false,
+            is_busy: false,
+        };
+
+        let runtime = PaneRuntimeState::from_observation(&observation);
+        assert_eq!(runtime.remote_host.as_deref(), Some("haswell"));
+        assert_eq!(
+            runtime.remote_host_source,
+            Some(PaneEvidenceSource::ScreenStructure)
+        );
+    }
+
+    #[test]
+    fn system_prompt_marks_unknown_host_as_unknown_not_local() {
+        let prompt = TerminalContext {
+            focused_pane_index: 1,
+            focused_hostname: None,
+            focused_hostname_confidence: None,
+            focused_hostname_source: None,
+            focused_title: Some("Terminal".to_string()),
+            focused_pane_mode: PaneMode::Shell,
+            focused_has_shell_integration: false,
+            focused_shell_metadata_fresh: false,
+            focused_runtime_stack: Vec::new(),
+            focused_runtime_warnings: Vec::new(),
+            cwd: Some("/tmp".to_string()),
+            recent_output: Vec::new(),
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            git_branch: None,
+            ssh_host: None,
+            tmux_session: None,
+            agents_md: None,
+            skills: Vec::new(),
+            command_history: Vec::new(),
+            other_panes: vec![],
+            git_diff: None,
+            project_structure: None,
+        }
+        .to_system_prompt();
+
+        assert!(!prompt.contains("host=\"local\""));
     }
 
     #[test]

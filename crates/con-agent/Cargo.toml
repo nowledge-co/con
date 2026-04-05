@@ -18,3 +18,4 @@ crossbeam-channel.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 dirs.workspace = true
+gethostname.workspace = true

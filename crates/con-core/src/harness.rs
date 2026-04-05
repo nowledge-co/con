@@ -334,11 +334,13 @@ impl AgentHarness {
             }
         });
 
-        let ssh_host = focused_observation.detected_remote_host.clone();
+        let ssh_host = focused_runtime.remote_host.clone();
 
         TerminalContext {
             focused_pane_index,
-            focused_hostname: focused_observation.detected_remote_host.clone(),
+            focused_hostname: focused_runtime.remote_host.clone(),
+            focused_hostname_confidence: focused_runtime.remote_host_confidence,
+            focused_hostname_source: focused_runtime.remote_host_source,
             focused_title: focused_observation.title.clone(),
             focused_pane_mode: focused_runtime.mode,
             focused_has_shell_integration: focused_observation.has_shell_integration,

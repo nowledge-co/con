@@ -25,6 +25,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 **AI Agent**
 - The agent system prompt has been restructured for sharper tool usage. Questions are answered with minimal side effects; tasks are executed carefully with verification. Each tool now has explicit guidelines so the agent picks the right one the first time.
 - Remote host detection works on Ghostty panes — the agent correctly identifies SSH sessions and targets the right host.
+- Remote panes no longer silently fall back to `local` when host evidence is missing. con now keeps host as `unknown` unless the pane itself provides a defensible signal, and it can recover advisory remote host hints from tmux status lines and pane titles when OSC 7 is absent.
 - Busy/idle detection works on Ghostty panes — the agent waits for a running command to finish before sending another.
 - Pane-aware context is more honest in tmux and terminal UIs. The agent now distinguishes ordinary shells from multiplexers and full-screen apps, and it stops over-trusting stale cwd or command metadata when the visible pane has moved on.
 - tmux awareness now comes from the pane itself instead of inherited app state, which reduces wrong assumptions after manually attaching to a session mid-chat.

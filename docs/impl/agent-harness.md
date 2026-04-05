@@ -249,8 +249,9 @@ When multiple panes are open, the system prompt includes a `<panes>` block listi
 
 This matters for SSH, tmux, and full-screen TUIs:
 
-- `ssh_host` comes from the pane's own remote-host detection, never from the app process environment.
+- `ssh_host` comes from pane-local evidence only. con prefers a detected host from the pane itself and now falls back to title/screen-structure hints when OSC 7 does not carry a usable remote hostname.
 - `tmux_session` is inferred from the pane itself (command/title/screen hints), not from `TMUX` in the parent process.
+- When remote identity is unknown, the prompt says `unknown`, not `local`.
 - When the pane mode is not `shell`, or shell metadata is stale, the prompt explicitly tells the model to inspect the live pane with `list_panes`, `read_pane`, and `send_keys` before making claims about cwd, hostname, or the running app.
 
 This is still a transitional architecture. The next layer is a dedicated pane runtime observer that keeps evidence and models nested scopes such as `ssh -> tmux -> shell -> Codex CLI`. See `docs/impl/pane-runtime-observer.md`.

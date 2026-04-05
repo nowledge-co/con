@@ -681,8 +681,12 @@ pub struct PaneInfo {
     pub cols: usize,
     /// Whether the PTY child process is still running.
     pub is_alive: bool,
-    /// Hostname from OSC 7 URI — differs from local hostname for SSH sessions.
+    /// Effective hostname inferred from pane-local evidence.
     pub hostname: Option<String>,
+    /// Confidence for the effective hostname, when detected.
+    pub hostname_confidence: Option<crate::context::PaneConfidence>,
+    /// Evidence source for the effective hostname, when detected.
+    pub hostname_source: Option<crate::context::PaneEvidenceSource>,
     /// Current pane mode: shell, tmux-like multiplexer, or another TUI.
     pub mode: PaneMode,
     /// Whether shell metadata like cwd and last_command is likely fresh for the visible app.
