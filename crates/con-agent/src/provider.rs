@@ -498,20 +498,36 @@ impl AgentProvider {
             .map(|m| m.content.clone())
             .unwrap_or_default();
 
+        let model = self.config.effective_model(kind);
+        let base_url = self.config.effective_base_url(kind);
         log::info!(
-            "[agent] Sending to {:?}/{}: system_prompt={} chars, history={} msgs, user_msg={} chars, panes={}",
+            "[agent] Sending to {:?}/{}: system_prompt={} chars, history={} msgs, user_msg={} chars, panes={}, base_url={:?}",
             kind,
-            self.config.effective_model(kind),
+            model,
             system_prompt.len(),
             chat_history.len(),
             last_user_msg.len(),
             1 + context.other_panes.len(),
+            base_url,
         );
+
+        // Warn if a custom base_url is set but the model is the provider default —
+        // the user probably forgot to set [agent.providers.<name>].model and is
+        // sending the default model name to a third-party API.
+        if base_url.is_some() && model == kind.default_model() {
+            log::warn!(
+                "[agent] Custom base_url is set for {:?} but model is the default '{}'. \
+                 Set [agent.providers.{:?}].model in config.toml to override.",
+                kind,
+                model,
+                kind,
+            );
+        }
 
         let _ = event_tx.send(AgentEvent::Step(AgentStep::Thinking(format!(
             "{}:{}",
             kind,
-            self.config.effective_model(kind),
+            model,
         ))));
 
         log::info!(
@@ -557,8 +573,9 @@ impl AgentProvider {
 
         let response = match *kind {
             ProviderKind::Anthropic => stream_with!(self.build_anthropic_client()?),
-            ProviderKind::OpenAI | ProviderKind::OpenAICompatible => {
-                stream_with!(self.build_openai_client()?)
+            ProviderKind::OpenAI => stream_with!(self.build_openai_client()?),
+            ProviderKind::OpenAICompatible => {
+                stream_with!(self.build_openai_compatible_client()?)
             }
             ProviderKind::DeepSeek => stream_with!(self.build_deepseek_client()?),
             ProviderKind::Groq => stream_with!(self.build_groq_client()?),
@@ -597,15 +614,28 @@ impl AgentProvider {
     }
 
     fn build_openai_client(&self) -> Result<openai::Client> {
-        let kind = &self.config.provider; // OpenAI or OpenAICompatible
-        let api_key = self.resolve_api_key(kind)?;
+        let api_key = self.resolve_api_key(&ProviderKind::OpenAI)?;
         let mut builder = openai::Client::builder().api_key(&api_key);
-        if let Some(url) = self.config.effective_base_url(kind) {
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::OpenAI) {
             builder = builder.base_url(url);
         }
         builder
             .build()
             .map_err(|e| anyhow::anyhow!("OpenAI client error: {e}"))
+    }
+
+    /// OpenAI-compatible providers use the Chat Completions API (`/chat/completions`)
+    /// rather than the Responses API (`/responses`). Most third-party providers
+    /// (MiniMax, Together, etc.) only implement the completions endpoint.
+    fn build_openai_compatible_client(&self) -> Result<openai::CompletionsClient> {
+        let api_key = self.resolve_api_key(&ProviderKind::OpenAICompatible)?;
+        let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::OpenAICompatible) {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("OpenAI-compatible client error: {e}"))
     }
 
     fn build_deepseek_client(&self) -> Result<deepseek::Client> {
@@ -744,8 +774,9 @@ impl AgentProvider {
 
         match *kind {
             ProviderKind::Anthropic => do_complete!(self.build_anthropic_client()?),
-            ProviderKind::OpenAI | ProviderKind::OpenAICompatible => {
-                do_complete!(self.build_openai_client()?)
+            ProviderKind::OpenAI => do_complete!(self.build_openai_client()?),
+            ProviderKind::OpenAICompatible => {
+                do_complete!(self.build_openai_compatible_client()?)
             }
             ProviderKind::DeepSeek => do_complete!(self.build_deepseek_client()?),
             ProviderKind::Groq => do_complete!(self.build_groq_client()?),
