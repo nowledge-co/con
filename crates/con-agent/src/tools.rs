@@ -1025,6 +1025,13 @@ impl Tool for SendKeysTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         // Decode escape sequences in the keys string
         let decoded = decode_key_escapes(&args.keys);
+        log::info!(
+            "[send_keys] pane={} raw={:?} decoded={:?} decoded_bytes={:?}",
+            args.pane_index,
+            args.keys,
+            decoded,
+            decoded.as_bytes()
+        );
 
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
         self.pane_tx
@@ -1280,7 +1287,16 @@ impl Tool for SearchPanesTool {
 }
 
 /// Decode common escape sequences in key strings.
-/// Supports: \n, \t, \r, \xNN (hex byte), \x1b[... (ANSI sequences).
+/// Decode escape sequences in keys strings from LLMs.
+///
+/// Supports multiple notations that LLMs commonly produce:
+/// - Standard: `\n`, `\t`, `\r`, `\\`
+/// - Hex with backslash: `\x1b`, `\x03` (preferred notation)
+/// - Hex without backslash: `x1b`, `x03` (weaker models omit the backslash)
+///
+/// The bare-hex fallback (`x1b`) is only triggered when the two hex digits
+/// form a valid control character (0x00–0x1F) or DEL (0x7F), so it won't
+/// corrupt normal text like "exit" or "maximum".
 fn decode_key_escapes(input: &str) -> String {
     let mut result = Vec::new();
     let bytes = input.as_bytes();
@@ -1319,6 +1335,22 @@ fn decode_key_escapes(input: &str) -> String {
                     i += 1;
                 }
             }
+        } else if bytes[i] == b'x' && i + 2 < bytes.len() {
+            // Bare hex without backslash: "x1b", "x03", etc.
+            // Only match control characters (0x00-0x1F) and DEL (0x7F)
+            // to avoid false positives in normal text.
+            let hex = &input[i + 1..i + 3];
+            if hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    if byte <= 0x1F || byte == 0x7F {
+                        result.push(byte);
+                        i += 3;
+                        continue;
+                    }
+                }
+            }
+            result.push(bytes[i]);
+            i += 1;
         } else {
             result.push(bytes[i]);
             i += 1;
@@ -1379,4 +1411,85 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     }
 
     inner(&mut p, &mut t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_key_escapes;
+
+    #[test]
+    fn decode_standard_escapes() {
+        assert_eq!(decode_key_escapes(r"\n"), "\n");
+        assert_eq!(decode_key_escapes(r"\t"), "\t");
+        assert_eq!(decode_key_escapes(r"\r"), "\r");
+        assert_eq!(decode_key_escapes(r"\\"), "\\");
+    }
+
+    #[test]
+    fn decode_hex_with_backslash() {
+        // \x1b → ESC (0x1B)
+        let decoded = decode_key_escapes(r"\x1b");
+        assert_eq!(decoded.as_bytes(), &[0x1B]);
+
+        // \x03 → Ctrl-C (0x03)
+        let decoded = decode_key_escapes(r"\x03");
+        assert_eq!(decoded.as_bytes(), &[0x03]);
+
+        // \x02 → Ctrl-B / tmux prefix (0x02)
+        let decoded = decode_key_escapes(r"\x02");
+        assert_eq!(decoded.as_bytes(), &[0x02]);
+    }
+
+    #[test]
+    fn decode_bare_hex_control_chars() {
+        // Weaker models omit the backslash: "x1b" should still decode
+        let decoded = decode_key_escapes("x1b");
+        assert_eq!(decoded.as_bytes(), &[0x1B], "bare x1b should decode to ESC");
+
+        let decoded = decode_key_escapes("x03");
+        assert_eq!(decoded.as_bytes(), &[0x03], "bare x03 should decode to Ctrl-C");
+
+        let decoded = decode_key_escapes("x02c");
+        assert_eq!(
+            decoded.as_bytes(),
+            &[0x02, b'c'],
+            "x02c should decode to Ctrl-B + c (tmux new window)"
+        );
+    }
+
+    #[test]
+    fn bare_hex_does_not_corrupt_normal_text() {
+        // "exit" contains "xi" but not "x" + two hex digits for a control char
+        assert_eq!(decode_key_escapes("exit"), "exit");
+        // "maximum" has "x" but followed by "im" which is not a control char range
+        assert_eq!(decode_key_escapes("maximum"), "maximum");
+        // "x41" is 0x41 = 'A', NOT a control char, so should stay literal
+        assert_eq!(decode_key_escapes("x41"), "x41");
+        // "hexdump" should not be affected
+        assert_eq!(decode_key_escapes("hexdump"), "hexdump");
+    }
+
+    #[test]
+    fn decode_vim_escape_save_sequence() {
+        // LLM sends: \x1b:w\n (Escape, :w, Enter)
+        let decoded = decode_key_escapes(r"\x1b:w\n");
+        assert_eq!(decoded.as_bytes(), &[0x1B, b':', b'w', b'\n']);
+    }
+
+    #[test]
+    fn decode_bare_hex_vim_sequence() {
+        // Weaker model sends: x1b:wqx0a (Escape, :wq, newline)
+        let decoded = decode_key_escapes("x1b:wqx0a");
+        assert_eq!(decoded.as_bytes(), &[0x1B, b':', b'w', b'q', 0x0A]);
+    }
+
+    #[test]
+    fn decode_mixed_content() {
+        // "hello\nworld" → "hello" + newline + "world"
+        let decoded = decode_key_escapes(r"hello\nworld");
+        assert_eq!(decoded, "hello\nworld");
+
+        // Normal text with no escapes
+        assert_eq!(decode_key_escapes("ls -la"), "ls -la");
+    }
 }
