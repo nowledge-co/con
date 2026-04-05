@@ -4,9 +4,10 @@ use gpui::*;
 
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
+use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::stepper::{Stepper, StepperItem};
 use gpui_component::switch::Switch;
-use gpui_component::{ActiveTheme, Icon, Sizable as _, input::Input};
+use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _, input::Input};
 
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
@@ -56,6 +57,7 @@ pub struct SettingsPanel {
 
     selected_provider: ProviderKind,
     model_input: Entity<InputState>,
+    model_select: Entity<SelectState<SearchableVec<String>>>,
     api_key_input: Entity<InputState>,
     base_url_input: Entity<InputState>,
     max_tokens_input: Entity<InputState>,
@@ -105,6 +107,12 @@ impl SettingsPanel {
             s.set_value(&pc.model.clone().unwrap_or_default(), window, cx);
             s
         });
+        let model_select = Self::make_model_select(
+            &agent.provider,
+            &pc.model,
+            window,
+            cx,
+        );
         let api_key_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("sk-... or env var like ANTHROPIC_API_KEY", window, cx);
@@ -183,6 +191,7 @@ impl SettingsPanel {
             active_section: SettingsSection::General,
             selected_provider: config.agent.provider.clone(),
             model_input,
+            model_select,
             api_key_input,
             base_url_input,
             max_tokens_input,
@@ -225,6 +234,8 @@ impl SettingsPanel {
                 )
             });
             self.auto_approve = agent.auto_approve_tools;
+            self.model_select =
+                Self::make_model_select(&agent.provider, &pc.model, window, cx);
             self.font_size_input.update(cx, |s, cx| {
                 s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
             });
@@ -268,6 +279,40 @@ impl SettingsPanel {
                 cx,
             )
         });
+    }
+
+    /// Build a model select entity for the given provider.
+    fn make_model_select(
+        provider: &ProviderKind,
+        current_model: &Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<SearchableVec<String>>> {
+        let models: Vec<String> = provider_models(provider)
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let selected_index = current_model.as_ref().and_then(|m| {
+            models.iter().position(|item| item == m).map(IndexPath::new)
+        });
+        let entity = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(models),
+                selected_index,
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
+        cx.subscribe_in(&entity, window, |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
+            if let SelectEvent::Confirm(Some(value)) = ev {
+                this.model_input.update(cx, |s, cx| {
+                    s.set_value(value, window, cx);
+                });
+                cx.notify();
+            }
+        }).detach();
+        entity
     }
 
     /// Parse a ghostty config from clipboard and show a live preview.
@@ -577,6 +622,9 @@ impl SettingsPanel {
         // Load new provider's saved config (or defaults)
         let pc = self.config.agent.providers.get_or_default(&provider);
         self.load_provider_inputs(&pc, window, cx);
+
+        // Rebuild model select for new provider
+        self.model_select = Self::make_model_select(&provider, &pc.model, window, cx);
         cx.notify();
     }
 
@@ -1316,7 +1364,7 @@ impl SettingsPanel {
         let temperature_input = self.temperature_input.clone();
         let suggestion_model_input = self.suggestion_model_input.clone();
         let models = provider_models(&self.selected_provider);
-        let current_model = self.model_input.read(cx).value().to_string();
+        let model_select = self.model_select.clone();
 
         let mut provider_list = div().flex().flex_col();
         for provider in ALL_PROVIDERS.iter() {
@@ -1384,121 +1432,60 @@ impl SettingsPanel {
 
         let has_key = !self.api_key_input.read(cx).value().is_empty();
 
-        // ── Model card with input + optional dropdown list ──
-        let mut model_card_content = card(theme)
-            .child(
-                div()
-                    .px(px(14.0))
-                    .py(px(12.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Model"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .child(
-                                        div()
-                                            .size(px(6.0))
-                                            .rounded_full()
-                                            .bg(if has_key {
-                                                theme.success
-                                            } else {
-                                                theme.muted_foreground.opacity(0.2)
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(10.0))
-                                            .text_color(theme.muted_foreground.opacity(0.45))
-                                            .child(if has_key { "Ready" } else { "No key" }),
-                                    ),
-                            ),
-                    )
-                    .child(Input::new(&model_input)),
-            );
-
-        if !models.is_empty() {
-            // Model list — clean vertical list instead of wrapping chips
-            let mut model_list = div()
+        // ── Model card — Select dropdown for known providers, text input for custom ──
+        let model_card_content = card(theme).child(
+            div()
+                .px(px(14.0))
+                .py(px(12.0))
                 .flex()
                 .flex_col()
-                .px(px(4.0))
-                .pb(px(6.0));
-
-            for model in models {
-                let model_name = model.to_string();
-                let model_clone = model_name.clone();
-                let is_active = current_model == model_name;
-                model_list = model_list.child(
+                .gap(px(8.0))
+                .child(
                     div()
-                        .id(SharedString::from(format!("model-{model_name}")))
-                        .h(px(28.0))
-                        .px(px(10.0))
                         .flex()
                         .items_center()
-                        .rounded(px(6.0))
-                        .cursor_pointer()
-                        .text_size(px(11.5))
-                        .font_family("Ioskeley Mono")
-                        .bg(if is_active {
-                            theme.primary.opacity(0.08)
-                        } else {
-                            theme.transparent
-                        })
-                        .text_color(if is_active {
-                            theme.foreground
-                        } else {
-                            theme.muted_foreground.opacity(0.7)
-                        })
-                        .font_weight(if is_active {
-                            FontWeight::MEDIUM
-                        } else {
-                            FontWeight::NORMAL
-                        })
-                        .hover(|s| s.bg(theme.muted.opacity(0.06)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, window, cx| {
-                                this.model_input.update(cx, |s, cx| {
-                                    s.set_value(&model_clone, window, cx);
-                                });
-                                cx.notify();
-                            }),
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Model"),
                         )
-                        .child(model_name)
-                        .children(if is_active {
-                            Some(
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .justify_end()
-                                    .child(
-                                        svg()
-                                            .path("phosphor/check.svg")
-                                            .size(px(12.0))
-                                            .text_color(theme.primary),
-                                    ),
-                            )
-                        } else {
-                            None
-                        }),
-                );
-            }
-            model_card_content = model_card_content.child(model_list);
-        }
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .child(
+                                    div()
+                                        .size(px(6.0))
+                                        .rounded_full()
+                                        .bg(if has_key {
+                                            theme.success
+                                        } else {
+                                            theme.muted_foreground.opacity(0.2)
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .text_color(theme.muted_foreground.opacity(0.45))
+                                        .child(if has_key { "Ready" } else { "No key" }),
+                                ),
+                        ),
+                )
+                .child(if models.is_empty() {
+                    // Custom providers — free-form text input
+                    div().child(Input::new(&model_input))
+                } else {
+                    // Known providers — searchable Select dropdown
+                    div().child(
+                        Select::new(&model_select)
+                            .placeholder("Select a model…")
+                            .small(),
+                    )
+                }),
+        );
 
         let right_col = div()
             .flex()
@@ -1778,16 +1765,8 @@ impl Render for SettingsPanel {
         } else {
             px(24.0)
         };
-        let card_width = {
-            let target = match active {
-                SettingsSection::Appearance => (viewport_w * 0.84).clamp(720.0, 1100.0),
-                SettingsSection::Models => (viewport_w * 0.76).clamp(680.0, 980.0),
-                SettingsSection::General | SettingsSection::Keys => {
-                    (viewport_w * 0.66).clamp(600.0, 900.0)
-                }
-            };
-            px(target.min(viewport_w - 32.0))
-        };
+        // Uniform width for all sections — prevents position jumping when switching tabs
+        let card_width = px(((viewport_w * 0.76).clamp(680.0, 980.0)).min(viewport_w - 32.0));
         let card_height = {
             let target = match active {
                 SettingsSection::Appearance => (viewport_h * 0.82).clamp(440.0, 780.0),
