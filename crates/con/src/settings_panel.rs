@@ -1945,33 +1945,6 @@ impl Render for SettingsPanel {
                                                             ),
                                                     )
                                                     .child("config.toml"),
-                                            )
-                                            // Close button
-                                            .child(
-                                                div()
-                                                    .id("close-settings")
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .size(px(22.0))
-                                                    .rounded(px(6.0))
-                                                    .cursor_pointer()
-                                                    .hover(|s| s.bg(theme.muted.opacity(0.10)))
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        cx.listener(|this, _, window, cx| {
-                                                            this.save(window, cx);
-                                                            this.toggle(window, cx);
-                                                        }),
-                                                    )
-                                                    .child(
-                                                        svg()
-                                                            .path("phosphor/x.svg")
-                                                            .size(px(12.0))
-                                                            .text_color(
-                                                                theme.muted_foreground.opacity(0.5),
-                                                            ),
-                                                    ),
                                             ),
                                     ),
                             )

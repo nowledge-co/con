@@ -1,5 +1,6 @@
 use gpui::*;
 use gpui_component::input::InputState;
+use gpui_component::kbd::Kbd;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, input::Input};
 
@@ -18,19 +19,19 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "new-tab",
         label: "New Tab",
-        shortcut: "⌘T",
+        shortcut: "cmd-t",
         category: "Terminal",
     },
     PaletteAction {
         id: "close-tab",
         label: "Close Tab",
-        shortcut: "⌘W",
+        shortcut: "cmd-w",
         category: "Terminal",
     },
     PaletteAction {
         id: "clear-terminal",
         label: "Clear Terminal",
-        shortcut: "⌘K",
+        shortcut: "cmd-k",
         category: "Terminal",
     },
     PaletteAction {
@@ -42,49 +43,43 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "toggle-agent",
         label: "Toggle Agent Panel",
-        shortcut: "⌘L",
+        shortcut: "cmd-l",
         category: "Agent",
     },
     PaletteAction {
         id: "cycle-input-mode",
         label: "Cycle Input Mode",
-        shortcut: "Tab",
+        shortcut: "tab",
         category: "Input",
     },
     PaletteAction {
         id: "split-right",
         label: "Split Right",
-        shortcut: "⌘D",
+        shortcut: "cmd-d",
         category: "Pane",
     },
     PaletteAction {
         id: "split-down",
         label: "Split Down",
-        shortcut: "⇧⌘D",
+        shortcut: "cmd-shift-d",
         category: "Pane",
     },
     PaletteAction {
         id: "toggle-input-bar",
         label: "Toggle Input Bar",
-        shortcut: "⌃`",
-        category: "View",
-    },
-    PaletteAction {
-        id: "toggle-sidebar",
-        label: "Toggle Sidebar",
-        shortcut: "",
+        shortcut: "ctrl-`",
         category: "View",
     },
     PaletteAction {
         id: "settings",
         label: "Open Settings",
-        shortcut: "⌘,",
+        shortcut: "cmd-,",
         category: "Settings",
     },
     PaletteAction {
         id: "quit",
         label: "Quit",
-        shortcut: "⌘Q",
+        shortcut: "cmd-q",
         category: "App",
     },
 ];
@@ -183,7 +178,11 @@ impl Render for CommandPalette {
         // Read current query text from input state
         self.query_text = self.query.read(cx).value().to_string();
         let actions = self.filtered_actions();
-        let selected = self.selected_index;
+        let selected = if !actions.is_empty() {
+            self.selected_index.min(actions.len().saturating_sub(1))
+        } else {
+            0
+        };
 
         let theme = cx.theme();
 
@@ -201,6 +200,29 @@ impl Render for CommandPalette {
         for (i, action) in actions.iter().enumerate() {
             let is_selected = i == selected;
             let idx = i;
+            let shortcut = if action.shortcut.is_empty() {
+                div().min_w(px(56.0)).into_any_element()
+            } else if let Ok(stroke) = Keystroke::parse(action.shortcut) {
+                div()
+                    .min_w(px(56.0))
+                    .flex()
+                    .justify_end()
+                    .child(Kbd::new(stroke).outline())
+                    .into_any_element()
+            } else {
+                div()
+                    .min_w(px(56.0))
+                    .text_xs()
+                    .flex()
+                    .justify_end()
+                    .text_color(if is_selected {
+                        theme.primary_foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .child(action.shortcut)
+                    .into_any_element()
+            };
 
             list = list.child(
                 div()
@@ -238,28 +260,20 @@ impl Render for CommandPalette {
                             .overflow_x_hidden()
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(px(10.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .flex_shrink_0()
                                     .text_color(if is_selected {
                                         theme.primary_foreground
                                     } else {
                                         theme.muted_foreground
                                     })
-                                    .min_w(px(60.0))
-                                    .child(action.category),
+                                    .min_w(px(68.0))
+                                    .child(action.category.to_uppercase()),
                             )
                             .child(div().text_sm().child(action.label)),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .flex_shrink_0()
-                            .text_color(if is_selected {
-                                theme.primary_foreground
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .child(action.shortcut),
-                    ),
+                    .child(shortcut),
             );
         }
 

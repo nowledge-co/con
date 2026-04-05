@@ -667,11 +667,6 @@ impl ConWorkspace {
             "toggle-input-bar" => {
                 self.toggle_input_bar(&crate::ToggleInputBar, window, cx);
             }
-            "toggle-sidebar" => {
-                self.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.toggle_collapsed(cx);
-                });
-            }
             "cycle-input-mode" => {
                 self.input_bar.update(cx, |bar, cx| {
                     bar.cycle_mode(window, cx);
