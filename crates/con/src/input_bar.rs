@@ -25,11 +25,11 @@ impl InputMode {
         }
     }
 
-    fn label(&self) -> &str {
+    fn icon(self) -> &'static str {
         match self {
-            Self::Smart => "Auto",
-            Self::Shell => "Shell",
-            Self::Agent => "Agent",
+            Self::Smart => "phosphor/magic-wand.svg",
+            Self::Shell => "phosphor/terminal.svg",
+            Self::Agent => "phosphor/oven.svg",
         }
     }
 
@@ -83,7 +83,7 @@ impl InputBar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Type a command or ask AI...")
+                .placeholder("Type a command or ask AI…")
                 .auto_grow(1, 6)
         });
 
@@ -237,8 +237,11 @@ impl InputBar {
         px(56.0 + (rows.saturating_sub(1) as f32 * 20.0))
     }
 
-    pub fn cycle_mode(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mode = self.mode.next();
+        let placeholder = self.placeholder().to_string();
+        self.input_state
+            .update(cx, |s, cx| s.set_placeholder(&placeholder, window, cx));
         cx.notify();
     }
 
@@ -262,12 +265,11 @@ impl InputBar {
         cx.notify();
     }
 
-    #[allow(dead_code)]
     fn placeholder(&self) -> &str {
         match self.mode {
-            InputMode::Smart => "Type a command or ask AI...",
-            InputMode::Shell => "Type a shell command...",
-            InputMode::Agent => "Ask the AI agent...",
+            InputMode::Smart => "Type a command or ask AI…",
+            InputMode::Shell => "Run a command…",
+            InputMode::Agent => "Ask anything…",
         }
     }
 }
@@ -289,13 +291,13 @@ impl Render for InputBar {
 
         let mode_tint = self.mode.tint(cx);
 
-        // ── Mode prefix — minimal, inline ──
+        // ── Mode prefix — icon-only, minimal ──
         let mode_prefix = div()
             .id("mode-toggle")
             .flex()
             .items_center()
-            .h(px(24.0))
-            .px(px(8.0))
+            .justify_center()
+            .size(px(24.0))
             .rounded(px(6.0))
             .cursor_pointer()
             .bg(mode_tint.opacity(0.08))
@@ -307,11 +309,10 @@ impl Render for InputBar {
                 }),
             )
             .child(
-                div()
-                    .text_size(px(11.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(mode_tint)
-                    .child(self.mode.label().to_string()),
+                svg()
+                    .path(self.mode.icon())
+                    .size(px(14.0))
+                    .text_color(mode_tint),
             );
 
         // ── Pane pills — compact row above input, only with >1 pane ──
@@ -455,7 +456,13 @@ impl Render for InputBar {
                     }),
             );
 
-        // ── Main layout ──
+        // Font: mono for shell/smart, system for agent
+        let input_font = match self.mode {
+            InputMode::Agent => ".SystemUIFont",
+            _ => "Ioskeley Mono",
+        };
+
+        // ── Main layout — flat bar, no rounded bubble ──
         div()
             .flex()
             .flex_col()
@@ -502,44 +509,35 @@ impl Render for InputBar {
                     _ => {}
                 }
             }))
-            // ── Container ──
+            // ── Flat container ──
             .child(
                 div()
-                    .px(px(8.0))
-                    .pt(px(6.0))
-                    .pb(px(6.0))
+                    .px(px(10.0))
+                    .py(px(6.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    // Pane pills — above input when multiple panes
+                    .children(pane_row)
+                    // Input row: mode + field + send
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .rounded(px(12.0))
-                            .bg(theme.background.opacity(0.76))
-                            .px(px(6.0))
-                            .py(px(6.0))
-                            // Pane pills — above input when multiple panes
-                            .children(pane_row.map(|row| {
-                                div().pb(px(4.0)).child(row)
-                            }))
-                            // Input row: mode + field + send
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(mode_prefix)
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.0))
-                                    .child(mode_prefix)
+                                    .flex_1()
+                                    .font_family(input_font)
+                                    .text_size(px(13.0))
                                     .child(
-                                        div()
-                                            .flex_1()
-                                            .font_family("Ioskeley Mono")
-                                            .text_size(px(13.0))
-                                            .child(
-                                                Input::new(&self.input_state)
-                                                    .appearance(false)
-                                                    .cleanable(false),
-                                            ),
-                                    )
-                                    .child(send_button),
-                            ),
+                                        Input::new(&self.input_state)
+                                            .appearance(false)
+                                            .cleanable(false),
+                                    ),
+                            )
+                            .child(send_button),
                     ),
             )
     }

@@ -5,7 +5,6 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
-use gpui_component::stepper::{Stepper, StepperItem};
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _, input::Input};
 
@@ -955,25 +954,18 @@ impl SettingsPanel {
             None
         };
 
-        // Build import section buttons (need cx.listener)
+        // Build import section
         let custom_theme_name_input = self.custom_theme_name_input.clone();
-        let import_progress = if self.custom_theme_preview.is_some() {
-            2
-        } else if !custom_theme_name_input.read(cx).value().trim().is_empty() {
-            1
-        } else {
-            0
-        };
         let paste_btn = Button::new("paste-theme-btn")
-            .label("Load Clipboard Theme")
+            .label("Load from Clipboard")
             .icon(Icon::default().path("phosphor/clipboard-text.svg"))
             .small()
-            .primary()
+            .ghost()
             .on_click(cx.listener(|this, _, window, cx| {
                 this.paste_theme_from_clipboard(window, cx);
             }));
         let open_catalog_btn = Button::new("ghostty-style-link")
-            .label("Open Ghostty Style")
+            .label("Browse Themes")
             .icon(Icon::default().path("phosphor/arrow-square-out.svg"))
             .small()
             .ghost()
@@ -986,10 +978,7 @@ impl SettingsPanel {
             .as_ref()
             .map(|preview| self.render_single_theme_card(preview, false, cx));
 
-        // Now all mutable borrows are done — get theme for pure layout
-        let theme = cx.theme();
-
-        let load_step_body: Option<AnyElement> = if let Some(card) = preview_card {
+        let preview_actions: Option<AnyElement> = if let Some(card) = preview_card {
             let apply_btn = Button::new("apply-custom-theme")
                 .label("Save & Apply")
                 .icon(Icon::default().path("phosphor/check.svg"))
@@ -999,7 +988,7 @@ impl SettingsPanel {
                     this.apply_custom_theme(cx);
                 }));
             let preview_btn = Button::new("preview-custom-theme")
-                .label("Preview Only")
+                .label("Preview")
                 .icon(Icon::default().path("phosphor/eye.svg"))
                 .small()
                 .ghost()
@@ -1011,61 +1000,46 @@ impl SettingsPanel {
             Some(
                 div()
                     .flex()
-                    .flex_col()
-                    .gap(px(10.0))
-                    .child(paste_btn)
+                    .items_start()
+                    .gap(px(12.0))
+                    .child(card)
                     .child(
                         div()
-                            .p(px(12.0))
-                            .rounded(px(10.0))
-                            .bg(theme.muted.opacity(0.08))
                             .flex()
-                            .items_start()
-                            .gap(px(12.0))
-                            .child(card)
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(8.0))
-                                    .child(
-                                        div()
-                                            .text_size(px(10.5))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme.primary)
-                                            .child("PREVIEW"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .line_height(px(17.0))
-                                            .text_color(theme.muted_foreground.opacity(0.7))
-                                            .child(
-                                                "Check the palette in-context first, then save it once the terminal chrome and ANSI colors feel balanced.",
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(8.0))
-                                            .child(apply_btn)
-                                            .child(preview_btn),
-                                    ),
-                            ),
+                            .flex_col()
+                            .gap(px(6.0))
+                            .child(apply_btn)
+                            .child(preview_btn),
                     )
                     .into_any_element(),
             )
         } else {
-            Some(paste_btn.into_any_element())
+            None
         };
 
-        let import_section = div()
+        // Now all mutable borrows are done — get theme for pure layout
+        let theme = cx.theme();
+
+        let mut import_section = div()
             .px(px(18.0))
             .py(px(16.0))
             .flex()
             .flex_col()
-            .gap(px(16.0))
+            .gap(px(12.0))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Import Theme"),
+            )
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .line_height(px(18.0))
+                    .text_color(theme.muted_foreground.opacity(0.6))
+                    .child("Copy a Ghostty-style theme config, name it, then load it from the clipboard."),
+            )
+            // Name input
             .child(
                 div()
                     .flex()
@@ -1073,51 +1047,37 @@ impl SettingsPanel {
                     .gap(px(4.0))
                     .child(
                         div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Import Theme"),
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground.opacity(0.5))
+                            .child("Theme name"),
                     )
-                    .child(
-                        div()
-                            .text_size(px(11.5))
-                            .line_height(px(18.0))
-                            .text_color(theme.muted_foreground.opacity(0.72))
-                            .child("Import any Ghostty-style theme through a guided flow, preview it inside con, then keep only the palettes worth saving."),
-                    ),
+                    .child(Input::new(&custom_theme_name_input)),
             )
+            // Action buttons — compact row
             .child(
-                Stepper::new("theme-import-stepper")
-                    .vertical()
-                    .small()
-                    .selected_index(import_progress)
-                    .item(import_step_item(
-                        "Find a theme",
-                        "Open Ghostty Style and copy the config block for the palette you want to bring over.",
-                        Some(open_catalog_btn.into_any_element()),
-                        theme,
-                    ))
-                    .item(import_step_item(
-                        "Name it",
-                        "This becomes the saved theme name inside con, so make it easy to recognize later.",
-                        Some(Input::new(&custom_theme_name_input).into_any_element()),
-                        theme,
-                    ))
-                    .item(import_step_item(
-                        "Load and review",
-                        "Pull the copied config from the clipboard, inspect the preview, then save it once it looks right.",
-                        load_step_body,
-                        theme,
-                    )),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(paste_btn)
+                    .child(open_catalog_btn),
             );
 
-        let mut import_section = import_section;
+        // Preview card with save/preview actions
+        if let Some(preview) = preview_actions {
+            import_section = import_section.child(
+                div()
+                    .pt(px(4.0))
+                    .child(preview),
+            );
+        }
 
         if let Some(ref status) = self.custom_theme_status {
             import_section = import_section.child(
                 div()
-                    .px(px(12.0))
-                    .py(px(10.0))
-                    .rounded(px(8.0))
+                    .px(px(10.0))
+                    .py(px(8.0))
+                    .rounded(px(6.0))
                     .bg(if status.starts_with("Error") {
                         theme.danger.opacity(0.08)
                     } else {
@@ -2092,38 +2052,6 @@ fn stacked_input_field(
         .child(Input::new(input))
 }
 
-
-fn import_step_item(
-    title: &str,
-    description: &str,
-    body: Option<AnyElement>,
-    theme: &gpui_component::Theme,
-) -> StepperItem {
-    let mut content = div()
-        .flex()
-        .flex_col()
-        .gap(px(6.0))
-        .child(
-            div()
-                .text_size(px(12.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.foreground)
-                .child(title.to_string()),
-        )
-        .child(
-            div()
-                .text_size(px(11.5))
-                .line_height(px(18.0))
-                .text_color(theme.muted_foreground.opacity(0.7))
-                .child(description.to_string()),
-        );
-
-    if let Some(body) = body {
-        content = content.child(div().pt(px(2.0)).child(body));
-    }
-
-    StepperItem::new().child(content)
-}
 
 /// Convert a GPUI Keystroke to the binding format string (e.g. "cmd-shift-d").
 fn keystroke_to_binding(ks: &gpui::Keystroke) -> String {

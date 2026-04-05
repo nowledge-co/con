@@ -68,6 +68,45 @@ cargo test --workspace # test
 
 See `docs/design/con-design-language.md` for full design system.
 
+## UI/UX Principles
+
+These principles govern all UI iteration. Follow them proactively — don't wait for the user to point out violations.
+
+### Use gpui-component library first
+
+Before building custom UI, check `3pp/gpui-component/` for an existing component. The library has 60+ components including:
+
+- **Select** (`select::Select`, `SelectState<SearchableVec<String>>`) — searchable dropdowns. Use for any list selection instead of hand-rolling clickable divs.
+- **Button** (`button::Button`) — use `.ghost()`, `.primary()`, `.small()`, `.icon()` variants. Never hand-roll clickable divs for buttons.
+- **Input** (`input::Input`, `InputState`) — text fields with `.appearance(false)` for inline, `.cleanable()`, `.placeholder()`.
+- **Switch** (`switch::Switch`) — toggles. Never hand-roll toggle divs.
+- **Icon** (`Icon::default().path("phosphor/name.svg")`) — use with Button via `.icon()`.
+- **Clipboard** (`clipboard::Clipboard`) — copy-to-clipboard with auto check-icon feedback.
+- **Sidebar** (`sidebar::Sidebar`) — collapsible sidebar with icon-only mode.
+- **Settings** (`setting::SettingPage`) — native settings layouts.
+
+Read the component's source in `3pp/gpui-component/crates/ui/src/` to understand its API before using it. The `CLAUDE.md` in `3pp/gpui-component/` documents the full architecture.
+
+### Visual normalization
+
+- **Rounding consistency**: If one surface is flat (e.g., embedded terminal NSView), adjacent surfaces should also be flat. Don't mix rounded bubbles next to sharp-edged content.
+- **Uniform widths**: When multiple panels/cards share a container and the user switches between them, use the same width for all to prevent layout jumping.
+- **Icons over text labels** for mode indicators and compact controls. Text labels are for headings and settings fields.
+- **Font context-switching**: Use mono font (Ioskeley Mono) for shell/command contexts. Use system font (.SystemUIFont) for natural-language/agent contexts and settings UI.
+
+### Focus behavior
+
+- After submitting input from the input bar, keep focus on the input bar — the user is in a "command flow" and will likely type more. They can click the terminal to focus it.
+- Modal dialogs (settings, command palette) capture and return focus cleanly.
+- Use `FocusInput` action (keybinding) as the explicit "focus the input bar" gesture.
+
+### Density and wording
+
+- Prefer compact, terse UI labels. "Browse Themes" not "Open Ghostty Style". "Load from Clipboard" not "Load Clipboard Theme".
+- Remove anything the user can derive from context (e.g., don't show CWD when it's visible in the terminal).
+- Placeholders should be action-oriented and short: "Run a command…", "Ask anything…".
+- Avoid numbered step wizards for simple 2-3 step flows — inline everything flat.
+
 ## Key Conventions
 
 - **Crate boundaries matter.** con-terminal has zero UI deps. con-agent has zero terminal deps. con-core glues them.

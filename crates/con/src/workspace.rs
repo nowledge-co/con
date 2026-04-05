@@ -1419,7 +1419,6 @@ impl ConWorkspace {
 
     fn execute_shell(&self, cmd: &str, window: &mut Window, cx: &mut Context<Self>) {
         let target_ids = self.input_bar.read(cx).target_pane_ids();
-        let is_broadcast = target_ids.len() > 1;
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
         let all_terminals = pane_tree.all_terminals();
 
@@ -1433,11 +1432,9 @@ impl ConWorkspace {
             }
         }
 
-        if is_broadcast {
-            self.input_bar.focus_handle(cx).focus(window, cx);
-        } else {
-            self.active_terminal().focus(window, cx);
-        }
+        // Always keep focus on input bar after sending a command —
+        // the terminal output is visible, and the user can click to focus it.
+        self.input_bar.focus_handle(cx).focus(window, cx);
     }
 
     fn send_to_agent(&mut self, content: &str, cx: &mut Context<Self>) {
