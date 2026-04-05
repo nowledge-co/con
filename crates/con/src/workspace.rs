@@ -6,8 +6,8 @@ const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 
 use crate::agent_panel::{
-    AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, LoadConversation,
-    NewConversation, PanelState, RerunFromMessage,
+    AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, InlineInputSubmit,
+    LoadConversation, NewConversation, PanelState, RerunFromMessage,
 };
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{
@@ -55,6 +55,7 @@ pub struct ConWorkspace {
     harness: AgentHarness,
     agent_panel_open: bool,
     agent_panel_width: f32,
+    input_bar_visible: bool,
     /// Tracks whether a modal was open on the last render, so we can
     /// restore terminal focus when a modal dismisses itself internally.
     modal_was_open: bool,
@@ -273,6 +274,8 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_delete_conversation)
             .detach();
+        cx.subscribe_in(&agent_panel, window, Self::on_inline_input_submit)
+            .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_cancel_request)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_enable_auto_approve)
@@ -368,6 +371,7 @@ impl ConWorkspace {
             harness,
             agent_panel_open,
             agent_panel_width,
+            input_bar_visible: session.input_bar_visible,
             modal_was_open: false,
             ghostty_hidden: false,
             pending_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -528,6 +532,7 @@ impl ConWorkspace {
             active_tab: self.active_tab,
             agent_panel_open: self.agent_panel_open,
             agent_panel_width: Some(self.agent_panel_width),
+            input_bar_visible: self.input_bar_visible,
             conversation_id: None, // deprecated — per-tab now
         };
         if let Err(e) = session.save() {
@@ -586,6 +591,18 @@ impl ConWorkspace {
         self.agent_panel.update(cx, |panel, cx| {
             panel.refresh_conversation_list(cx);
         });
+    }
+
+    fn on_inline_input_submit(
+        &mut self,
+        _panel: &Entity<AgentPanel>,
+        event: &InlineInputSubmit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Forward inline input as an agent message
+        self.send_to_agent(&event.text, cx);
+        cx.notify();
     }
 
     fn on_cancel_request(
@@ -1282,6 +1299,20 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn toggle_input_bar(
+        &mut self,
+        _: &crate::ToggleInputBar,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.input_bar_visible = !self.input_bar_visible;
+        if self.input_bar_visible {
+            self.input_bar.focus_handle(cx).focus(window, cx);
+        }
+        self.save_session(cx);
+        cx.notify();
+    }
+
     fn quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_all_sessions();
         self.save_session(cx);
@@ -1299,6 +1330,11 @@ impl ConWorkspace {
     }
 
     fn focus_input(&mut self, _: &FocusInput, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.input_bar_visible {
+            self.input_bar_visible = true;
+            self.save_session(cx);
+            cx.notify();
+        }
         self.input_bar.focus_handle(cx).focus(window, cx);
     }
 
@@ -1811,10 +1847,12 @@ impl Render for ConWorkspace {
             bar.set_skills(skill_entries);
         });
 
-        // Sync model name to agent panel header
+        // Sync model name and inline input state to agent panel
         let model_name = self.harness.active_model_name();
+        let show_inline = !self.input_bar_visible && self.agent_panel_open;
         self.agent_panel.update(cx, |panel, _cx| {
             panel.set_model_name(model_name);
+            panel.set_show_inline_input(show_inline);
         });
 
         let theme = cx.theme();
@@ -2050,8 +2088,31 @@ impl Render for ConWorkspace {
         // Spacer pushes right-side controls to the edge
         tab_bar = tab_bar.child(div().flex_1());
 
+        // Input bar toggle button
+        tab_bar = tab_bar.child(
+            div()
+                .id("toggle-input-bar")
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(26.0))
+                .mb(px(3.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_input_bar(&crate::ToggleInputBar, window, cx);
+                }))
+                .child(svg().path("phosphor/square-half-bottom-fill.svg").size(px(14.0)).text_color(
+                    if self.input_bar_visible {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground
+                    },
+                )),
+        );
+
         // Agent panel toggle button
-        let panel_icon = "phosphor/oven.svg";
         tab_bar = tab_bar.child(
             div()
                 .id("toggle-agent-panel")
@@ -2063,16 +2124,11 @@ impl Render for ConWorkspace {
                 .mr(px(4.0))
                 .rounded(px(6.0))
                 .cursor_pointer()
-                .text_color(if self.agent_panel_open {
-                    theme.primary
-                } else {
-                    theme.muted_foreground
-                })
                 .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
                 }))
-                .child(svg().path(panel_icon).size(px(14.0)).text_color(
+                .child(svg().path("phosphor/square-half-fill.svg").size(px(14.0)).text_color(
                     if self.agent_panel_open {
                         theme.primary
                     } else {
@@ -2174,6 +2230,7 @@ impl Render for ConWorkspace {
             )
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::toggle_agent_panel))
+            .on_action(cx.listener(Self::toggle_input_bar))
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::toggle_command_palette))
             .on_action(cx.listener(Self::new_tab))
@@ -2224,8 +2281,11 @@ impl Render for ConWorkspace {
                 }
             }))
             .child(tab_bar)
-            .child(main_area)
-            .child(self.input_bar.clone());
+            .child(main_area);
+
+        if self.input_bar_visible {
+            root = root.child(self.input_bar.clone());
+        }
 
         // Skill autocomplete popup — rendered at workspace level above ghostty
         if has_skill_popup {

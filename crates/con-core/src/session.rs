@@ -9,8 +9,14 @@ pub struct Session {
     pub agent_panel_open: bool,
     #[serde(default)]
     pub agent_panel_width: Option<f32>,
+    #[serde(default = "default_input_bar_visible")]
+    pub input_bar_visible: bool,
     #[serde(default)]
     pub conversation_id: Option<String>,
+}
+
+fn default_input_bar_visible() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +50,7 @@ impl Default for Session {
             active_tab: 0,
             agent_panel_open: false,
             agent_panel_width: None,
+            input_bar_visible: true,
             conversation_id: None,
         }
     }

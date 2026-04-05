@@ -87,6 +87,9 @@ fn default_split_down() -> String {
 fn default_focus_input() -> String {
     "cmd-k".into()
 }
+fn default_toggle_input_bar() -> String {
+    "cmd-shift-k".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -100,6 +103,7 @@ pub struct KeybindingConfig {
     pub split_right: String,
     pub split_down: String,
     pub focus_input: String,
+    pub toggle_input_bar: String,
 }
 
 impl Default for KeybindingConfig {
@@ -114,6 +118,7 @@ impl Default for KeybindingConfig {
             split_right: default_split_right(),
             split_down: default_split_down(),
             focus_input: default_focus_input(),
+            toggle_input_bar: default_toggle_input_bar(),
         }
     }
 }

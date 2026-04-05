@@ -26,6 +26,7 @@ actions!(
         Quit,
         NewTab,
         ToggleAgentPanel,
+        ToggleInputBar,
         CloseTab,
         SplitRight,
         SplitDown,
@@ -99,6 +100,7 @@ fn main() {
             KeyBinding::new(&kb.split_right, SplitRight, None),
             KeyBinding::new(&kb.split_down, SplitDown, None),
             KeyBinding::new(&kb.focus_input, FocusInput, None),
+            KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
         ]);
 
         // Quit is handled by ConWorkspace::quit() which cancels sessions first.
@@ -143,6 +145,7 @@ fn main() {
                 name: "View".into(),
                 items: vec![
                     MenuItem::action("Toggle Agent Panel", ToggleAgentPanel),
+                    MenuItem::action("Toggle Input Bar", ToggleInputBar),
                     MenuItem::action("Command Palette", command_palette::ToggleCommandPalette),
                     MenuItem::separator(),
                     MenuItem::action("Focus Input", FocusInput),

@@ -51,6 +51,11 @@ pub struct DeleteConversation {
 }
 impl EventEmitter<DeleteConversation> for AgentPanel {}
 
+pub struct InlineInputSubmit {
+    pub text: String,
+}
+impl EventEmitter<InlineInputSubmit> for AgentPanel {}
+
 pub struct CancelRequest;
 impl EventEmitter<CancelRequest> for AgentPanel {}
 
@@ -320,6 +325,11 @@ pub struct AgentPanel {
     editing_msg_idx: Option<usize>,
     /// Input state for the inline edit field
     edit_input_state: Option<Entity<InputState>>,
+    /// When true, show a compact inline input at the bottom of the panel
+    /// (used when the main input bar is hidden but agent panel is open)
+    show_inline_input: bool,
+    /// Input state for the inline input at bottom of agent panel
+    inline_input_state: Option<Entity<InputState>>,
 }
 
 struct PanelMessage {
@@ -381,6 +391,8 @@ impl AgentPanel {
             model_name: String::new(),
             editing_msg_idx: None,
             edit_input_state: None,
+            show_inline_input: false,
+            inline_input_state: None,
         }
     }
 
@@ -407,6 +419,8 @@ impl AgentPanel {
             model_name: String::new(),
             editing_msg_idx: None,
             edit_input_state: None,
+            show_inline_input: false,
+            inline_input_state: None,
         }
     }
 
@@ -499,6 +513,10 @@ impl AgentPanel {
     pub fn refresh_conversation_list(&mut self, cx: &mut Context<Self>) {
         self.conversation_list = con_agent::Conversation::list_all();
         cx.notify();
+    }
+
+    pub fn set_show_inline_input(&mut self, show: bool) {
+        self.show_inline_input = show;
     }
 
     fn scroll_to_bottom(&self) {
@@ -996,7 +1014,7 @@ fn render_user_message_text(
 }
 
 impl Render for AgentPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
         // ── Messages ──────────────────────────────────────────────
@@ -2022,6 +2040,41 @@ impl Render for AgentPanel {
             panel = panel.child(history);
         } else {
             panel = panel.child(messages_area);
+        }
+
+        // Inline input — shown when main input bar is hidden
+        if self.show_inline_input {
+            let inline_input = self.inline_input_state.get_or_insert_with(|| {
+                cx.new(|cx| InputState::new(window, cx).placeholder("Ask anything…"))
+            }).clone();
+            panel = panel.child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(10.0))
+                    .py(px(8.0))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key == "enter"
+                            && !event.keystroke.modifiers.shift
+                        {
+                            if let Some(ref input) = this.inline_input_state {
+                                let text = input.read(cx).text().to_string();
+                                if !text.trim().is_empty() {
+                                    // Clear the inline input — drop and recreate the state
+                                    this.inline_input_state = Some(cx.new(|cx| {
+                                        InputState::new(window, cx).placeholder("Ask anything…")
+                                    }));
+                                    cx.emit(InlineInputSubmit { text });
+                                }
+                            }
+                        }
+                    }))
+                    .child(
+                        Input::new(&inline_input)
+                            .appearance(false)
+                            .cleanable(false)
+                            .small(),
+                    ),
+            );
         }
 
         panel
