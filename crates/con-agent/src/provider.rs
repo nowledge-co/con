@@ -20,7 +20,7 @@ use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{
     BatchExecTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool,
     PaneRequest, ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool,
-    TerminalExecRequest, TerminalExecTool,
+    TerminalExecRequest, TerminalExecTool, TmuxInspectTool,
 };
 
 // ── Provider enum ───────────────────────────────────────────────────
@@ -420,6 +420,7 @@ macro_rules! build_and_stream {
             .tool(ListFilesTool::new(root.clone()))
             .tool(SearchTool::new(root))
             .tool(ListPanesTool::new($pane_tx.clone()))
+            .tool(TmuxInspectTool::new($pane_tx.clone()))
             .tool(ReadPaneTool::new($pane_tx.clone()))
             .tool(SendKeysTool::new($pane_tx.clone()))
             .tool(SearchPanesTool::new($pane_tx))

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::context::PaneMode;
 use crate::control::{
     PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneVisibleTarget,
+    TmuxControlState,
 };
 
 /// Error type for agent tool execution
@@ -700,6 +701,8 @@ pub struct PaneInfo {
     pub visible_target: PaneVisibleTarget,
     /// Nested runtime/control targets from outer shell toward the front-most visible app.
     pub target_stack: Vec<PaneVisibleTarget>,
+    /// tmux adapter state when a tmux layer is present in this pane.
+    pub tmux_control: Option<TmuxControlState>,
     /// Control channels con can use on this pane.
     pub control_channels: Vec<PaneControlChannel>,
     /// Capabilities currently available on this pane.
@@ -751,6 +754,8 @@ pub enum PaneQuery {
         pattern: String,
         max_matches: usize,
     },
+    /// Return tmux adapter state for a pane whose target stack contains tmux.
+    InspectTmux { pane_index: usize },
 }
 
 /// Response from the workspace to a pane tool.
@@ -759,6 +764,7 @@ pub enum PaneResponse {
     PaneList(Vec<PaneInfo>),
     Content(String),
     KeysSent,
+    TmuxInfo(TmuxControlState),
     /// Search results: Vec of (pane_index, line_number, line_text).
     SearchResults(Vec<(usize, usize, String)>),
     Error(String),
@@ -819,6 +825,72 @@ impl Tool for ListPanesTool {
 
         match response {
             PaneResponse::PaneList(panes) => serde_json::to_string_pretty(&panes)
+                .map_err(|e| ToolError::CommandFailed(e.to_string())),
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+// ── tmux_inspect tool ──────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TmuxInspectArgs {
+    pub pane_index: usize,
+}
+
+pub struct TmuxInspectTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl TmuxInspectTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for TmuxInspectTool {
+    const NAME: &'static str = "tmux_inspect";
+    type Error = ToolError;
+    type Args = TmuxInspectArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Inspect the tmux adapter state for a specific con pane. Returns the detected tmux session, tmux control mode, the front-most target inside tmux, and the reason native tmux pane/window control is or is not available. Use this when a pane's target_stack includes tmux.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target con pane index (from list_panes)"
+                    }
+                },
+                "required": ["pane_index"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::InspectTmux {
+                    pane_index: args.pane_index,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| ToolError::CommandFailed("Pane query timed out".into()))
+        })?;
+
+        match response {
+            PaneResponse::TmuxInfo(info) => serde_json::to_string_pretty(&info)
                 .map_err(|e| ToolError::CommandFailed(e.to_string())),
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),

@@ -265,6 +265,8 @@ On top of that observer, con now derives a typed `PaneControlState` for each pan
 - `control_capabilities` say what is allowed right now
 - `control_notes` explain important limits such as "this is tmux inside a con pane"
 
+con also now exposes a tmux-specific inspect surface. `tmux_inspect` returns the detected tmux session, the current tmux adapter mode, the front-most target inside tmux, and the explicit reason native tmux pane/window control is not yet available.
+
 What is still missing is stronger backend truth for foreground runtime identity. The next layer is not more local heuristics; it is an upstream Ghostty observability contract for explicit foreground process and semantic prompt state. See `docs/impl/pane-runtime-observer.md`.
 
 Separately, con also needs a control-plane split between visible shell execution, local hidden execution, tmux-native control, and raw TUI input. That design lives in `docs/impl/agent-runtime-control-plane.md`.

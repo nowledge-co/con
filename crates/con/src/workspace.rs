@@ -1176,6 +1176,7 @@ impl ConWorkspace {
                             address_space: control.address_space,
                             visible_target: control.visible_target.clone(),
                             target_stack: control.target_stack.clone(),
+                            tmux_control: control.tmux.clone(),
                             control_channels: control.channels.clone(),
                             control_capabilities: control.capabilities.clone(),
                             control_notes: control.notes.clone(),
@@ -1257,6 +1258,28 @@ impl ConWorkspace {
                     }
                 }
                 PaneResponse::SearchResults(results)
+            }
+            PaneQuery::InspectTmux { pane_index } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let terminal = &all_terminals[pane_index - 1];
+                    let (_, runtime) =
+                        self.observe_terminal_runtime_for_tab(tab_idx, terminal, 20, cx);
+                    let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+                    if let Some(tmux) = control.tmux {
+                        PaneResponse::TmuxInfo(tmux)
+                    } else {
+                        PaneResponse::Error(format!(
+                            "Pane {} is not currently in a tmux scope.",
+                            pane_index
+                        ))
+                    }
+                }
             }
         };
 

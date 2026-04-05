@@ -34,6 +34,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - con now refuses `terminal_exec` and `batch_exec` on panes that are not proven plain-shell targets. This prevents the built-in agent from typing shell commands into tmux+nvim or other visible TUIs.
 - Pane control state is now typed and shared across the prompt, `list_panes`, and execution guards. The agent now sees each pane's address space, visible target, control channels, capabilities, and control notes instead of relying on flat pane heuristics.
 - Nested agent runtimes are now carried as a target stack, so panes can describe situations like remote shell -> tmux -> Codex CLI or Claude Code instead of flattening those layers into one ambiguous state.
+- tmux now has an explicit inspectable adapter state and a dedicated `tmux_inspect` tool. The agent can ask what tmux session is visible, what target is currently in front inside tmux, and why native tmux pane/window control is not yet available.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

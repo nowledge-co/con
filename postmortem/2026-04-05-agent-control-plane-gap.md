@@ -31,6 +31,7 @@ The shipped foundation includes:
 - explicit address-space, visible-target, nested-target-stack, control-channel, and capability fields
 - `list_panes`, the system prompt, and visible-exec guards all consuming that same control state
 - visible shell execution now gated by capability (`exec_visible_shell`) instead of loosely repeated safety prose
+- a tmux-specific inspect surface that reports session, front target, and explicit control unavailability instead of leaving tmux buried in generic pane metadata
 
 The longer-term design still introduces:
 

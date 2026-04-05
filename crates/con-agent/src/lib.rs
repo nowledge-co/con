@@ -9,7 +9,7 @@ pub mod tools;
 pub use context::TerminalContext;
 pub use control::{
     PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneControlState,
-    PaneVisibleTarget, PaneVisibleTargetKind,
+    PaneVisibleTarget, PaneVisibleTargetKind, TmuxControlMode, TmuxControlState,
 };
 pub use conversation::{Conversation, ConversationSummary, Message, MessageRole};
 pub use hook::{ConHook, ToolApprovalDecision, is_dangerous};
@@ -22,4 +22,5 @@ pub use tools::{
     BatchExecTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool,
     PaneInfo, PaneQuery, PaneRequest, PaneResponse, ReadPaneTool, SearchPanesTool, SearchTool,
     SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecResponse, TerminalExecTool,
+    TmuxInspectTool,
 };

@@ -80,6 +80,24 @@ impl PaneControlCapability {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TmuxControlMode {
+    Unavailable,
+    InspectOnly,
+    Native,
+}
+
+impl TmuxControlMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::InspectOnly => "inspect_only",
+            Self::Native => "native",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PaneVisibleTarget {
     pub kind: PaneVisibleTargetKind,
@@ -107,9 +125,18 @@ pub struct PaneControlState {
     pub address_space: PaneAddressSpace,
     pub target_stack: Vec<PaneVisibleTarget>,
     pub visible_target: PaneVisibleTarget,
+    pub tmux: Option<TmuxControlState>,
     pub channels: Vec<PaneControlChannel>,
     pub capabilities: Vec<PaneControlCapability>,
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TmuxControlState {
+    pub session_name: Option<String>,
+    pub mode: TmuxControlMode,
+    pub front_target: Option<PaneVisibleTarget>,
+    pub reason: String,
 }
 
 impl PaneControlState {
@@ -119,6 +146,7 @@ impl PaneControlState {
             .last()
             .cloned()
             .unwrap_or_else(|| fallback_visible_target(runtime));
+        let tmux = tmux_control_from_runtime(runtime, &target_stack);
 
         let mut channels = vec![
             PaneControlChannel::ReadScreen,
@@ -186,6 +214,7 @@ impl PaneControlState {
             address_space: PaneAddressSpace::ConPane,
             target_stack,
             visible_target,
+            tmux,
             channels,
             capabilities,
             notes,
@@ -208,6 +237,33 @@ pub fn format_target_stack(targets: &[PaneVisibleTarget]) -> String {
             .collect::<Vec<_>>()
             .join(" -> ")
     }
+}
+
+fn tmux_control_from_runtime(
+    runtime: &PaneRuntimeState,
+    target_stack: &[PaneVisibleTarget],
+) -> Option<TmuxControlState> {
+    if !target_stack
+        .iter()
+        .any(|target| target.kind == PaneVisibleTargetKind::TmuxSession)
+    {
+        return None;
+    }
+
+    let tmux_index = target_stack
+        .iter()
+        .position(|target| target.kind == PaneVisibleTargetKind::TmuxSession)?;
+
+    Some(TmuxControlState {
+        session_name: runtime.tmux_session.clone().or_else(|| {
+            target_stack
+                .get(tmux_index)
+                .and_then(|target| target.label.clone())
+        }),
+        mode: TmuxControlMode::InspectOnly,
+        front_target: target_stack.get(tmux_index + 1).cloned(),
+        reason: "con can identify the tmux scope in this pane, but it does not yet have a same-session tmux control channel. Native tmux pane/window targeting and tmux command execution are unavailable.".to_string(),
+    })
 }
 
 fn target_stack_from_runtime(runtime: &PaneRuntimeState) -> Vec<PaneVisibleTarget> {
@@ -324,8 +380,8 @@ fn fallback_visible_target(runtime: &PaneRuntimeState) -> PaneVisibleTarget {
 #[cfg(test)]
 mod tests {
     use super::{
-        PaneControlCapability, PaneControlState, PaneVisibleTargetKind, fallback_visible_target,
-        format_target_stack,
+        PaneControlCapability, PaneControlState, PaneVisibleTargetKind, TmuxControlMode,
+        fallback_visible_target, format_target_stack,
     };
     use crate::context::{
         PaneConfidence, PaneEvidenceSource, PaneMode, PaneRuntimeScope, PaneRuntimeState,
@@ -453,6 +509,18 @@ mod tests {
         assert_eq!(
             format_target_stack(&control.target_stack),
             "shell_prompt(haswell) -> remote_shell(haswell) -> tmux_session(work) -> agent_cli(codex)"
+        );
+        assert_eq!(
+            control.tmux.as_ref().map(|tmux| tmux.mode),
+            Some(TmuxControlMode::InspectOnly)
+        );
+        assert_eq!(
+            control
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.front_target.as_ref())
+                .map(|target| target.summary()),
+            Some("agent_cli(codex)".to_string())
         );
         assert!(
             control

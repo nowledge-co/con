@@ -948,6 +948,7 @@ impl TerminalContext {
                     label: None,
                     host: None,
                 },
+                tmux: None,
                 channels: vec![
                     PaneControlChannel::ReadScreen,
                     PaneControlChannel::SearchScrollback,
@@ -1008,6 +1009,7 @@ impl TerminalContext {
                Never use shell_exec to inspect or modify a remote SSH/tmux environment.\n\
                Prefer over terminal_exec only for local tasks such as git status, file searches, package lookups, and background ops.\n\n\
              - list_panes: List all open panes with runtime state plus control state: visible target kind, control channels, capabilities, and addressing notes.\n\n\
+             - tmux_inspect: Inspect the tmux adapter state for a con pane that contains a tmux scope. Returns session, tmux control mode, front-most target inside tmux, and why native tmux control is or is not available.\n\n\
              - read_pane: Read last N lines from any pane (includes scrollback). Use to inspect output.\n\n\
              - send_keys: Send raw keystrokes to any pane. For TUI interaction: Ctrl-C (\\x03), arrows, Enter.\n\n\
              - search_panes: Search scrollback across all panes by regex. Find previous errors, output, etc.\n\n\
@@ -1077,7 +1079,26 @@ impl TerminalContext {
         if let Some(host) = &self.focused_control.visible_target.host {
             prompt.push_str(&format!(" target_host=\"{}\"", xml_escape(host)));
         }
+        if let Some(tmux) = &self.focused_control.tmux {
+            prompt.push_str(&format!(" tmux_mode=\"{}\"", tmux.mode.as_str()));
+            if let Some(session) = &tmux.session_name {
+                prompt.push_str(&format!(" tmux_session=\"{}\"", xml_escape(session)));
+            }
+        }
         prompt.push_str("/>\n");
+        if let Some(tmux) = &self.focused_control.tmux {
+            let front_target = tmux
+                .front_target
+                .as_ref()
+                .map(PaneVisibleTarget::summary)
+                .unwrap_or_else(|| "unknown".to_string());
+            prompt.push_str(&format!(
+                "<tmux_control mode=\"{}\" front_target=\"{}\">{}</tmux_control>\n",
+                tmux.mode.as_str(),
+                xml_escape(&front_target),
+                xml_escape(&tmux.reason)
+            ));
+        }
         for note in &self.focused_control.notes {
             prompt.push_str(&format!(
                 "<control_note>{}</control_note>\n",
@@ -1194,8 +1215,14 @@ impl TerminalContext {
                     " control_capabilities=\"{}\"",
                     xml_escape(&format_control_capabilities(&pane.control.capabilities))
                 );
+                let tmux_control = pane
+                    .control
+                    .tmux
+                    .as_ref()
+                    .map(|tmux| format!(" tmux_mode=\"{}\"", tmux.mode.as_str()))
+                    .unwrap_or_default();
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}{}{}{}{}{}/>\n",
+                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}{}{}{}{}{}{}/>\n",
                     pane.pane_index,
                     xml_escape(cwd),
                     pane.mode.as_str(),
@@ -1208,6 +1235,7 @@ impl TerminalContext {
                     tmux,
                     control_target,
                     target_stack,
+                    tmux_control,
                     control_channels,
                     control_capabilities
                 ));
