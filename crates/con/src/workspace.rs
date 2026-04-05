@@ -2416,7 +2416,7 @@ impl Render for ConWorkspace {
             let mut popup = div()
                 .absolute()
                 .bottom(popup_bottom)
-                .right(px(24.0))
+                .left(px(24.0))
                 .w(px(260.0))
                 .max_h(px(280.0))
                 .flex()

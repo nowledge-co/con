@@ -1205,9 +1205,8 @@ impl Render for AgentPanel {
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .vertical_scrollbar(&self.scroll_handle)
-            .bg(theme.title_bar)
             .px(px(14.0))
-            .pt(px(12.0))
+            .pt(px(10.0))
             .pb(px(64.0))
             .gap(px(14.0));
 
@@ -1215,7 +1214,7 @@ impl Render for AgentPanel {
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
 
-            let mut msg_el = div().flex().flex_col().gap(px(8.0));
+            let mut msg_el = div().flex().flex_col().gap(px(4.0));
 
             if is_system {
                 // System greeting — quiet, centered
@@ -1428,39 +1427,32 @@ impl Render for AgentPanel {
                 let mut header_row = div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .pb(px(4.0))
+                    .gap(px(5.0))
+                    .pb(px(2.0))
                     .child(
                         svg()
                             .path("phosphor/oven.svg")
-                            .size(px(14.0))
-                            .text_color(theme.primary.opacity(0.7)),
+                            .size(px(13.0))
+                            .text_color(theme.primary.opacity(0.6)),
                     )
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(11.5))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground.opacity(0.8))
+                            .text_color(theme.foreground.opacity(0.65))
                             .child(model_label),
                     );
                 if let Some(dur) = msg_duration_ms {
-                    header_row = header_row
-                        .child(
-                            div()
-                                .text_size(px(10.0))
-                                .text_color(theme.muted_foreground.opacity(0.35))
-                                .child("·"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(10.5))
-                                .text_color(theme.muted_foreground.opacity(0.4))
-                                .child(format_duration_ms(dur)),
-                        );
+                    header_row = header_row.child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(theme.muted_foreground.opacity(0.3))
+                            .child(format!("· {}", format_duration_ms(dur))),
+                    );
                 }
                 msg_el = msg_el.child(header_row);
 
-                // Extended thinking (collapsible) — flat inline row
+                // Extended thinking (collapsible)
                 if let Some(thinking) = &msg.thinking {
                     if !thinking.is_empty() {
                         let thinking_collapsed = msg.thinking_collapsed;
@@ -1469,7 +1461,6 @@ impl Render for AgentPanel {
                         } else {
                             "phosphor/caret-down.svg"
                         };
-                        // Show duration-style summary: word count as proxy
                         let word_count = thinking.split_whitespace().count();
                         let thinking_summary = if word_count > 0 {
                             format!("Thought · {} words", word_count)
@@ -1477,99 +1468,93 @@ impl Render for AgentPanel {
                             "Thinking…".to_string()
                         };
 
+                        // Thinking toggle — same indent as steps toggle
                         msg_el = msg_el.child(
                             div()
+                                .id(SharedString::from(format!(
+                                    "thinking-toggle-{msg_idx}"
+                                )))
                                 .flex()
-                                .flex_col()
-                                .ml(px(20.0))
-                                // Toggle row
+                                .items_center()
+                                .gap(px(5.0))
+                                .ml(px(18.0))
+                                .py(px(2.0))
+                                .px(px(4.0))
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(theme.muted.opacity(0.05)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        if let Some(m) =
+                                            this.state.messages.get_mut(msg_idx)
+                                        {
+                                            m.thinking_collapsed = !m.thinking_collapsed;
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(
+                                    svg()
+                                        .path(chevron)
+                                        .size(px(10.0))
+                                        .text_color(theme.muted_foreground.opacity(0.3)),
+                                )
+                                .child(
+                                    svg()
+                                        .path("phosphor/brain.svg")
+                                        .size(px(11.0))
+                                        .text_color(theme.muted_foreground.opacity(0.35)),
+                                )
                                 .child(
                                     div()
-                                        .id(SharedString::from(format!(
-                                            "thinking-toggle-{msg_idx}"
-                                        )))
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(5.0))
-                                        .py(px(2.0))
-                                        .px(px(4.0))
-                                        .rounded(px(4.0))
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(theme.muted.opacity(0.05)))
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |this, _, _, cx| {
-                                                if let Some(m) =
-                                                    this.state.messages.get_mut(msg_idx)
-                                                {
-                                                    m.thinking_collapsed = !m.thinking_collapsed;
-                                                }
-                                                cx.notify();
-                                            }),
-                                        )
-                                        .child(
-                                            svg()
-                                                .path("phosphor/brain.svg")
-                                                .size(px(12.0))
-                                                .text_color(theme.muted_foreground.opacity(0.5)),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(11.5))
-                                                .text_color(theme.muted_foreground.opacity(0.6))
-                                                .flex_1()
-                                                .child(thinking_summary),
-                                        )
-                                        .child(
-                                            svg()
-                                                .path(chevron)
-                                                .size(px(10.0))
-                                                .text_color(theme.muted_foreground.opacity(0.35)),
-                                        ),
-                                )
-                                // Expanded content — no border, subtle bg
-                                .children(if !thinking_collapsed {
-                                    let display_text: SharedString =
-                                        if thinking.len() > THINKING_DISPLAY_LEN {
-                                            format!(
-                                                "{}…",
-                                                &thinking[..thinking
-                                                    .floor_char_boundary(THINKING_DISPLAY_LEN)]
-                                            )
-                                            .into()
-                                        } else {
-                                            thinking.clone().into()
-                                        };
-                                    Some(
-                                        div()
-                                            .mx(px(4.0))
-                                            .mt(px(2.0))
-                                            .mb(px(4.0))
-                                            .px(px(10.0))
-                                            .py(px(6.0))
-                                            .rounded(px(6.0))
-                                            .bg(theme.muted.opacity(0.04))
-                                            .max_h(px(256.0))
-                                            .overflow_y_hidden()
-                                            .text_xs()
-                                            .line_height(px(18.0))
-                                            .text_color(theme.muted_foreground.opacity(0.6))
-                                            .child(
-                                                TextView::markdown(
-                                                    ElementId::Name(
-                                                        format!("thinking-md-{msg_idx}").into(),
-                                                    ),
-                                                    display_text,
-                                                )
-                                                .selectable(true)
-                                                .style(chat_markdown_style())
-                                                .text_xs(),
-                                            ),
-                                    )
-                                } else {
-                                    None
-                                }),
+                                        .text_size(px(11.0))
+                                        .text_color(theme.muted_foreground.opacity(0.4))
+                                        .child(thinking_summary),
+                                ),
                         );
+
+                        // Expanded content
+                        if !thinking_collapsed {
+                            let display_text: SharedString =
+                                if thinking.len() > THINKING_DISPLAY_LEN {
+                                    format!(
+                                        "{}…",
+                                        &thinking[..thinking
+                                            .floor_char_boundary(THINKING_DISPLAY_LEN)]
+                                    )
+                                    .into()
+                                } else {
+                                    thinking.clone().into()
+                                };
+                            msg_el = msg_el.child(
+                                div()
+                                    .ml(px(22.0))
+                                    .mr(px(4.0))
+                                    .mt(px(1.0))
+                                    .mb(px(2.0))
+                                    .px(px(10.0))
+                                    .py(px(6.0))
+                                    .rounded(px(6.0))
+                                    .bg(theme.muted.opacity(0.04))
+                                    .max_h(px(200.0))
+                                    .overflow_y_hidden()
+                                    .text_xs()
+                                    .line_height(px(17.0))
+                                    .text_color(theme.muted_foreground.opacity(0.5))
+                                    .child(
+                                        TextView::markdown(
+                                            ElementId::Name(
+                                                format!("thinking-md-{msg_idx}").into(),
+                                            ),
+                                            display_text,
+                                        )
+                                        .selectable(true)
+                                        .style(chat_markdown_style())
+                                        .text_xs(),
+                                    ),
+                            );
+                        }
                     }
                 }
 
@@ -1578,11 +1563,11 @@ impl Render for AgentPanel {
                     let content: SharedString = msg.content.clone().into();
                     msg_el = msg_el.child(
                         div()
-                            .pl(px(20.0))
+                            .ml(px(18.0))
                             .pr(px(4.0))
                             .text_size(px(13.5))
                             .line_height(px(22.0))
-                            .text_color(theme.foreground.opacity(0.9))
+                            .text_color(theme.foreground.opacity(0.88))
                             .child(
                                 TextView::markdown(
                                     ElementId::Name(format!("msg-md-{msg_idx}").into()),
@@ -1594,10 +1579,10 @@ impl Render for AgentPanel {
                             ),
                     );
 
-                    // Copy button — uses Clipboard component for copy-with-checkmark feedback
+                    // Copy button
                     let content_for_clip = assistant_content_for_copy;
                     msg_el = msg_el.child(
-                        div().pl(px(20.0)).child(
+                        div().ml(px(18.0)).child(
                             Clipboard::new(format!("copy-asst-{msg_idx}"))
                                 .value(SharedString::from(content_for_clip)),
                         ),
@@ -1615,14 +1600,14 @@ impl Render for AgentPanel {
                     "phosphor/caret-down.svg"
                 };
 
-                // Toggle header — compact pill
+                // Toggle header
                 msg_el = msg_el.child(
                     div()
                         .id(SharedString::from(format!("steps-toggle-{msg_idx}")))
                         .flex()
                         .items_center()
                         .gap(px(5.0))
-                        .ml(px(20.0))
+                        .ml(px(18.0))
                         .py(px(2.0))
                         .px(px(4.0))
                         .rounded(px(4.0))
@@ -1641,12 +1626,12 @@ impl Render for AgentPanel {
                             svg()
                                 .path(chevron)
                                 .size(px(10.0))
-                                .text_color(theme.muted_foreground.opacity(0.35)),
+                                .text_color(theme.muted_foreground.opacity(0.3)),
                         )
                         .child(
                             div()
                                 .text_size(px(11.0))
-                                .text_color(theme.muted_foreground.opacity(0.5))
+                                .text_color(theme.muted_foreground.opacity(0.4))
                                 .child(format!(
                                     "{} step{}",
                                     step_count,
@@ -1656,7 +1641,7 @@ impl Render for AgentPanel {
                 );
 
                 if !collapsed {
-                    let mut steps_el = div().flex().flex_col().ml(px(20.0)).gap(px(1.0));
+                    let mut steps_el = div().flex().flex_col().ml(px(18.0)).gap(px(1.0));
 
                     for (step_idx, step) in msg.steps.iter().enumerate() {
                         let icon_color = match step.status {
@@ -1812,7 +1797,7 @@ impl Render for AgentPanel {
 
         // ── Active tool calls (flat inline rows) ─────────────────
         if !self.state.tool_calls.is_empty() {
-            let mut tc_container = div().flex().flex_col().ml(px(20.0)).gap(px(1.0));
+            let mut tc_container = div().flex().flex_col().ml(px(18.0)).gap(px(1.0));
 
             for (tc_idx, tc) in self.state.tool_calls.iter().enumerate() {
                 let is_done = tc.result.is_some();
@@ -1917,81 +1902,65 @@ impl Render for AgentPanel {
             let deny_idx = i;
             let human_tool = humanize_tool_name(&approval.tool_name);
 
+            // Approval card — clean, flat, aligned with assistant content
             let approval_el = div()
                 .flex()
                 .flex_col()
-                .gap(px(8.0))
+                .gap(px(6.0))
+                .ml(px(18.0))
+                .mr(px(4.0))
                 .px(px(10.0))
-                .py(px(10.0))
+                .py(px(8.0))
                 .rounded(px(8.0))
-                .bg(theme.warning.opacity(0.04))
-                // Header — icon + title
+                .bg(theme.muted.opacity(0.04))
+                // Header row — tool icon + name + "requires approval"
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(6.0))
-                        .child(
-                            svg()
-                                .path("phosphor/warning.svg")
-                                .size(px(14.0))
-                                .text_color(theme.warning.opacity(0.8)),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.foreground.opacity(0.85))
-                                .child(format!("{} requires approval", human_tool)),
-                        ),
-                )
-                // Command preview — monospace, subtle bg
-                .child(
-                    div()
-                        .flex()
-                        .items_start()
                         .gap(px(5.0))
-                        .px(px(8.0))
-                        .py(px(6.0))
-                        .rounded(px(6.0))
-                        .bg(theme.muted.opacity(0.05))
                         .child(
                             svg()
                                 .path(icon)
-                                .size(px(11.0))
-                                .mt(px(1.0))
+                                .size(px(12.0))
                                 .flex_shrink_0()
-                                .text_color(theme.muted_foreground.opacity(0.5)),
+                                .text_color(theme.warning.opacity(0.7)),
                         )
                         .child(
                             div()
-                                .text_size(px(11.0))
-                                .font_family("Ioskeley Mono")
+                                .text_size(px(11.5))
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.foreground.opacity(0.75))
-                                .overflow_x_hidden()
-                                .child(truncate_str(&args_display, 80)),
+                                .child(human_tool),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(theme.muted_foreground.opacity(0.4))
+                                .child("requires approval"),
                         ),
                 )
-                // Action buttons — right-aligned
+                // Command preview — monospace
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .font_family("Ioskeley Mono")
+                        .text_color(theme.foreground.opacity(0.6))
+                        .overflow_x_hidden()
+                        .child(truncate_str(&args_display, 80)),
+                )
+                // Action row — compact buttons
                 .child(
                     div()
                         .flex()
+                        .items_center()
                         .gap(px(4.0))
-                        .justify_end()
-                        .child(
-                            Button::new(format!("deny-{i}"))
-                                .label("Deny")
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.resolve_approval(deny_idx, false, cx);
-                                })),
-                        )
+                        .pt(px(2.0))
                         .child(
                             Button::new(format!("allow-{i}"))
                                 .label("Allow")
                                 .small()
-                                .ghost()
+                                .primary()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.resolve_approval(allow_idx, true, cx);
                                 })),
@@ -2000,11 +1969,20 @@ impl Render for AgentPanel {
                             Button::new(format!("allow-all-{i}"))
                                 .label("Allow All")
                                 .small()
-                                .primary()
+                                .ghost()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.auto_approve = true;
                                     cx.emit(EnableAutoApprove);
                                     this.resolve_all_approvals(cx);
+                                })),
+                        )
+                        .child(
+                            Button::new(format!("deny-{i}"))
+                                .label("Deny")
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.resolve_approval(deny_idx, false, cx);
                                 })),
                         ),
                 );
@@ -2021,7 +1999,7 @@ impl Render for AgentPanel {
             };
             messages_area = messages_area.child(
                 div()
-                    .ml(px(20.0))
+                    .ml(px(18.0))
                     .flex()
                     .items_center()
                     .gap(px(5.0))
@@ -2263,11 +2241,56 @@ impl Render for AgentPanel {
             let has_text = !inline_input.read(cx).value().trim().is_empty();
             let has_skills = !self.filtered_inline_skills(cx).is_empty();
 
+            // Send button — circular, matches main input bar
+            let send_button = div()
+                .id("inline-send-btn")
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(24.0))
+                .rounded(px(12.0))
+                .cursor_pointer()
+                .flex_shrink_0()
+                .bg(if has_text && !has_skills {
+                    theme.primary
+                } else {
+                    theme.muted.opacity(0.12)
+                })
+                .hover(|s| {
+                    if has_text {
+                        s.bg(theme.primary_hover)
+                    } else {
+                        s.bg(theme.muted.opacity(0.18))
+                    }
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        if let Some(ref input) = this.inline_input_state {
+                            let text = input.read(cx).text().to_string();
+                            if !text.trim().is_empty() {
+                                input.update(cx, |s, cx| s.set_value("", window, cx));
+                                cx.emit(InlineInputSubmit { text });
+                            }
+                        }
+                    }),
+                )
+                .child(
+                    svg()
+                        .path("phosphor/arrow-up.svg")
+                        .size(px(12.0))
+                        .text_color(if has_text && !has_skills {
+                            theme.primary_foreground
+                        } else {
+                            theme.muted_foreground.opacity(0.4)
+                        }),
+                );
+
             panel = panel.child(
                 div()
                     .flex_shrink_0()
-                    .px(px(12.0))
-                    .py(px(8.0))
+                    .px(px(10.0))
+                    .py(px(6.0))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                         let key = event.keystroke.key.as_str();
                         let has_completions = !this.filtered_inline_skills(cx).is_empty();
@@ -2309,52 +2332,44 @@ impl Render for AgentPanel {
                             cx.stop_propagation();
                         }
                     }))
+                    // Input container — flat row matching main input bar style
                     .child(
                         div()
                             .flex()
-                            .items_end()
-                            .gap(px(8.0))
-                            .px(px(10.0))
-                            .py(px(6.0))
-                            .rounded(px(12.0))
-                            .bg(theme.muted.opacity(0.06))
+                            .items_center()
+                            .gap(px(6.0))
+                            .px(px(6.0))
+                            .py(px(5.0))
+                            .rounded(px(10.0))
+                            .bg(theme.background)
+                            // Oven icon as mode indicator
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(24.0))
+                                    .rounded(px(6.0))
+                                    .bg(theme.primary.opacity(0.08))
+                                    .child(
+                                        svg()
+                                            .path("phosphor/oven.svg")
+                                            .size(px(14.0))
+                                            .text_color(theme.primary),
+                                    ),
+                            )
+                            // Text field
                             .child(
                                 div()
                                     .flex_1()
+                                    .text_size(px(13.0))
                                     .child(
                                         Input::new(&inline_input)
                                             .appearance(false)
                                             .cleanable(false),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .mb(px(2.0))
-                                    .child(
-                                        {
-                                            let mut btn = Button::new("inline-send")
-                                                .icon(Icon::default().path("phosphor/arrow-up.svg"))
-                                                .ghost()
-                                                .xsmall()
-                                                .rounded(px(99.0));
-                                            if has_text && !has_skills {
-                                                btn = btn.bg(theme.primary)
-                                                    .text_color(theme.primary_foreground);
-                                            }
-                                            btn
-                                        }
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                if let Some(ref input) = this.inline_input_state {
-                                                    let text = input.read(cx).text().to_string();
-                                                    if !text.trim().is_empty() {
-                                                        input.update(cx, |s, cx| s.set_value("", window, cx));
-                                                        cx.emit(InlineInputSubmit { text });
-                                                    }
-                                                }
-                                            })),
-                                    ),
-                            ),
+                            .child(send_button),
                     ),
             );
         }

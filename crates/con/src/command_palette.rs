@@ -66,7 +66,7 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "toggle-input-bar",
         label: "Toggle Input Bar",
-        shortcut: "⌘`",
+        shortcut: "⌃`",
         category: "View",
     },
     PaletteAction {
