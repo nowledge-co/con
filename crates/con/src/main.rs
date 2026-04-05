@@ -101,9 +101,8 @@ fn main() {
             KeyBinding::new(&kb.focus_input, FocusInput, None),
         ]);
 
-        cx.on_action::<Quit>(|_, cx| {
-            cx.quit();
-        });
+        // Quit is handled by ConWorkspace::quit() which cancels sessions first.
+        // No global handler needed — the workspace root div has .on_action for Quit.
 
         cx.set_menus(vec![
             Menu {

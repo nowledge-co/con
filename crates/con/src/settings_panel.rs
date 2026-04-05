@@ -1037,7 +1037,7 @@ impl SettingsPanel {
                     .text_size(px(11.5))
                     .line_height(px(18.0))
                     .text_color(theme.muted_foreground.opacity(0.6))
-                    .child("Copy a Ghostty-style theme config, name it, then load it from the clipboard."),
+                    .child("Paste a Ghostty-format theme from the clipboard. Browse 500+ community themes at ghostty-style.vercel.app."),
             )
             // Name input
             .child(
@@ -1118,6 +1118,13 @@ impl SettingsPanel {
                             .text_color(theme.muted_foreground.opacity(0.5))
                             .child(format!("{total_count} themes")),
                     ),
+            )
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(theme.muted_foreground.opacity(0.4))
+                    .mb(px(10.0))
+                    .child("Community themes from ghostty-style.vercel.app"),
             )
             .child(builtin_grid);
 
@@ -2299,6 +2306,7 @@ fn display_theme_name(name: &str) -> String {
         "kanagawa-wave" => "Kanagawa Wave".into(),
         "everforest-dark" => "Everforest Dark".into(),
         "everforest-light" => "Everforest Light".into(),
+        "claude-code-light" => "Claude Code Light".into(),
         // User themes: convert kebab-case to Title Case
         other => other
             .split('-')

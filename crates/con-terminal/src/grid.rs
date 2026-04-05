@@ -434,6 +434,33 @@ impl TerminalTheme {
         }
     }
 
+    /// Claude Code Light — by liljackson, from ghostty-style.vercel.app community.
+    pub fn claude_code_light() -> Self {
+        Self {
+            name: "claude-code-light".into(),
+            foreground: Color::rgb(0x14, 0x14, 0x13),
+            background: Color::rgb(0xFA, 0xF9, 0xF5),
+            ansi: [
+                Color::rgb(0x3D, 0x3D, 0x3A), // black
+                Color::rgb(0xE0, 0x5A, 0x52), // red
+                Color::rgb(0x13, 0x93, 0x52), // green
+                Color::rgb(0xA3, 0x72, 0x00), // yellow
+                Color::rgb(0x35, 0x6A, 0xD1), // blue
+                Color::rgb(0x87, 0x41, 0xBB), // magenta
+                Color::rgb(0x0E, 0x7E, 0x83), // cyan
+                Color::rgb(0x59, 0x59, 0x53), // white
+                Color::rgb(0x85, 0x85, 0x80), // bright black
+                Color::rgb(0xE0, 0x5A, 0x52), // bright red
+                Color::rgb(0x13, 0x93, 0x52), // bright green
+                Color::rgb(0xA3, 0x72, 0x00), // bright yellow
+                Color::rgb(0x35, 0x6A, 0xD1), // bright blue
+                Color::rgb(0x87, 0x41, 0xBB), // bright magenta
+                Color::rgb(0x0E, 0x7E, 0x83), // bright cyan
+                Color::rgb(0xFA, 0xF9, 0xF5), // bright white
+            ],
+        }
+    }
+
     /// Look up a built-in theme by name. Case-insensitive.
     pub fn by_name(name: &str) -> Option<Self> {
         match name.to_lowercase().as_str() {
@@ -451,6 +478,7 @@ impl TerminalTheme {
             "kanagawa-wave" | "kanagawa" => Some(Self::kanagawa_wave()),
             "everforest-dark" | "everforest" => Some(Self::everforest_dark()),
             "everforest-light" => Some(Self::everforest_light()),
+            "claude-code-light" | "claude-code" => Some(Self::claude_code_light()),
             _ => {
                 // Fall back to user themes from ~/.config/con/themes/
                 Self::load_user_themes()
@@ -492,6 +520,7 @@ impl TerminalTheme {
             "kanagawa-wave",
             "everforest-dark",
             "everforest-light",
+            "claude-code-light",
         ]
     }
 
