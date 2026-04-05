@@ -1,6 +1,6 @@
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Icon, Selectable as _, Sizable as _,
+    ActiveTheme, Icon,
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
 };
@@ -294,30 +294,43 @@ impl Render for InputBar {
         let inner_radius = px(8.0);
         let mode_label = self.mode.label().to_string();
         let mode_tint = self.mode.tint(cx);
-        let mode_button = Button::new("mode-toggle")
-            .label(mode_label)
-            .small()
-            .ghost()
-            .selected(true)
-            .tooltip("Switch mode (Tab)")
+        let mode_button = div()
+            .id("mode-toggle")
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .h(control_h)
+            .px(px(10.0))
+            .rounded(control_radius)
+            .cursor_pointer()
+            .bg(theme.background.opacity(0.76))
+            .hover(|s| s.bg(theme.background.opacity(0.94)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.cycle_mode(window, cx);
                 }),
-            );
-
-        let mode_meta = div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .child(mode_button)
+            )
+            .child(div().size(px(6.0)).rounded_full().bg(mode_tint))
             .child(
                 div()
-                    .text_size(px(10.5))
+                    .text_size(px(11.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.foreground)
+                    .child(mode_label),
+            )
+            .child(
+                div()
+                    .h(px(18.0))
+                    .px(px(6.0))
+                    .flex()
+                    .items_center()
+                    .rounded(px(6.0))
+                    .bg(theme.muted.opacity(0.10))
+                    .text_size(px(9.5))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(mode_tint.opacity(0.78))
-                    .child("Tab switches mode"),
+                    .text_color(theme.muted_foreground.opacity(0.72))
+                    .child("⇥"),
             );
 
         let all_selected =
@@ -499,19 +512,12 @@ impl Render for InputBar {
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .gap(px(6.0))
+                    .items_end()
+                    .gap(px(8.0))
                     .px(px(12.0))
                     .pt(px(8.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap(px(10.0))
-                            .child(mode_meta)
-                            .children(pane_area),
-                    )
+                    .pb(px(2.0))
+                    .child(mode_button)
                     .child(
                         div()
                             .flex()
@@ -520,6 +526,7 @@ impl Render for InputBar {
                             .min_h(px(42.0))
                             .px(px(10.0))
                             .py(px(8.0))
+                            .flex_1()
                             .rounded(control_radius)
                             .bg(theme.background.opacity(0.82))
                             .child(
@@ -530,7 +537,8 @@ impl Render for InputBar {
                                 ),
                             )
                             .child(send_button),
-                    ),
+                    )
+                    .children(pane_area),
             )
             .child(
                 div()
@@ -551,7 +559,7 @@ impl Render for InputBar {
                         div()
                             .text_size(px(10.0))
                             .text_color(theme.muted_foreground.opacity(0.25))
-                            .child("/ skills  ⇥ switch mode  ⇧↵ newline  ↵ send"),
+                            .child("/ skills  ⇧↵ newline  ↵ send"),
                     ),
             )
     }

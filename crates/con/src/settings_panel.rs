@@ -4,7 +4,6 @@ use gpui::*;
 
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
-use gpui_component::list::ListItem;
 use gpui_component::stepper::{Stepper, StepperItem};
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Icon, Selectable as _, Sizable as _, input::Input};
@@ -1317,7 +1316,6 @@ impl SettingsPanel {
         let temperature_input = self.temperature_input.clone();
         let suggestion_model_input = self.suggestion_model_input.clone();
         let provider_name = provider_label(&self.selected_provider);
-        let provider_summary_text = provider_summary(&self.selected_provider);
         let models = provider_models(&self.selected_provider);
         let current_model = self.model_input.read(cx).value().to_string();
 
@@ -1326,85 +1324,65 @@ impl SettingsPanel {
             let is_selected = *provider == self.selected_provider;
             let label = provider_label(provider);
             let provider_clone = provider.clone();
-            let subtitle = provider_summary(provider);
             let known_models = provider_models(provider).len();
 
             let row = div()
+                .id(SharedString::from(format!("prov-{label}")))
+                .h(px(38.0))
+                .px(px(12.0))
+                .flex()
+                .items_center()
+                .gap(px(10.0))
                 .rounded(px(10.0))
-                .overflow_hidden()
+                .cursor_pointer()
                 .bg(if is_selected {
-                    theme.primary.opacity(0.07)
+                    theme.primary.opacity(0.10)
                 } else {
-                    theme.muted.opacity(0.04)
+                    theme.transparent
                 })
-                .child(
-                    ListItem::new(SharedString::from(format!("prov-{label}")))
-                        .selected(is_selected)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.select_provider(provider_clone.clone(), window, cx);
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .items_start()
-                                .justify_between()
-                                .gap(px(10.0))
-                                .w_full()
-                                .py(px(3.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_start()
-                                        .gap(px(10.0))
-                                        .child(div().mt(px(3.0)).size(px(7.0)).rounded_full().bg(
-                                            if is_selected {
-                                                theme.primary
-                                            } else {
-                                                theme.muted_foreground.opacity(0.18)
-                                            },
-                                        ))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .flex()
-                                                .flex_col()
-                                                .gap(px(2.0))
-                                                .child(
-                                                    div()
-                                                        .text_size(px(12.5))
-                                                        .font_weight(if is_selected {
-                                                            FontWeight::SEMIBOLD
-                                                        } else {
-                                                            FontWeight::MEDIUM
-                                                        })
-                                                        .text_color(if is_selected {
-                                                            theme.foreground
-                                                        } else {
-                                                            theme.muted_foreground
-                                                        })
-                                                        .child(label),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(10.5))
-                                                        .line_height(px(16.0))
-                                                        .text_color(
-                                                            theme.muted_foreground.opacity(0.55),
-                                                        )
-                                                        .child(subtitle),
-                                                ),
-                                        ),
-                                )
-                                .child(info_badge(
-                                    if known_models == 0 {
-                                        "Custom".to_string()
-                                    } else {
-                                        known_models.to_string()
-                                    },
-                                    theme,
-                                )),
-                        ),
+                .hover(|s| {
+                    if is_selected {
+                        s.bg(theme.primary.opacity(0.13))
+                    } else {
+                        s.bg(theme.muted.opacity(0.08))
+                    }
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        this.select_provider(provider_clone.clone(), window, cx);
+                    }),
                 );
+            let row = row
+                .child(div().size(px(7.0)).rounded_full().bg(if is_selected {
+                    theme.primary
+                } else {
+                    theme.muted_foreground.opacity(0.20)
+                }))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(12.5))
+                        .font_weight(if is_selected {
+                            FontWeight::SEMIBOLD
+                        } else {
+                            FontWeight::MEDIUM
+                        })
+                        .text_color(if is_selected {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .child(label),
+                )
+                .child(info_badge(
+                    if known_models == 0 {
+                        "Custom".to_string()
+                    } else {
+                        format!("{known_models}")
+                    },
+                    theme,
+                ));
 
             provider_list = provider_list.child(row);
         }
@@ -1418,66 +1396,58 @@ impl SettingsPanel {
         let provider_card = card(theme).child(
             div()
                 .px(px(16.0))
-                .py(px(16.0))
+                .py(px(14.0))
                 .flex()
-                .flex_col()
-                .gap(px(14.0))
+                .items_center()
+                .justify_between()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.primary)
+                                .child("ACTIVE PROVIDER"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(18.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(provider_name),
+                        ),
+                )
                 .child(
                     div()
                         .flex()
-                        .items_start()
-                        .justify_between()
-                        .gap(px(12.0))
-                        .child(
-                            div()
-                                .flex_1()
-                                .flex()
-                                .flex_col()
-                                .gap(px(3.0))
-                                .child(
-                                    div()
-                                        .text_size(px(10.5))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme.primary)
-                                        .child("ACTIVE PROVIDER"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(18.0))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(provider_name),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.5))
-                                        .line_height(px(18.0))
-                                        .text_color(theme.muted_foreground.opacity(0.7))
-                                        .child(provider_summary_text),
-                                ),
-                        )
-                        .child(info_badge(model_count_badge.clone(), theme)),
-                )
-                .child(
-                    div().flex().flex_wrap().gap(px(6.0)).children([
-                        info_badge(
-                            if self.base_url_input.read(cx).value().is_empty() {
-                                "Default endpoint".to_string()
-                            } else {
-                                "Custom endpoint".to_string()
-                            },
-                            theme,
-                        )
-                        .into_any_element(),
-                        info_badge(
-                            if self.api_key_input.read(cx).value().is_empty() {
-                                "No key set".to_string()
-                            } else {
-                                "Credential configured".to_string()
-                            },
-                            theme,
-                        )
-                        .into_any_element(),
-                    ]),
+                        .flex_wrap()
+                        .justify_end()
+                        .gap(px(6.0))
+                        .children([
+                            info_badge(model_count_badge.clone(), theme).into_any_element(),
+                            info_badge(
+                                if self.base_url_input.read(cx).value().is_empty() {
+                                    "Default endpoint".to_string()
+                                } else {
+                                    "Custom endpoint".to_string()
+                                },
+                                theme,
+                            )
+                            .into_any_element(),
+                            info_badge(
+                                if self.api_key_input.read(cx).value().is_empty() {
+                                    "No key set".to_string()
+                                } else {
+                                    "Credential configured".to_string()
+                                },
+                                theme,
+                            )
+                            .into_any_element(),
+                        ]),
                 ),
         );
 
@@ -1628,25 +1598,17 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .w(px(240.0))
+            .w(px(214.0))
             .flex_shrink_0()
             .child(group_label("Provider", &theme))
             .child(
                 card(theme).child(
                     div()
-                        .px(px(10.0))
-                        .py(px(10.0))
+                        .px(px(8.0))
+                        .py(px(8.0))
                         .flex()
                         .flex_col()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .px(px(2.0))
-                                .text_size(px(11.5))
-                                .line_height(px(18.0))
-                                .text_color(theme.muted_foreground.opacity(0.7))
-                                .child("Pick the provider first, then tune the model and endpoint on the right."),
-                        )
+                        .gap(px(4.0))
                         .child(provider_list),
                 ),
             );
@@ -2261,24 +2223,6 @@ fn provider_label(provider: &ProviderKind) -> &'static str {
         ProviderKind::Mistral => "Mistral",
         ProviderKind::Together => "Together",
         ProviderKind::XAI => "xAI",
-    }
-}
-
-fn provider_summary(provider: &ProviderKind) -> &'static str {
-    match provider {
-        ProviderKind::Anthropic => "Balanced frontier models with strong coding and reasoning.",
-        ProviderKind::OpenAI => "General-purpose flagship and reasoning models from OpenAI.",
-        ProviderKind::OpenAICompatible => "Bring your own OpenAI-style endpoint and model catalog.",
-        ProviderKind::DeepSeek => "Fast, affordable chat and reasoning models.",
-        ProviderKind::Groq => "Low-latency inference with open model serving.",
-        ProviderKind::Cohere => "Enterprise-friendly language and retrieval models.",
-        ProviderKind::Gemini => "Google multimodal models with strong broad capability.",
-        ProviderKind::Ollama => "Run local models on this machine via Ollama.",
-        ProviderKind::OpenRouter => "Route across many providers through one API.",
-        ProviderKind::Perplexity => "Search-oriented models with web-grounded answers.",
-        ProviderKind::Mistral => "Compact European foundation models and endpoints.",
-        ProviderKind::Together => "Hosted open models with broad model variety.",
-        ProviderKind::XAI => "xAI-hosted Grok models and compatible endpoints.",
     }
 }
 
