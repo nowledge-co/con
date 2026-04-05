@@ -470,16 +470,18 @@ impl Render for InputBar {
             .font_family(".SystemUIFont")
             .text_size(px(13.0))
             // Intercept Tab
-            .on_action(cx.listener(|this, _: &gpui_component::input::IndentInline, window, cx| {
-                let matches = this.filtered_skills(cx);
-                if !matches.is_empty() {
-                    let idx = this.skill_selection.min(matches.len().saturating_sub(1));
-                    let name = matches[idx].name.clone();
-                    this.complete_skill(&name, window, cx);
-                } else {
-                    this.cycle_mode(window, cx);
-                }
-            }))
+            .on_action(cx.listener(
+                |this, _: &gpui_component::input::IndentInline, window, cx| {
+                    let matches = this.filtered_skills(cx);
+                    if !matches.is_empty() {
+                        let idx = this.skill_selection.min(matches.len().saturating_sub(1));
+                        let name = matches[idx].name.clone();
+                        this.complete_skill(&name, window, cx);
+                    } else {
+                        this.cycle_mode(window, cx);
+                    }
+                },
+            ))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let matches = this.filtered_skills(cx);
                 let has_completions = !matches.is_empty();

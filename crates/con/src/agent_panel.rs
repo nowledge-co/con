@@ -325,11 +325,7 @@ impl PanelState {
                 self.complete_tool_call(&call_id, &result);
             }
             HarnessEvent::ResponseComplete(msg) => {
-                self.complete_response(
-                    &msg.content,
-                    msg.model.as_deref(),
-                    msg.duration_ms,
-                );
+                self.complete_response(&msg.content, msg.model.as_deref(), msg.duration_ms);
             }
             HarnessEvent::Error(err) => {
                 self.add_message("system", &format!("Error: {}", err));
@@ -566,16 +562,16 @@ impl AgentPanel {
         self.show_inline_input = show;
     }
 
+    pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
+        self.skills = skills;
+    }
+
     pub fn focus_inline_input(&self, window: &mut Window, cx: &mut App) -> bool {
         let Some(ref input) = self.inline_input_state else {
             return false;
         };
         input.read(cx).focus_handle(cx).focus(window, cx);
         true
-    }
-
-    pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
-        self.skills = skills;
     }
 
     /// Return matching skills if the inline input text starts with `/`.
@@ -739,16 +735,9 @@ impl AgentPanel {
         cx.notify();
     }
 
-    pub fn complete_response(
-        &mut self,
-        msg: &con_agent::Message,
-        cx: &mut Context<Self>,
-    ) {
-        self.state.complete_response(
-            &msg.content,
-            msg.model.as_deref(),
-            msg.duration_ms,
-        );
+    pub fn complete_response(&mut self, msg: &con_agent::Message, cx: &mut Context<Self>) {
+        self.state
+            .complete_response(&msg.content, msg.model.as_deref(), msg.duration_ms);
         self.scroll_to_bottom();
         cx.notify();
     }
@@ -1144,59 +1133,67 @@ impl Render for AgentPanel {
                 }
             })
             .detach();
-            cx.subscribe_in(&state, window, |this: &mut Self, _, ev: &InputEvent, window, cx| {
-                match ev {
-                    InputEvent::Change => {
-                        let skills = this.filtered_inline_skills(cx);
-                        if skills.is_empty() {
-                            this.inline_skill_selection = 0;
-                        } else {
-                            this.inline_skill_selection =
-                                this.inline_skill_selection.min(skills.len().saturating_sub(1));
-                        }
-                        cx.emit(InlineSkillAutocompleteChanged);
-                        cx.notify();
-                    }
-                    InputEvent::PressEnter { .. } => {
-                        if this.inline_shift_enter {
-                            // Shift+Enter: newline already inserted by auto_grow
-                            this.inline_shift_enter = false;
-                            return;
-                        }
-
-                        // Regular Enter: undo the newline auto_grow inserted, then submit
-                        if let Some(ref input) = this.inline_input_state {
-                            input.update(cx, |s, cx| {
-                                let cursor = s.cursor();
-                                let val = s.value().to_string();
-                                if cursor > 0 && val.as_bytes().get(cursor - 1) == Some(&b'\n') {
-                                    let mut cleaned = val[..cursor - 1].to_string();
-                                    cleaned.push_str(&val[cursor..]);
-                                    s.set_value(&cleaned, window, cx);
-                                }
-                            });
-                        }
-
-                        let has_completions = !this.filtered_inline_skills(cx).is_empty();
-                        if has_completions {
-                            // Enter completes the selected skill
+            cx.subscribe_in(
+                &state,
+                window,
+                |this: &mut Self, _, ev: &InputEvent, window, cx| {
+                    match ev {
+                        InputEvent::Change => {
                             let skills = this.filtered_inline_skills(cx);
-                            let sel = this.inline_skill_selection.min(skills.len().saturating_sub(1));
-                            if let Some(skill) = skills.get(sel) {
-                                let name = skill.name.clone();
-                                this.complete_inline_skill(&name, window, cx);
+                            if skills.is_empty() {
+                                this.inline_skill_selection = 0;
+                            } else {
+                                this.inline_skill_selection = this
+                                    .inline_skill_selection
+                                    .min(skills.len().saturating_sub(1));
                             }
-                        } else if let Some(ref input) = this.inline_input_state {
-                            let text = input.read(cx).value().to_string();
-                            if !text.trim().is_empty() {
-                                input.update(cx, |s, cx| s.set_value("", window, cx));
-                                cx.emit(InlineInputSubmit { text });
+                            cx.emit(InlineSkillAutocompleteChanged);
+                            cx.notify();
+                        }
+                        InputEvent::PressEnter { .. } => {
+                            if this.inline_shift_enter {
+                                // Shift+Enter: newline already inserted by auto_grow
+                                this.inline_shift_enter = false;
+                                return;
+                            }
+
+                            // Regular Enter: undo the newline auto_grow inserted, then submit
+                            if let Some(ref input) = this.inline_input_state {
+                                input.update(cx, |s, cx| {
+                                    let cursor = s.cursor();
+                                    let val = s.value().to_string();
+                                    if cursor > 0 && val.as_bytes().get(cursor - 1) == Some(&b'\n')
+                                    {
+                                        let mut cleaned = val[..cursor - 1].to_string();
+                                        cleaned.push_str(&val[cursor..]);
+                                        s.set_value(&cleaned, window, cx);
+                                    }
+                                });
+                            }
+
+                            let has_completions = !this.filtered_inline_skills(cx).is_empty();
+                            if has_completions {
+                                // Enter completes the selected skill
+                                let skills = this.filtered_inline_skills(cx);
+                                let sel = this
+                                    .inline_skill_selection
+                                    .min(skills.len().saturating_sub(1));
+                                if let Some(skill) = skills.get(sel) {
+                                    let name = skill.name.clone();
+                                    this.complete_inline_skill(&name, window, cx);
+                                }
+                            } else if let Some(ref input) = this.inline_input_state {
+                                let text = input.read(cx).value().to_string();
+                                if !text.trim().is_empty() {
+                                    input.update(cx, |s, cx| s.set_value("", window, cx));
+                                    cx.emit(InlineInputSubmit { text });
+                                }
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
-                }
-            })
+                },
+            )
             .detach();
             self.inline_input_state = Some(state);
         }
@@ -1485,9 +1482,7 @@ impl Render for AgentPanel {
                         // Thinking toggle — same indent as steps toggle
                         msg_el = msg_el.child(
                             div()
-                                .id(SharedString::from(format!(
-                                    "thinking-toggle-{msg_idx}"
-                                )))
+                                .id(SharedString::from(format!("thinking-toggle-{msg_idx}")))
                                 .flex()
                                 .items_center()
                                 .gap(px(5.0))
@@ -1500,9 +1495,7 @@ impl Render for AgentPanel {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
-                                        if let Some(m) =
-                                            this.state.messages.get_mut(msg_idx)
-                                        {
+                                        if let Some(m) = this.state.messages.get_mut(msg_idx) {
                                             m.thinking_collapsed = !m.thinking_collapsed;
                                         }
                                         cx.notify();
@@ -1530,17 +1523,17 @@ impl Render for AgentPanel {
 
                         // Expanded content
                         if !thinking_collapsed {
-                            let display_text: SharedString =
-                                if thinking.len() > THINKING_DISPLAY_LEN {
-                                    format!(
-                                        "{}…",
-                                        &thinking[..thinking
-                                            .floor_char_boundary(THINKING_DISPLAY_LEN)]
-                                    )
-                                    .into()
-                                } else {
-                                    thinking.clone().into()
-                                };
+                            let display_text: SharedString = if thinking.len()
+                                > THINKING_DISPLAY_LEN
+                            {
+                                format!(
+                                    "{}…",
+                                    &thinking[..thinking.floor_char_boundary(THINKING_DISPLAY_LEN)]
+                                )
+                                .into()
+                            } else {
+                                thinking.clone().into()
+                            };
                             msg_el = msg_el.child(
                                 div()
                                     .ml(px(22.0))
@@ -1669,11 +1662,12 @@ impl Render for AgentPanel {
 
                         // Step row — flat, no dots, no borders
                         // Parse label "Human Name: detail" into (name, detail) for better typography
-                        let (step_name, step_detail) = if let Some(colon_pos) = step.label.find(": ") {
-                            (&step.label[..colon_pos], Some(&step.label[colon_pos + 2..]))
-                        } else {
-                            (step.label.as_str(), None)
-                        };
+                        let (step_name, step_detail) =
+                            if let Some(colon_pos) = step.label.find(": ") {
+                                (&step.label[..colon_pos], Some(&step.label[colon_pos + 2..]))
+                            } else {
+                                (step.label.as_str(), None)
+                            };
                         let mut step_header = div()
                             .flex()
                             .items_center()
@@ -2225,7 +2219,9 @@ impl Render for AgentPanel {
                                         div()
                                             .text_xs()
                                             .text_color(theme.muted_foreground.opacity(0.6))
-                                            .child(format!("{date}{model_part}  ·  {msg_count} messages")),
+                                            .child(format!(
+                                                "{date}{model_part}  ·  {msg_count} messages"
+                                            )),
                                     ),
                             )
                             .child(
@@ -2236,10 +2232,9 @@ impl Render for AgentPanel {
                                     .flex_shrink_0()
                                     .invisible()
                                     .group_hover("conv-row", |s| s.visible())
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        |_, _, cx| cx.stop_propagation(),
-                                    )
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
                                     .child(
                                         Button::new(SharedString::from(format!("del-conv-{i}")))
                                             .icon(Icon::default().path("phosphor/trash.svg"))
@@ -2325,7 +2320,9 @@ impl Render for AgentPanel {
 
                         if key == "tab" && has_completions {
                             let skills = this.filtered_inline_skills(cx);
-                            let sel = this.inline_skill_selection.min(skills.len().saturating_sub(1));
+                            let sel = this
+                                .inline_skill_selection
+                                .min(skills.len().saturating_sub(1));
                             if let Some(skill) = skills.get(sel) {
                                 let name = skill.name.clone();
                                 this.complete_inline_skill(&name, window, cx);
@@ -2335,7 +2332,8 @@ impl Render for AgentPanel {
                         }
 
                         if key == "up" && has_completions {
-                            this.inline_skill_selection = this.inline_skill_selection.saturating_sub(1);
+                            this.inline_skill_selection =
+                                this.inline_skill_selection.saturating_sub(1);
                             cx.emit(InlineSkillAutocompleteChanged);
                             cx.notify();
                             cx.stop_propagation();
@@ -2343,7 +2341,8 @@ impl Render for AgentPanel {
                         }
                         if key == "down" && has_completions {
                             let max = this.filtered_inline_skills(cx).len().saturating_sub(1);
-                            this.inline_skill_selection = (this.inline_skill_selection + 1).min(max);
+                            this.inline_skill_selection =
+                                (this.inline_skill_selection + 1).min(max);
                             cx.emit(InlineSkillAutocompleteChanged);
                             cx.notify();
                             cx.stop_propagation();
