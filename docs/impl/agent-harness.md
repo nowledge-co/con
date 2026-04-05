@@ -252,3 +252,5 @@ This matters for SSH, tmux, and full-screen TUIs:
 - `ssh_host` comes from the pane's own remote-host detection, never from the app process environment.
 - `tmux_session` is inferred from the pane itself (command/title/screen hints), not from `TMUX` in the parent process.
 - When the pane mode is not `shell`, or shell metadata is stale, the prompt explicitly tells the model to inspect the live pane with `list_panes`, `read_pane`, and `send_keys` before making claims about cwd, hostname, or the running app.
+
+This is still a transitional architecture. The next layer is a dedicated pane runtime observer that keeps evidence and models nested scopes such as `ssh -> tmux -> shell -> Codex CLI`. See `docs/impl/pane-runtime-observer.md`.

@@ -461,6 +461,42 @@ These workflows must feel **enhanced**, not wrapped.
 - Codex / Claude Code / OpenCode can run directly in a pane without con hijacking them
 - built-in assistance remains available, but never competes for terminal ownership
 
+### Required state model
+
+The product should think in scopes, not labels.
+
+A pane may contain a stack like:
+
+1. local shell
+2. SSH connection
+3. remote shell
+4. tmux session
+5. external agent CLI
+
+The UI and the built-in agent should consume that same scope model.
+
+### Product rules
+
+- Never present shell cwd or last command as if they describe the visible app when the pane is in tmux or another TUI.
+- Prefer calm scope indicators over noisy badges.
+- When certainty is low, show less and say less.
+- When an action is remote-sensitive, approvals must make the remote scope explicit.
+- When an external agent CLI is active, con should support it with orientation, notifications, and safe approvals, not compete for control.
+
+### Minimum visible cues
+
+- local vs remote
+- multiplexer session when known
+- whether the pane is at a shell prompt or inside another interactive runtime
+- external agent CLI identity when confidence is high
+
+### Failure to avoid
+
+The worst failure is false confidence.
+
+Users will tolerate uncertainty.
+They will not tolerate the terminal confidently naming the wrong host, session, or active tool.
+
 ### Why this matters
 
 This is where terminal-native credibility is won or lost.

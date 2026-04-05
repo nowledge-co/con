@@ -152,7 +152,37 @@ GPUI gives us Zed-level text rendering quality (critical for a terminal) and a p
 
 Both backends are wrapped by `TerminalPane` in the `con` crate. All workspace, agent, and pane tree code works through this common API. Grid-specific features (command blocks, OSC 133 text search) gracefully degrade when using ghostty, while ghostty-specific features (COMMAND_FINISHED with exit code + duration, Metal rendering) are unavailable on the legacy backend.
 
-### 3. AI Agent Harness: Rig
+### 3. Pane Runtime Observer
+
+The long-term product requirement is not "tmux detection."
+It is durable pane runtime observability.
+
+A pane may contain a nested stack:
+
+- local shell
+- SSH connection
+- remote shell
+- tmux
+- another shell
+- Codex CLI / Claude Code / OpenCode / vim / htop
+
+The architecture must model that explicitly.
+
+**Three-layer design:**
+
+1. **Backend facts** — PTY process-group facts, OSC 133 events, alternate-screen state, titles, PWD, visible text
+2. **Pane runtime observer** — evidence merge, freshness, scope-stack inference, confidence
+3. **Consumers** — agent prompt, `list_panes`, approvals, sidebar, notifications, resume surfaces
+
+**Important constraint:** shell metadata and visible-app identity are not the same thing. Once tmux or another TUI takes over the screen, cwd and last command become advisory unless stronger evidence says otherwise.
+
+**Strongest current foundation:** on Unix, `portable-pty` already exposes the PTY foreground process group and raw fd. That should become the primary local-runtime probe for detecting shells, multiplexers, TUIs, and local agent CLIs.
+
+**Ghostty implication:** Ghostty gives con strong terminal facts, but the embedded C API does not yet expose all of Ghostty's richer internal semantic prompt/runtime state. con therefore needs its own backend-neutral pane runtime observer instead of pushing more product logic into prompt heuristics.
+
+See `docs/impl/pane-runtime-observer.md`.
+
+### 4. AI Agent Harness: Rig
 
 **Why [Rig](https://rig.rs/) over alternatives:**
 
@@ -189,7 +219,7 @@ Both backends are wrapped by `TerminalPane` in the `con` crate. All workspace, a
 
 **Escape hatch:** If we later need ai-sdk features, we can spawn a Bun/Node sidecar process and communicate over IPC. This is a pragmatic fallback, not a primary architecture.
 
-### 4. Cross-Platform Strategy
+### 5. Cross-Platform Strategy
 
 | Platform | GPU | Font | PTY | Window |
 |----------|-----|------|-----|--------|
@@ -263,8 +293,8 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Command history in agent context (last 10 commands with exit codes)
 - [x] Inline AI suggestions (debounced completion engine with caching)
 - [x] Command block actions (copy output, re-run, explain via agent)
-- [x] SSH-aware agent (parses SSH_CONNECTION for remote host)
-- [x] tmux-aware agent (queries tmux session name)
+- [x] SSH-aware agent (uses pane-local remote host detection)
+- [x] tmux/TUI-aware agent (pane-local mode + tmux session hints)
 - [x] Conversation history + search (save/load/list, new chat, history panel)
 
 ### Phase 6: Polish
@@ -344,6 +374,8 @@ The agent always knows:
 - Whether they're in SSH/tmux/docker
 - Git status if in a repo
 
+This is the current baseline. The next step is a runtime scope stack with evidence and confidence so the agent can distinguish shell metadata from the visible foreground runtime.
+
 ### Agent Tool Execution
 
 When the agent needs to run a command:
@@ -360,10 +392,16 @@ This means the user **sees** what the agent does — no hidden subprocess. Full 
 
 For tools like Claude Code, Codex CLI, or OpenCode that run *inside* the terminal:
 
-- con detects these agents via process name / OSC sequences
+- con should detect them through the pane runtime observer, using strong evidence first:
+  - PTY foreground process identity for local panes
+  - shell/runtime transitions
+  - backend facts such as alternate screen and command lifecycle
+  - advisory screen structure only as a fallback
 - Provides enhanced UX: notification rings, focus management
 - Does NOT try to "take over" — con is the host, not the agent
 - Optional: pipe agent's stderr/notifications to con's notification system
+
+This is a product boundary, not a convenience feature. con must support these tools without pretending that con itself owns the pane.
 
 ---
 

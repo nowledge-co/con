@@ -74,3 +74,37 @@ It does **not** provide: Screen/Grid state, rendering, PTY management, or scroll
 - `MOUSE_SHAPE` — cursor shape changes
 - `DESKTOP_NOTIFICATION` — system notifications from terminal apps
 - `SET_MOUSE_VISIBILITY` — show/hide cursor during typing
+
+### Observability Limits For Pane Intelligence
+
+Ghostty is excellent at terminal behavior, but the current embedded C API is not yet a full pane-runtime introspection API.
+
+What the C API gives us well:
+
+- `SET_TITLE`
+- `PWD`
+- `COMMAND_FINISHED`
+- visible and scrollback text via `ghostty_surface_read_text`
+- selection access
+- inspector lifecycle access
+
+What Ghostty clearly tracks internally in Zig:
+
+- semantic prompt state
+- prompt/input/output boundaries
+- prompt click movement
+- richer screen semantics around command output
+
+What the embedded API does **not** currently give us as a stable product contract:
+
+- the exact foreground program identity
+- a nested scope stack such as `ssh -> tmux -> Codex CLI`
+- a direct export of Ghostty's richer semantic prompt model for host applications
+
+This matters for con:
+
+- Ghostty should be treated as a strong source of terminal facts
+- con still needs its own backend-neutral pane runtime observer
+- we should not design external-agent or tmux awareness around assumptions that Ghostty will directly tell us the whole runtime state
+
+One more important limit: Ghostty's OSC 7 handling validates host information against the local system when reporting `PWD`. That means `PWD` is not a durable embedded signal for remote host identity in the way a naive reader might expect.
