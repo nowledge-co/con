@@ -109,7 +109,7 @@ impl ConWorkspace {
         let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
         let session = Session::load().unwrap_or_default();
         let colors = theme_to_ghostty_colors(&terminal_theme);
-        let ghostty_app = con_ghostty::GhosttyApp::new(Some(&colors))
+        let ghostty_app = con_ghostty::GhosttyApp::new(Some(&colors), Some(font_size))
             .map(std::sync::Arc::new)
             .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
         let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
@@ -709,15 +709,14 @@ impl ConWorkspace {
 
         let term_config = settings.read(cx).terminal_config().clone();
         self.font_size = term_config.font_size;
-        if let Err(err) = self.ghostty_app.update_font_size(self.font_size) {
-            log::error!("Failed to update Ghostty font size: {}", err);
-        }
 
-        // Apply terminal theme if changed
         if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
-            if new_theme.name != self.terminal_theme.name {
-                self.apply_terminal_theme(new_theme, window, cx);
-            }
+            self.apply_terminal_theme(new_theme, window, cx);
+        } else {
+            log::warn!(
+                "Skipping terminal theme sync; theme {:?} was not found",
+                term_config.theme
+            );
         }
 
         // Re-apply keybindings at runtime so changes take effect immediately

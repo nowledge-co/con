@@ -56,6 +56,15 @@ pub struct GhosttyConfigPatch {
 }
 
 impl GhosttyConfigPatch {
+    fn merge(&mut self, patch: &GhosttyConfigPatch) {
+        if let Some(colors) = &patch.colors {
+            self.colors = Some(colors.clone());
+        }
+        if let Some(font_size) = patch.font_size {
+            self.font_size = Some(font_size);
+        }
+    }
+
     fn to_config_string(&self) -> String {
         let mut s = String::with_capacity(512);
         if let Some(colors) = &self.colors {
@@ -183,17 +192,19 @@ pub struct GhosttyApp {
     app: ffi::ghostty_app_t,
     // Box prevents the runtime_config from being moved while ghostty holds a pointer.
     _runtime_config: Box<ffi::ghostty_runtime_config_s>,
+    appearance: Mutex<GhosttyConfigPatch>,
 }
 
 impl GhosttyApp {
     /// Create a new ghostty app with the given terminal colors.
-    pub fn new(colors: Option<&TerminalColors>) -> Result<Self, String> {
+    pub fn new(colors: Option<&TerminalColors>, font_size: Option<f32>) -> Result<Self, String> {
         ensure_ghostty_init()?;
 
-        let config = build_ghostty_config(&GhosttyConfigPatch {
+        let appearance = GhosttyConfigPatch {
             colors: colors.cloned(),
-            font_size: None,
-        })?;
+            font_size,
+        };
+        let config = build_ghostty_config(&appearance)?;
 
         // App-level userdata is not used for per-surface state.
         // We keep it null — per-surface state is on surface userdata.
@@ -221,6 +232,7 @@ impl GhosttyApp {
         Ok(Self {
             app,
             _runtime_config: runtime_config,
+            appearance: Mutex::new(appearance),
         })
     }
 
@@ -233,7 +245,6 @@ impl GhosttyApp {
     }
 
     /// Update the app's terminal colors at runtime.
-    /// Creates a new config, loads the colors, and applies it.
     pub fn update_colors(&self, colors: &TerminalColors) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {
             colors: Some(colors.clone()),
@@ -248,15 +259,13 @@ impl GhosttyApp {
         })
     }
 
-    pub fn update_font_size(&self, font_size: f32) -> Result<(), String> {
-        self.update_config(&GhosttyConfigPatch {
-            colors: None,
-            font_size: Some(font_size),
-        })
-    }
-
     pub fn update_config(&self, patch: &GhosttyConfigPatch) -> Result<(), String> {
-        let config = build_ghostty_config(patch)?;
+        let merged = {
+            let mut appearance = self.appearance.lock();
+            appearance.merge(patch);
+            appearance.clone()
+        };
+        let config = build_ghostty_config(&merged)?;
         unsafe {
             ffi::ghostty_app_update_config(self.app, config);
             ffi::ghostty_config_free(config);
@@ -1058,4 +1067,69 @@ unsafe extern "C" fn close_surface_callback(userdata: *mut c_void, _process_aliv
     }
     let state = unsafe { &*(userdata as *const StateRef) };
     state.lock().child_exited = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GhosttyConfigPatch, TerminalColors};
+
+    fn sample_colors(seed: u8) -> TerminalColors {
+        TerminalColors {
+            foreground: [seed, seed.saturating_add(1), seed.saturating_add(2)],
+            background: [
+                seed.saturating_add(3),
+                seed.saturating_add(4),
+                seed.saturating_add(5),
+            ],
+            palette: [[seed; 3]; 16],
+        }
+    }
+
+    #[test]
+    fn config_patch_merge_preserves_existing_colors() {
+        let original_colors = sample_colors(10);
+        let mut patch = GhosttyConfigPatch {
+            colors: Some(original_colors.clone()),
+            font_size: Some(14.0),
+        };
+
+        patch.merge(&GhosttyConfigPatch {
+            colors: None,
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(
+            patch.colors.as_ref().map(|c| c.background),
+            Some(original_colors.background)
+        );
+        assert_eq!(
+            patch.colors.as_ref().map(|c| c.foreground),
+            Some(original_colors.foreground)
+        );
+        assert_eq!(patch.font_size, Some(16.0));
+    }
+
+    #[test]
+    fn config_patch_merge_replaces_colors_when_present() {
+        let replacement_colors = sample_colors(40);
+        let mut patch = GhosttyConfigPatch {
+            colors: Some(sample_colors(10)),
+            font_size: Some(14.0),
+        };
+
+        patch.merge(&GhosttyConfigPatch {
+            colors: Some(replacement_colors.clone()),
+            font_size: None,
+        });
+
+        assert_eq!(
+            patch.colors.as_ref().map(|c| c.background),
+            Some(replacement_colors.background)
+        );
+        assert_eq!(
+            patch.colors.as_ref().map(|c| c.foreground),
+            Some(replacement_colors.foreground)
+        );
+        assert_eq!(patch.font_size, Some(14.0));
+    }
 }

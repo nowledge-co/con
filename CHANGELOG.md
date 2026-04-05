@@ -58,6 +58,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Scrollback buffer with smooth scroll and a floating indicator showing how far back you are
 - Clipboard integration with Cmd+C / Cmd+V, including bracketed paste mode for safe pasting into editors
 - Cmd+K now clears the current Ghostty screen and scrollback using Ghostty's native action path
+- Fixed a Ghostty theme sync regression where the Settings panel could update con's chrome but leave the terminal on an old palette after a later runtime config update
 - Tab management — Cmd+T to open, Cmd+W to close, Cmd+1–9 to switch, Cmd+Shift+[/] to cycle
 - Session restore — your tabs, layout, and panel state are preserved when you relaunch
 - Full compatibility with terminal applications like vim, htop, and tmux (alternate screen, application cursor keys, DEC private modes, Kitty keyboard protocol)
