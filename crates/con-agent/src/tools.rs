@@ -1033,28 +1033,44 @@ impl Tool for SendKeysTool {
             decoded.as_bytes()
         );
 
-        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
-        self.pane_tx
-            .send(PaneRequest {
-                query: PaneQuery::SendKeys {
-                    pane_index: args.pane_index,
-                    keys: decoded,
-                },
-                response_tx,
-            })
-            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+        // Split at standalone-ESC boundaries to avoid VT parser ambiguity.
+        // When ESC (0x1B) is immediately followed by a printable char like 'g',
+        // the terminal interprets "ESC g" as a 2-byte escape sequence instead of
+        // a standalone ESC key followed by 'g'. We split the write at these points
+        // and insert a small delay so the terminal processes ESC on its own.
+        let segments = split_at_standalone_esc(&decoded);
 
-        let response = tokio::task::block_in_place(|| {
-            response_rx
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .map_err(|_| ToolError::CommandFailed("Pane query timed out".into()))
-        })?;
+        for (i, segment) in segments.iter().enumerate() {
+            if i > 0 {
+                // Brief delay so the terminal's VT parser commits the previous ESC
+                // as a standalone key before receiving the next character.
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+            self.pane_tx
+                .send(PaneRequest {
+                    query: PaneQuery::SendKeys {
+                        pane_index: args.pane_index,
+                        keys: segment.clone(),
+                    },
+                    response_tx,
+                })
+                .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
 
-        match response {
-            PaneResponse::KeysSent => Ok("Keys sent successfully".to_string()),
-            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
-            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+            let response = tokio::task::block_in_place(|| {
+                response_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .map_err(|_| ToolError::CommandFailed("Pane query timed out".into()))
+            })?;
+
+            match response {
+                PaneResponse::KeysSent => {}
+                PaneResponse::Error(e) => return Err(ToolError::CommandFailed(e)),
+                _ => return Err(ToolError::CommandFailed("Unexpected response".into())),
+            }
         }
+
+        Ok("Keys sent successfully".to_string())
     }
 }
 
@@ -1359,6 +1375,80 @@ fn decode_key_escapes(input: &str) -> String {
     String::from_utf8_lossy(&result).into_owned()
 }
 
+/// Split a decoded key string at standalone-ESC boundaries.
+///
+/// In VT100 terminals, `ESC` followed by a byte in `0x40..=0x7E` forms a
+/// 2-character escape sequence. When an LLM sends `\x1bggdG` intending
+/// "ESC (exit insert) then gg then dG", the terminal's VT parser instead
+/// consumes `ESC g` as one sequence, eating the ESC and the first `g`.
+///
+/// This function splits the input so that each standalone ESC (not followed
+/// by `[`, `O`, or `P` which start valid multi-byte sequences like CSI, SS3,
+/// DCS) becomes its own segment. The caller inserts a brief delay between
+/// segments so the VT parser commits ESC as a standalone key.
+///
+/// Returns a vec of segments. If there are no standalone-ESC boundaries,
+/// returns the original string as a single-element vec.
+fn split_at_standalone_esc(input: &str) -> Vec<String> {
+    let bytes = input.as_bytes();
+    if bytes.is_empty() {
+        return vec![input.to_string()];
+    }
+
+    let mut segments: Vec<String> = Vec::new();
+    let mut start = 0;
+
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1B {
+            // Check what follows ESC
+            let next = bytes.get(i + 1).copied();
+            match next {
+                // CSI (ESC [), SS3 (ESC O), DCS (ESC P) — valid multi-byte
+                // sequence prefixes. Don't split these.
+                Some(b'[') | Some(b'O') | Some(b'P') => {
+                    i += 1;
+                    continue;
+                }
+                // ESC at end of string — no split needed
+                None => {
+                    i += 1;
+                    continue;
+                }
+                // Standalone ESC followed by a non-sequence char.
+                // Split into: [start..i) as one segment, then ESC alone,
+                // then [i+1..] starts the next segment.
+                Some(_) => {
+                    // Push any accumulated bytes before this ESC
+                    if start < i {
+                        let seg =
+                            String::from_utf8_lossy(&bytes[start..i]).into_owned();
+                        segments.push(seg);
+                    }
+                    // Push ESC as its own segment
+                    segments.push("\x1b".to_string());
+                    start = i + 1;
+                    i = start;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // Remaining bytes
+    if start < bytes.len() {
+        let seg = String::from_utf8_lossy(&bytes[start..]).into_owned();
+        segments.push(seg);
+    }
+
+    if segments.is_empty() {
+        vec![input.to_string()]
+    } else {
+        segments
+    }
+}
+
 /// Simple glob matching for filename filtering.
 /// Supports `*` (matches any sequence) and `?` (matches one char).
 fn glob_match(pattern: &str, text: &str) -> bool {
@@ -1415,7 +1505,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_key_escapes;
+    use super::{decode_key_escapes, split_at_standalone_esc};
 
     #[test]
     fn decode_standard_escapes() {
@@ -1491,5 +1581,77 @@ mod tests {
 
         // Normal text with no escapes
         assert_eq!(decode_key_escapes("ls -la"), "ls -la");
+    }
+
+    // ── split_at_standalone_esc tests ────────────────────────────────
+
+    #[test]
+    fn split_esc_before_printable() {
+        // ESC followed by 'g' — must split so ESC is processed alone
+        let input = "\x1bggdG";
+        let segments = split_at_standalone_esc(input);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0], "\x1b");
+        assert_eq!(segments[1], "ggdG");
+    }
+
+    #[test]
+    fn no_split_for_csi_sequence() {
+        // ESC [ A is a CSI Up arrow — should NOT split
+        let input = "\x1b[A";
+        let segments = split_at_standalone_esc(input);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0], "\x1b[A");
+    }
+
+    #[test]
+    fn no_split_for_ss3_sequence() {
+        // ESC O P is an SS3 F1 key — should NOT split
+        let input = "\x1bOP";
+        let segments = split_at_standalone_esc(input);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0], "\x1bOP");
+    }
+
+    #[test]
+    fn split_esc_colon_w() {
+        // ESC :w\n — common vim "exit insert + save" sequence
+        let input = "\x1b:w\n";
+        let segments = split_at_standalone_esc(input);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0], "\x1b");
+        assert_eq!(segments[1], ":w\n");
+    }
+
+    #[test]
+    fn no_split_for_plain_text() {
+        let segments = split_at_standalone_esc("hello world");
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0], "hello world");
+    }
+
+    #[test]
+    fn esc_at_end_no_split() {
+        // ESC at the very end — no following char, no need to split
+        let input = "hello\x1b";
+        let segments = split_at_standalone_esc(input);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0], "hello\x1b");
+    }
+
+    #[test]
+    fn multiple_standalone_esc() {
+        // ESC gg dG ESC :wq\n — two standalone ESCs
+        let input = "\x1bggdG\x1b:wq\n";
+        let segments = split_at_standalone_esc(input);
+        assert_eq!(segments, vec!["\x1b", "ggdG", "\x1b", ":wq\n"]);
+    }
+
+    #[test]
+    fn mixed_standalone_and_csi_esc() {
+        // ESC (standalone) then gg then ESC[A (CSI Up arrow)
+        let input = "\x1bgg\x1b[A";
+        let segments = split_at_standalone_esc(input);
+        assert_eq!(segments, vec!["\x1b", "gg\x1b[A"]);
     }
 }

@@ -1072,8 +1072,9 @@ impl ConWorkspace {
                              2. send_keys(pane_index={idx}, keys=\":%d\\n\") to clear the buffer\n\
                              3. send_keys(pane_index={idx}, keys=\"i\") to enter insert mode\n\
                              4. send_keys(pane_index={idx}, keys=\"your content here\") to type content\n\
-                             5. send_keys(pane_index={idx}, keys=\"\\x1b:w\\n\") to save\n\
-                             6. read_pane(pane_index={idx}) after each step to verify.",
+                             5. send_keys(pane_index={idx}, keys=\"\\x1b\") to return to normal mode\n\
+                             6. send_keys(pane_index={idx}, keys=\":w\\n\") to save\n\
+                             7. read_pane(pane_index={idx}) after each step to verify.",
                             idx = target_pane_index
                         )
                     } else {
