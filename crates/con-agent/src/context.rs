@@ -122,13 +122,66 @@ pub struct PaneRuntimeState {
     pub remote_host: Option<String>,
     pub remote_host_confidence: Option<PaneConfidence>,
     pub remote_host_source: Option<PaneEvidenceSource>,
+    pub agent_cli: Option<String>,
     pub tmux_session: Option<String>,
+    pub active_scope: Option<PaneRuntimeScope>,
+    pub evidence: Vec<PaneEvidence>,
     pub scope_stack: Vec<PaneRuntimeScope>,
     pub warnings: Vec<String>,
 }
 
 impl PaneRuntimeState {
     pub fn from_observation(observation: &PaneObservationFrame) -> Self {
+        PaneRuntimeObserver::default().observe(observation.clone())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaneEvidence {
+    pub subject: String,
+    pub value: Option<String>,
+    pub source: PaneEvidenceSource,
+    pub confidence: PaneConfidence,
+    pub generation: u64,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StickyFact {
+    value: String,
+    confidence: PaneConfidence,
+    source: PaneEvidenceSource,
+    generation: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PaneRuntimeObserver {
+    generation: u64,
+    remote_host: Option<StickyFact>,
+    multiplexer: Option<StickyFact>,
+    tmux_session: Option<StickyFact>,
+    agent_cli: Option<StickyFact>,
+}
+
+impl PaneRuntimeObserver {
+    pub fn observe(&mut self, observation: PaneObservationFrame) -> PaneRuntimeState {
+        self.generation += 1;
+
+        let detected_mode = infer_pane_mode(
+            observation.title.as_deref(),
+            &observation.recent_output,
+            observation.last_command.as_deref(),
+            observation.has_shell_integration,
+            observation.is_alt_screen,
+        );
+
+        let shell_metadata_fresh = shell_metadata_is_fresh(
+            detected_mode,
+            observation.has_shell_integration,
+            observation.last_command.as_deref(),
+            observation.cwd.as_deref(),
+        );
+
         let remote_host_hint = detect_remote_host_hint(
             observation.title.as_deref(),
             observation.detected_remote_host.as_deref(),
@@ -144,19 +197,67 @@ impl PaneRuntimeState {
             observation.last_command.as_deref(),
             &observation.recent_output,
         );
-        let mode = infer_pane_mode(
-            observation.title.as_deref(),
-            &observation.recent_output,
-            observation.last_command.as_deref(),
-            observation.has_shell_integration,
-            observation.is_alt_screen,
+        let agent_cli_scope =
+            detect_agent_cli_scope(observation.title.as_deref(), &observation.recent_output);
+
+        self.remote_host = Self::merge_fact(
+            self.remote_host.take(),
+            remote_host_hint.map(|(value, confidence, source)| StickyFact {
+                value,
+                confidence,
+                source,
+                generation: self.generation,
+            }),
+            detected_mode != PaneMode::Shell || !shell_metadata_fresh,
+            self.generation,
+            12,
         );
-        let shell_metadata_fresh = shell_metadata_is_fresh(
-            mode,
-            observation.has_shell_integration,
-            observation.last_command.as_deref(),
-            observation.cwd.as_deref(),
+        self.multiplexer = Self::merge_fact(
+            self.multiplexer.take(),
+            tmux_scope.as_ref().map(|scope| StickyFact {
+                value: scope.label.clone().unwrap_or_else(|| "tmux".to_string()),
+                confidence: scope.confidence,
+                source: scope.evidence_source,
+                generation: self.generation,
+            }),
+            detected_mode != PaneMode::Shell,
+            self.generation,
+            12,
         );
+        self.tmux_session = Self::merge_fact(
+            self.tmux_session.take(),
+            tmux_session.map(|value| StickyFact {
+                value,
+                confidence: PaneConfidence::Strong,
+                source: PaneEvidenceSource::CommandLine,
+                generation: self.generation,
+            }),
+            detected_mode != PaneMode::Shell,
+            self.generation,
+            12,
+        );
+        self.agent_cli = Self::merge_fact(
+            self.agent_cli.take(),
+            agent_cli_scope.as_ref().and_then(|scope| {
+                scope.label.clone().map(|value| StickyFact {
+                    value,
+                    confidence: scope.confidence,
+                    source: scope.evidence_source,
+                    generation: self.generation,
+                })
+            }),
+            detected_mode != PaneMode::Shell,
+            self.generation,
+            8,
+        );
+
+        let mode = if self.multiplexer.is_some() {
+            PaneMode::Multiplexer
+        } else if self.agent_cli.is_some() || detected_mode == PaneMode::Tui {
+            PaneMode::Tui
+        } else {
+            detected_mode
+        };
 
         let mut scope_stack = Vec::new();
         if observation.has_shell_integration
@@ -172,24 +273,60 @@ impl PaneRuntimeState {
             });
         }
 
-        if let Some((host, confidence, evidence_source)) = remote_host_hint.clone() {
+        let mut evidence = Vec::new();
+
+        if let Some(remote_host) = &self.remote_host {
             scope_stack.push(PaneRuntimeScope {
                 kind: PaneScopeKind::RemoteShell,
                 label: None,
-                host: Some(host),
-                confidence,
-                evidence_source,
+                host: Some(remote_host.value.clone()),
+                confidence: remote_host.confidence,
+                evidence_source: remote_host.source,
+            });
+            evidence.push(PaneEvidence {
+                subject: "remote_host".to_string(),
+                value: Some(remote_host.value.clone()),
+                source: remote_host.source,
+                confidence: remote_host.confidence,
+                generation: remote_host.generation,
+                note: Some("Pane-local host evidence".to_string()),
             });
         }
 
-        if let Some(scope) = tmux_scope {
-            scope_stack.push(scope);
+        if let Some(multiplexer) = &self.multiplexer {
+            scope_stack.push(PaneRuntimeScope {
+                kind: PaneScopeKind::Multiplexer,
+                label: Some(multiplexer.value.clone()),
+                host: None,
+                confidence: multiplexer.confidence,
+                evidence_source: multiplexer.source,
+            });
+            evidence.push(PaneEvidence {
+                subject: "multiplexer".to_string(),
+                value: Some(multiplexer.value.clone()),
+                source: multiplexer.source,
+                confidence: multiplexer.confidence,
+                generation: multiplexer.generation,
+                note: Some("tmux-like pane structure".to_string()),
+            });
         }
 
-        if let Some(scope) =
-            detect_agent_cli_scope(observation.title.as_deref(), &observation.recent_output)
-        {
-            scope_stack.push(scope);
+        if let Some(agent_cli) = &self.agent_cli {
+            scope_stack.push(PaneRuntimeScope {
+                kind: PaneScopeKind::AgentCli,
+                label: Some(agent_cli.value.clone()),
+                host: None,
+                confidence: agent_cli.confidence,
+                evidence_source: agent_cli.source,
+            });
+            evidence.push(PaneEvidence {
+                subject: "agent_cli".to_string(),
+                value: Some(agent_cli.value.clone()),
+                source: agent_cli.source,
+                confidence: agent_cli.confidence,
+                generation: agent_cli.generation,
+                note: Some("Visible agent CLI chrome".to_string()),
+            });
         } else if mode == PaneMode::Tui {
             scope_stack.push(PaneRuntimeScope {
                 kind: PaneScopeKind::InteractiveApp,
@@ -207,6 +344,13 @@ impl PaneRuntimeState {
             });
         }
 
+        let active_scope = scope_stack.last().cloned();
+        let tmux_session = self.tmux_session.as_ref().map(|value| value.value.clone());
+        let agent_cli = self.agent_cli.as_ref().map(|value| value.value.clone());
+        let remote_host = self.remote_host.as_ref().map(|value| value.value.clone());
+        let remote_host_confidence = self.remote_host.as_ref().map(|value| value.confidence);
+        let remote_host_source = self.remote_host.as_ref().map(|value| value.source);
+
         let mut warnings = Vec::new();
         if !shell_metadata_fresh {
             warnings.push(
@@ -219,26 +363,45 @@ impl PaneRuntimeState {
                     .to_string(),
             );
         }
-        if remote_host_hint.is_some() {
+        if remote_host.is_some() {
             warnings.push(
                 "Remote host identity is inferred from terminal metadata and should be verified before destructive actions.".to_string(),
             );
         }
 
-        let (remote_host, remote_host_confidence, remote_host_source) = match remote_host_hint {
-            Some((host, confidence, source)) => (Some(host), Some(confidence), Some(source)),
-            None => (None, None, None),
-        };
-
-        Self {
+        PaneRuntimeState {
             mode,
             shell_metadata_fresh,
             remote_host,
             remote_host_confidence,
             remote_host_source,
+            agent_cli,
             tmux_session,
+            active_scope,
+            evidence,
             scope_stack,
             warnings,
+        }
+    }
+
+    fn merge_fact(
+        previous: Option<StickyFact>,
+        fresh: Option<StickyFact>,
+        allow_retention: bool,
+        generation: u64,
+        ttl: u64,
+    ) -> Option<StickyFact> {
+        if let Some(fresh) = fresh {
+            return Some(fresh);
+        }
+
+        match previous {
+            Some(previous)
+                if allow_retention && generation.saturating_sub(previous.generation) <= ttl =>
+            {
+                Some(previous)
+            }
+            _ => None,
         }
     }
 }
@@ -390,16 +553,7 @@ fn host_candidate_from_tmux_status(line: &str) -> Option<String> {
 }
 
 fn host_candidate_from_title(title: &str) -> Option<String> {
-    if let Some(host) = host_candidate_from_user_at_host(title) {
-        return Some(host);
-    }
-
-    if title.contains(char::is_whitespace) {
-        return None;
-    }
-
-    let candidate = normalize_host_candidate(title)?;
-    (!is_local_hostname(&candidate)).then_some(candidate)
+    host_candidate_from_user_at_host(title)
 }
 
 fn detect_remote_host_hint(
@@ -699,6 +853,9 @@ pub struct PaneSummary {
     pub mode: PaneMode,
     pub has_shell_integration: bool,
     pub shell_metadata_fresh: bool,
+    pub agent_cli: Option<String>,
+    pub active_scope: Option<PaneRuntimeScope>,
+    pub evidence: Vec<PaneEvidence>,
     pub runtime_stack: Vec<PaneRuntimeScope>,
     pub runtime_warnings: Vec<String>,
     pub tmux_session: Option<String>,
@@ -720,6 +877,10 @@ fn format_runtime_stack(scopes: &[PaneRuntimeScope]) -> String {
             .collect::<Vec<_>>()
             .join(" > ")
     }
+}
+
+fn format_scope_summary(scope: &PaneRuntimeScope) -> String {
+    scope.summary()
 }
 
 fn xml_escape(value: &str) -> String {
@@ -833,6 +994,12 @@ impl TerminalContext {
         if let Some(cwd) = &self.cwd {
             prompt.push_str(&format!(" cwd=\"{}\"", xml_escape(cwd)));
         }
+        if let Some(scope) = self.focused_runtime_stack.last() {
+            prompt.push_str(&format!(
+                " active_scope=\"{}\"",
+                xml_escape(&format_scope_summary(scope))
+            ));
+        }
         prompt.push_str("/>\n");
         if !self.focused_runtime_stack.is_empty() {
             prompt.push_str("<runtime_stack>\n");
@@ -884,6 +1051,12 @@ impl TerminalContext {
             } else {
                 prompt.push_str(" host=\"unknown\"");
             }
+            if let Some(scope) = self.focused_runtime_stack.last() {
+                prompt.push_str(&format!(
+                    " active_scope=\"{}\"",
+                    xml_escape(&format_scope_summary(scope))
+                ));
+            }
             prompt.push_str("/>\n");
             // Other panes
             for pane in &self.other_panes {
@@ -908,14 +1081,25 @@ impl TerminalContext {
                     .hostname_confidence
                     .map(|confidence| format!(" host_confidence=\"{}\"", confidence.as_str()))
                     .unwrap_or_default();
+                let active_scope = pane
+                    .active_scope
+                    .as_ref()
+                    .map(|scope| {
+                        format!(
+                            " active_scope=\"{}\"",
+                            xml_escape(&format_scope_summary(scope))
+                        )
+                    })
+                    .unwrap_or_default();
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}/>\n",
+                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}{}/>\n",
                     pane.pane_index,
                     xml_escape(cwd),
                     pane.mode.as_str(),
                     xml_escape(&format_runtime_stack(&pane.runtime_stack)),
                     host,
                     host_confidence,
+                    active_scope,
                     busy,
                     stale,
                     tmux
@@ -1027,9 +1211,9 @@ impl TerminalContext {
 #[cfg(test)]
 mod tests {
     use super::{
-        PaneConfidence, PaneEvidenceSource, PaneMode, PaneObservationFrame, PaneRuntimeState,
-        TerminalContext, detect_remote_host_hint, detect_tmux_session, infer_pane_mode,
-        shell_metadata_is_fresh,
+        PaneConfidence, PaneEvidenceSource, PaneMode, PaneObservationFrame, PaneRuntimeObserver,
+        PaneRuntimeState, TerminalContext, detect_remote_host_hint, detect_tmux_session,
+        infer_pane_mode, shell_metadata_is_fresh,
     };
 
     #[test]
@@ -1139,6 +1323,124 @@ mod tests {
         assert_eq!(
             runtime.remote_host_source,
             Some(PaneEvidenceSource::ScreenStructure)
+        );
+    }
+
+    #[test]
+    fn observer_retains_remote_host_across_sparse_tui_frames() {
+        let mut observer = PaneRuntimeObserver::default();
+
+        let first = PaneObservationFrame {
+            title: Some("haswell".to_string()),
+            cwd: Some("/home/w".to_string()),
+            recent_output: vec![
+                "nvtop 1.4.1".to_string(),
+                "0* 63d 3h 22m 1 model-serving 2 ops 3 nekomaster haswell".to_string(),
+            ],
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            detected_remote_host: None,
+            has_shell_integration: true,
+            is_alt_screen: false,
+            is_busy: false,
+        };
+        let second = PaneObservationFrame {
+            title: Some("haswell".to_string()),
+            cwd: Some("/home/w".to_string()),
+            recent_output: vec!["gpu0".to_string(), "gpu1".to_string()],
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            detected_remote_host: None,
+            has_shell_integration: false,
+            is_alt_screen: false,
+            is_busy: false,
+        };
+
+        let first_runtime = observer.observe(first);
+        let second_runtime = observer.observe(second);
+
+        assert_eq!(first_runtime.remote_host.as_deref(), Some("haswell"));
+        assert_eq!(second_runtime.remote_host.as_deref(), Some("haswell"));
+        assert_eq!(second_runtime.mode, PaneMode::Multiplexer);
+    }
+
+    #[test]
+    fn observer_clears_remote_host_when_fresh_local_shell_returns() {
+        let mut observer = PaneRuntimeObserver::default();
+
+        let remote_tmux = PaneObservationFrame {
+            title: Some("haswell".to_string()),
+            cwd: Some("/home/w".to_string()),
+            recent_output: vec![
+                "nvtop 1.4.1".to_string(),
+                "0* 63d 3h 22m 1 model-serving 2 ops 3 nekomaster haswell".to_string(),
+            ],
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            detected_remote_host: None,
+            has_shell_integration: true,
+            is_alt_screen: false,
+            is_busy: false,
+        };
+        let local_shell = PaneObservationFrame {
+            title: Some("kingston".to_string()),
+            cwd: Some("/Users/weyl/conductor/workspaces/con/kingston".to_string()),
+            recent_output: vec!["cargo test".to_string()],
+            last_command: Some("cargo test".to_string()),
+            last_exit_code: Some(0),
+            last_command_duration_secs: Some(1.0),
+            detected_remote_host: None,
+            has_shell_integration: true,
+            is_alt_screen: false,
+            is_busy: false,
+        };
+
+        observer.observe(remote_tmux);
+        let runtime = observer.observe(local_shell);
+
+        assert_eq!(runtime.remote_host, None);
+        assert_eq!(runtime.mode, PaneMode::Shell);
+    }
+
+    #[test]
+    fn observer_retains_agent_cli_across_sparse_tui_frames() {
+        let mut observer = PaneRuntimeObserver::default();
+
+        let first = PaneObservationFrame {
+            title: Some("Claude Code".to_string()),
+            cwd: None,
+            recent_output: vec!["Claude Code".to_string(), "Claude Code".to_string()],
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            detected_remote_host: None,
+            has_shell_integration: false,
+            is_alt_screen: false,
+            is_busy: false,
+        };
+        let second = PaneObservationFrame {
+            title: Some("Claude Code".to_string()),
+            cwd: None,
+            recent_output: vec!["Reviewing files".to_string()],
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            detected_remote_host: None,
+            has_shell_integration: false,
+            is_alt_screen: false,
+            is_busy: false,
+        };
+
+        observer.observe(first);
+        let runtime = observer.observe(second);
+
+        assert_eq!(runtime.agent_cli.as_deref(), Some("claude_code"));
+        assert_eq!(
+            runtime.active_scope.and_then(|scope| scope.label),
+            Some("claude_code".to_string())
         );
     }
 

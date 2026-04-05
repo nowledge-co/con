@@ -174,7 +174,11 @@ Current implementation in con:
 
 - `mode`
 - `shell_metadata_fresh`
+- `remote_host`
+- `agent_cli`
 - `tmux_session`
+- `active_scope`
+- `evidence`
 - `scope_stack`
 - `warnings`
 
@@ -350,6 +354,7 @@ Current con behavior reflects that limit:
 - remote host identity is merged from pane-local evidence, not OSC 7 alone
 - tmux status lines and pane titles can contribute advisory host hints
 - when no evidence survives that merge, the runtime model keeps host as `unknown` instead of collapsing to `local`
+- each tab now owns per-pane runtime observers that persist defensible facts across sparse frames and feed every consumer from the same state
 
 ## Probe design
 
@@ -478,8 +483,12 @@ It also enables better product surfaces:
 
 ### Phase 1
 
-- add `PaneObservationFrame`, `Evidence`, `PaneRuntimeState`, and `ScopeStack` types
-- keep current pane-mode snapshot path as a temporary adapter into the new model
+Shipped in con:
+
+- `PaneObservationFrame`, `PaneEvidence`, `PaneRuntimeState`, and `PaneRuntimeObserver`
+- per-tab observer maps keyed by `PaneId`
+- shared observer output consumed by agent context, `list_panes`, sidebar naming, and smart-input remote classification
+- stateful retention for remote host, tmux, and external agent CLI identity with explicit invalidation when a fresh shell returns
 
 ### Phase 2
 

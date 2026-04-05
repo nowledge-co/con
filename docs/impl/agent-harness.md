@@ -254,4 +254,6 @@ This matters for SSH, tmux, and full-screen TUIs:
 - When remote identity is unknown, the prompt says `unknown`, not `local`.
 - When the pane mode is not `shell`, or shell metadata is stale, the prompt explicitly tells the model to inspect the live pane with `list_panes`, `read_pane`, and `send_keys` before making claims about cwd, hostname, or the running app.
 
-This is still a transitional architecture. The next layer is a dedicated pane runtime observer that keeps evidence and models nested scopes such as `ssh -> tmux -> shell -> Codex CLI`. See `docs/impl/pane-runtime-observer.md`.
+con now keeps a per-pane runtime observer for each tab. The observer persists pane-local facts across sparse frames, invalidates them when a fresh shell returns, and exposes merged runtime state to the prompt, `list_panes`, the sidebar, and smart-input classification.
+
+What is still missing is stronger backend truth for foreground runtime identity. The next layer is not more local heuristics; it is an upstream Ghostty observability contract for explicit foreground process and semantic prompt state. See `docs/impl/pane-runtime-observer.md`.

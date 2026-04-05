@@ -691,6 +691,12 @@ pub struct PaneInfo {
     pub mode: PaneMode,
     /// Whether shell metadata like cwd and last_command is likely fresh for the visible app.
     pub shell_metadata_fresh: bool,
+    /// The top-most active runtime scope, when detected.
+    pub active_scope: Option<crate::context::PaneRuntimeScope>,
+    /// Detected external agent CLI, when visible.
+    pub agent_cli: Option<String>,
+    /// Evidence behind the current runtime summary.
+    pub evidence: Vec<crate::context::PaneEvidence>,
     /// Structured runtime scopes inferred from pane-local evidence.
     pub runtime_stack: Vec<crate::context::PaneRuntimeScope>,
     /// Warnings about stale or advisory runtime metadata.
@@ -767,7 +773,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, pane mode, host, and whether shell metadata is fresh. Use this before inspecting tmux/TUI panes so you do not over-trust stale cwd or command metadata.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, pane mode, host, active scope, runtime evidence, and whether shell metadata is fresh. Use this before inspecting tmux/TUI panes so you do not over-trust stale cwd or command metadata.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}

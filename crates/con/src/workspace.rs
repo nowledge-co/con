@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+
 use gpui::*;
 use gpui_component::ActiveTheme;
 
@@ -36,6 +39,7 @@ struct Tab {
     needs_attention: bool,
     session: AgentSession,
     panel_state: PanelState,
+    runtime_observers: RefCell<HashMap<usize, con_agent::context::PaneRuntimeObserver>>,
 }
 
 /// The main workspace: tabs + agent panel + input bar + settings overlay
@@ -175,6 +179,7 @@ impl ConWorkspace {
                     needs_attention: false,
                     session: agent_session,
                     panel_state,
+                    runtime_observers: RefCell::new(HashMap::new()),
                 }
             })
             .collect();
@@ -186,6 +191,7 @@ impl ConWorkspace {
                 needs_attention: false,
                 session: AgentSession::new(),
                 panel_state: PanelState::new(),
+                runtime_observers: RefCell::new(HashMap::new()),
             });
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
@@ -344,8 +350,56 @@ impl ConWorkspace {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
     }
 
+    fn reconcile_runtime_observers_for_tab(&self, tab_idx: usize) {
+        let pane_ids: HashSet<usize> = self.tabs[tab_idx]
+            .pane_tree
+            .pane_terminals()
+            .into_iter()
+            .map(|(pane_id, _)| pane_id)
+            .collect();
+        self.tabs[tab_idx]
+            .runtime_observers
+            .borrow_mut()
+            .retain(|pane_id, _| pane_ids.contains(pane_id));
+    }
+
+    fn observe_terminal_runtime_for_tab(
+        &self,
+        tab_idx: usize,
+        terminal: &TerminalPane,
+        recent_output_lines: usize,
+        cx: &App,
+    ) -> (
+        con_agent::context::PaneObservationFrame,
+        con_agent::context::PaneRuntimeState,
+    ) {
+        let pane_tree = &self.tabs[tab_idx].pane_tree;
+        let pane_id = pane_tree
+            .pane_id_for_terminal(terminal)
+            .unwrap_or(usize::MAX);
+        let observation = terminal.observation_frame(recent_output_lines, cx);
+        let runtime = {
+            let mut observers = self.tabs[tab_idx].runtime_observers.borrow_mut();
+            let observer = observers.entry(pane_id).or_default();
+            observer.observe(observation.clone())
+        };
+        (observation, runtime)
+    }
+
+    fn effective_remote_host_for_tab(
+        &self,
+        tab_idx: usize,
+        terminal: &TerminalPane,
+        cx: &App,
+    ) -> Option<String> {
+        self.observe_terminal_runtime_for_tab(tab_idx, terminal, 12, cx)
+            .1
+            .remote_host
+    }
+
     /// Build agent context from the focused pane, including summaries of other panes.
     fn build_agent_context(&self, cx: &App) -> con_agent::TerminalContext {
+        self.reconcile_runtime_observers_for_tab(self.active_tab);
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
         let focused = self.active_terminal();
 
@@ -358,9 +412,8 @@ impl ConWorkspace {
             .find(|(_, t)| pane_tree.pane_id_for_terminal(t) == Some(focused_pid))
             .map(|(i, _)| i + 1)
             .unwrap_or(1);
-        let focused_observation = focused.observation_frame(50, cx);
-        let focused_runtime =
-            con_agent::context::PaneRuntimeState::from_observation(&focused_observation);
+        let (focused_observation, focused_runtime) =
+            self.observe_terminal_runtime_for_tab(self.active_tab, focused, 50, cx);
 
         let mut other_pane_summaries = Vec::new();
         if pane_tree.pane_count() > 1 {
@@ -369,9 +422,8 @@ impl ConWorkspace {
                     if pid == focused_pid {
                         continue;
                     }
-                    let observation = terminal.observation_frame(10, cx);
-                    let runtime =
-                        con_agent::context::PaneRuntimeState::from_observation(&observation);
+                    let (observation, runtime) =
+                        self.observe_terminal_runtime_for_tab(self.active_tab, terminal, 10, cx);
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
                         hostname: runtime.remote_host.clone(),
@@ -381,6 +433,9 @@ impl ConWorkspace {
                         mode: runtime.mode,
                         has_shell_integration: observation.has_shell_integration,
                         shell_metadata_fresh: runtime.shell_metadata_fresh,
+                        agent_cli: runtime.agent_cli.clone(),
+                        active_scope: runtime.active_scope.clone(),
+                        evidence: runtime.evidence.clone(),
                         runtime_stack: runtime.scope_stack,
                         runtime_warnings: runtime.warnings,
                         tmux_session: runtime.tmux_session,
@@ -568,7 +623,8 @@ impl ConWorkspace {
         if event.content.trim().starts_with('/') {
             match self.harness.classify_input(
                 &event.content,
-                self.active_terminal().detected_remote_host(cx).is_some(),
+                self.effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
+                    .is_some(),
             ) {
                 InputKind::SkillInvoke(name, args) => {
                     if let Some(desc) =
@@ -617,7 +673,7 @@ impl ConWorkspace {
             .enumerate()
             .map(|(i, tab)| {
                 let terminal = tab.pane_tree.focused_terminal();
-                let hostname = terminal.detected_remote_host(cx);
+                let hostname = self.effective_remote_host_for_tab(i, terminal, cx);
                 let is_ssh = hostname.is_some();
                 let title = terminal.title(cx);
                 let current_dir = terminal.current_dir(cx);
@@ -817,7 +873,9 @@ impl ConWorkspace {
                 self.send_to_agent(&content, cx);
             }
             InputMode::Smart => {
-                let is_remote = self.active_terminal().detected_remote_host(cx).is_some();
+                let is_remote = self
+                    .effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
+                    .is_some();
                 match self.harness.classify_input(&content, is_remote) {
                     InputKind::ShellCommand(cmd) => {
                         self.execute_shell(&cmd, window, cx);
@@ -1036,14 +1094,14 @@ impl ConWorkspace {
 
         let response = match req.query {
             PaneQuery::List => {
+                self.reconcile_runtime_observers_for_tab(tab_idx);
                 let panes: Vec<PaneInfo> = all_terminals
                     .iter()
                     .enumerate()
                     .map(|(idx, terminal)| {
                         let pid = pane_tree.pane_id_for_terminal(terminal).unwrap_or(idx);
-                        let observation = terminal.observation_frame(12, cx);
-                        let runtime =
-                            con_agent::context::PaneRuntimeState::from_observation(&observation);
+                        let (observation, runtime) =
+                            self.observe_terminal_runtime_for_tab(tab_idx, terminal, 12, cx);
                         let title = observation
                             .title
                             .clone()
@@ -1062,6 +1120,9 @@ impl ConWorkspace {
                             hostname_source: runtime.remote_host_source,
                             mode: runtime.mode,
                             shell_metadata_fresh: runtime.shell_metadata_fresh,
+                            active_scope: runtime.active_scope.clone(),
+                            agent_cli: runtime.agent_cli.clone(),
+                            evidence: runtime.evidence.clone(),
                             runtime_stack: runtime.scope_stack,
                             runtime_warnings: runtime.warnings,
                             tmux_session: runtime.tmux_session,
@@ -1267,6 +1328,7 @@ impl ConWorkspace {
             needs_attention: false,
             session: AgentSession::new(),
             panel_state: PanelState::new(),
+            runtime_observers: RefCell::new(HashMap::new()),
         });
         self.active_tab = self.tabs.len() - 1;
 
@@ -1558,6 +1620,7 @@ impl Render for ConWorkspace {
 
         // Keep pane focus in sync with which terminal has window focus
         self.tabs[self.active_tab].pane_tree.sync_focus(window, cx);
+        self.reconcile_runtime_observers_for_tab(self.active_tab);
 
         // Sync pane info and CWD to input bar
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
@@ -1566,7 +1629,9 @@ impl Render for ConWorkspace {
             .pane_terminals()
             .into_iter()
             .map(|(id, terminal)| {
-                let hostname = terminal.detected_remote_host(cx);
+                let (_, runtime) =
+                    self.observe_terminal_runtime_for_tab(self.active_tab, &terminal, 12, cx);
+                let hostname = runtime.remote_host.clone();
                 let title = terminal.title(cx);
                 let current_dir = terminal.current_dir(cx);
                 let name = pane_display_name(&hostname, &title, &current_dir, id);
