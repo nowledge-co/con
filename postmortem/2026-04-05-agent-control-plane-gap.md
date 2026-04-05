@@ -28,7 +28,7 @@ We documented the architecture explicitly in `docs/impl/agent-runtime-control-pl
 The shipped foundation includes:
 
 - `PaneControlState` as a shared, typed contract above `PaneRuntimeState`
-- explicit address-space, visible-target, control-channel, and capability fields
+- explicit address-space, visible-target, nested-target-stack, control-channel, and capability fields
 - `list_panes`, the system prompt, and visible-exec guards all consuming that same control state
 - visible shell execution now gated by capability (`exec_visible_shell`) instead of loosely repeated safety prose
 

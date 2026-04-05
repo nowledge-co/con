@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::control::{
     PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneControlState,
-    PaneVisibleTarget, PaneVisibleTargetKind,
+    PaneVisibleTarget, PaneVisibleTargetKind, format_target_stack,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -709,8 +709,11 @@ fn detect_agent_cli_scope(
 
     for (needle, label) in [
         ("claude code", "claude_code"),
-        ("opencode", "opencode"),
+        ("codex cli", "codex"),
         ("codex", "codex"),
+        ("open code", "opencode"),
+        ("open-code", "opencode"),
+        ("opencode", "opencode"),
     ] {
         if title_lower
             .as_deref()
@@ -935,6 +938,11 @@ impl TerminalContext {
             focused_runtime_warnings: Vec::new(),
             focused_control: PaneControlState {
                 address_space: PaneAddressSpace::ConPane,
+                target_stack: vec![PaneVisibleTarget {
+                    kind: PaneVisibleTargetKind::UnknownTui,
+                    label: None,
+                    host: None,
+                }],
                 visible_target: PaneVisibleTarget {
                     kind: PaneVisibleTargetKind::UnknownTui,
                     label: None,
@@ -1059,9 +1067,10 @@ impl TerminalContext {
         }
         prompt.push_str("/>\n");
         prompt.push_str(&format!(
-            "<focused_control address_space=\"{}\" visible_target=\"{}\" channels=\"{}\" capabilities=\"{}\"",
+            "<focused_control address_space=\"{}\" visible_target=\"{}\" target_stack=\"{}\" channels=\"{}\" capabilities=\"{}\"",
             self.focused_control.address_space.as_str(),
             xml_escape(&self.focused_control.visible_target.summary()),
+            xml_escape(&format_target_stack(&self.focused_control.target_stack)),
             xml_escape(&format_control_channels(&self.focused_control.channels)),
             xml_escape(&format_control_capabilities(&self.focused_control.capabilities)),
         ));
@@ -1110,13 +1119,14 @@ impl TerminalContext {
             // Focused pane
             let cwd_label = self.cwd.as_deref().unwrap_or("?");
             prompt.push_str(&format!(
-                "  <pane index=\"{}\" focused=\"true\" cwd=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\" runtime=\"{}\" control_target=\"{}\" control_channels=\"{}\" control_capabilities=\"{}\"",
+                "  <pane index=\"{}\" focused=\"true\" cwd=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\" runtime=\"{}\" control_target=\"{}\" target_stack=\"{}\" control_channels=\"{}\" control_capabilities=\"{}\"",
                 self.focused_pane_index,
                 xml_escape(cwd_label),
                 self.focused_pane_mode.as_str(),
                 self.focused_shell_metadata_fresh,
                 xml_escape(&format_runtime_stack(&self.focused_runtime_stack)),
                 xml_escape(&self.focused_control.visible_target.summary()),
+                xml_escape(&format_target_stack(&self.focused_control.target_stack)),
                 xml_escape(&format_control_channels(&self.focused_control.channels)),
                 xml_escape(&format_control_capabilities(&self.focused_control.capabilities))
             ));
@@ -1172,6 +1182,10 @@ impl TerminalContext {
                     " control_target=\"{}\"",
                     xml_escape(&pane.control.visible_target.summary())
                 );
+                let target_stack = format!(
+                    " target_stack=\"{}\"",
+                    xml_escape(&format_target_stack(&pane.control.target_stack))
+                );
                 let control_channels = format!(
                     " control_channels=\"{}\"",
                     xml_escape(&format_control_channels(&pane.control.channels))
@@ -1181,7 +1195,7 @@ impl TerminalContext {
                     xml_escape(&format_control_capabilities(&pane.control.capabilities))
                 );
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}{}{}{}{}/>\n",
+                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}{}{}{}{}{}/>\n",
                     pane.pane_index,
                     xml_escape(cwd),
                     pane.mode.as_str(),
@@ -1193,6 +1207,7 @@ impl TerminalContext {
                     stale,
                     tmux,
                     control_target,
+                    target_stack,
                     control_channels,
                     control_capabilities
                 ));

@@ -1175,6 +1175,7 @@ impl ConWorkspace {
                             shell_metadata_fresh: runtime.shell_metadata_fresh,
                             address_space: control.address_space,
                             visible_target: control.visible_target.clone(),
+                            target_stack: control.target_stack.clone(),
                             control_channels: control.channels.clone(),
                             control_capabilities: control.capabilities.clone(),
                             control_notes: control.notes.clone(),

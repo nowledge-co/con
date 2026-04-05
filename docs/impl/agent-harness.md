@@ -245,7 +245,7 @@ When the focused pane is an SSH session, remote executables aren't on the local 
 
 The system prompt is built from a live pane snapshot, not process-wide environment variables. For the focused pane we derive host, title, pane mode (`shell`, `multiplexer`, `tui`, `unknown`), and whether shell metadata is fresh enough to trust for the visible app.
 
-When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, mode, shell-metadata freshness, and typed control state. That control state includes the pane's address space, visible target, control channels, capabilities, and notes. This lets the agent target the right pane(s) immediately without confusing a con pane with a tmux pane or editor target.
+When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, mode, shell-metadata freshness, and typed control state. That control state includes the pane's address space, front-most visible target, nested target stack, control channels, capabilities, and notes. This lets the agent target the right pane(s) immediately without confusing a con pane with a tmux pane or editor target.
 
 This matters for SSH, tmux, and full-screen TUIs:
 
@@ -260,6 +260,7 @@ On top of that observer, con now derives a typed `PaneControlState` for each pan
 
 - `address_space` says what `pane_index` actually refers to
 - `visible_target` says what app or runtime is currently in front
+- `target_stack` preserves nested layers such as remote shell -> tmux -> Codex CLI
 - `control_channels` say how con may act
 - `control_capabilities` say what is allowed right now
 - `control_notes` explain important limits such as "this is tmux inside a con pane"

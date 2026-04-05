@@ -698,6 +698,8 @@ pub struct PaneInfo {
     pub address_space: PaneAddressSpace,
     /// The best-known visible target inside this con pane.
     pub visible_target: PaneVisibleTarget,
+    /// Nested runtime/control targets from outer shell toward the front-most visible app.
+    pub target_stack: Vec<PaneVisibleTarget>,
     /// Control channels con can use on this pane.
     pub control_channels: Vec<PaneControlChannel>,
     /// Capabilities currently available on this pane.
@@ -786,7 +788,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, runtime state, and control state: address space, visible target, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, runtime state, and control state: address space, visible target, nested target_stack, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}

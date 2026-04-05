@@ -32,7 +32,7 @@ The fix is a first-class control plane.
 con now ships the first typed control-plane layer:
 
 - every observed pane can be reduced to a `PaneControlState`
-- `list_panes` exposes address space, visible target, control channels, capabilities, and notes
+- `list_panes` exposes address space, visible target, nested target stack, control channels, capabilities, and notes
 - the system prompt embeds the same control state for the focused pane and peer panes
 - visible execution is gated by `exec_visible_shell`, not by ad hoc prompt wording
 
@@ -41,6 +41,7 @@ This is still phase one.
 What it solves:
 
 - the model can see that a con pane showing tmux is still only addressable as a con pane
+- the model can see nested situations such as `remote shell -> tmux -> codex` instead of flattening them into one label
 - shell execution safety is computed from typed capability data
 - prompt, tools, and runtime guards share one vocabulary
 
