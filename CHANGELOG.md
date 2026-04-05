@@ -31,6 +31,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - tmux awareness now comes from the pane itself instead of inherited app state, which reduces wrong assumptions after manually attaching to a session mid-chat.
 - Pane runtime is now modeled as a scope stack instead of a flat snapshot. The agent and pane tools can see advisory scopes such as remote shell, tmux, and branded agent CLIs with explicit freshness warnings when the visible screen has moved beyond the last shell prompt.
 - Pane runtime is now stateful instead of snapshot-only. Each tab keeps per-pane runtime observers so remote host, tmux, and external agent CLI identity survive sparse screen frames but are invalidated when a fresh shell returns.
+- con now refuses `terminal_exec` and `batch_exec` on panes that are not proven plain-shell targets. This prevents the built-in agent from typing shell commands into tmux+nvim or other visible TUIs.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

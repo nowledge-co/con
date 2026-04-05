@@ -125,7 +125,7 @@ impl Tool for TerminalExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute a command in a terminal pane. The user sees the command run in real time. Use pane_index to target a specific pane (from list_panes), or omit to use the focused pane.".to_string(),
+            description: "Execute a command visibly in a con terminal pane only when the visible target is a proven shell. pane_index refers to a con pane from list_panes, not a tmux pane/window. For tmux, vim, nvim, and other TUIs, inspect first and use send_keys only when intentional.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -201,7 +201,7 @@ impl Tool for ShellExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute a shell command in a background process. Output is captured but not shown in the terminal. Use terminal_exec instead for visible execution.".to_string(),
+            description: "Execute a shell command in a hidden LOCAL background process on the con workspace machine. Output is captured but not shown in the terminal. Never use this for remote SSH/tmux inspection or remote mutations.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1011,7 +1011,7 @@ impl Tool for BatchExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute commands across multiple panes in PARALLEL. Use this when you need to run commands on 2+ panes simultaneously (e.g., check uptime on all machines, deploy to staging and production). Much faster than calling terminal_exec multiple times.".to_string(),
+            description: "Execute commands across multiple con panes in PARALLEL, but only when each visible target is a proven shell. pane_index values come from list_panes and do not refer to tmux panes/windows.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

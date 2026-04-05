@@ -777,6 +777,10 @@ pub fn shell_metadata_is_fresh(
     has_shell_integration || last_command.is_some() || cwd.is_some()
 }
 
+pub fn direct_terminal_exec_is_safe(runtime: &PaneRuntimeState) -> bool {
+    runtime.mode == PaneMode::Shell && runtime.shell_metadata_fresh
+}
+
 /// Terminal context extracted for the AI agent.
 /// This is what makes con's agent smarter than a generic chatbot —
 /// it always knows what the user is doing in their terminal.
@@ -937,14 +941,18 @@ impl TerminalContext {
              For TASKS that modify state: verify context first, explain what you will do, then execute carefully.\n\n\
              ## Tools\n\n\
              <tools>\n\
-             - terminal_exec: Run a command visibly in any pane. Use pane_index to target a specific pane.\n\
+             - terminal_exec: Run a command visibly in a pane only when con has strong evidence that the visible target is a shell.\n\
+               Never use terminal_exec on tmux, vim, nvim, dashboards, or other TUIs unless a future tool explicitly supports that runtime.\n\
+               Use pane_index to target a specific con pane.\n\
                ALWAYS use absolute paths for executables when possible.\n\
                Check exit_code in the response — 0 means success, non-zero means failure.\n\
                If exit_code is null, shell integration may be absent or the command is still running.\n\n\
-             - batch_exec: Run commands on MULTIPLE panes in PARALLEL. Fastest for multi-pane tasks\n\
+             - batch_exec: Run commands on MULTIPLE panes in PARALLEL, but only on panes that are proven safe shell targets.\n\
+               Fastest for multi-pane tasks\n\
                (e.g., \"check uptime on all servers\"). Returns results for each pane independently.\n\n\
-             - shell_exec: Run a command in a hidden subprocess. Output is NOT shown to the user.\n\
-               Prefer over terminal_exec for: git status, file searches, package lookups, background ops.\n\n\
+             - shell_exec: Run a command in a hidden LOCAL subprocess on the con workspace machine. Output is NOT shown to the user.\n\
+               Never use shell_exec to inspect or modify a remote SSH/tmux environment.\n\
+               Prefer over terminal_exec only for local tasks such as git status, file searches, package lookups, and background ops.\n\n\
              - list_panes: List all open panes with index, title, cwd, dimensions, hostname, shell integration status.\n\n\
              - read_pane: Read last N lines from any pane (includes scrollback). Use to inspect output.\n\n\
              - send_keys: Send raw keystrokes to any pane. For TUI interaction: Ctrl-C (\\x03), arrows, Enter.\n\n\
@@ -965,7 +973,7 @@ impl TerminalContext {
              - If is_busy is true, a command is already running — wait or use a different pane.\n\
              - On SSH panes (hostname != null): commands execute on the REMOTE host, not locally.\n\
              - When pane mode is not `shell`, or shell metadata is marked stale, do NOT assume cwd/hostname/last_command describe the visible app.\n\
-             - For tmux, vim, htop, dashboards, and other TUIs: inspect the pane with read_pane/list_panes/send_keys before making claims.\n\
+             - terminal_exec and batch_exec are shell-only operations. For tmux, vim, htop, dashboards, and other TUIs: inspect the pane with read_pane/list_panes/send_keys before making claims or interacting.\n\
              - If a command fails (exit_code != 0), diagnose the error before retrying.\n\
              - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
              </safety>\n\n",
@@ -1213,7 +1221,7 @@ mod tests {
     use super::{
         PaneConfidence, PaneEvidenceSource, PaneMode, PaneObservationFrame, PaneRuntimeObserver,
         PaneRuntimeState, TerminalContext, detect_remote_host_hint, detect_tmux_session,
-        infer_pane_mode, shell_metadata_is_fresh,
+        direct_terminal_exec_is_safe, infer_pane_mode, shell_metadata_is_fresh,
     };
 
     #[test]
@@ -1475,6 +1483,39 @@ mod tests {
         .to_system_prompt();
 
         assert!(!prompt.contains("host=\"local\""));
+    }
+
+    #[test]
+    fn direct_terminal_exec_requires_fresh_shell() {
+        let shell_runtime = PaneRuntimeState {
+            mode: PaneMode::Shell,
+            shell_metadata_fresh: true,
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
+            agent_cli: None,
+            tmux_session: None,
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let tmux_runtime = PaneRuntimeState {
+            mode: PaneMode::Multiplexer,
+            shell_metadata_fresh: false,
+            remote_host: Some("haswell".to_string()),
+            remote_host_confidence: Some(PaneConfidence::Advisory),
+            remote_host_source: Some(PaneEvidenceSource::ScreenStructure),
+            agent_cli: None,
+            tmux_session: Some("nvim".to_string()),
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: Vec::new(),
+            warnings: Vec::new(),
+        };
+
+        assert!(direct_terminal_exec_is_safe(&shell_runtime));
+        assert!(!direct_terminal_exec_is_safe(&tmux_runtime));
     }
 
     #[test]

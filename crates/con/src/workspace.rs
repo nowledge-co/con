@@ -997,7 +997,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         // Use the specified pane, or fall back to the focused pane.
-        let pane = if let Some(pane_index) = req.pane_index {
+        let (pane, target_pane_index) = if let Some(pane_index) = req.pane_index {
             let pane_tree = &self.tabs[tab_idx].pane_tree;
             let all_terminals = pane_tree.all_terminals();
             if pane_index == 0 || pane_index > all_terminals.len() {
@@ -1011,9 +1011,17 @@ impl ConWorkspace {
                 });
                 return;
             }
-            all_terminals[pane_index - 1].clone()
+            (all_terminals[pane_index - 1].clone(), pane_index)
         } else {
-            self.tabs[tab_idx].pane_tree.focused_terminal().clone()
+            let pane_tree = &self.tabs[tab_idx].pane_tree;
+            let focused = pane_tree.focused_terminal().clone();
+            let focused_index = pane_tree
+                .all_terminals()
+                .iter()
+                .position(|terminal| terminal.entity_id() == focused.entity_id())
+                .map(|idx| idx + 1)
+                .unwrap_or(1);
+            (focused, focused_index)
         };
 
         // Safety: refuse to execute on a dead PTY.
@@ -1021,6 +1029,28 @@ impl ConWorkspace {
             let _ = req.response_tx.send(TerminalExecResponse {
                 output: "Pane PTY process has exited — cannot execute command.".to_string(),
                 exit_code: Some(1),
+            });
+            return;
+        }
+
+        let (_, runtime) = self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+        if !con_agent::context::direct_terminal_exec_is_safe(&runtime) {
+            let active_scope = runtime
+                .active_scope
+                .as_ref()
+                .map(con_agent::context::PaneRuntimeScope::summary)
+                .unwrap_or_else(|| runtime.mode.as_str().to_string());
+            let host = runtime.remote_host.unwrap_or_else(|| "unknown".to_string());
+            let output = format!(
+                "Refused to execute shell command in pane {} because the visible target is not a proven shell.\nmode: {}\nactive_scope: {}\nhost: {}\nUse list_panes/read_pane/send_keys to inspect or interact with tmux, nvim, or other TUIs.",
+                target_pane_index,
+                runtime.mode.as_str(),
+                active_scope,
+                host,
+            );
+            let _ = req.response_tx.send(TerminalExecResponse {
+                output,
+                exit_code: Some(2),
             });
             return;
         }
