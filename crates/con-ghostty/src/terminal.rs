@@ -473,12 +473,18 @@ impl GhosttyTerminal {
         // terminal semantics where NUL in text input is meaningless.
     }
 
-    /// Write raw bytes to the terminal, correctly routing text through
-    /// `ghostty_surface_text` and control characters through `ghostty_surface_key`.
+    /// Write raw bytes to the terminal via the key event path.
     ///
-    /// This is the ghostty equivalent of writing to a PTY fd — it handles
-    /// the split between ghostty's IME text pipeline and its key event pipeline
-    /// that callers shouldn't need to know about.
+    /// All characters — both printable and control — are sent through
+    /// `ghostty_surface_key`. Control characters (Enter, Tab, Escape, Backspace)
+    /// use their macOS keycodes. Printable text is batched and sent via the
+    /// key event's `text` field, which ghostty writes directly to the PTY as
+    /// UTF-8 without bracketed-paste wrapping or control-character stripping.
+    ///
+    /// This is critical for TUI interaction: `ghostty_surface_text` (the IME/paste
+    /// pipeline) wraps all input in bracketed paste markers (`\x1b[200~…\x1b[201~`)
+    /// when the application has mode 2004 enabled (vim, neovim, etc.), and strips
+    /// control characters. The key event path bypasses all of that.
     pub fn write_to_pty(&self, data: &[u8]) {
         let text = String::from_utf8_lossy(data);
 
@@ -491,21 +497,39 @@ impl GhosttyTerminal {
 
         for ch in text.chars() {
             if let Some(key_event) = char_to_key_event(ch) {
-                // Flush any pending printable text first
+                // Flush any pending printable text before sending a control char
                 if !pending_text.is_empty() {
-                    self.send_text(&pending_text);
+                    self.send_text_as_key_event(&pending_text);
                     pending_text.clear();
                 }
-                // Send the control character as a key event
                 self.send_key(key_event);
             } else {
                 pending_text.push(ch);
             }
         }
 
-        // Flush remaining text
         if !pending_text.is_empty() {
-            self.send_text(&pending_text);
+            self.send_text_as_key_event(&pending_text);
+        }
+    }
+
+    /// Send printable text through the key event path, bypassing the paste pipeline.
+    ///
+    /// Unlike `send_text()` which uses `ghostty_surface_text` (triggers bracketed
+    /// paste wrapping in mode 2004), this sends via `ghostty_surface_key` with the
+    /// `text` field set. Ghostty writes the UTF-8 directly to the PTY.
+    fn send_text_as_key_event(&self, text: &str) {
+        if let Ok(cstr) = CString::new(text) {
+            let key_event = ffi::ghostty_input_key_s {
+                action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
+                mods: 0,
+                consumed_mods: 0,
+                keycode: 0xFFFF, // unmapped — text field carries the content
+                text: cstr.as_ptr(),
+                unshifted_codepoint: 0,
+                composing: false,
+            };
+            self.send_key(key_event);
         }
     }
 
