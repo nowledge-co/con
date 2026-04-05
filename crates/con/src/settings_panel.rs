@@ -1804,7 +1804,7 @@ impl Focusable for SettingsPanel {
 }
 
 impl Render for SettingsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().id("settings-overlay");
         }
@@ -1820,12 +1820,35 @@ impl Render for SettingsPanel {
         };
 
         let theme = cx.theme();
+        let viewport = window.viewport_size();
+        let viewport_w = viewport.width.as_f32();
+        let viewport_h = viewport.height.as_f32();
+        let compact = viewport_w < 980.0;
+        let sidebar_w = if compact { px(144.0) } else { px(160.0) };
+        let content_pad = if compact { px(18.0) } else { px(24.0) };
+        let card_width = {
+            let target = match active {
+                SettingsSection::Appearance => (viewport_w * 0.84).clamp(720.0, 1100.0),
+                SettingsSection::Models => (viewport_w * 0.76).clamp(680.0, 980.0),
+                SettingsSection::General | SettingsSection::Keys => {
+                    (viewport_w * 0.66).clamp(600.0, 900.0)
+                }
+            };
+            px(target.min(viewport_w - 32.0))
+        };
+        let card_height = {
+            let target = match active {
+                SettingsSection::Appearance => (viewport_h * 0.82).clamp(440.0, 780.0),
+                _ => (viewport_h * 0.76).clamp(420.0, 720.0),
+            };
+            px(target.min(viewport_h - 32.0))
+        };
 
         // Sidebar
         let mut sidebar = div()
             .flex()
             .flex_col()
-            .w(px(160.0))
+            .w(sidebar_w)
             .pt(px(8.0))
             .pb(px(12.0))
             .px(px(8.0))
@@ -1893,7 +1916,7 @@ impl Render for SettingsPanel {
             .id("settings-content-scroll")
             .flex_1()
             .overflow_y_scroll()
-            .p(px(24.0))
+            .p(content_pad)
             .child(content);
 
         let backdrop = div()
@@ -1919,12 +1942,8 @@ impl Render for SettingsPanel {
             .justify_center()
             .child(
                 div()
-                    .w(relative(0.70))
-                    .min_w(px(600.0))
-                    .max_w(px(960.0))
-                    .h(relative(0.75))
-                    .min_h(px(400.0))
-                    .max_h(px(720.0))
+                    .w(card_width)
+                    .h(card_height)
                     .rounded(px(12.0))
                     .bg(theme.title_bar)
                     .overflow_hidden()

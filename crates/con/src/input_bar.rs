@@ -1,9 +1,8 @@
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Icon,
+    ActiveTheme, Icon, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
-    tab::{Tab, TabBar},
 };
 
 actions!(input_bar, [SubmitInput, EscapeInput]);
@@ -35,19 +34,11 @@ impl InputMode {
         }
     }
 
-    fn index(self) -> usize {
+    fn tint(self, cx: &App) -> Hsla {
         match self {
-            Self::Smart => 0,
-            Self::Shell => 1,
-            Self::Agent => 2,
-        }
-    }
-
-    fn from_index(index: usize) -> Self {
-        match index {
-            1 => Self::Shell,
-            2 => Self::Agent,
-            _ => Self::Smart,
+            Self::Smart => cx.theme().muted_foreground,
+            Self::Shell => cx.theme().success,
+            Self::Agent => cx.theme().primary,
         }
     }
 }
@@ -235,6 +226,18 @@ impl InputBar {
         cx.notify();
     }
 
+    pub fn skill_popup_offset(&self, cx: &App) -> Pixels {
+        let rows = self
+            .input_state
+            .read(cx)
+            .value()
+            .lines()
+            .count()
+            .clamp(1, 6);
+
+        px(84.0 + (rows.saturating_sub(1) as f32 * 22.0))
+    }
+
     pub fn cycle_mode(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.mode = self.mode.next();
         cx.notify();
@@ -285,25 +288,38 @@ impl Render for InputBar {
         let has_multiple_panes = self.panes.len() > 1;
         let cwd = self.cwd.clone();
 
-        let control_h = px(32.0);
+        let control_h = px(30.0);
         let pill_h = px(28.0);
         let control_radius = px(10.0);
         let inner_radius = px(8.0);
+        let mode_label = self.mode.label().to_string();
+        let mode_tint = self.mode.tint(cx);
+        let mode_button = Button::new("mode-toggle")
+            .label(mode_label)
+            .small()
+            .ghost()
+            .selected(true)
+            .tooltip("Switch mode (Tab)")
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.cycle_mode(window, cx);
+                }),
+            );
 
-        let mode_tabs = div().w(px(176.0)).child(
-            TabBar::new("mode-tabs")
-                .segmented()
-                .selected_index(self.mode.index())
-                .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                    this.mode = InputMode::from_index(*ix);
-                    cx.notify();
-                }))
-                .child(Tab::new().label(InputMode::Smart.label()).flex_1())
-                .child(Tab::new().label(InputMode::Shell.label()).flex_1())
-                .child(Tab::new().label(InputMode::Agent.label()).flex_1()),
-        );
+        let mode_meta = div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(mode_button)
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(mode_tint.opacity(0.78))
+                    .child("Tab switches mode"),
+            );
 
-        // Pane selector — visible when multiple panes exist
         let all_selected =
             !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len();
         let pane_area = if has_multiple_panes {
@@ -317,7 +333,6 @@ impl Render for InputBar {
                     self.selected_pane_ids.contains(&pane.id)
                 };
 
-                // Status dot color: red=dead, amber=busy, cyan=SSH, green=idle
                 let dot_color = if !pane.is_alive {
                     theme.danger
                 } else if pane.is_busy {
@@ -328,7 +343,6 @@ impl Render for InputBar {
                     theme.success
                 };
 
-                // Display: hostname for SSH, otherwise name truncated
                 let label = if let Some(host) = &pane.hostname {
                     if host.len() > 12 {
                         format!("{}…", &host[..10])
@@ -375,14 +389,12 @@ impl Render for InputBar {
                             this.toggle_pane_selection(pane_id, cx);
                         }),
                     )
-                    // Status dot
                     .child(div().size(px(6.0)).rounded_full().bg(dot_color))
                     .child(label);
 
                 pills = pills.child(pill);
             }
 
-            // "All" toggle
             let all_btn = div()
                 .id("pane-sel-all")
                 .flex()
@@ -453,7 +465,6 @@ impl Render for InputBar {
                 match event.keystroke.key.as_str() {
                     "escape" => {
                         if has_completions {
-                            // Clear the slash prefix to dismiss completions
                             this.input_state
                                 .update(cx, |s, cx| s.set_value("", window, cx));
                             this.skill_selection = 0;
@@ -464,7 +475,6 @@ impl Render for InputBar {
                         }
                     }
                     "tab" if has_completions => {
-                        // Tab completes the selected skill
                         let idx = this.skill_selection.min(matches.len().saturating_sub(1));
                         let name = matches[idx].name.clone();
                         this.complete_skill(&name, window, cx);
@@ -486,43 +496,50 @@ impl Render for InputBar {
                     _ => {}
                 }
             }))
-            // Main row
             .child(
                 div()
                     .flex()
-                    .items_end()
-                    .min_h(px(44.0))
-                    .px(px(12.0))
-                    .py(px(6.0))
+                    .flex_col()
                     .gap(px(6.0))
-                    .child(mode_tabs)
+                    .px(px(12.0))
+                    .pt(px(8.0))
                     .child(
                         div()
-                            .flex_1()
                             .flex()
                             .items_center()
-                            .min_h(control_h)
-                            .px(px(8.0))
+                            .justify_between()
+                            .gap(px(10.0))
+                            .child(mode_meta)
+                            .children(pane_area),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_end()
+                            .gap(px(8.0))
+                            .min_h(px(42.0))
+                            .px(px(10.0))
+                            .py(px(8.0))
                             .rounded(control_radius)
                             .bg(theme.background.opacity(0.82))
-                            .font_family("Ioskeley Mono")
                             .child(
-                                Input::new(&self.input_state)
-                                    .appearance(false)
-                                    .cleanable(false),
-                            ),
-                    )
-                    .children(pane_area)
-                    .child(send_button),
+                                div().flex_1().font_family("Ioskeley Mono").child(
+                                    Input::new(&self.input_state)
+                                        .appearance(false)
+                                        .cleanable(false),
+                                ),
+                            )
+                            .child(send_button),
+                    ),
             )
-            // Status row
             .child(
                 div()
                     .flex()
                     .items_center()
                     .h(px(18.0))
                     .px(px(14.0))
-                    .pb(px(4.0))
+                    .pt(px(1.0))
+                    .pb(px(6.0))
                     .child(
                         div()
                             .text_size(px(10.5))
@@ -534,7 +551,7 @@ impl Render for InputBar {
                         div()
                             .text_size(px(10.0))
                             .text_color(theme.muted_foreground.opacity(0.25))
-                            .child("/ skills  ⇥ mode  ⇧↵ newline  ↵ send"),
+                            .child("/ skills  ⇥ switch mode  ⇧↵ newline  ↵ send"),
                     ),
             )
     }

@@ -5,21 +5,30 @@ const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 
-use crate::agent_panel::{AgentPanel, CancelRequest, EnableAutoApprove, LoadConversation, NewConversation, PanelState, RerunFromMessage};
+use crate::agent_panel::{
+    AgentPanel, CancelRequest, EnableAutoApprove, LoadConversation, NewConversation, PanelState,
+    RerunFromMessage,
+};
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
-use crate::input_bar::{EscapeInput, InputBar, InputMode, PaneInfo, SubmitInput};
+use crate::input_bar::{
+    EscapeInput, InputBar, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
+};
 use crate::pane_tree::{PaneTree, SplitDirection};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
-use crate::terminal_view::{ClosePaneRequest, ExplainCommand, FocusChanged, InputChanged, TerminalView};
+use crate::terminal_view::{
+    ClosePaneRequest, ExplainCommand, FocusChanged, InputChanged, TerminalView,
+};
 use con_terminal::TerminalTheme;
 
 #[cfg(target_os = "macos")]
-use crate::ghostty_view::{GhosttyFocusChanged, GhosttyProcessExited, GhosttyTitleChanged, GhosttyView};
+use crate::ghostty_view::{
+    GhosttyFocusChanged, GhosttyProcessExited, GhosttyTitleChanged, GhosttyView,
+};
 use crate::{CloseTab, FocusInput, NewTab, SplitDown, SplitRight, ToggleAgentPanel};
-use con_core::config::Config;
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
+use con_core::config::Config;
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
 use con_core::session::Session;
 use con_core::suggestions::SuggestionEngine;
@@ -128,8 +137,7 @@ impl ConWorkspace {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
         let font_size = config.terminal.font_size;
         let scrollback_lines = config.terminal.scrollback_lines;
-        let terminal_theme = TerminalTheme::by_name(&config.terminal.theme)
-            .unwrap_or_default();
+        let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
         let session = Session::load().unwrap_or_default();
 
         // Eagerly initialize ghostty if configured, so all terminals use the same backend.
@@ -151,13 +159,21 @@ impl ConWorkspace {
 
         // Closure to create a terminal with the correct backend for this session.
         #[allow(unused_mut)]
-        let mut make_terminal = |cwd: Option<&str>, window: &mut Window, cx: &mut Context<Self>| -> TerminalPane {
-            #[cfg(target_os = "macos")]
-            if let Some(ref app) = ghostty_app {
-                return make_ghostty_terminal(app, window, cx);
-            }
-            make_legacy_terminal(font_size, scrollback_lines, &terminal_theme, cwd, window, cx)
-        };
+        let mut make_terminal =
+            |cwd: Option<&str>, window: &mut Window, cx: &mut Context<Self>| -> TerminalPane {
+                #[cfg(target_os = "macos")]
+                if let Some(ref app) = ghostty_app {
+                    return make_ghostty_terminal(app, window, cx);
+                }
+                make_legacy_terminal(
+                    font_size,
+                    scrollback_lines,
+                    &terminal_theme,
+                    cwd,
+                    window,
+                    cx,
+                )
+            };
 
         let mut tabs: Vec<Tab> = session
             .tabs
@@ -215,12 +231,12 @@ impl ConWorkspace {
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
         let agent_panel_open = session.agent_panel_open;
-        let agent_panel_width = session.agent_panel_width.unwrap_or(AGENT_PANEL_DEFAULT_WIDTH);
+        let agent_panel_width = session
+            .agent_panel_width
+            .unwrap_or(AGENT_PANEL_DEFAULT_WIDTH);
         // Take the active tab's restored panel state for the AgentPanel
-        let initial_panel_state = std::mem::replace(
-            &mut tabs[active_tab].panel_state,
-            PanelState::new(),
-        );
+        let initial_panel_state =
+            std::mem::replace(&mut tabs[active_tab].panel_state, PanelState::new());
         let agent_panel = cx.new(|cx| {
             let mut panel = AgentPanel::with_state(initial_panel_state, cx);
             panel.set_auto_approve(config.agent.auto_approve_tools);
@@ -230,7 +246,10 @@ impl ConWorkspace {
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
         let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
-            log::error!("Failed to create agent harness: {}. Agent features disabled.", e);
+            log::error!(
+                "Failed to create agent harness: {}. Agent features disabled.",
+                e
+            );
             panic!("Fatal: agent harness initialization failed: {}", e);
         });
         let suggestion_engine = harness.suggestion_engine(300);
@@ -239,6 +258,8 @@ impl ConWorkspace {
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
+            .detach();
+        cx.subscribe_in(&input_bar, window, Self::on_skill_autocomplete_changed)
             .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_settings_saved)
             .detach();
@@ -284,13 +305,19 @@ impl ConWorkspace {
                         }
 
                         // Terminal exec requests — route to the tab that owns the session
-                        while let Ok(req) = workspace.tabs[tab_idx].session.terminal_exec_requests().try_recv() {
+                        while let Ok(req) = workspace.tabs[tab_idx]
+                            .session
+                            .terminal_exec_requests()
+                            .try_recv()
+                        {
                             got_event = true;
                             workspace.handle_terminal_exec_request_for_tab(tab_idx, req, cx);
                         }
 
                         // Pane queries — route to the tab that owns the session
-                        while let Ok(req) = workspace.tabs[tab_idx].session.pane_requests().try_recv() {
+                        while let Ok(req) =
+                            workspace.tabs[tab_idx].session.pane_requests().try_recv()
+                        {
                             got_event = true;
                             workspace.handle_pane_request_for_tab(tab_idx, req, cx);
                         }
@@ -301,7 +328,8 @@ impl ConWorkspace {
                         got_event = true;
                         workspace.apply_suggestion(entity_id, suggestion, cx);
                     }
-                }).ok();
+                })
+                .ok();
 
                 if !got_event {
                     cx.background_executor()
@@ -379,7 +407,14 @@ impl ConWorkspace {
                 return pane;
             }
         }
-        make_legacy_terminal(self.font_size, self.scrollback_lines, &self.terminal_theme, cwd, window, cx)
+        make_legacy_terminal(
+            self.font_size,
+            self.scrollback_lines,
+            &self.terminal_theme,
+            cwd,
+            window,
+            cx,
+        )
     }
 
     fn active_terminal(&self) -> &TerminalPane {
@@ -424,23 +459,49 @@ impl ConWorkspace {
 
         // Build context via Grid if available (legacy), otherwise construct manually
         if let Some(focused_grid) = focused.as_grid(cx) {
-            self.harness
-                .build_context(&focused_grid.lock(), None, focused_pane_index, focused_hostname, other_pane_summaries)
+            self.harness.build_context(
+                &focused_grid.lock(),
+                None,
+                focused_pane_index,
+                focused_hostname,
+                other_pane_summaries,
+            )
         } else {
             // Ghostty: build context without Grid access
-            self.harness
-                .build_context_from_snapshot(
-                    &focused.content_lines(50, cx),
-                    focused.current_dir(cx),
-                    focused.last_command(cx),
-                    focused.last_exit_code(cx),
-                    focused.last_command_duration(cx).map(|d| d.as_secs_f64()),
-                    focused.is_busy(cx),
-                    focused_pane_index,
-                    focused_hostname,
-                    other_pane_summaries,
-                )
+            self.harness.build_context_from_snapshot(
+                &focused.content_lines(50, cx),
+                focused.current_dir(cx),
+                focused.last_command(cx),
+                focused.last_exit_code(cx),
+                focused.last_command_duration(cx).map(|d| d.as_secs_f64()),
+                focused.is_busy(cx),
+                focused_pane_index,
+                focused_hostname,
+                other_pane_summaries,
+            )
         }
+    }
+
+    fn panel_state_from_conversation(&self, conv: &Conversation) -> PanelState {
+        let mut state = PanelState::new();
+        for msg in &conv.messages {
+            match msg.role {
+                con_agent::MessageRole::User => {
+                    let visible = self
+                        .harness
+                        .display_label_for_user_message(&msg.content)
+                        .unwrap_or_else(|| msg.content.clone());
+                    state.add_message("user", &visible);
+                }
+                con_agent::MessageRole::Assistant => {
+                    state.add_message("assistant", &msg.content);
+                }
+                con_agent::MessageRole::System | con_agent::MessageRole::Tool => {
+                    state.add_message("system", &msg.content);
+                }
+            }
+        }
+        state
     }
 
     fn save_session(&self, cx: &App) {
@@ -450,9 +511,7 @@ impl ConWorkspace {
             .map(|tab| {
                 let terminal = tab.pane_tree.focused_terminal();
                 let cwd = terminal.current_dir(cx);
-                let title = terminal
-                    .title(cx)
-                    .unwrap_or_else(|| tab.title.clone());
+                let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
                 con_core::session::TabState {
                     title,
                     cwd,
@@ -495,11 +554,14 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.tabs[self.active_tab].session.load_conversation(&event.id) {
+        if self.tabs[self.active_tab]
+            .session
+            .load_conversation(&event.id)
+        {
             // Rebuild panel state from the loaded conversation
             let conv = self.tabs[self.active_tab].session.conversation();
             let conv = conv.lock();
-            let new_state = PanelState::from_conversation(&conv);
+            let new_state = self.panel_state_from_conversation(&conv);
             drop(conv);
             self.agent_panel.update(cx, |panel, cx| {
                 panel.swap_state(new_state, cx);
@@ -544,7 +606,29 @@ impl ConWorkspace {
 
         let context = self.build_agent_context(cx);
         let session = &self.tabs[self.active_tab].session;
-        self.harness.send_message(session, event.content.clone(), context);
+        if event.content.trim().starts_with('/') {
+            match self.harness.classify_input(
+                &event.content,
+                self.active_terminal().detected_remote_host(cx).is_some(),
+            ) {
+                InputKind::SkillInvoke(name, args) => {
+                    if let Some(desc) =
+                        self.harness
+                            .invoke_skill(session, &name, args.as_deref(), context)
+                    {
+                        self.agent_panel.update(cx, |panel, cx| {
+                            panel.add_step(&desc, cx);
+                        });
+                    }
+                }
+                _ => self
+                    .harness
+                    .send_message(session, event.content.clone(), context),
+            }
+        } else {
+            self.harness
+                .send_message(session, event.content.clone(), context);
+        }
     }
 
     fn on_sidebar_select(
@@ -659,6 +743,9 @@ impl ConWorkspace {
         // Apply updated skills paths (forces rescan on next cwd check)
         let skills_config = settings.read(cx).skills_config().clone();
         self.harness.update_skills_config(skills_config);
+        if let Some(cwd) = self.active_terminal().current_dir(cx) {
+            self.harness.scan_skills(&cwd);
+        }
 
         let term_config = settings.read(cx).terminal_config().clone();
         self.font_size = term_config.font_size;
@@ -679,7 +766,11 @@ impl ConWorkspace {
             KeyBinding::new(&kb.toggle_agent, crate::ToggleAgentPanel, None),
             KeyBinding::new(&kb.close_tab, crate::CloseTab, None),
             KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
-            KeyBinding::new(&kb.command_palette, crate::command_palette::ToggleCommandPalette, None),
+            KeyBinding::new(
+                &kb.command_palette,
+                crate::command_palette::ToggleCommandPalette,
+                None,
+            ),
             KeyBinding::new(&kb.split_right, crate::SplitRight, None),
             KeyBinding::new(&kb.split_down, crate::SplitDown, None),
             KeyBinding::new(&kb.focus_input, crate::FocusInput, None),
@@ -739,6 +830,16 @@ impl ConWorkspace {
     ) {
     }
 
+    fn on_skill_autocomplete_changed(
+        &mut self,
+        _input_bar: &Entity<InputBar>,
+        _event: &SkillAutocompleteChanged,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+    }
+
     fn on_input_submit(
         &mut self,
         input_bar: &Entity<InputBar>,
@@ -746,9 +847,8 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (content, mode) = input_bar.update(cx, |bar, cx| {
-            (bar.take_content(window, cx), bar.mode())
-        });
+        let (content, mode) =
+            input_bar.update(cx, |bar, cx| (bar.take_content(window, cx), bar.mode()));
 
         if content.trim().is_empty() {
             return;
@@ -773,7 +873,10 @@ impl ConWorkspace {
                     InputKind::SkillInvoke(name, args) => {
                         let context = self.build_agent_context(cx);
                         let session = &self.tabs[self.active_tab].session;
-                        if let Some(desc) = self.harness.invoke_skill(session, &name, args.as_deref(), context) {
+                        if let Some(desc) =
+                            self.harness
+                                .invoke_skill(session, &name, args.as_deref(), context)
+                        {
                             if !self.agent_panel_open {
                                 self.agent_panel_open = true;
                             }
@@ -841,13 +944,7 @@ impl ConWorkspace {
                     });
                 } else {
                     self.agent_panel.update(cx, |panel, cx| {
-                        panel.add_pending_approval(
-                            &call_id,
-                            &tool_name,
-                            &args,
-                            approval_tx,
-                            cx,
-                        );
+                        panel.add_pending_approval(&call_id, &tool_name, &args, approval_tx, cx);
                     });
                 }
             }
@@ -928,11 +1025,10 @@ impl ConWorkspace {
         // Ghostty doesn't support OSC 133 callbacks, so we rely solely on the fallback.
         if let Some(grid) = pane.as_grid(cx) {
             let response_tx = req.response_tx.clone();
-            grid.lock().set_command_complete_callback(Box::new(
-                move |output, exit_code| {
+            grid.lock()
+                .set_command_complete_callback(Box::new(move |output, exit_code| {
                     let _ = response_tx.send(TerminalExecResponse { output, exit_code });
-                },
-            ));
+                }));
         }
 
         // Write the command to the PTY — user sees it execute in real time
@@ -985,19 +1081,20 @@ impl ConWorkspace {
                     }
                 } else {
                     // Ghostty: poll COMMAND_FINISHED action for reliable completion
-                    let finished = _this.update(cx, |_ws, cx| {
-                        pane_for_fallback.take_command_finished(cx)
-                    }).ok().flatten();
+                    let finished = _this
+                        .update(cx, |_ws, cx| pane_for_fallback.take_command_finished(cx))
+                        .ok()
+                        .flatten();
 
                     if let Some((exit_code, _duration)) = finished {
                         // Command finished with exit code from shell integration
-                        let output = _this.update(cx, |_ws, cx| {
-                            pane_for_fallback.recent_lines(50, cx).join("\n")
-                        }).unwrap_or_default();
-                        let _ = fallback_response_tx.try_send(TerminalExecResponse {
-                            output,
-                            exit_code,
-                        });
+                        let output = _this
+                            .update(cx, |_ws, cx| {
+                                pane_for_fallback.recent_lines(50, cx).join("\n")
+                            })
+                            .unwrap_or_default();
+                        let _ = fallback_response_tx
+                            .try_send(TerminalExecResponse { output, exit_code });
                         return;
                     }
 
@@ -1020,9 +1117,11 @@ impl ConWorkspace {
                 g.recent_lines(50).join("\n")
             } else {
                 // Ghostty: read screen text via the workspace's App context
-                _this.update(cx, |_ws, cx| {
-                    pane_for_fallback.recent_lines(50, cx).join("\n")
-                }).unwrap_or_default()
+                _this
+                    .update(cx, |_ws, cx| {
+                        pane_for_fallback.recent_lines(50, cx).join("\n")
+                    })
+                    .unwrap_or_default()
             };
             let _ = fallback_response_tx.try_send(TerminalExecResponse {
                 output,
@@ -1051,17 +1150,17 @@ impl ConWorkspace {
                     .iter()
                     .enumerate()
                     .map(|(idx, terminal)| {
-                        let pid = pane_tree
-                            .pane_id_for_terminal(terminal)
-                            .unwrap_or(idx);
-                        let title = terminal.title(cx)
+                        let pid = pane_tree.pane_id_for_terminal(terminal).unwrap_or(idx);
+                        let title = terminal
+                            .title(cx)
                             .unwrap_or_else(|| format!("Pane {}", idx + 1));
                         let (cols, rows) = terminal.grid_size(cx);
                         // Ghostty always has shell integration (COMMAND_FINISHED
                         // action fires via OSC 133). Legacy only has it if a prompt
                         // has been seen.
                         let has_shell_integration = if terminal.as_grid(cx).is_some() {
-                            terminal.as_grid(cx)
+                            terminal
+                                .as_grid(cx)
                                 .map(|g| g.lock().last_prompt_row.is_some())
                                 .unwrap_or(false)
                         } else {
@@ -1165,12 +1264,7 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    fn focus_input(
-        &mut self,
-        _: &FocusInput,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn focus_input(&mut self, _: &FocusInput, window: &mut Window, cx: &mut Context<Self>) {
         self.input_bar.focus_handle(cx).focus(window, cx);
     }
 
@@ -1219,8 +1313,7 @@ impl ConWorkspace {
     }
 
     fn is_modal_open(&self, cx: &App) -> bool {
-        self.settings_panel.read(cx).is_visible()
-            || self.command_palette.read(cx).is_visible()
+        self.settings_panel.read(cx).is_visible() || self.command_palette.read(cx).is_visible()
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
@@ -1248,9 +1341,9 @@ impl ConWorkspace {
             &mut self.tabs[self.active_tab].panel_state,
             PanelState::new(),
         );
-        let outgoing = self.agent_panel.update(cx, |panel, cx| {
-            panel.swap_state(incoming, cx)
-        });
+        let outgoing = self
+            .agent_panel
+            .update(cx, |panel, cx| panel.swap_state(incoming, cx));
         self.tabs[old_active].panel_state = outgoing;
 
         terminal.set_ghostty_focus(true, cx);
@@ -1331,9 +1424,11 @@ impl ConWorkspace {
         let all_terminals = pane_tree.all_terminals();
 
         for terminal in &all_terminals {
-            if all_terminals.len() == 1 || target_ids.iter().any(|&tid| {
-                pane_tree.terminal_has_pane_id(terminal, tid)
-            }) {
+            if all_terminals.len() == 1
+                || target_ids
+                    .iter()
+                    .any(|&tid| pane_tree.terminal_has_pane_id(terminal, tid))
+            {
                 terminal.write(format!("{}\n", cmd).as_bytes(), cx);
             }
         }
@@ -1354,7 +1449,8 @@ impl ConWorkspace {
         });
         let context = self.build_agent_context(cx);
         let session = &self.tabs[self.active_tab].session;
-        self.harness.send_message(session, content.to_string(), context);
+        self.harness
+            .send_message(session, content.to_string(), context);
     }
 
     fn split_pane(
@@ -1371,21 +1467,11 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    fn split_right(
-        &mut self,
-        _: &SplitRight,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn split_right(&mut self, _: &SplitRight, window: &mut Window, cx: &mut Context<Self>) {
         self.split_pane(SplitDirection::Horizontal, window, cx);
     }
 
-    fn split_down(
-        &mut self,
-        _: &SplitDown,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn split_down(&mut self, _: &SplitDown, window: &mut Window, cx: &mut Context<Self>) {
         self.split_pane(SplitDirection::Vertical, window, cx);
     }
 
@@ -1495,14 +1581,11 @@ impl ConWorkspace {
         let old_active = self.active_tab;
 
         // Take the incoming tab's panel state
-        let incoming = std::mem::replace(
-            &mut self.tabs[index].panel_state,
-            PanelState::new(),
-        );
+        let incoming = std::mem::replace(&mut self.tabs[index].panel_state, PanelState::new());
         // Swap into the panel, get the outgoing state back
-        let outgoing = self.agent_panel.update(cx, |panel, cx| {
-            panel.swap_state(incoming, cx)
-        });
+        let outgoing = self
+            .agent_panel
+            .update(cx, |panel, cx| panel.swap_state(incoming, cx));
         // Stash outgoing state into the old tab
         self.tabs[old_active].panel_state = outgoing;
 
@@ -1653,7 +1736,13 @@ impl Render for ConWorkspace {
                 let name = pane_display_name(&hostname, &title, &current_dir, id);
                 let is_busy = terminal.is_busy(cx);
                 let is_alive = terminal.is_alive(cx);
-                PaneInfo { id, name, hostname, is_busy, is_alive }
+                PaneInfo {
+                    id,
+                    name,
+                    hostname,
+                    is_busy,
+                    is_alive,
+                }
             })
             .collect();
 
@@ -1676,9 +1765,14 @@ impl Render for ConWorkspace {
             })
             .unwrap_or_else(|| "~".to_string());
 
-        let skill_entries: Vec<crate::input_bar::SkillEntry> = self.harness.skill_summaries()
+        let skill_entries: Vec<crate::input_bar::SkillEntry> = self
+            .harness
+            .skill_summaries()
             .into_iter()
-            .map(|(name, desc)| crate::input_bar::SkillEntry { name, description: desc })
+            .map(|(name, desc)| crate::input_bar::SkillEntry {
+                name,
+                description: desc,
+            })
             .collect();
         self.input_bar.update(cx, |bar, _cx| {
             bar.set_panes(pane_infos, focused_pane_id);
@@ -1714,11 +1808,7 @@ impl Render for ConWorkspace {
             .min_h_0()
             .child(pane_tree_rendered);
 
-        let mut main_area = div()
-            .flex()
-            .flex_1()
-            .min_h_0()
-            .child(terminal_area);
+        let mut main_area = div().flex().flex_1().min_h_0().child(terminal_area);
 
         if self.agent_panel_open {
             // Draggable divider — matches pane divider style
@@ -1773,9 +1863,7 @@ impl Render for ConWorkspace {
             let is_active = index == self.active_tab;
             let needs_attention = tab.needs_attention && !is_active;
             let terminal = tab.pane_tree.focused_terminal();
-            let title = terminal
-                .title(cx)
-                .unwrap_or_else(|| tab.title.clone());
+            let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
 
             // Truncate long titles
             let display_title: String = if title.len() > 24 {
@@ -1802,9 +1890,7 @@ impl Render for ConWorkspace {
                     .hover(|s| s.bg(theme.muted.opacity(0.25)));
                 // Only show on hover for inactive tabs
                 if !is_active {
-                    close_el = close_el
-                        .invisible()
-                        .group_hover("tab", |s| s.visible());
+                    close_el = close_el.invisible().group_hover("tab", |s| s.visible());
                 }
                 Some(
                     close_el
@@ -1862,12 +1948,7 @@ impl Render for ConWorkspace {
                     .hover(|s| s.bg(theme.muted.opacity(0.08)));
             }
 
-            let mut tab_content = div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .w_full()
-                .min_w_0();
+            let mut tab_content = div().flex().items_center().gap(px(6.0)).w_full().min_w_0();
 
             // Attention dot for tabs with pending agent activity
             if needs_attention {
@@ -1960,16 +2041,13 @@ impl Render for ConWorkspace {
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
                 }))
-                .child(
-                    svg()
-                        .path(panel_icon)
-                        .size(px(14.0))
-                        .text_color(if self.agent_panel_open {
-                            theme.primary
-                        } else {
-                            theme.muted_foreground
-                        }),
-                ),
+                .child(svg().path(panel_icon).size(px(14.0)).text_color(
+                    if self.agent_panel_open {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground
+                    },
+                )),
         );
 
         let mut root = div()
@@ -1988,7 +2066,8 @@ impl Render for ConWorkspace {
                     // Agent panel resize drag
                     if let Some((start_x, start_width)) = this.agent_panel_drag {
                         let delta = start_x - f32::from(event.position.x);
-                        let new_width = (start_width + delta).clamp(AGENT_PANEL_MIN_WIDTH, AGENT_PANEL_MAX_WIDTH);
+                        let new_width = (start_width + delta)
+                            .clamp(AGENT_PANEL_MIN_WIDTH, AGENT_PANEL_MAX_WIDTH);
                         if (this.agent_panel_width - new_width).abs() > 1.0 {
                             this.agent_panel_width = new_width;
                             // Notify all terminals so they detect new available space
@@ -2021,7 +2100,11 @@ impl Render for ConWorkspace {
                         if let Some(dir) = pane_tree.dragging_direction() {
                             match dir {
                                 SplitDirection::Horizontal => {
-                                    let panel_w = if this.agent_panel_open { this.agent_panel_width + 7.0 } else { 0.0 };
+                                    let panel_w = if this.agent_panel_open {
+                                        this.agent_panel_width + 7.0
+                                    } else {
+                                        0.0
+                                    };
                                     (f32::from(event.position.x), win_w - panel_w)
                                 }
                                 SplitDirection::Vertical => {
@@ -2115,21 +2198,32 @@ impl Render for ConWorkspace {
         // Skill autocomplete popup — rendered at workspace level above ghostty
         if has_skill_popup {
             let theme = cx.theme();
-            let skills = self.input_bar.read(cx).filtered_skills(cx)
-                .into_iter().map(|s| (s.name.clone(), s.description.clone())).collect::<Vec<_>>();
+            let popup_width = px((window.bounds().size.width.as_f32() * 0.34).clamp(320.0, 480.0));
+            let popup_bottom = self.input_bar.read(cx).skill_popup_offset(cx);
+            let skills = self
+                .input_bar
+                .read(cx)
+                .filtered_skills(cx)
+                .into_iter()
+                .map(|s| (s.name.clone(), s.description.clone()))
+                .collect::<Vec<_>>();
             let sel = self.input_bar.read(cx).skill_selection();
             let sel = sel.min(skills.len().saturating_sub(1));
 
             let mut popup = div()
                 .absolute()
-                .bottom(px(66.0)) // above input bar (44 + 22 status row)
-                .left(px(12.0))
-                .right(px(12.0))
+                .bottom(popup_bottom)
+                .left(px(24.0))
+                .w(popup_width)
+                .max_h(px(320.0))
                 .flex()
                 .flex_col()
-                .rounded(px(8.0))
-                .bg(theme.background)
-                .py(px(4.0))
+                .rounded(px(10.0))
+                .bg(theme.background.opacity(0.98))
+                .border_1()
+                .border_color(theme.muted.opacity(0.16))
+                .py(px(6.0))
+                .overflow_hidden()
                 .font_family(".SystemUIFont");
 
             for (i, (name, desc)) in skills.iter().enumerate() {
@@ -2139,14 +2233,18 @@ impl Render for ConWorkspace {
                     div()
                         .id(SharedString::from(format!("skill-{name}")))
                         .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .h(px(30.0))
-                        .mx(px(4.0))
-                        .px(px(10.0))
-                        .rounded(px(6.0))
+                        .flex_col()
+                        .gap(px(2.0))
+                        .mx(px(6.0))
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .rounded(px(8.0))
                         .cursor_pointer()
-                        .bg(if is_sel { theme.primary.opacity(0.10) } else { theme.transparent })
+                        .bg(if is_sel {
+                            theme.primary.opacity(0.10)
+                        } else {
+                            theme.transparent
+                        })
                         .hover(|s| s.bg(theme.primary.opacity(0.08)))
                         .on_mouse_down(MouseButton::Left, {
                             let input_bar = self.input_bar.clone();
@@ -2159,14 +2257,19 @@ impl Render for ConWorkspace {
                         .child(
                             div()
                                 .text_size(px(12.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(if is_sel { theme.primary } else { theme.foreground })
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(if is_sel {
+                                    theme.primary
+                                } else {
+                                    theme.foreground
+                                })
                                 .child(format!("/{name}")),
                         )
                         .child(
                             div()
                                 .text_size(px(11.0))
-                                .text_color(theme.muted_foreground.opacity(0.6))
+                                .line_height(px(16.0))
+                                .text_color(theme.muted_foreground.opacity(0.68))
                                 .child(desc.clone()),
                         ),
                 );
@@ -2216,7 +2319,11 @@ fn pane_display_name(
             let after = title[colon_pos + 1..].trim();
             // If before-colon contains @, it's user@host — use the path after colon
             if before.contains('@') {
-                if after.is_empty() { before.to_string() } else { shorten_path(after) }
+                if after.is_empty() {
+                    before.to_string()
+                } else {
+                    shorten_path(after)
+                }
             } else {
                 before.to_string()
             }
@@ -2238,7 +2345,10 @@ fn pane_display_name(
         let is_bare_home = matches!(
             path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
             Some(ref name) if name == "home" || name == "Users"
-        ) && path.parent().and_then(|p| p.parent()).map_or(false, |pp| pp.parent().is_none());
+        ) && path
+            .parent()
+            .and_then(|p| p.parent())
+            .map_or(false, |pp| pp.parent().is_none());
 
         if !is_bare_home {
             if let Some(base) = path.file_name() {
