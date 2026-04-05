@@ -994,6 +994,12 @@ impl TerminalContext {
              ## Decision framework\n\
              For QUESTIONS about code, errors, or terminal state: prefer reading files and panes. Minimize side effects.\n\
              For TASKS that modify state: verify context first, explain what you will do, then execute carefully.\n\n\
+             ## Turn efficiency\n\
+             Each tool call counts as a turn. Plan your actions to minimize turns:\n\
+             - Batch safe keystrokes in one send_keys: e.g., send_keys \"\\x1bggdG\" (escape + go to top + delete all) is one turn, not three.\n\
+             - read_pane is required after mode changes and content input, but sequential keystrokes in the same mode can be batched.\n\
+             - For vim content: compose the full content string and send it in one send_keys call (up to ~50 lines), then read_pane once to verify.\n\
+             - For tmux navigation: send_keys \"\\x02c\" (prefix + create window) is one call, not two.\n\n\
              ## Tools\n\n\
              <tools>\n\
              - terminal_exec: Run a command visibly in a con pane only when that pane's control capabilities include `exec_visible_shell`.\n\

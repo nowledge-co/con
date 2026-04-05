@@ -268,7 +268,7 @@ impl Default for AgentConfig {
         Self {
             provider: ProviderKind::default(),
             providers: ProviderMap::default(),
-            max_turns: 10,
+            max_turns: 30,
             temperature: None,
             auto_context: true,
             auto_approve_tools: false,
@@ -884,8 +884,19 @@ async fn consume_stream<R: Send + 'static>(
             }
             Ok(_) => {}
             Err(e) => {
-                log::error!("[agent] Stream error: {e}");
                 let msg = e.to_string();
+
+                // MaxTurnError: graceful degradation instead of hard error.
+                // Return whatever the agent has produced so far, appending a
+                // notice that the turn limit was reached so the user can continue.
+                if msg.contains("MaxTurnError") || msg.contains("max turn") {
+                    log::warn!("[agent] Reached max turn limit — returning partial response");
+                    let notice = "\n\n---\n*Reached the turn limit for this request. You can send another message to continue where I left off.*";
+                    response_text.push_str(notice);
+                    break;
+                }
+
+                log::error!("[agent] Stream error: {e}");
                 // Surface actionable error for models that don't support tool use
                 if msg.contains("tool use") || msg.contains("tool_use") {
                     return Err(anyhow::anyhow!(

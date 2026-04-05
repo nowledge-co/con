@@ -32,8 +32,8 @@ Before any tmux operation, read_pane to see:
 - The main content area — what application is currently visible
 Parse the status bar to know which window you are on and what other windows exist.
 
-### Navigation
-- Switch to window N: send_keys \"\\x02\" then send_keys \"N\" (e.g., \"0\", \"1\", \"2\")
+### Navigation (batch prefix + command in one send_keys call)
+- Switch to window N: send_keys \"\\x020\" (prefix + 0, one call) — NOT two separate calls
 - Next window: send_keys \"\\x02n\"
 - Previous window: send_keys \"\\x02p\"
 - List windows interactively: send_keys \"\\x02w\" then read_pane
@@ -83,17 +83,17 @@ Before any vim operation, read_pane to understand:
 Send \\x1b (Escape) first to ensure you are in normal mode before any operation.
 
 ### Writing content to the current buffer
-To replace entire file content:
-1. send_keys \"\\x1b\" (ensure normal mode)
-2. read_pane to verify normal mode
-3. send_keys \"ggdG\" (go to top, delete everything)
-4. read_pane to verify buffer is empty
-5. send_keys \"i\" (enter insert mode)
-6. send_keys the content (for large content, send 5-10 lines at a time with read_pane between chunks)
-7. send_keys \"\\x1b\" (back to normal mode)
-8. read_pane to verify content was entered correctly
-9. send_keys \":w\\n\" to save
-10. read_pane to verify save succeeded (look for \"written\" message at bottom)
+To replace entire file content (turn-efficient approach):
+1. send_keys \"\\x1b\" (ensure normal mode) — read_pane to verify
+2. send_keys \"ggdG\" (go to top, delete everything) — read_pane to verify empty
+3. send_keys \"i\" (enter insert mode) then immediately send content in the SAME call:
+   send_keys \"i#!/bin/bash\\nline2\\nline3\\n...entire content...\"
+   You can send up to ~50 lines in one send_keys call.
+4. read_pane to verify content was entered correctly
+5. send_keys \"\\x1b:w\\n\" (escape + save in one call)
+6. read_pane to verify save succeeded (look for \"written\" message at bottom)
+
+This uses ~6 tool calls instead of 10+. Batch keystrokes when they don't require verification between them.
 
 To append content at the end:
 1. send_keys \"\\x1bGo\" (normal mode, go to last line, open new line below in insert mode)
