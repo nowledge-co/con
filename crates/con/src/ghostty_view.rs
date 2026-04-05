@@ -288,6 +288,12 @@ impl GhosttyView {
             return;
         }
 
+        // Ctrl+` is reserved for toggle-input-bar (app shortcut).
+        // Don't forward to ghostty so GPUI's action dispatch handles it.
+        if keystroke.modifiers.control && keystroke.key == "`" {
+            return;
+        }
+
         let mods = gpui_mods_to_ghostty(&keystroke.modifiers);
         let key_name = keystroke.key.as_str();
 

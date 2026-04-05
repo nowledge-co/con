@@ -1346,6 +1346,11 @@ impl Render for AgentPanel {
                                     .gap(px(1.0))
                                     .invisible()
                                     .group_hover("user-msg", |s| s.visible())
+                                    // Copy
+                                    .child(
+                                        Clipboard::new(format!("copy-user-{msg_idx}"))
+                                            .value(SharedString::from(user_content.clone())),
+                                    )
                                     // Edit
                                     .child({
                                         let content_for_edit = user_content.clone();
@@ -1990,7 +1995,7 @@ impl Render for AgentPanel {
             messages_area = messages_area.child(approval_el);
         }
 
-        // ── Status indicator ──────────────────────────────────────
+        // ── Status indicator — matches step row layout ──────────
         if let Some((icon, label)) = self.status_text() {
             let status_color = match self.state.status {
                 AgentStatus::Thinking => theme.warning,
@@ -2003,16 +2008,19 @@ impl Render for AgentPanel {
                     .flex()
                     .items_center()
                     .gap(px(5.0))
+                    .py(px(2.0))
+                    .px(px(4.0))
                     .child(
                         svg()
                             .path(icon)
-                            .size(px(10.0))
+                            .size(px(11.0))
+                            .flex_shrink_0()
                             .text_color(status_color.opacity(0.55)),
                     )
                     .child(
                         div()
-                            .text_size(px(10.5))
-                            .text_color(theme.muted_foreground.opacity(0.5))
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground.opacity(0.45))
                             .child(label),
                     ),
             );
@@ -2289,8 +2297,8 @@ impl Render for AgentPanel {
             panel = panel.child(
                 div()
                     .flex_shrink_0()
-                    .px(px(10.0))
-                    .py(px(6.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                         let key = event.keystroke.key.as_str();
                         let has_completions = !this.filtered_inline_skills(cx).is_empty();
@@ -2332,25 +2340,26 @@ impl Render for AgentPanel {
                             cx.stop_propagation();
                         }
                     }))
-                    // Input container — flat row matching main input bar style
+                    // Input container — matches main input bar visual style
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
-                            .px(px(6.0))
-                            .py(px(5.0))
-                            .rounded(px(10.0))
+                            .gap(px(8.0))
+                            .px(px(8.0))
+                            .py(px(6.0))
+                            .rounded(px(12.0))
                             .bg(theme.background)
-                            // Oven icon as mode indicator
+                            // Oven icon badge
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .size(px(24.0))
-                                    .rounded(px(6.0))
-                                    .bg(theme.primary.opacity(0.08))
+                                    .size(px(26.0))
+                                    .flex_shrink_0()
+                                    .rounded(px(7.0))
+                                    .bg(theme.primary.opacity(0.10))
                                     .child(
                                         svg()
                                             .path("phosphor/oven.svg")
@@ -2362,6 +2371,7 @@ impl Render for AgentPanel {
                             .child(
                                 div()
                                     .flex_1()
+                                    .min_w_0()
                                     .text_size(px(13.0))
                                     .child(
                                         Input::new(&inline_input)

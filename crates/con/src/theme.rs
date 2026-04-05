@@ -52,6 +52,9 @@ pub fn init_theme(cx: &mut App, terminal_theme: &str) {
     }
     // Always show scrollbar on hover — macOS default "Scrolling" fades too fast
     Theme::global_mut(cx).scrollbar_show = ScrollbarShow::Hover;
+    // Transparent scrollbar track — only the thumb is visible.
+    // Prevents bg mismatch when scrollbar overlays different surface colors.
+    Theme::global_mut(cx).colors.scrollbar = gpui::transparent_black();
 
     let mode = if terminal_theme.contains("light") {
         ThemeMode::Light

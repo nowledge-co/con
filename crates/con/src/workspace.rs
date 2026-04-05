@@ -267,6 +267,8 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_theme_preview)
             .detach();
+        // Re-render workspace when settings panel visibility changes (e.g. X close button)
+        cx.observe(&settings_panel, |_, _, cx| cx.notify()).detach();
         cx.subscribe_in(&command_palette, window, Self::on_palette_select)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_new_conversation)
