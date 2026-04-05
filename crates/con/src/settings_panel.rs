@@ -6,7 +6,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
 use gpui_component::stepper::{Stepper, StepperItem};
 use gpui_component::switch::Switch;
-use gpui_component::{ActiveTheme, Icon, Selectable as _, Sizable as _, input::Input};
+use gpui_component::{ActiveTheme, Icon, Sizable as _, input::Input};
 
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
@@ -1315,213 +1315,205 @@ impl SettingsPanel {
         let max_turns_input = self.max_turns_input.clone();
         let temperature_input = self.temperature_input.clone();
         let suggestion_model_input = self.suggestion_model_input.clone();
-        let provider_name = provider_label(&self.selected_provider);
         let models = provider_models(&self.selected_provider);
         let current_model = self.model_input.read(cx).value().to_string();
 
-        let mut provider_list = div().flex().flex_col().gap(px(1.0));
+        let mut provider_list = div().flex().flex_col();
         for provider in ALL_PROVIDERS.iter() {
             let is_selected = *provider == self.selected_provider;
             let label = provider_label(provider);
             let provider_clone = provider.clone();
-            let known_models = provider_models(provider).len();
 
-            let row = div()
-                .id(SharedString::from(format!("prov-{label}")))
-                .h(px(34.0))
-                .pl(px(10.0))
-                .pr(px(8.0))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .rounded(px(8.0))
-                .cursor_pointer()
-                .bg(if is_selected {
-                    theme.primary.opacity(0.08)
-                } else {
-                    theme.transparent
-                })
-                .hover(|s| {
-                    if is_selected {
-                        s.bg(theme.primary.opacity(0.10))
+            provider_list = provider_list.child(
+                div()
+                    .id(SharedString::from(format!("prov-{label}")))
+                    .h(px(32.0))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .rounded(px(7.0))
+                    .cursor_pointer()
+                    .bg(if is_selected {
+                        theme.primary.opacity(0.08)
                     } else {
-                        s.bg(theme.muted.opacity(0.06))
-                    }
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, window, cx| {
-                        this.select_provider(provider_clone.clone(), window, cx);
-                    }),
-                )
-                .child(
-                    div()
-                        .w(px(3.0))
-                        .h(px(16.0))
-                        .rounded(px(1.5))
-                        .bg(if is_selected {
-                            theme.primary
+                        theme.transparent
+                    })
+                    .hover(|s| {
+                        if is_selected {
+                            s
                         } else {
-                            theme.transparent
+                            s.bg(theme.muted.opacity(0.06))
+                        }
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.select_provider(provider_clone.clone(), window, cx);
                         }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(px(12.0))
-                        .font_weight(if is_selected {
-                            FontWeight::SEMIBOLD
-                        } else {
-                            FontWeight::NORMAL
-                        })
-                        .text_color(if is_selected {
-                            theme.foreground
-                        } else {
-                            theme.muted_foreground
-                        })
-                        .child(label),
-                )
-                .children(if known_models > 0 {
-                    Some(
-                        div()
-                            .text_size(px(9.5))
-                            .text_color(theme.muted_foreground.opacity(0.35))
-                            .child(format!("{known_models}")),
                     )
-                } else {
-                    None
-                });
-
-            provider_list = provider_list.child(row);
+                    .child(
+                        div()
+                            .w(px(2.0))
+                            .h(px(14.0))
+                            .rounded(px(1.0))
+                            .bg(if is_selected {
+                                theme.primary
+                            } else {
+                                theme.transparent
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(12.0))
+                            .font_weight(if is_selected {
+                                FontWeight::MEDIUM
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(if is_selected {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .child(label),
+                    ),
+            );
         }
 
         let has_key = !self.api_key_input.read(cx).value().is_empty();
-        let has_url = !self.base_url_input.read(cx).value().is_empty();
 
-        let provider_card = card(theme).child(
-            div()
-                .px(px(16.0))
-                .py(px(14.0))
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_size(px(16.0))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(provider_name),
-                        )
-                        .child(
-                            div()
-                                .size(px(8.0))
-                                .rounded_full()
-                                .bg(if has_key {
-                                    theme.success
-                                } else {
-                                    theme.muted_foreground.opacity(0.2)
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(6.0))
-                        .text_size(px(10.5))
-                        .text_color(theme.muted_foreground.opacity(0.55))
-                        .child(if has_key { "Key set" } else { "No key" })
-                        .child("·")
-                        .child(if has_url {
-                            "Custom endpoint"
-                        } else {
-                            "Default endpoint"
-                        })
-                        .child("·")
-                        .child(if models.is_empty() {
-                            "Custom model"
-                        } else {
-                            "Known models"
-                        }),
-                ),
-        );
-
-        let mut model_card_content = card(theme).child(
-            div()
-                .px(px(16.0))
-                .py(px(14.0))
-                .flex()
-                .flex_col()
-                .gap(px(10.0))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Model"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(theme.muted_foreground.opacity(0.6))
-                                .child("Leave blank to use the provider's default model."),
-                        ),
-                )
-                .child(Input::new(&model_input)),
-        );
+        // ── Model card with input + optional dropdown list ──
+        let mut model_card_content = card(theme)
+            .child(
+                div()
+                    .px(px(14.0))
+                    .py(px(12.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Model"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(
+                                        div()
+                                            .size(px(6.0))
+                                            .rounded_full()
+                                            .bg(if has_key {
+                                                theme.success
+                                            } else {
+                                                theme.muted_foreground.opacity(0.2)
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .text_color(theme.muted_foreground.opacity(0.45))
+                                            .child(if has_key { "Ready" } else { "No key" }),
+                                    ),
+                            ),
+                    )
+                    .child(Input::new(&model_input)),
+            );
 
         if !models.is_empty() {
-            let mut chips = div()
+            // Model list — clean vertical list instead of wrapping chips
+            let mut model_list = div()
                 .flex()
-                .flex_wrap()
-                .gap(px(4.0))
-                .px(px(16.0))
-                .pb(px(14.0));
+                .flex_col()
+                .px(px(4.0))
+                .pb(px(6.0));
 
             for model in models {
                 let model_name = model.to_string();
                 let model_clone = model_name.clone();
                 let is_active = current_model == model_name;
-                chips = chips.child(
-                    Button::new(SharedString::from(format!("model-{model_name}")))
-                        .label(model_name)
-                        .small()
-                        .ghost()
-                        .selected(is_active)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.model_input.update(cx, |s, cx| {
-                                s.set_value(&model_clone, window, cx);
-                            });
-                            cx.notify();
-                        })),
+                model_list = model_list.child(
+                    div()
+                        .id(SharedString::from(format!("model-{model_name}")))
+                        .h(px(28.0))
+                        .px(px(10.0))
+                        .flex()
+                        .items_center()
+                        .rounded(px(6.0))
+                        .cursor_pointer()
+                        .text_size(px(11.5))
+                        .font_family("Ioskeley Mono")
+                        .bg(if is_active {
+                            theme.primary.opacity(0.08)
+                        } else {
+                            theme.transparent
+                        })
+                        .text_color(if is_active {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground.opacity(0.7)
+                        })
+                        .font_weight(if is_active {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .hover(|s| s.bg(theme.muted.opacity(0.06)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.model_input.update(cx, |s, cx| {
+                                    s.set_value(&model_clone, window, cx);
+                                });
+                                cx.notify();
+                            }),
+                        )
+                        .child(model_name)
+                        .children(if is_active {
+                            Some(
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .justify_end()
+                                    .child(
+                                        svg()
+                                            .path("phosphor/check.svg")
+                                            .size(px(12.0))
+                                            .text_color(theme.primary),
+                                    ),
+                            )
+                        } else {
+                            None
+                        }),
                 );
             }
-            model_card_content = model_card_content.child(chips);
+            model_card_content = model_card_content.child(model_list);
         }
 
         let right_col = div()
             .flex()
             .flex_col()
             .flex_1()
-            .gap(px(14.0))
-            .child(provider_card)
+            .gap(px(12.0))
             .child(model_card_content)
             .child(
                 card(theme).child(
                     div()
-                        .px(px(16.0))
-                        .py(px(16.0))
+                        .px(px(14.0))
+                        .py(px(12.0))
                         .flex()
                         .flex_col()
-                        .gap(px(14.0))
+                        .gap(px(12.0))
                         .child(
                             div()
                                 .text_sm()
@@ -1530,13 +1522,13 @@ impl SettingsPanel {
                         )
                         .child(stacked_input_field(
                             "API Key",
-                            "Paste a key directly, or enter an env var like ANTHROPIC_API_KEY.",
+                            "Paste a key or an env var name like ANTHROPIC_API_KEY",
                             &api_key_input,
                             theme,
                         ))
                         .child(stacked_input_field(
                             "Base URL",
-                            "Leave blank to use the provider's default endpoint.",
+                            "Leave blank for the default endpoint",
                             &base_url_input,
                             theme,
                         )),
@@ -1545,38 +1537,38 @@ impl SettingsPanel {
             .child(
                 card(theme).child(
                     div()
-                        .px(px(16.0))
-                        .py(px(16.0))
+                        .px(px(14.0))
+                        .py(px(12.0))
                         .flex()
                         .flex_col()
-                        .gap(px(14.0))
+                        .gap(px(12.0))
                         .child(
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
-                                .child("Advanced"),
+                                .child("Tuning"),
                         )
                         .child(stacked_input_field(
                             "Max Tokens",
-                            "Optional per-provider ceiling for generated tokens.",
+                            "Per-provider ceiling for generated tokens",
                             &max_tokens_input,
                             theme,
                         ))
                         .child(stacked_input_field(
                             "Max Turns",
-                            "How many tool-use turns the agent can take before it must stop.",
+                            "How many tool-use turns before the agent must stop",
                             &max_turns_input,
                             theme,
                         ))
                         .child(stacked_input_field(
                             "Temperature",
-                            "Leave blank for the provider default. Lower is steadier; higher is looser.",
+                            "Blank for default — lower is steadier, higher is looser",
                             &temperature_input,
                             theme,
                         ))
                         .child(stacked_input_field(
                             "Suggestion Model",
-                            "Optional lightweight model for shell suggestions. Blank means reuse the main model.",
+                            "Optional lightweight model for shell suggestions",
                             &suggestion_model_input,
                             theme,
                         )),
@@ -1586,17 +1578,14 @@ impl SettingsPanel {
         let provider_column = div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
-            .w(px(196.0))
+            .gap(px(6.0))
+            .w(px(180.0))
             .flex_shrink_0()
-            .child(group_label("Provider", &theme))
             .child(
                 card(theme).child(
                     div()
-                        .px(px(6.0))
-                        .py(px(6.0))
-                        .flex()
-                        .flex_col()
+                        .px(px(4.0))
+                        .py(px(4.0))
                         .child(provider_list),
                 ),
             );

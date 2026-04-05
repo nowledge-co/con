@@ -234,7 +234,7 @@ impl InputBar {
             .count()
             .clamp(1, 6);
 
-        px(68.0 + (rows.saturating_sub(1) as f32 * 20.0))
+        px(56.0 + (rows.saturating_sub(1) as f32 * 20.0))
     }
 
     pub fn cycle_mode(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -285,43 +285,40 @@ impl Render for InputBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let has_multiple_panes = self.panes.len() > 1;
-        let cwd = self.cwd.clone();
+        let has_text = !self.input_state.read(cx).value().trim().is_empty();
 
-        let mode_label = self.mode.label().to_string();
         let mode_tint = self.mode.tint(cx);
 
-        // ── Mode badge — inline compact pill ──
-        let mode_button = div()
+        // ── Mode prefix — minimal, inline ──
+        let mode_prefix = div()
             .id("mode-toggle")
             .flex()
             .items_center()
-            .gap(px(4.0))
-            .h(px(22.0))
-            .px(px(7.0))
-            .rounded(px(5.0))
+            .h(px(24.0))
+            .px(px(8.0))
+            .rounded(px(6.0))
             .cursor_pointer()
-            .bg(mode_tint.opacity(0.10))
-            .hover(|s| s.bg(mode_tint.opacity(0.18)))
+            .bg(mode_tint.opacity(0.08))
+            .hover(|s| s.bg(mode_tint.opacity(0.14)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.cycle_mode(window, cx);
                 }),
             )
-            .child(div().size(px(4.0)).rounded_full().bg(mode_tint))
             .child(
                 div()
-                    .text_size(px(10.5))
+                    .text_size(px(11.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(mode_tint)
-                    .child(mode_label),
+                    .child(self.mode.label().to_string()),
             );
 
-        // ── Pane selector — shown only with multiple panes ──
+        // ── Pane pills — compact row above input, only with >1 pane ──
         let all_selected =
             !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len();
-        let pane_area = if has_multiple_panes {
-            let mut pills = div().flex().items_center().gap(px(1.0));
+        let pane_row = if has_multiple_panes {
+            let mut pills = div().flex().items_center().gap(px(2.0));
 
             for pane in &self.panes {
                 let pane_id = pane.id;
@@ -342,111 +339,105 @@ impl Render for InputBar {
                 };
 
                 let label = if let Some(host) = &pane.hostname {
-                    if host.len() > 12 {
-                        format!("{}…", &host[..10])
+                    if host.len() > 10 {
+                        format!("{}…", &host[..8])
                     } else {
                         host.clone()
                     }
-                } else if pane.name.len() > 14 {
-                    format!("{}…", &pane.name[..12])
+                } else if pane.name.len() > 12 {
+                    format!("{}…", &pane.name[..10])
                 } else {
                     pane.name.clone()
                 };
 
-                let pill = div()
-                    .id(SharedString::from(format!("pane-sel-{pane_id}")))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .h(px(22.0))
-                    .px(px(7.0))
-                    .rounded(px(5.0))
-                    .text_size(px(10.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .cursor_pointer()
-                    .bg(if is_target {
-                        theme.background.opacity(0.8)
-                    } else {
-                        theme.transparent
-                    })
-                    .text_color(if is_target {
-                        theme.foreground
-                    } else {
-                        theme.muted_foreground.opacity(0.5)
-                    })
-                    .hover(|s| {
-                        if is_target {
-                            s
+                pills = pills.child(
+                    div()
+                        .id(SharedString::from(format!("pane-sel-{pane_id}")))
+                        .flex()
+                        .items_center()
+                        .gap(px(3.0))
+                        .h(px(20.0))
+                        .px(px(6.0))
+                        .rounded(px(4.0))
+                        .text_size(px(10.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .cursor_pointer()
+                        .bg(if is_target {
+                            theme.muted.opacity(0.14)
                         } else {
-                            s.bg(theme.muted.opacity(0.08))
-                        }
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.toggle_pane_selection(pane_id, cx);
-                        }),
-                    )
-                    .child(div().size(px(5.0)).rounded_full().bg(dot_color))
-                    .child(label);
-
-                pills = pills.child(pill);
+                            theme.transparent
+                        })
+                        .text_color(if is_target {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground.opacity(0.4)
+                        })
+                        .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                this.toggle_pane_selection(pane_id, cx);
+                            }),
+                        )
+                        .child(div().size(px(4.0)).rounded_full().bg(dot_color))
+                        .child(label),
+                );
             }
 
-            let all_btn = div()
-                .id("pane-sel-all")
-                .flex()
-                .items_center()
-                .justify_center()
-                .h(px(22.0))
-                .px(px(6.0))
-                .rounded(px(5.0))
-                .text_size(px(9.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .cursor_pointer()
-                .bg(if all_selected {
-                    theme.primary.opacity(0.12)
-                } else {
-                    theme.transparent
-                })
-                .text_color(if all_selected {
-                    theme.primary
-                } else {
-                    theme.muted_foreground.opacity(0.35)
-                })
-                .hover(|s| s.bg(theme.muted.opacity(0.08)))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        this.toggle_select_all(cx);
-                    }),
-                )
-                .child("All");
-
-            Some(
+            pills = pills.child(
                 div()
+                    .id("pane-sel-all")
                     .flex()
                     .items_center()
-                    .gap(px(1.0))
-                    .child(pills)
-                    .child(all_btn),
-            )
+                    .justify_center()
+                    .h(px(20.0))
+                    .px(px(5.0))
+                    .rounded(px(4.0))
+                    .text_size(px(9.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .cursor_pointer()
+                    .text_color(if all_selected {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground.opacity(0.3)
+                    })
+                    .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.toggle_select_all(cx);
+                        }),
+                    )
+                    .child("All"),
+            );
+
+            Some(pills)
         } else {
             None
         };
 
-        // ── Send button ──
+        // ── Send button — inside container, right edge ──
         let send_button = div()
             .id("send-button")
             .flex()
             .items_center()
             .justify_center()
-            .size(px(26.0))
-            .rounded(px(13.0))
+            .size(px(24.0))
+            .rounded(px(12.0))
             .cursor_pointer()
-            .bg(theme.primary)
-            .hover(|s| s.bg(theme.primary_hover))
             .flex_shrink_0()
+            .bg(if has_text {
+                theme.primary
+            } else {
+                theme.muted.opacity(0.12)
+            })
+            .hover(|s| {
+                if has_text {
+                    s.bg(theme.primary_hover)
+                } else {
+                    s.bg(theme.muted.opacity(0.18))
+                }
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _, _, cx| {
@@ -456,8 +447,12 @@ impl Render for InputBar {
             .child(
                 svg()
                     .path("phosphor/arrow-up.svg")
-                    .size(px(13.0))
-                    .text_color(theme.primary_foreground),
+                    .size(px(12.0))
+                    .text_color(if has_text {
+                        theme.primary_foreground
+                    } else {
+                        theme.muted_foreground.opacity(0.4)
+                    }),
             );
 
         // ── Main layout ──
@@ -467,7 +462,7 @@ impl Render for InputBar {
             .bg(theme.title_bar)
             .font_family(".SystemUIFont")
             .text_size(px(13.0))
-            // Intercept Tab BEFORE InputState's IndentInline binding
+            // Intercept Tab
             .on_action(cx.listener(|this, _: &gpui_component::input::IndentInline, window, cx| {
                 let matches = this.filtered_skills(cx);
                 if !matches.is_empty() {
@@ -507,42 +502,31 @@ impl Render for InputBar {
                     _ => {}
                 }
             }))
-            // ── Input row ──
+            // ── Container ──
             .child(
                 div()
-                    .flex()
-                    .items_end()
-                    .gap(px(6.0))
                     .px(px(8.0))
-                    .py(px(6.0))
-                    // Input container — single unified row
+                    .pt(px(6.0))
+                    .pb(px(6.0))
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .flex_1()
-                            .min_h(px(34.0))
-                            .pl(px(6.0))
-                            .pr(px(8.0))
-                            .py(px(5.0))
-                            .rounded(px(10.0))
+                            .rounded(px(12.0))
                             .bg(theme.background.opacity(0.76))
-                            // Pane selector row — only when multiple panes
-                            .children(pane_area.map(|area| {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.0))
-                                    .pb(px(4.0))
-                                    .child(area)
+                            .px(px(6.0))
+                            .py(px(6.0))
+                            // Pane pills — above input when multiple panes
+                            .children(pane_row.map(|row| {
+                                div().pb(px(4.0)).child(row)
                             }))
-                            // Main row: mode badge + input + cwd
+                            // Input row: mode + field + send
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap(px(5.0))
-                                    .child(mode_button)
+                                    .gap(px(4.0))
+                                    .child(mode_prefix)
                                     .child(
                                         div()
                                             .flex_1()
@@ -554,49 +538,9 @@ impl Render for InputBar {
                                                     .cleanable(false),
                                             ),
                                     )
-                                    .child(
-                                        div()
-                                            .text_size(px(9.5))
-                                            .text_color(theme.muted_foreground.opacity(0.28))
-                                            .font_family("Ioskeley Mono")
-                                            .flex_shrink_0()
-                                            .child(cwd),
-                                    ),
+                                    .child(send_button),
                             ),
-                    )
-                    // Send button
-                    .child(send_button),
-            )
-            // ── Footer hints — minimal ──
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .h(px(16.0))
-                    .px(px(14.0))
-                    .pb(px(3.0))
-                    .gap(px(8.0))
-                    .text_size(px(9.5))
-                    .text_color(theme.muted_foreground.opacity(0.22))
-                    .child(hint_kbd("⇥", "mode"))
-                    .child(hint_kbd("/", "skill"))
-                    .child(hint_kbd("⇧↵", "line"))
-                    .child(hint_kbd("↵", "send")),
+                    ),
             )
     }
-}
-
-/// Render a keyboard hint: key + label pair
-fn hint_kbd(key: &str, label: &str) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(3.0))
-        .child(
-            div()
-                .font_weight(FontWeight::MEDIUM)
-                .child(key.to_string()),
-        )
-        .child(label.to_string())
 }
