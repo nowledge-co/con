@@ -4,6 +4,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::clipboard::Clipboard;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::spinner::Spinner;
 use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{ActiveTheme, Icon, Sizable as _};
 
@@ -2027,10 +2028,20 @@ impl Render for AgentPanel {
         }
 
         // ── Header ──────────────────────────────────────────────
-        let status_dot_color = match self.state.status {
-            AgentStatus::Idle => theme.muted_foreground.opacity(0.3),
-            AgentStatus::Thinking => theme.warning,
-            AgentStatus::Responding => theme.success,
+        let status_indicator = match self.state.status {
+            AgentStatus::Idle => div()
+                .size(px(6.0))
+                .rounded_full()
+                .bg(theme.muted_foreground.opacity(0.3))
+                .into_any_element(),
+            AgentStatus::Thinking => Spinner::new()
+                .small()
+                .color(theme.warning)
+                .into_any_element(),
+            AgentStatus::Responding => Spinner::new()
+                .small()
+                .color(theme.success)
+                .into_any_element(),
         };
 
         // Model label — show short name (e.g. "claude-sonnet-4-6" → "Sonnet 4.6")
@@ -2055,8 +2066,8 @@ impl Render for AgentPanel {
                     .text_color(theme.foreground.opacity(0.7))
                     .child(model_display),
             )
-            // Status dot — animated when active
-            .child(div().size(px(6.0)).rounded_full().bg(status_dot_color));
+            // Status indicator — idle dot, spinner when actively thinking/responding
+            .child(status_indicator);
 
         // Auto-approve badge
         if self.auto_approve {
