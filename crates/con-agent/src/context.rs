@@ -1,5 +1,173 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneMode {
+    Shell,
+    Multiplexer,
+    Tui,
+    Unknown,
+}
+
+impl PaneMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Multiplexer => "multiplexer",
+            Self::Tui => "tui",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+fn looks_like_tmux_command(command: &str) -> bool {
+    let trimmed = command.trim_start();
+    trimmed == "tmux"
+        || trimmed.starts_with("tmux ")
+        || trimmed == "tmate"
+        || trimmed.starts_with("tmate ")
+}
+
+fn title_looks_like_tmux(title: &str) -> bool {
+    let title_lower = title.to_ascii_lowercase();
+    title_lower.contains("tmux") || title_lower.contains("tmate")
+}
+
+fn line_looks_like_tmux_status(line: &str) -> bool {
+    let line = line.trim();
+    if line.is_empty() {
+        return false;
+    }
+
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let colon_windows = tokens
+        .iter()
+        .filter(|token| {
+            token
+                .split_once(':')
+                .is_some_and(|(idx, _)| !idx.is_empty() && idx.chars().all(|c| c.is_ascii_digit()))
+        })
+        .count();
+    if colon_windows >= 2 {
+        return true;
+    }
+
+    let numbered_windows = tokens
+        .windows(2)
+        .filter(|pair| {
+            pair[0]
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '*' || c == '-')
+                && pair[1]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        })
+        .count();
+    numbered_windows >= 2
+}
+
+fn looks_like_dense_fullscreen_ui(recent_output: &[String]) -> bool {
+    if recent_output.len() < 8 {
+        return false;
+    }
+
+    let non_empty = recent_output
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    if non_empty * 10 < recent_output.len() * 7 {
+        return false;
+    }
+
+    let has_box_drawing = recent_output.iter().any(|line| {
+        line.chars().any(|c| {
+            matches!(
+                c,
+                '│' | '─' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼'
+            )
+        })
+    });
+
+    has_box_drawing
+        || recent_output
+            .last()
+            .is_some_and(|line| line_looks_like_tmux_status(line))
+}
+
+pub fn detect_tmux_session(
+    title: Option<&str>,
+    last_command: Option<&str>,
+    recent_output: &[String],
+) -> Option<String> {
+    if let Some(command) = last_command {
+        if looks_like_tmux_command(command) {
+            let tokens: Vec<&str> = command.split_whitespace().collect();
+            for window in tokens.windows(2) {
+                if window[0] == "-t" {
+                    return Some(window[1].trim_matches(&['"', '\''][..]).to_string());
+                }
+                if let Some(rest) = window[0].strip_prefix("-t") {
+                    if !rest.is_empty() {
+                        return Some(rest.trim_matches(&['"', '\''][..]).to_string());
+                    }
+                }
+            }
+            return Some("attached".to_string());
+        }
+    }
+
+    if let Some(title) = title.filter(|t| title_looks_like_tmux(t)) {
+        let trimmed = title.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if recent_output
+        .last()
+        .is_some_and(|line| line_looks_like_tmux_status(line))
+    {
+        return Some("visible".to_string());
+    }
+
+    None
+}
+
+pub fn infer_pane_mode(
+    title: Option<&str>,
+    recent_output: &[String],
+    last_command: Option<&str>,
+    has_shell_integration: bool,
+    is_alt_screen: bool,
+) -> PaneMode {
+    if detect_tmux_session(title, last_command, recent_output).is_some() {
+        return PaneMode::Multiplexer;
+    }
+
+    if is_alt_screen || looks_like_dense_fullscreen_ui(recent_output) {
+        return PaneMode::Tui;
+    }
+
+    if has_shell_integration || last_command.is_some() {
+        return PaneMode::Shell;
+    }
+
+    PaneMode::Unknown
+}
+
+pub fn shell_metadata_is_fresh(
+    mode: PaneMode,
+    has_shell_integration: bool,
+    last_command: Option<&str>,
+    cwd: Option<&str>,
+) -> bool {
+    if mode != PaneMode::Shell {
+        return false;
+    }
+
+    has_shell_integration || last_command.is_some() || cwd.is_some()
+}
+
 /// Terminal context extracted for the AI agent.
 /// This is what makes con's agent smarter than a generic chatbot —
 /// it always knows what the user is doing in their terminal.
@@ -9,6 +177,14 @@ pub struct TerminalContext {
     pub focused_pane_index: usize,
     /// Remote hostname of the focused pane (None if local)
     pub focused_hostname: Option<String>,
+    /// Focused pane title if available.
+    pub focused_title: Option<String>,
+    /// Whether the focused pane looks like a shell, multiplexer, or TUI.
+    pub focused_pane_mode: PaneMode,
+    /// Whether shell integration has been observed for the focused pane.
+    pub focused_has_shell_integration: bool,
+    /// Whether shell-derived metadata such as cwd and last_command should be treated as fresh.
+    pub focused_shell_metadata_fresh: bool,
     /// Current working directory (from OSC 7 or manual detection)
     pub cwd: Option<String>,
     /// Last N lines of terminal output
@@ -54,6 +230,11 @@ pub struct PaneSummary {
     pub pane_index: usize,
     /// Remote hostname if this is an SSH session, None if local.
     pub hostname: Option<String>,
+    pub title: Option<String>,
+    pub mode: PaneMode,
+    pub has_shell_integration: bool,
+    pub shell_metadata_fresh: bool,
+    pub tmux_session: Option<String>,
     pub cwd: Option<String>,
     pub last_command: Option<String>,
     pub last_exit_code: Option<i32>,
@@ -67,6 +248,10 @@ impl TerminalContext {
         Self {
             focused_pane_index: 1,
             focused_hostname: None,
+            focused_title: None,
+            focused_pane_mode: PaneMode::Unknown,
+            focused_has_shell_integration: false,
+            focused_shell_metadata_fresh: false,
             cwd: None,
             recent_output: Vec::new(),
             last_command: None,
@@ -126,12 +311,36 @@ impl TerminalContext {
              - Check is_alive before executing — false means PTY exited, commands will fail.\n\
              - If is_busy is true, a command is already running — wait or use a different pane.\n\
              - On SSH panes (hostname != null): commands execute on the REMOTE host, not locally.\n\
+             - When pane mode is not `shell`, or shell metadata is marked stale, do NOT assume cwd/hostname/last_command describe the visible app.\n\
+             - For tmux, vim, htop, dashboards, and other TUIs: inspect the pane with read_pane/list_panes/send_keys before making claims.\n\
              - If a command fails (exit_code != 0), diagnose the error before retrying.\n\
              - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
              </safety>\n\n",
         );
 
         prompt.push_str("<terminal_context>\n");
+        prompt.push_str(&format!(
+            "<focused_pane index=\"{}\" mode=\"{}\" shell_integration=\"{}\" shell_metadata_fresh=\"{}\"",
+            self.focused_pane_index,
+            self.focused_pane_mode.as_str(),
+            self.focused_has_shell_integration,
+            self.focused_shell_metadata_fresh,
+        ));
+        if let Some(host) = &self.focused_hostname {
+            prompt.push_str(&format!(" host=\"{}\"", host));
+        }
+        if let Some(title) = &self.focused_title {
+            prompt.push_str(&format!(" title=\"{}\"", title));
+        }
+        if let Some(cwd) = &self.cwd {
+            prompt.push_str(&format!(" cwd=\"{}\"", cwd));
+        }
+        prompt.push_str("/>\n");
+        if !self.focused_shell_metadata_fresh {
+            prompt.push_str(
+                "<metadata_warning>Shell-derived metadata may be stale for the visible app in this pane. Prefer live pane inspection.</metadata_warning>\n",
+            );
+        }
 
         let total_panes = 1 + self.other_panes.len();
 
@@ -143,17 +352,37 @@ impl TerminalContext {
             let host_label = self.focused_hostname.as_deref().unwrap_or("local");
             let cwd_label = self.cwd.as_deref().unwrap_or("?");
             prompt.push_str(&format!(
-                "  <pane index=\"{}\" focused=\"true\" host=\"{}\" cwd=\"{}\"/>\n",
-                self.focused_pane_index, host_label, cwd_label
+                "  <pane index=\"{}\" focused=\"true\" host=\"{}\" cwd=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\"/>\n",
+                self.focused_pane_index,
+                host_label,
+                cwd_label,
+                self.focused_pane_mode.as_str(),
+                self.focused_shell_metadata_fresh
             ));
             // Other panes
             for pane in &self.other_panes {
                 let host = pane.hostname.as_deref().unwrap_or("local");
                 let cwd = pane.cwd.as_deref().unwrap_or("?");
                 let busy = if pane.is_busy { " busy=\"true\"" } else { "" };
+                let stale = if pane.shell_metadata_fresh {
+                    " shell_metadata_fresh=\"true\""
+                } else {
+                    " shell_metadata_fresh=\"false\""
+                };
+                let tmux = pane
+                    .tmux_session
+                    .as_deref()
+                    .map(|session| format!(" tmux=\"{}\"", session))
+                    .unwrap_or_default();
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" host=\"{}\" cwd=\"{}\"{}/>\n",
-                    pane.pane_index, host, cwd, busy
+                    "  <pane index=\"{}\" host=\"{}\" cwd=\"{}\" mode=\"{}\"{}{}{}/>\n",
+                    pane.pane_index,
+                    host,
+                    cwd,
+                    pane.mode.as_str(),
+                    busy,
+                    stale,
+                    tmux
                 ));
             }
             prompt.push_str("</panes>\n");
@@ -244,5 +473,38 @@ impl TerminalContext {
         }
 
         prompt
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PaneMode, detect_tmux_session, infer_pane_mode, shell_metadata_is_fresh};
+
+    #[test]
+    fn detects_tmux_from_command_target() {
+        let session = detect_tmux_session(None, Some("tmux attach -t model-serving"), &Vec::new());
+        assert_eq!(session.as_deref(), Some("model-serving"));
+    }
+
+    #[test]
+    fn infers_tmux_from_status_line() {
+        let recent = vec![
+            "nvtop 1.4.1".to_string(),
+            "0* 63d 1m 45m 1 model-serving 2 ops 3 nekomaster".to_string(),
+        ];
+        assert_eq!(
+            infer_pane_mode(None, &recent, None, false, false),
+            PaneMode::Multiplexer
+        );
+    }
+
+    #[test]
+    fn shell_metadata_is_stale_inside_tui() {
+        assert!(!shell_metadata_is_fresh(
+            PaneMode::Tui,
+            true,
+            Some("top"),
+            Some("/tmp"),
+        ));
     }
 }

@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use con_agent::context::{PaneMode, detect_tmux_session, infer_pane_mode, shell_metadata_is_fresh};
 use con_terminal::{Grid, TerminalTheme};
 use gpui::*;
 use parking_lot::Mutex;
@@ -21,6 +22,15 @@ pub enum TerminalPane {
     Legacy(Entity<TerminalView>),
     #[cfg(target_os = "macos")]
     Ghostty(Entity<GhosttyView>),
+}
+
+#[derive(Debug, Clone)]
+pub struct PaneAgentMetadata {
+    pub title: Option<String>,
+    pub mode: PaneMode,
+    pub has_shell_integration: bool,
+    pub shell_metadata_fresh: bool,
+    pub tmux_session: Option<String>,
 }
 
 impl Clone for TerminalPane {
@@ -73,6 +83,26 @@ impl TerminalPane {
             Self::Legacy(e) => e.read(cx).grid().lock().is_busy(),
             #[cfg(target_os = "macos")]
             Self::Ghostty(e) => e.read(cx).terminal().map(|t| t.is_busy()).unwrap_or(false),
+        }
+    }
+
+    pub fn has_shell_integration(&self, cx: &App) -> bool {
+        match self {
+            Self::Legacy(e) => e.read(cx).grid().lock().last_prompt_row.is_some(),
+            #[cfg(target_os = "macos")]
+            Self::Ghostty(e) => e
+                .read(cx)
+                .terminal()
+                .map(|t| t.current_dir().is_some() || !t.command_history().is_empty())
+                .unwrap_or(false),
+        }
+    }
+
+    pub fn is_alt_screen(&self, cx: &App) -> bool {
+        match self {
+            Self::Legacy(e) => e.read(cx).grid().lock().is_alt_screen(),
+            #[cfg(target_os = "macos")]
+            Self::Ghostty(_) => false,
         }
     }
 
@@ -287,6 +317,36 @@ impl TerminalPane {
                 .read(cx)
                 .terminal()
                 .and_then(|t| t.last_command_duration()),
+        }
+    }
+
+    pub fn agent_metadata(&self, cx: &App) -> PaneAgentMetadata {
+        let title = self.title(cx);
+        let recent_output = self.content_lines(12, cx);
+        let last_command = self.last_command(cx);
+        let cwd = self.current_dir(cx);
+        let has_shell_integration = self.has_shell_integration(cx);
+        let mode = infer_pane_mode(
+            title.as_deref(),
+            &recent_output,
+            last_command.as_deref(),
+            has_shell_integration,
+            self.is_alt_screen(cx),
+        );
+        let tmux_session =
+            detect_tmux_session(title.as_deref(), last_command.as_deref(), &recent_output);
+
+        PaneAgentMetadata {
+            title,
+            mode,
+            has_shell_integration,
+            shell_metadata_fresh: shell_metadata_is_fresh(
+                mode,
+                has_shell_integration,
+                last_command.as_deref(),
+                cwd.as_deref(),
+            ),
+            tmux_session,
         }
     }
 

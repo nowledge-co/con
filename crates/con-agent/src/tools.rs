@@ -4,6 +4,8 @@ use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::context::PaneMode;
+
 /// Error type for agent tool execution
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -681,6 +683,12 @@ pub struct PaneInfo {
     pub is_alive: bool,
     /// Hostname from OSC 7 URI — differs from local hostname for SSH sessions.
     pub hostname: Option<String>,
+    /// Current pane mode: shell, tmux-like multiplexer, or another TUI.
+    pub mode: PaneMode,
+    /// Whether shell metadata like cwd and last_command is likely fresh for the visible app.
+    pub shell_metadata_fresh: bool,
+    /// tmux session hint when detected from the pane itself.
+    pub tmux_session: Option<String>,
     /// Whether shell integration (OSC 133) is active.
     pub has_shell_integration: bool,
     /// Last command executed (from OSC 133 tracking).
@@ -751,7 +759,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, and whether it's focused. Use this to discover what the user has open before reading specific panes.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, pane mode, host, and whether shell metadata is fresh. Use this before inspecting tmux/TUI panes so you do not over-trust stale cwd or command metadata.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}

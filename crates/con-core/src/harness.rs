@@ -234,6 +234,11 @@ impl AgentHarness {
         cwd: Option<&str>,
         focused_pane_index: usize,
         focused_hostname: Option<String>,
+        focused_title: Option<String>,
+        focused_pane_mode: con_agent::context::PaneMode,
+        focused_has_shell_integration: bool,
+        focused_shell_metadata_fresh: bool,
+        tmux_session: Option<String>,
         other_panes: Vec<con_agent::context::PaneSummary>,
     ) -> TerminalContext {
         let recent_output = grid.content_lines(50);
@@ -244,30 +249,6 @@ impl AgentHarness {
         let agents_md = cwd.as_ref().and_then(|dir| {
             let agents_path = Path::new(dir).join("AGENTS.md");
             std::fs::read_to_string(&agents_path).ok()
-        });
-
-        // Parse SSH_CONNECTION for remote host IP (format: "client_ip client_port server_ip server_port")
-        let ssh_host = std::env::var("SSH_CONNECTION")
-            .ok()
-            .and_then(|val| val.split_whitespace().next().map(|s| s.to_string()));
-
-        // Parse TMUX for session name (format: "/tmp/tmux-uid/default,pid,index")
-        let tmux_session = std::env::var("TMUX").ok().and_then(|val| {
-            // Get the session name via tmux command, falling back to socket path parsing
-            std::process::Command::new("tmux")
-                .args(["display-message", "-p", "#S"])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .or_else(|| {
-                    // Fallback: extract from socket path
-                    val.split(',').next().and_then(|path| {
-                        std::path::Path::new(path)
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                    })
-                })
         });
 
         let git_branch = cwd.as_ref().and_then(|dir| {
@@ -376,9 +357,15 @@ impl AgentHarness {
             }
         });
 
+        let ssh_host = focused_hostname.clone();
+
         TerminalContext {
             focused_pane_index,
             focused_hostname,
+            focused_title,
+            focused_pane_mode,
+            focused_has_shell_integration,
+            focused_shell_metadata_fresh,
             cwd,
             recent_output,
             last_command: grid.last_command.clone(),
@@ -407,6 +394,11 @@ impl AgentHarness {
         is_busy: bool,
         focused_pane_index: usize,
         focused_hostname: Option<String>,
+        focused_title: Option<String>,
+        focused_pane_mode: con_agent::context::PaneMode,
+        focused_has_shell_integration: bool,
+        focused_shell_metadata_fresh: bool,
+        tmux_session: Option<String>,
         other_panes: Vec<con_agent::context::PaneSummary>,
     ) -> TerminalContext {
         let _ = is_busy; // available for future use
@@ -414,26 +406,6 @@ impl AgentHarness {
         let agents_md = cwd.as_ref().and_then(|dir| {
             let agents_path = Path::new(dir).join("AGENTS.md");
             std::fs::read_to_string(&agents_path).ok()
-        });
-
-        let ssh_host = std::env::var("SSH_CONNECTION")
-            .ok()
-            .and_then(|val| val.split_whitespace().next().map(|s| s.to_string()));
-
-        let tmux_session = std::env::var("TMUX").ok().and_then(|val| {
-            std::process::Command::new("tmux")
-                .args(["display-message", "-p", "#S"])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .or_else(|| {
-                    val.split(',').next().and_then(|path| {
-                        std::path::Path::new(path)
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                    })
-                })
         });
 
         let git_branch = cwd.as_ref().and_then(|dir| {
@@ -522,9 +494,15 @@ impl AgentHarness {
             }
         });
 
+        let ssh_host = focused_hostname.clone();
+
         TerminalContext {
             focused_pane_index,
             focused_hostname,
+            focused_title,
+            focused_pane_mode,
+            focused_has_shell_integration,
+            focused_shell_metadata_fresh,
             cwd,
             recent_output: recent_output.to_vec(),
             last_command,

@@ -7,8 +7,8 @@ const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, InlineInputSubmit,
-    InlineSkillAutocompleteChanged,
-    LoadConversation, NewConversation, PanelState, RerunFromMessage,
+    InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
+    RerunFromMessage,
 };
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{
@@ -279,8 +279,12 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_inline_input_submit)
             .detach();
-        cx.subscribe_in(&agent_panel, window, Self::on_inline_skill_autocomplete_changed)
-            .detach();
+        cx.subscribe_in(
+            &agent_panel,
+            window,
+            Self::on_inline_skill_autocomplete_changed,
+        )
+        .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_cancel_request)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_enable_auto_approve)
@@ -447,6 +451,7 @@ impl ConWorkspace {
             .map(|(i, _)| i + 1)
             .unwrap_or(1);
         let focused_hostname = focused.detected_remote_host(cx);
+        let focused_meta = focused.agent_metadata(cx);
 
         let mut other_pane_summaries = Vec::new();
         if pane_tree.pane_count() > 1 {
@@ -455,9 +460,15 @@ impl ConWorkspace {
                     if pid == focused_pid {
                         continue;
                     }
+                    let meta = terminal.agent_metadata(cx);
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
                         hostname: terminal.detected_remote_host(cx),
+                        title: meta.title,
+                        mode: meta.mode,
+                        has_shell_integration: meta.has_shell_integration,
+                        shell_metadata_fresh: meta.shell_metadata_fresh,
+                        tmux_session: meta.tmux_session,
                         cwd: terminal.current_dir(cx),
                         last_command: terminal.last_command(cx),
                         last_exit_code: terminal.last_exit_code(cx),
@@ -475,6 +486,11 @@ impl ConWorkspace {
                 None,
                 focused_pane_index,
                 focused_hostname,
+                focused_meta.title,
+                focused_meta.mode,
+                focused_meta.has_shell_integration,
+                focused_meta.shell_metadata_fresh,
+                focused_meta.tmux_session,
                 other_pane_summaries,
             )
         } else {
@@ -488,6 +504,11 @@ impl ConWorkspace {
                 focused.is_busy(cx),
                 focused_pane_index,
                 focused_hostname,
+                focused_meta.title,
+                focused_meta.mode,
+                focused_meta.has_shell_integration,
+                focused_meta.shell_metadata_fresh,
+                focused_meta.tmux_session,
                 other_pane_summaries,
             )
         }
@@ -1205,21 +1226,12 @@ impl ConWorkspace {
                     .enumerate()
                     .map(|(idx, terminal)| {
                         let pid = pane_tree.pane_id_for_terminal(terminal).unwrap_or(idx);
-                        let title = terminal
-                            .title(cx)
+                        let meta = terminal.agent_metadata(cx);
+                        let title = meta
+                            .title
+                            .clone()
                             .unwrap_or_else(|| format!("Pane {}", idx + 1));
                         let (cols, rows) = terminal.grid_size(cx);
-                        // Ghostty always has shell integration (COMMAND_FINISHED
-                        // action fires via OSC 133). Legacy only has it if a prompt
-                        // has been seen.
-                        let has_shell_integration = if terminal.as_grid(cx).is_some() {
-                            terminal
-                                .as_grid(cx)
-                                .map(|g| g.lock().last_prompt_row.is_some())
-                                .unwrap_or(false)
-                        } else {
-                            true // ghostty pane
-                        };
                         PaneInfo {
                             index: idx + 1,
                             title,
@@ -1229,7 +1241,10 @@ impl ConWorkspace {
                             cols,
                             is_alive: terminal.is_alive(cx),
                             hostname: terminal.detected_remote_host(cx),
-                            has_shell_integration,
+                            mode: meta.mode,
+                            shell_metadata_fresh: meta.shell_metadata_fresh,
+                            tmux_session: meta.tmux_session,
+                            has_shell_integration: meta.has_shell_integration,
                             last_command: terminal.last_command(cx),
                             last_exit_code: terminal.last_exit_code(cx),
                             is_busy: terminal.is_busy(cx),
@@ -1793,7 +1808,11 @@ impl Render for ConWorkspace {
         let has_skill_popup = !self.input_bar.read(cx).filtered_skills(cx).is_empty();
         let has_inline_skill_popup = self.agent_panel_open
             && !self.input_bar_visible
-            && !self.agent_panel.read(cx).filtered_inline_skills(cx).is_empty();
+            && !self
+                .agent_panel
+                .read(cx)
+                .filtered_inline_skills(cx)
+                .is_empty();
         let needs_ghostty_hidden = is_modal_open || has_skill_popup || has_inline_skill_popup;
 
         if self.modal_was_open && !is_modal_open {
@@ -2135,13 +2154,16 @@ impl Render for ConWorkspace {
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_input_bar(&crate::ToggleInputBar, window, cx);
                 }))
-                .child(svg().path("phosphor/square-half-bottom-fill.svg").size(px(14.0)).text_color(
-                    if self.input_bar_visible {
-                        theme.primary
-                    } else {
-                        theme.muted_foreground
-                    },
-                )),
+                .child(
+                    svg()
+                        .path("phosphor/square-half-bottom-fill.svg")
+                        .size(px(14.0))
+                        .text_color(if self.input_bar_visible {
+                            theme.primary
+                        } else {
+                            theme.muted_foreground
+                        }),
+                ),
         );
 
         // Agent panel toggle button
@@ -2160,13 +2182,16 @@ impl Render for ConWorkspace {
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
                 }))
-                .child(svg().path("phosphor/square-half-fill.svg").size(px(14.0)).text_color(
-                    if self.agent_panel_open {
-                        theme.primary
-                    } else {
-                        theme.muted_foreground
-                    },
-                )),
+                .child(
+                    svg()
+                        .path("phosphor/square-half-fill.svg")
+                        .size(px(14.0))
+                        .text_color(if self.agent_panel_open {
+                            theme.primary
+                        } else {
+                            theme.muted_foreground
+                        }),
+                ),
         );
 
         let mut root = div()

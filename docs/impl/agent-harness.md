@@ -243,4 +243,12 @@ When the focused pane is an SSH session, remote executables aren't on the local 
 
 ### Multi-pane agent context
 
-When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, and busy status. This lets the agent target the right pane(s) immediately — using `terminal_exec` with `pane_index` or `batch_exec` for parallel execution — without needing to call `list_panes` first.
+The system prompt is built from a live pane snapshot, not process-wide environment variables. For the focused pane we derive host, title, pane mode (`shell`, `multiplexer`, `tui`, `unknown`), and whether shell metadata is fresh enough to trust for the visible app.
+
+When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, mode, and shell-metadata freshness. This lets the agent target the right pane(s) immediately — using `terminal_exec` with `pane_index` or `batch_exec` for parallel execution — without needing to call `list_panes` first.
+
+This matters for SSH, tmux, and full-screen TUIs:
+
+- `ssh_host` comes from the pane's own remote-host detection, never from the app process environment.
+- `tmux_session` is inferred from the pane itself (command/title/screen hints), not from `TMUX` in the parent process.
+- When the pane mode is not `shell`, or shell metadata is stale, the prompt explicitly tells the model to inspect the live pane with `list_panes`, `read_pane`, and `send_keys` before making claims about cwd, hostname, or the running app.
