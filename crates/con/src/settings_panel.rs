@@ -4,6 +4,7 @@ use gpui::*;
 
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
+use gpui_component::kbd::Kbd;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _, input::Input};
@@ -1593,10 +1594,21 @@ impl SettingsPanel {
                 }
                 let value = this.binding_value(field).to_string();
                 let is_recording = recording.as_deref() == Some(*field);
-                let display = if is_recording {
-                    "Press shortcut...".to_string()
+                let badge = if is_recording {
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Press shortcut...")
+                        .into_any_element()
+                } else if let Ok(stroke) = Keystroke::parse(&value) {
+                    Kbd::new(stroke).outline().into_any_element()
                 } else {
-                    format_keybinding_display(&value)
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.muted_foreground)
+                        .child(value.clone())
+                        .into_any_element()
                 };
                 let field_str = field.to_string();
                 c = c.child(
@@ -1611,8 +1623,8 @@ impl SettingsPanel {
                         .child(
                             div()
                                 .id(SharedString::from(format!("key-badge-{field}")))
-                                .h(px(24.0))
-                                .px(px(9.0))
+                                .min_h(px(24.0))
+                                .px(px(6.0))
                                 .flex()
                                 .items_center()
                                 .rounded(px(5.0))
@@ -1620,17 +1632,15 @@ impl SettingsPanel {
                                 .bg(if is_recording {
                                     theme.primary.opacity(0.12)
                                 } else {
-                                    theme.muted.opacity(0.15)
+                                    theme.transparent
                                 })
-                                .text_size(px(11.5))
-                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(if is_recording {
                                     theme.primary
                                 } else {
                                     theme.muted_foreground
                                 })
                                 .hover(|s| {
-                                    s.bg(theme.primary.opacity(0.10)).text_color(theme.primary)
+                                    s.bg(theme.muted.opacity(0.08))
                                 })
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -1639,7 +1649,7 @@ impl SettingsPanel {
                                         cx.notify();
                                     }),
                                 )
-                                .child(display),
+                                .child(badge),
                         ),
                 );
             }
@@ -1671,7 +1681,7 @@ impl SettingsPanel {
                 .gap(px(8.0))
                 .child(group_label("Panes", &theme))
                 .child(pane_card)
-                .child(card(theme).child(key_row("Close Pane", "⌃D", theme))),
+                .child(card(theme).child(key_row("Close Pane", "ctrl-d", theme))),
         )
         .child(
             div()
@@ -1681,11 +1691,11 @@ impl SettingsPanel {
                 .child(group_label("Terminal", &theme))
                 .child(
                     card(theme)
-                        .child(key_row("Copy", "⌘C", theme))
+                        .child(key_row("Copy", "cmd-c", theme))
                         .child(row_separator(theme))
-                        .child(key_row("Paste", "⌘V", theme))
+                        .child(key_row("Paste", "cmd-v", theme))
                         .child(row_separator(theme))
-                        .child(key_row("Select All", "⌘A", theme)),
+                        .child(key_row("Select All", "cmd-a", theme)),
                 ),
         )
     }
@@ -2125,49 +2135,6 @@ fn keystroke_to_binding(ks: &gpui::Keystroke) -> String {
     parts.join("-")
 }
 
-/// Convert a GPUI binding string (e.g. "cmd-shift-d") to display format ("⇧⌘D").
-fn format_keybinding_display(binding: &str) -> String {
-    let parts: Vec<&str> = binding.split('-').collect();
-    if parts.is_empty() {
-        return binding.to_string();
-    }
-    let mut display = String::new();
-    // Modifier order for display: ⌃⌥⇧⌘ (standard macOS ordering)
-    let modifiers = &parts[..parts.len() - 1];
-    if modifiers.contains(&"ctrl") {
-        display.push('⌃');
-    }
-    if modifiers.contains(&"alt") {
-        display.push('⌥');
-    }
-    if modifiers.contains(&"shift") {
-        display.push('⇧');
-    }
-    if modifiers.contains(&"cmd") {
-        display.push('⌘');
-    }
-    if let Some(key) = parts.last() {
-        // Special key display names
-        let display_key = match *key {
-            "backspace" => "⌫",
-            "delete" => "⌦",
-            "enter" => "↵",
-            "tab" => "⇥",
-            "space" => "Space",
-            "up" => "↑",
-            "down" => "↓",
-            "left" => "←",
-            "right" => "→",
-            _ => "",
-        };
-        if display_key.is_empty() {
-            display.push_str(&key.to_uppercase());
-        } else {
-            display.push_str(display_key);
-        }
-    }
-    display
-}
 
 fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
     div()
@@ -2178,16 +2145,15 @@ fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
         .h(px(36.0))
         .child(div().text_sm().child(action.to_string()))
         .child(
-            div()
-                .h(px(22.0))
-                .px(px(7.0))
-                .flex()
-                .items_center()
-                .rounded(px(4.0))
-                .bg(theme.muted.opacity(0.15))
-                .text_size(px(11.0))
-                .text_color(theme.muted_foreground)
-                .child(shortcut.to_string()),
+            if let Ok(stroke) = Keystroke::parse(shortcut) {
+                Kbd::new(stroke).outline().into_any_element()
+            } else {
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme.muted_foreground)
+                    .child(shortcut.to_string())
+                    .into_any_element()
+            },
         )
 }
 
