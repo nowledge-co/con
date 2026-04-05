@@ -2,7 +2,7 @@
 
 ## Vision
 
-An open-source, cross-platform, GPU-accelerated terminal emulator that treats AI agents as first-class citizens. Think Warp's UX ambition meets Ghostty's terminal correctness meets a native agent harness — all in Rust.
+An open-source, macOS-native, GPU-accelerated terminal emulator that treats AI agents as first-class citizens. Think Warp's UX ambition meets Ghostty's terminal correctness meets a native agent harness — all in Rust.
 
 **Why con exists:**
 
@@ -43,8 +43,8 @@ An open-source, cross-platform, GPU-accelerated terminal emulator that treats AI
 │  │  Metal, macOS)  │  │  multi-provider)│               │
 │  ├─────────────────┤  └─────────────────┘               │
 │  │ con-terminal    │                                    │
-│  │ (vte + PTY,     │                                    │
-│  │  fallback)      │                                    │
+│  │ (themes +       │                                    │
+│  │  palette data)  │                                    │
 │  └─────────────────┘                                    │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -61,7 +61,7 @@ kingston/
 │   │   └── src/
 │   │       ├── main.rs         # Application bootstrap + keybindings
 │   │       ├── workspace.rs    # window, tabs, splits layout
-│   │       ├── terminal_view.rs # GPUI canvas rendering of terminal grid
+│   │       ├── ghostty_view.rs  # embedded Ghostty surface view
 │   │       ├── agent_panel.rs  # side panel for AI chat / tool output
 │   │       ├── input_bar.rs    # smart input bar (NLP/shell/skill modes)
 │   │       ├── pane_tree.rs    # split pane layout tree
@@ -77,12 +77,10 @@ kingston/
 │   │       ├── config.rs      # con config (TOML)
 │   │       └── suggestions.rs # AI shell command suggestions
 │   │
-│   ├── con-terminal/          # terminal emulation — legacy vte backend
+│   ├── con-terminal/          # terminal themes and palette helpers
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── pty.rs         # cross-platform PTY (portable-pty)
-│   │       ├── grid.rs        # terminal grid + VTE Perform impl
-│   │       └── input.rs       # keyboard → escape sequence encoding
+│   │       └── theme.rs       # built-in themes + Ghostty theme import
 │   │
 │   ├── con-ghostty/           # ghostty FFI — primary macOS backend
 │   │   └── src/
@@ -129,28 +127,16 @@ kingston/
 
 GPUI gives us Zed-level text rendering quality (critical for a terminal) and a proven canvas API for custom grid drawing. The `termy` project in awesome-gpui proves terminal embedding works.
 
-### 2. Terminal Core: Dual Backend (Ghostty + vte)
+### 2. Terminal Core: Ghostty-Only Runtime
 
-**Primary backend — libghostty (macOS):**
+con now runs one terminal runtime: full Ghostty embedded via its C API.
 
-- **Full Ghostty** terminal emulator embedded via its C API (`libghostty`)
-- GPU-accelerated Metal rendering via native NSView composited into GPUI's window
-- Complete VT compliance: Kitty keyboard protocol, sixel, hyperlinks, OSC 133 shell integration
-- Action callback system: 66 actions (SET_TITLE, PWD, COMMAND_FINISHED, RING_BELL, COLOR_CHANGE, SHOW_CHILD_EXITED, etc.)
-- `con-ghostty` crate provides a safe Rust FFI wrapper: `GhosttyApp` (singleton), `GhosttyTerminal` (per-surface), `TerminalState` (action-driven state)
-- Clipboard integration via NSPasteboard, key/mouse input forwarded through ghostty's input API
+- Ghostty owns PTY lifecycle, VT parsing, scrollback, and rendering
+- con embeds Ghostty surfaces inside GPUI windows and split layouts
+- `con-ghostty` stays thin: app lifecycle, surface lifecycle, callbacks, and safe Rust accessors
+- `con-terminal` now only owns theme and palette data used to drive Ghostty config
 
-**Fallback backend — vte + portable-pty (all platforms):**
-
-- **vte** (v0.15) — pure Rust VT100 parser, implements `Perform` trait for dispatch
-- Our `Grid` struct implements `vte::Perform` directly — handles print, CSI dispatch, SGR, OSC, ESC, alternate screen, scroll regions, cursor shapes
-- **portable-pty** — cross-platform PTY management (macOS/Linux/Windows)
-- 256-color + truecolor rendering, scrollback buffer
-- GPUI canvas rendering (software text rasterization)
-
-**Unified abstraction — `TerminalPane` enum:**
-
-Both backends are wrapped by `TerminalPane` in the `con` crate. All workspace, agent, and pane tree code works through this common API. Grid-specific features (command blocks, OSC 133 text search) gracefully degrade when using ghostty, while ghostty-specific features (COMMAND_FINISHED with exit code + duration, Metal rendering) are unavailable on the legacy backend.
+`TerminalPane` still exists, but it is now a product abstraction around one kind of pane, not a multi-backend compatibility layer.
 
 ### 3. Pane Runtime Observer
 
@@ -170,15 +156,15 @@ The architecture must model that explicitly.
 
 **Three-layer design:**
 
-1. **Backend facts** — PTY process-group facts, OSC 133 events, alternate-screen state, titles, PWD, visible text
+1. **Backend facts** — Ghostty action callbacks, process-exited state, titles, PWD, command-finished events, visible text
 2. **Pane runtime observer** — evidence merge, freshness, scope-stack inference, confidence
 3. **Consumers** — agent prompt, `list_panes`, approvals, sidebar, notifications, resume surfaces
 
 **Important constraint:** shell metadata and visible-app identity are not the same thing. Once tmux or another TUI takes over the screen, cwd and last command become advisory unless stronger evidence says otherwise.
 
-**Strongest current foundation:** on Unix, `portable-pty` already exposes the PTY foreground process group and raw fd. That should become the primary local-runtime probe for detecting shells, multiplexers, TUIs, and local agent CLIs.
+**Current foundation:** Ghostty already gives con strong terminal facts, but the embedded C API does not yet expose foreground-process identity or Ghostty's richer internal semantic prompt/runtime state. con therefore needs its own pane runtime observer instead of pushing more product logic into prompt heuristics.
 
-**Ghostty implication:** Ghostty gives con strong terminal facts, but the embedded C API does not yet expose all of Ghostty's richer internal semantic prompt/runtime state. con therefore needs its own backend-neutral pane runtime observer instead of pushing more product logic into prompt heuristics.
+**Long-term direction:** if con needs process-group identity or richer semantic prompt exports, the right move is to extend libghostty's C API upstream rather than reintroducing a second terminal runtime locally.
 
 See `docs/impl/pane-runtime-observer.md`.
 
@@ -207,7 +193,7 @@ See `docs/impl/pane-runtime-observer.md`.
 
 **Agent lifecycle (PromptHook):** Each agent request uses `agent.prompt().with_hook(hook).with_history(history)` instead of `agent.chat()`. The `ConHook` struct implements Rig's `PromptHook<M>` trait, emitting `AgentEvent`s for every tool call start/result and text delta. For dangerous tools (`shell_exec`, `terminal_exec`, `file_write`, `edit_file`), the hook blocks on a per-request approval channel — the UI must explicitly allow or deny execution before the agent proceeds. Safe tools (`file_read`, `list_files`, `search`) execute immediately. A 5-minute timeout prevents indefinite hangs if the UI becomes unresponsive.
 
-**Visible terminal tool:** The `terminal_exec` tool is con's core differentiator. Instead of running commands in a hidden subprocess, it writes commands to the user's visible terminal PTY. Output is captured via OSC 133 shell integration (with a 30-second timeout fallback for shells without it). The user sees every command the agent runs in real time — full transparency. The architecture uses a crossbeam channel from the tool to the workspace, with a completion callback registered on the grid.
+**Visible terminal tool:** The `terminal_exec` tool is con's core differentiator. Instead of running commands in a hidden subprocess, it writes commands to the user's visible Ghostty pane. Output is captured via Ghostty's command-finished signal, with a bounded recent-output fallback when shell integration is unavailable. The user sees every command the agent runs in real time — full transparency.
 
 **Streaming cancellation:** Agent requests can be cancelled mid-stream. The harness maintains an `Arc<AtomicBool>` cancellation flag checked between stream items. The agent panel shows a "Stop" button during streaming. Cancellation preserves the partial response accumulated so far.
 
@@ -219,15 +205,15 @@ See `docs/impl/pane-runtime-observer.md`.
 
 **Escape hatch:** If we later need ai-sdk features, we can spawn a Bun/Node sidecar process and communicate over IPC. This is a pragmatic fallback, not a primary architecture.
 
-### 5. Cross-Platform Strategy
+### 5. Platform Strategy
 
-| Platform | GPU | Font | PTY | Window |
-|----------|-----|------|-----|--------|
-| macOS | Metal (GPUI native) | Core Text | posix_openpt | GPUI/AppKit |
-| Linux | Blade/OpenGL (GPUI native) | fontconfig + freetype | openpty | GPUI/X11 or Wayland |
-| Windows | Blade/D3D (GPUI native) | DirectWrite | ConPTY | GPUI/Win32 |
+con currently targets macOS.
 
-GPUI handles all three platforms. `portable-pty` handles PTY differences. libghostty-vt is pure computation (no platform deps).
+- GPUI provides the native window shell
+- Ghostty provides the terminal runtime
+- AppKit provides the native view embedding boundary
+
+We can revisit broader platform support later, but the current product boundary is a macOS-native terminal with one runtime and one behavior model.
 
 ---
 
@@ -236,8 +222,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 ### Phase 1: Terminal That Works
 
 - [x] GPUI window with single terminal pane
-- [x] vte parsing → grid state → GPUI canvas render loop
-- [x] Keyboard input → PTY write (special keys, Ctrl+key, Alt+key, F-keys)
+- [x] Embedded Ghostty surface lifecycle and input forwarding
 - [x] Dynamic terminal resize (fills available window space)
 - [x] Scrollback buffer with mouse wheel navigation
 - [x] 256-color + truecolor
@@ -312,7 +297,7 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Unified input routing (smart mode classifies shell/agent/skill)
 - [x] Skills wired end-to-end (/explain, /fix, /commit, /test, /review)
 - [x] Command palette expanded (clear, focus, toggle sidebar, cycle mode)
-- [x] Terminal settings in Settings UI (font size, scrollback lines)
+- [x] Terminal settings in Settings UI (font size, theme)
 - [x] Cmd+A select all, Cmd+K clear scrollback
 - [x] Configurable keybindings (config.toml keybindings section)
 - [ ] Plugin system (Lua or WASM)
@@ -328,7 +313,6 @@ GPUI handles all three platforms. `portable-pty` handles PTY differences. libgho
 - [x] Directory listing tool (list_files — .gitignore-aware)
 - [x] Streaming cancellation (Stop button, partial response preserved)
 - [x] Resizable agent panel (drag divider, width persisted in session)
-- [x] Inline suggestions ghost text (Tab to accept, debounced AI completions)
 - [x] Extended thinking display (collapsible sections in agent panel)
 - [x] Theme configurability (4 built-in themes, live switching, settings picker)
 - [x] Per-tab agent sessions (each tab owns its own conversation, context, and approval state)
@@ -383,7 +367,7 @@ When the agent needs to run a command:
 1. Agent produces a `ShellExec` tool call via Rig
 2. con-core creates a new (or reuses) terminal pane
 3. Command is written to PTY
-4. Output is captured via COMMAND_FINISHED action (ghostty — instant, with exit code + duration) or OSC 133 boundaries (legacy — callback-driven) or screen scraping (timeout fallback)
+4. Output is captured via Ghostty `COMMAND_FINISHED`, with bounded recent-output fallback when shell integration is unavailable
 5. Result is fed back to agent with exit code and duration metadata
 
 This means the user **sees** what the agent does — no hidden subprocess. Full transparency.
@@ -393,7 +377,6 @@ This means the user **sees** what the agent does — no hidden subprocess. Full 
 For tools like Claude Code, Codex CLI, or OpenCode that run *inside* the terminal:
 
 - con should detect them through the pane runtime observer, using strong evidence first:
-  - PTY foreground process identity for local panes
   - shell/runtime transitions
   - backend facts such as alternate screen and command lifecycle
   - advisory screen structure only as a fallback
@@ -475,16 +458,16 @@ new-tab = "cmd+t"
 2. **GPUI's rendering quality** — Zed proves it handles text beautifully at scale
 3. **Rig's agent abstractions** — swap providers, define tools in Rust, stream tokens
 4. **Rust's performance** — sub-millisecond input latency, <100MB RAM
-5. **Cross-platform from day 1** — GPUI + portable-pty support macOS/Linux/Windows; Ghostty primary on macOS, vte fallback elsewhere
+5. **One runtime, one behavior model** — every pane uses Ghostty, which keeps terminal behavior and agent integration consistent
 6. **Open source** — fill the gap Warp left
 
 ---
 
 ## Resolved Decisions
 
-### 1. Terminal Backend: Full Ghostty (macOS Primary) + vte Fallback
+### 1. Terminal Backend: Full Ghostty
 
-**Decision:** Embed full Ghostty via libghostty C API as the primary macOS backend. Retain vte as a cross-platform fallback.
+**Decision:** Embed full Ghostty via libghostty C API as the only terminal runtime.
 
 **Rationale:**
 
@@ -492,8 +475,7 @@ new-tab = "cmd+t"
 - GPU-accelerated Metal rendering via native NSView — superior performance to software rasterization
 - Action callback system gives us COMMAND_FINISHED (exit code + duration), eliminating blind timeouts for agent command execution
 - The `con-ghostty` crate is a thin FFI wrapper (~800 lines), not a fork — upstream Ghostty updates flow through cleanly
-- vte fallback preserved for Linux/Windows and CI environments where Ghostty isn't available
-- `TerminalPane` enum abstracts both backends — workspace and agent code is backend-agnostic
+- `TerminalPane` remains as a stable pane-facing API for the workspace and agent layers
 
 ### 2. GPUI IME: Production-Ready
 
@@ -543,9 +525,8 @@ con (Rust)  ─── Unix socket (JSON-RPC) ───  plugin process (Node/Pyt
 ### 5. Licensing: MIT
 
 - **GPUI-CE**: Apache 2.0 (compatible with MIT, allows sublicensing)
-- **Ghostty libghostty-vt**: MIT
+- **Ghostty libghostty**: MIT
 - **Rig**: MIT
-- **portable-pty**: MIT
 - **con**: MIT (already in LICENSE)
 
 All clear. No copyleft, no GPL contamination.

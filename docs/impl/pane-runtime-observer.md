@@ -34,7 +34,7 @@ This document defines the long-term architecture for that answer.
 - Separate backend facts from product inferences.
 - Represent nested scopes explicitly.
 - Preserve confidence and freshness with every claim.
-- Work across both terminal backends.
+- Work from Ghostty facts without rebuilding another terminal engine.
 - Support external agent CLIs without hijacking them.
 - Degrade honestly when the platform cannot provide strong evidence.
 
@@ -42,7 +42,7 @@ This document defines the long-term architecture for that answer.
 
 - Perfect remote introspection without cooperation from the remote machine.
 - Regex-based certainty about every TUI.
-- Ghostty-specific hacks that do not generalize to the fallback backend.
+- Ghostty-specific hacks that pretend the C API exposes more than it really does.
 - Hiding uncertainty from the user or the agent.
 
 ## Core rule
@@ -223,18 +223,26 @@ That is the abstraction the product actually needs.
 
 These can justify high-confidence claims.
 
-#### PTY foreground process group
+#### Ghostty action and screen facts
 
-On Unix, `portable-pty` already exposes:
+The public libghostty C API already gives us strong pane facts:
 
-- `MasterPty::process_group_leader()`
-- `MasterPty::as_raw_fd()`
+- title
+- working directory
+- command-finished events
+- process-exited state
+- visible text
+- scrollback text
 
-This is the strongest local signal for the currently interactive program.
+These are strong facts about terminal state.
+They are not direct foreground-process identity.
 
-If the foreground process group resolves to `tmux`, `vim`, `nvim`, `less`, `codex`, `claude`, or `opencode`, that should dominate title-based guesses.
+#### Upstreamable runtime facts
 
-This should become the primary local probe.
+Ghostty clearly owns the PTY and process group internally.
+If con needs high-confidence local foreground-app identity, the durable path is to expose that through libghostty instead of rebuilding a parallel PTY stack in this repo.
+
+That should be treated as an upstream API contract project, not a local shortcut.
 
 #### Shell integration events
 
@@ -293,19 +301,6 @@ These can explain why a tool might be in use, but they do not prove the pane is 
 
 ## Backend adapters
 
-## Legacy backend
-
-The fallback backend already has direct access to:
-
-- PTY master
-- child process id
-- OSC 133 state
-- alternate-screen state
-- grid content
-- persistent SSH target tracking
-
-This backend is currently better positioned than Ghostty for deep runtime observation because it owns the PTY directly.
-
 ## Ghostty backend
 
 Ghostty currently gives us:
@@ -323,9 +318,9 @@ the embedded C API does not currently expose the same rich semantic prompt and r
 
 Important consequence:
 
-we should not design the pane-runtime system around assumptions that Ghostty will tell us the exact foreground app or nested scope stack.
+we should not design the pane-runtime system around assumptions that Ghostty will tell us the exact foreground app or nested scope stack today.
 
-Ghostty should feed Layer 1 facts. Layer 2 must remain backend-neutral.
+Ghostty should feed Layer 1 facts. Layer 2 should remain a con-owned observer that merges those facts into a defensible runtime model.
 
 ## Ghostty-specific observations
 
@@ -464,16 +459,15 @@ It also enables better product surfaces:
 
 ### Phase 2
 
-- implement Unix `PtyForegroundProbe`
-- enumerate foreground process groups without shelling out in the hot path
-- record executable name and pid set
+- upstream or expose stronger libghostty runtime facts when needed
+- record executable identity only from explicit backend contracts
+- avoid shelling out in the hot path for pane identity
 
 ### Phase 3
 
 - integrate backend adapters:
-  - legacy PTY/grid adapter
   - Ghostty surface adapter
-- unify freshness rules across both backends
+- unify freshness rules across all Ghostty fact streams
 
 ### Phase 4
 

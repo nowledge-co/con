@@ -52,7 +52,7 @@ User Input (Tab N)
 ConWorkspace::send_to_agent()
     │
     ├── Adds user message to AgentPanel
-    ├── Snapshots terminal grid → TerminalContext
+    ├── Snapshots Ghostty pane state → TerminalContext
     └── Calls harness.send_message(&tabs[N].session, content, context)
             │
             ▼

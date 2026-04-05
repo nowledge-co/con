@@ -13,6 +13,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Full VT compliance out of the box — Kitty keyboard protocol, hyperlinks, sixel graphics, and OSC 133 shell integration are handled natively by Ghostty. No configuration needed.
 - Instant command completion tracking — when a command finishes, con knows the exit code and exactly how long it took. The agent uses this to respond immediately instead of waiting on a timeout.
 - Clipboard integration — copy and paste work natively between the terminal and the system clipboard, including programmatic clipboard access via OSC 52.
+- Ghostty is now the only terminal runtime in con. The old in-app VTE/PTTY fallback path has been removed, so every pane uses the same terminal engine and the same behavior.
 
 **AI Agent**
 - Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.
@@ -27,6 +28,10 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Busy/idle detection works on Ghostty panes — the agent waits for a running command to finish before sending another.
 - Pane-aware context is more honest in tmux and terminal UIs. The agent now distinguishes ordinary shells from multiplexers and full-screen apps, and it stops over-trusting stale cwd or command metadata when the visible pane has moved on.
 - tmux awareness now comes from the pane itself instead of inherited app state, which reduces wrong assumptions after manually attaching to a session mid-chat.
+
+**Terminal**
+- New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.
+- Terminal settings are simpler and more honest. con no longer exposes backend switching or fake scrollback tuning for features that are owned by Ghostty itself.
 
 **Smart Input**
 - Command detection now scans your `$PATH` at startup instead of using a static word list. Any installed program — `hostname`, `terraform`, `kubectl`, or a custom script in `/usr/local/bin` — is correctly recognized as a shell command without manual configuration.
@@ -73,6 +78,5 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Agent panel (Cmd+L) with structured tool call cards, inline approval dialogs, code block rendering, and a resizable width you can drag to adjust
 - Settings panel (Cmd+,) to configure your provider, model, and preferences
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
-- Inline suggestions — type at a shell prompt and ghost text appears with AI-powered completions. Tab to accept, keep typing to dismiss.
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

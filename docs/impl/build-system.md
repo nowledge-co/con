@@ -2,61 +2,66 @@
 
 ## Overview
 
-con is a pure Rust workspace compiled with Cargo. No external build tools are required beyond `rustc` (stable, edition 2024) and `cmake` (for GPUI shader compilation).
+con is a Cargo workspace with one terminal runtime target: embedded Ghostty on macOS.
 
-## Build Commands
+The build no longer includes the old `vte` and `portable-pty` pipeline.
+
+## Build commands
 
 ```bash
-cargo build                    # debug build
-cargo build --release          # release build
-cargo run -p con               # run the terminal
-cargo test --workspace         # run all tests
+cargo build
+cargo build --release
+cargo run -p con
+cargo test --workspace
 ```
 
-## Workspace Structure
+## Workspace shape
 
 ```toml
 [workspace]
 members = [
-    "crates/con",           # main binary (GPUI app shell)
-    "crates/con-core",      # shared logic (harness, config, session)
-    "crates/con-terminal",  # terminal emulation (grid, pty, input)
-    "crates/con-agent",     # AI agent harness (Rig 0.34, tools)
-    "crates/con-cli",       # CLI client (stub)
+    "crates/con",
+    "crates/con-core",
+    "crates/con-terminal",
+    "crates/con-ghostty",
+    "crates/con-agent",
+    "crates/con-cli",
 ]
-resolver = "3"
 ```
 
-## Key Dependencies
+## Key crates
 
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| gpui | mainline (git) | GPU-accelerated UI framework (from zed-industries/zed) |
-| gpui-component | git | shadcn/ui-style component library |
-| rig-core | 0.34 | Multi-provider AI agent framework |
-| portable-pty | 0.8 | Cross-platform PTY management |
-| vte | 0.15 | Pure Rust VT100/xterm parser |
-| crossbeam-channel | 0.5 | Lock-free channels for event passing |
-| tokio | 1.x | Async runtime for agent tasks |
+| Crate | Purpose |
+|-------|---------|
+| `con` | GPUI app shell, tabs, splits, settings, agent panel |
+| `con-core` | harness, config, session persistence |
+| `con-ghostty` | Rust wrapper around libghostty C API |
+| `con-terminal` | terminal theme data and Ghostty palette translation helpers |
+| `con-agent` | built-in AI harness and tools |
 
-## GPUI Shaders
+## Key dependencies
 
-GPUI compiles Metal shaders at runtime via the `runtime_shaders` feature flag. This means:
-- No Xcode.app installation required for development
-- No pre-compilation step for shaders
-- cmake is needed for the shader compilation toolchain
+| Dependency | Purpose |
+|------------|---------|
+| `gpui` | native GPU UI framework |
+| `gpui-component` | reusable UI controls |
+| `rig-core` | multi-provider agent runtime |
+| `tokio` | async runtime for agent work |
+| `crossbeam-channel` | UI and harness event routing |
+| `reqwest` | live model list fetch from models.dev |
 
-## Platform Requirements
+## Platform boundary
 
-| Platform | Requirements |
-|----------|-------------|
-| macOS | Rust stable, cmake |
-| Linux | Rust stable, cmake, libwayland-dev, libxkbcommon-dev |
-| Windows | Rust stable, cmake |
+con currently requires macOS because the product depends on embedded Ghostty.
 
-## Dev Workflow
+That is enforced in the binary crate with a compile-time error on non-macOS targets.
 
-```bash
-cargo watch -x 'run -p con'    # auto-rebuild on file changes
-cargo nextest run               # faster parallel test runner
-```
+## Ghostty build boundary
+
+`con-ghostty` is intentionally thin:
+
+- FFI bindings live in `ffi.rs`
+- surface/app lifecycle lives in `terminal.rs`
+- product logic stays out of the wrapper
+
+If we need stronger pane observability in the future, the preferred path is to upstream or expose new libghostty C API surface area instead of growing another terminal runtime in this repo.

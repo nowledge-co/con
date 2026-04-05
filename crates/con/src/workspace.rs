@@ -1342,6 +1342,15 @@ impl ConWorkspace {
                 panel.swap_state(incoming, cx);
             });
         }
+        } else if self.agent_panel_open {
+            let focused_inline = self
+                .agent_panel
+                .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
+            if !focused_inline {
+                self.active_terminal().focus(window, cx);
+            }
+        } else {
+            self.active_terminal().focus(window, cx);
         // Show and focus new active tab's ghostty views
         for t in self.tabs[self.active_tab].pane_tree.all_terminals() {
             t.set_native_view_visible(true, cx);

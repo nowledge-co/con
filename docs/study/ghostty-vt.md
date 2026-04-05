@@ -81,16 +81,19 @@ Ghostty is excellent at terminal behavior, but the current embedded C API is not
 
 What the C API gives us well:
 
+- surface config inputs such as `font_size` and `working_directory`
 - `SET_TITLE`
 - `PWD`
 - `COMMAND_FINISHED`
 - visible and scrollback text via `ghostty_surface_read_text`
 - selection access
 - inspector lifecycle access
+- process-exited state
 
 What Ghostty clearly tracks internally in Zig:
 
 - semantic prompt state
+- PTY and process-group ownership
 - prompt/input/output boundaries
 - prompt click movement
 - richer screen semantics around command output
@@ -98,13 +101,15 @@ What Ghostty clearly tracks internally in Zig:
 What the embedded API does **not** currently give us as a stable product contract:
 
 - the exact foreground program identity
+- PTY foreground process group
 - a nested scope stack such as `ssh -> tmux -> Codex CLI`
 - a direct export of Ghostty's richer semantic prompt model for host applications
 
 This matters for con:
 
 - Ghostty should be treated as a strong source of terminal facts
-- con still needs its own backend-neutral pane runtime observer
+- con still needs its own pane runtime observer
+- if con needs process-group identity, the durable move is to upstream a libghostty API for it
 - we should not design external-agent or tmux awareness around assumptions that Ghostty will directly tell us the whole runtime state
 
 One more important limit: Ghostty's OSC 7 handling validates host information against the local system when reporting `PWD`. That means `PWD` is not a durable embedded signal for remote host identity in the way a naive reader might expect.

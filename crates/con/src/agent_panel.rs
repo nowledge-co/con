@@ -566,6 +566,14 @@ impl AgentPanel {
         self.show_inline_input = show;
     }
 
+    pub fn focus_inline_input(&self, window: &mut Window, cx: &mut App) -> bool {
+        let Some(ref input) = self.inline_input_state else {
+            return false;
+        };
+        input.read(cx).focus_handle(cx).focus(window, cx);
+        true
+    }
+
     pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
         self.skills = skills;
     }
