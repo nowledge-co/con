@@ -1,5 +1,6 @@
 use con_terminal::{Color, TerminalTheme};
 use gpui::App;
+use gpui_component::scroll::ScrollbarShow;
 use gpui_component::{Theme, ThemeMode, ThemeRegistry};
 use std::borrow::Cow;
 
@@ -49,6 +50,9 @@ pub fn init_theme(cx: &mut App, terminal_theme: &str) {
     } else {
         apply_gpui_theme_by_name(terminal_theme, cx);
     }
+    // Always show scrollbar on hover — macOS default "Scrolling" fades too fast
+    Theme::global_mut(cx).scrollbar_show = ScrollbarShow::Hover;
+
     let mode = if terminal_theme.contains("light") {
         ThemeMode::Light
     } else {

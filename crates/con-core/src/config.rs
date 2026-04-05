@@ -88,7 +88,7 @@ fn default_focus_input() -> String {
     "cmd-k".into()
 }
 fn default_toggle_input_bar() -> String {
-    "cmd-shift-k".into()
+    "cmd-`".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

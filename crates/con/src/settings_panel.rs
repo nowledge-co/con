@@ -548,6 +548,7 @@ impl SettingsPanel {
             "settings" => self.config.keybindings.settings = binding,
             "command_palette" => self.config.keybindings.command_palette = binding,
             "toggle_agent" => self.config.keybindings.toggle_agent = binding,
+            "toggle_input_bar" => self.config.keybindings.toggle_input_bar = binding,
             "focus_input" => self.config.keybindings.focus_input = binding,
             "split_right" => self.config.keybindings.split_right = binding,
             "split_down" => self.config.keybindings.split_down = binding,
@@ -566,6 +567,7 @@ impl SettingsPanel {
             "settings" => &self.config.keybindings.settings,
             "command_palette" => &self.config.keybindings.command_palette,
             "toggle_agent" => &self.config.keybindings.toggle_agent,
+            "toggle_input_bar" => &self.config.keybindings.toggle_input_bar,
             "focus_input" => &self.config.keybindings.focus_input,
             "split_right" => &self.config.keybindings.split_right,
             "split_down" => &self.config.keybindings.split_down,
@@ -1569,6 +1571,7 @@ impl SettingsPanel {
             ("Settings", "settings"),
             ("Command Palette", "command_palette"),
             ("Toggle Agent", "toggle_agent"),
+            ("Toggle Input Bar", "toggle_input_bar"),
             ("Focus Input", "focus_input"),
             ("Quit", "quit"),
         ];

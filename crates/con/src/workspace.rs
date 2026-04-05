@@ -753,6 +753,9 @@ impl ConWorkspace {
             "focus-terminal" => {
                 self.active_terminal().focus(window, cx);
             }
+            "toggle-input-bar" => {
+                self.toggle_input_bar(&crate::ToggleInputBar, window, cx);
+            }
             "toggle-sidebar" => {
                 self.sidebar.update(cx, |sidebar, cx| {
                     sidebar.toggle_collapsed(cx);
@@ -822,6 +825,7 @@ impl ConWorkspace {
             KeyBinding::new(&kb.split_right, crate::SplitRight, None),
             KeyBinding::new(&kb.split_down, crate::SplitDown, None),
             KeyBinding::new(&kb.focus_input, crate::FocusInput, None),
+            KeyBinding::new(&kb.toggle_input_bar, crate::ToggleInputBar, None),
         ]);
 
         // Settings panel closes on save — restore terminal focus
@@ -2412,8 +2416,8 @@ impl Render for ConWorkspace {
             let mut popup = div()
                 .absolute()
                 .bottom(popup_bottom)
-                .right(px(12.0))
-                .w(px(280.0))
+                .right(px(24.0))
+                .w(px(260.0))
                 .max_h(px(280.0))
                 .flex()
                 .flex_col()
