@@ -2,16 +2,15 @@
 
 ## What is con?
 
-con is an open-source, cross-platform, GPU-accelerated terminal emulator with a built-in AI agent harness. Built in Rust.
+con is an open-source, macOS-native, GPU-accelerated terminal emulator with a built-in AI agent harness. Built in Rust.
 
 ## Stack
 
 - **UI**: GPUI-CE v0.3.3 (community edition of Zed's framework, Apache 2.0)
-- **Terminal backend (macOS)**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. Primary backend on macOS.
-- **Terminal backend (fallback)**: vte v0.15 (pure Rust VT parser) + portable-pty + GPUI canvas rendering. Used on Linux/Windows and as test fallback.
+- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView
 - **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API (surface lifecycle, action callbacks, clipboard, key/mouse input)
+- **Terminal support crate**: con-terminal — theme and palette helpers only
 - **AI agent**: Rig v0.34.0 (from crates.io, 13 providers, Tool trait)
-- **PTY**: portable-pty crate (cross-platform, used by legacy backend)
 - **Socket API**: planned — Unix domain sockets, JSON-RPC (cmux-inspired)
 
 ## Repository Layout
@@ -27,7 +26,7 @@ kingston/
 ├── crates/
 │   ├── con/           # Main binary (GPUI app shell)
 │   ├── con-core/      # Shared logic (harness, config, session)
-│   ├── con-terminal/  # Terminal emulation — legacy vte backend (grid, pty, input encoding)
+│   ├── con-terminal/  # Terminal themes and palette helpers
 │   ├── con-ghostty/   # Ghostty FFI wrapper — primary macOS backend (libghostty C API)
 │   ├── con-agent/     # AI harness (Rig 0.34, tools, conversation)
 │   └── con-cli/       # CLI + socket client (stub)
@@ -53,7 +52,8 @@ cargo build --release  # release
 cargo run -p con       # run the terminal
 cargo test --workspace # test
 
-# GPUI needs runtime_shaders feature (already set) — no Xcode.app needed for dev
+# GPUI needs runtime_shaders feature (already set)
+# con currently ships the embedded Ghostty runtime on macOS
 ```
 
 ## Design Language

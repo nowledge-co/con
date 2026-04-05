@@ -31,9 +31,7 @@ pub struct TerminalColors {
 }
 
 impl TerminalColors {
-    /// Generate a ghostty config string with these colors.
-    fn to_config_string(&self) -> String {
-        let mut s = String::with_capacity(512);
+    fn append_config(&self, s: &mut String) {
         s.push_str(&format!(
             "background = {:02x}{:02x}{:02x}\n",
             self.background[0], self.background[1], self.background[2]
@@ -48,19 +46,53 @@ impl TerminalColors {
                 i, c[0], c[1], c[2]
             ));
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GhosttyConfigPatch {
+    pub colors: Option<TerminalColors>,
+    pub font_size: Option<f32>,
+}
+
+impl GhosttyConfigPatch {
+    fn to_config_string(&self) -> String {
+        let mut s = String::with_capacity(512);
+        if let Some(colors) = &self.colors {
+            colors.append_config(&mut s);
+        }
+        if let Some(font_size) = self.font_size {
+            s.push_str(&format!("font-size = {:.2}\n", font_size));
+        }
         s
     }
 
-    /// Write colors to a temp file and return the path.
     fn write_config_file(&self) -> Result<std::path::PathBuf, String> {
         let dir = std::env::temp_dir().join("con-ghostty");
         std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {}", e))?;
-        let path = dir.join("theme.conf");
+        let path = dir.join("runtime.conf");
         let mut f = std::fs::File::create(&path).map_err(|e| format!("create: {}", e))?;
         f.write_all(self.to_config_string().as_bytes())
             .map_err(|e| format!("write: {}", e))?;
         Ok(path)
     }
+}
+
+fn build_ghostty_config(patch: &GhosttyConfigPatch) -> Result<ffi::ghostty_config_t, String> {
+    let config = unsafe { ffi::ghostty_config_new() };
+    if config.is_null() {
+        return Err("ghostty_config_new returned null".into());
+    }
+
+    if patch.colors.is_some() || patch.font_size.is_some() {
+        let path = patch.write_config_file()?;
+        let path_str = path.to_str().ok_or("non-UTF8 path")?;
+        let cpath = CString::new(path_str).map_err(|e| format!("CString: {}", e))?;
+        unsafe { ffi::ghostty_config_load_file(config, cpath.as_ptr()) };
+    }
+
+    unsafe { ffi::ghostty_config_finalize(config) };
+    Ok(config)
 }
 
 // ── Per-surface state updated by action callbacks ───────────
@@ -158,19 +190,10 @@ impl GhosttyApp {
     pub fn new(colors: Option<&TerminalColors>) -> Result<Self, String> {
         ensure_ghostty_init()?;
 
-        // Create and finalize config
-        let config = unsafe { ffi::ghostty_config_new() };
-        if config.is_null() {
-            return Err("ghostty_config_new returned null".into());
-        }
-        unsafe {
-            // Load our theme colors instead of the user's ghostty config.
-            // This ensures ghostty matches con's theme system.
-            if let Some(colors) = colors {
-                Self::load_colors_into_config(config, colors)?;
-            }
-            ffi::ghostty_config_finalize(config);
-        }
+        let config = build_ghostty_config(&GhosttyConfigPatch {
+            colors: colors.cloned(),
+            font_size: None,
+        })?;
 
         // App-level userdata is not used for per-surface state.
         // We keep it null — per-surface state is on surface userdata.
@@ -209,28 +232,32 @@ impl GhosttyApp {
         unsafe { ffi::ghostty_app_tick(self.app) }
     }
 
-    /// Load theme colors into a ghostty config via a temp file.
-    fn load_colors_into_config(
-        config: ffi::ghostty_config_t,
-        colors: &TerminalColors,
-    ) -> Result<(), String> {
-        let path = colors.write_config_file()?;
-        let path_str = path.to_str().ok_or("non-UTF8 path")?;
-        let cpath = CString::new(path_str).map_err(|e| format!("CString: {}", e))?;
-        unsafe { ffi::ghostty_config_load_file(config, cpath.as_ptr()) };
-        Ok(())
-    }
-
     /// Update the app's terminal colors at runtime.
     /// Creates a new config, loads the colors, and applies it.
     pub fn update_colors(&self, colors: &TerminalColors) -> Result<(), String> {
-        let config = unsafe { ffi::ghostty_config_new() };
-        if config.is_null() {
-            return Err("ghostty_config_new returned null".into());
-        }
+        self.update_config(&GhosttyConfigPatch {
+            colors: Some(colors.clone()),
+            font_size: None,
+        })
+    }
+
+    pub fn update_appearance(&self, colors: &TerminalColors, font_size: f32) -> Result<(), String> {
+        self.update_config(&GhosttyConfigPatch {
+            colors: Some(colors.clone()),
+            font_size: Some(font_size),
+        })
+    }
+
+    pub fn update_font_size(&self, font_size: f32) -> Result<(), String> {
+        self.update_config(&GhosttyConfigPatch {
+            colors: None,
+            font_size: Some(font_size),
+        })
+    }
+
+    pub fn update_config(&self, patch: &GhosttyConfigPatch) -> Result<(), String> {
+        let config = build_ghostty_config(patch)?;
         unsafe {
-            Self::load_colors_into_config(config, colors)?;
-            ffi::ghostty_config_finalize(config);
             ffi::ghostty_app_update_config(self.app, config);
             ffi::ghostty_config_free(config);
         }
@@ -383,6 +410,39 @@ impl GhosttyTerminal {
             ffi::ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_LIGHT
         };
         unsafe { ffi::ghostty_surface_set_color_scheme(self.surface, scheme) }
+    }
+
+    pub fn perform_binding_action(&self, action: &str) -> Result<bool, String> {
+        let action = CString::new(action).map_err(|e| format!("CString: {}", e))?;
+        Ok(unsafe { ffi::ghostty_surface_binding_action(self.surface, action.as_ptr(), 0) })
+    }
+
+    pub fn clear_screen_and_scrollback(&self) -> Result<(), String> {
+        let handled = self.perform_binding_action("clear_screen")?;
+        if handled {
+            Ok(())
+        } else {
+            Err("Ghostty rejected clear_screen binding action".to_string())
+        }
+    }
+
+    pub fn update_config(&self, patch: &GhosttyConfigPatch) -> Result<(), String> {
+        let config = build_ghostty_config(patch)?;
+        unsafe {
+            ffi::ghostty_surface_update_config(self.surface, config);
+            ffi::ghostty_config_free(config);
+        }
+        self.refresh();
+        Ok(())
+    }
+
+    pub fn update_appearance(&self, colors: &TerminalColors, font_size: f32) -> Result<(), String> {
+        self.update_config(&GhosttyConfigPatch {
+            colors: Some(colors.clone()),
+            font_size: Some(font_size),
+        })?;
+        self.refresh();
+        Ok(())
     }
 
     /// Send a key event to the terminal. Returns true if ghostty consumed it.

@@ -82,6 +82,8 @@ Ghostty is excellent at terminal behavior, but the current embedded C API is not
 What the C API gives us well:
 
 - surface config inputs such as `font_size` and `working_directory`
+- live app and surface config updates via `ghostty_app_update_config` / `ghostty_surface_update_config`
+- native binding actions such as `clear_screen`
 - `SET_TITLE`
 - `PWD`
 - `COMMAND_FINISHED`

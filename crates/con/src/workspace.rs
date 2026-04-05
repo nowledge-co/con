@@ -112,17 +112,21 @@ impl ConWorkspace {
         let ghostty_app = con_ghostty::GhosttyApp::new(Some(&colors))
             .map(std::sync::Arc::new)
             .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
+        let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
+            log::error!(
+                "Failed to create agent harness: {}. Agent features disabled.",
+                e
+            );
+            panic!("Fatal: agent harness initialization failed: {}", e);
+        });
         let model_registry = ModelRegistry::new();
         if model_registry.needs_refresh() {
             let registry_for_fetch = model_registry.clone();
-            cx.spawn(async move |this, cx| {
+            harness.spawn_detached(async move {
                 if let Err(e) = registry_for_fetch.fetch().await {
                     log::warn!("Failed to refresh model registry: {}", e);
-                    return;
                 }
-                let _ = this.update(cx, |_workspace, cx| cx.notify());
-            })
-            .detach();
+            });
         }
 
         let make_terminal =
@@ -201,13 +205,6 @@ impl ConWorkspace {
         let registry = model_registry.clone();
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, registry, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
-        let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
-            log::error!(
-                "Failed to create agent harness: {}. Agent features disabled.",
-                e
-            );
-            panic!("Fatal: agent harness initialization failed: {}", e);
-        });
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
@@ -361,8 +358,9 @@ impl ConWorkspace {
             .find(|(_, t)| pane_tree.pane_id_for_terminal(t) == Some(focused_pid))
             .map(|(i, _)| i + 1)
             .unwrap_or(1);
-        let focused_hostname = focused.detected_remote_host(cx);
-        let focused_meta = focused.agent_metadata(cx);
+        let focused_observation = focused.observation_frame(50, cx);
+        let focused_runtime =
+            con_agent::context::PaneRuntimeState::from_observation(&focused_observation);
 
         let mut other_pane_summaries = Vec::new();
         if pane_tree.pane_count() > 1 {
@@ -371,39 +369,33 @@ impl ConWorkspace {
                     if pid == focused_pid {
                         continue;
                     }
-                    let meta = terminal.agent_metadata(cx);
+                    let observation = terminal.observation_frame(10, cx);
+                    let runtime =
+                        con_agent::context::PaneRuntimeState::from_observation(&observation);
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
-                        hostname: terminal.detected_remote_host(cx),
-                        title: meta.title,
-                        mode: meta.mode,
-                        has_shell_integration: meta.has_shell_integration,
-                        shell_metadata_fresh: meta.shell_metadata_fresh,
-                        tmux_session: meta.tmux_session,
-                        cwd: terminal.current_dir(cx),
-                        last_command: terminal.last_command(cx),
-                        last_exit_code: terminal.last_exit_code(cx),
-                        is_busy: terminal.is_busy(cx),
-                        recent_output: terminal.content_lines(10, cx),
+                        hostname: observation.detected_remote_host.clone(),
+                        title: observation.title.clone(),
+                        mode: runtime.mode,
+                        has_shell_integration: observation.has_shell_integration,
+                        shell_metadata_fresh: runtime.shell_metadata_fresh,
+                        runtime_stack: runtime.scope_stack,
+                        runtime_warnings: runtime.warnings,
+                        tmux_session: runtime.tmux_session,
+                        cwd: observation.cwd,
+                        last_command: observation.last_command,
+                        last_exit_code: observation.last_exit_code,
+                        is_busy: observation.is_busy,
+                        recent_output: observation.recent_output,
                     });
                 }
             }
         }
 
         self.harness.build_context_from_snapshot(
-            &focused.content_lines(50, cx),
-            focused.current_dir(cx),
-            focused.last_command(cx),
-            focused.last_exit_code(cx),
-            focused.last_command_duration(cx).map(|d| d.as_secs_f64()),
-            focused.is_busy(cx),
             focused_pane_index,
-            focused_hostname,
-            focused_meta.title,
-            focused_meta.mode,
-            focused_meta.has_shell_integration,
-            focused_meta.shell_metadata_fresh,
-            focused_meta.tmux_session,
+            &focused_observation,
+            &focused_runtime,
             other_pane_summaries,
         )
     }
@@ -717,6 +709,9 @@ impl ConWorkspace {
 
         let term_config = settings.read(cx).terminal_config().clone();
         self.font_size = term_config.font_size;
+        if let Err(err) = self.ghostty_app.update_font_size(self.font_size) {
+            log::error!("Failed to update Ghostty font size: {}", err);
+        }
 
         // Apply terminal theme if changed
         if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
@@ -771,15 +766,15 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.terminal_theme = theme.clone();
+        let colors = theme_to_ghostty_colors(&theme);
         // Update all terminal panes (legacy gets full theme, ghostty gets color scheme)
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_terminals() {
-                terminal.set_theme(&theme, cx);
+                terminal.set_theme(&theme, &colors, self.font_size, cx);
             }
         }
-        let colors = theme_to_ghostty_colors(&theme);
-        if let Err(e) = self.ghostty_app.update_colors(&colors) {
-            log::error!("Failed to update ghostty colors: {}", e);
+        if let Err(e) = self.ghostty_app.update_appearance(&colors, self.font_size) {
+            log::error!("Failed to update Ghostty appearance: {}", e);
         }
         // Sync GPUI UI theme colors with terminal theme
         crate::theme::sync_gpui_theme(&theme, window, cx);
@@ -1050,8 +1045,10 @@ impl ConWorkspace {
                     .enumerate()
                     .map(|(idx, terminal)| {
                         let pid = pane_tree.pane_id_for_terminal(terminal).unwrap_or(idx);
-                        let meta = terminal.agent_metadata(cx);
-                        let title = meta
+                        let observation = terminal.observation_frame(12, cx);
+                        let runtime =
+                            con_agent::context::PaneRuntimeState::from_observation(&observation);
+                        let title = observation
                             .title
                             .clone()
                             .unwrap_or_else(|| format!("Pane {}", idx + 1));
@@ -1059,19 +1056,21 @@ impl ConWorkspace {
                         PaneInfo {
                             index: idx + 1,
                             title,
-                            cwd: terminal.current_dir(cx),
+                            cwd: observation.cwd.clone(),
                             is_focused: pid == focused_pid,
                             rows,
                             cols,
                             is_alive: terminal.is_alive(cx),
-                            hostname: terminal.detected_remote_host(cx),
-                            mode: meta.mode,
-                            shell_metadata_fresh: meta.shell_metadata_fresh,
-                            tmux_session: meta.tmux_session,
-                            has_shell_integration: meta.has_shell_integration,
-                            last_command: terminal.last_command(cx),
-                            last_exit_code: terminal.last_exit_code(cx),
-                            is_busy: terminal.is_busy(cx),
+                            hostname: observation.detected_remote_host,
+                            mode: runtime.mode,
+                            shell_metadata_fresh: runtime.shell_metadata_fresh,
+                            runtime_stack: runtime.scope_stack,
+                            runtime_warnings: runtime.warnings,
+                            tmux_session: runtime.tmux_session,
+                            has_shell_integration: observation.has_shell_integration,
+                            last_command: observation.last_command,
+                            last_exit_code: observation.last_exit_code,
+                            is_busy: observation.is_busy,
                         }
                     })
                     .collect();

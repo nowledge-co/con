@@ -28,9 +28,12 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Busy/idle detection works on Ghostty panes — the agent waits for a running command to finish before sending another.
 - Pane-aware context is more honest in tmux and terminal UIs. The agent now distinguishes ordinary shells from multiplexers and full-screen apps, and it stops over-trusting stale cwd or command metadata when the visible pane has moved on.
 - tmux awareness now comes from the pane itself instead of inherited app state, which reduces wrong assumptions after manually attaching to a session mid-chat.
+- Pane runtime is now modeled as a scope stack instead of a flat snapshot. The agent and pane tools can see advisory scopes such as remote shell, tmux, and branded agent CLIs with explicit freshness warnings when the visible screen has moved beyond the last shell prompt.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.
+- Font size changes now apply to existing Ghostty panes immediately, so terminal text updates in place when you save Settings.
+- Terminal theme changes now apply to live Ghostty panes immediately instead of only updating the surrounding con interface.
 - Terminal settings are simpler and more honest. con no longer exposes backend switching or fake scrollback tuning for features that are owned by Ghostty itself.
 
 **Smart Input**
@@ -54,7 +57,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Mouse text selection with click-drag, double-click for words, triple-click for lines, and Cmd+A to select all
 - Scrollback buffer with smooth scroll and a floating indicator showing how far back you are
 - Clipboard integration with Cmd+C / Cmd+V, including bracketed paste mode for safe pasting into editors
-- Cmd+K to clear your scrollback history
+- Cmd+K now clears the current Ghostty screen and scrollback using Ghostty's native action path
 - Tab management — Cmd+T to open, Cmd+W to close, Cmd+1–9 to switch, Cmd+Shift+[/] to cycle
 - Session restore — your tabs, layout, and panel state are preserved when you relaunch
 - Full compatibility with terminal applications like vim, htop, and tmux (alternate screen, application cursor keys, DEC private modes, Kitty keyboard protocol)

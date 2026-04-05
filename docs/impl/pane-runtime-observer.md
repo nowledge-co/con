@@ -59,15 +59,13 @@ These are raw observations with minimal interpretation.
 
 Examples:
 
-- PTY foreground process group
-- child process id
 - terminal title
 - OSC 7 pwd
-- OSC 133 prompt and command boundaries
+- shell integration presence
 - alternate-screen state
 - command-finished events
 - visible screen text
-- shell integration support
+- future libghostty foreground-process exports
 
 This layer answers:
 
@@ -112,6 +110,19 @@ Consumers must receive structured runtime state, not re-run their own heuristics
 ### `PaneObservationFrame`
 
 An immutable observation snapshot emitted by a backend adapter.
+
+Current implementation in con:
+
+- `title`
+- `cwd`
+- `recent_output`
+- `last_command`
+- `last_exit_code`
+- `last_command_duration_secs`
+- `detected_remote_host`
+- `has_shell_integration`
+- `is_alt_screen`
+- `is_busy`
 
 Suggested fields:
 
@@ -159,15 +170,12 @@ Suggested sources:
 
 The durable observer output for one pane.
 
-Suggested fields:
+Current implementation in con:
 
-- `epoch`
+- `mode`
+- `shell_metadata_fresh`
+- `tmux_session`
 - `scope_stack`
-- `active_scope`
-- `shell_metadata`
-- `screen_mode`
-- `confidence`
-- `evidence`
 - `warnings`
 
 ### `ScopeStack`
@@ -341,31 +349,27 @@ This matters because a product design that depends on remote hostname coming fro
 
 The observer should run probes independently and merge their evidence.
 
-### `PtyForegroundProbe`
+### `GhosttyObservationProbe`
 
 Purpose:
 
-- identify the current local interactive process
-- determine whether the visible runtime is shell, multiplexer, TUI, or external agent CLI
-
-Platform notes:
-
-- Unix: primary implementation
-- Windows: best-effort, likely different process-tree strategy
+- build `PaneObservationFrame` from the embedded Ghostty surface
+- keep title, cwd, command-finished, and screen excerpts synchronized
+- expose only facts that libghostty actually exports today
 
 ### `ShellIntegrationProbe`
 
 Purpose:
 
-- track prompt/command lifecycle
+- track prompt-oriented metadata that Ghostty exposes indirectly today
 - mark shell metadata freshness
-- detect transitions back to the shell
+- detect transitions back to the shell when strong shell evidence returns
 
 ### `TerminalSemanticProbe`
 
 Purpose:
 
-- consume backend-native signals such as alternate screen, command-finished, title updates, and future Ghostty semantic exports
+- consume backend-native signals such as command-finished, title updates, and future Ghostty semantic exports
 
 ### `ScreenStructureProbe`
 
@@ -381,8 +385,8 @@ this probe is advisory only.
 
 Purpose:
 
-- keep remote scope identity stable
-- distinguish `ssh` as local foreground app from the remote runtime beyond it
+- keep remote scope identity stable without overstating certainty
+- distinguish remote-shell hints from truly proven foreground identity
 
 Likely evidence:
 
@@ -404,6 +408,20 @@ Examples:
 - "logs tail pane"
 
 Manual labels should never overwrite facts. They should layer on top of them.
+
+### `GhosttyObservabilityContract`
+
+Purpose:
+
+- define the next upstream libghostty exports con actually needs
+- avoid rebuilding a parallel PTY/process introspection stack beside Ghostty
+
+High-value future exports:
+
+- foreground process identity
+- alternate-screen state
+- richer semantic prompt lifecycle
+- explicit remote/runtime markers for embedded hosts
 
 ## Freshness and invalidation
 

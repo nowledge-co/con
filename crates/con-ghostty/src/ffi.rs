@@ -509,6 +509,11 @@ unsafe extern "C" {
     ) -> bool;
     pub fn ghostty_surface_free_text(surface: ghostty_surface_t, text: *mut ghostty_text_s);
     pub fn ghostty_surface_update_config(surface: ghostty_surface_t, config: ghostty_config_t);
+    pub fn ghostty_surface_binding_action(
+        surface: ghostty_surface_t,
+        action: *const c_char,
+        arg: usize,
+    ) -> bool;
 
     // Clipboard
     pub fn ghostty_surface_complete_clipboard_request(

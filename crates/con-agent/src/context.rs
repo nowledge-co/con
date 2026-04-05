@@ -20,6 +20,211 @@ impl PaneMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneScopeKind {
+    Shell,
+    RemoteShell,
+    Multiplexer,
+    InteractiveApp,
+    AgentCli,
+}
+
+impl PaneScopeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::RemoteShell => "remote_shell",
+            Self::Multiplexer => "multiplexer",
+            Self::InteractiveApp => "interactive_app",
+            Self::AgentCli => "agent_cli",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneEvidenceSource {
+    ShellIntegration,
+    Osc7,
+    CommandLine,
+    Title,
+    ScreenStructure,
+}
+
+impl PaneEvidenceSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ShellIntegration => "shell_integration",
+            Self::Osc7 => "osc7",
+            Self::CommandLine => "command_line",
+            Self::Title => "title",
+            Self::ScreenStructure => "screen_structure",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneConfidence {
+    Strong,
+    Advisory,
+}
+
+impl PaneConfidence {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Strong => "strong",
+            Self::Advisory => "advisory",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaneRuntimeScope {
+    pub kind: PaneScopeKind,
+    pub label: Option<String>,
+    pub host: Option<String>,
+    pub confidence: PaneConfidence,
+    pub evidence_source: PaneEvidenceSource,
+}
+
+impl PaneRuntimeScope {
+    pub fn summary(&self) -> String {
+        match (self.kind, self.label.as_deref(), self.host.as_deref()) {
+            (PaneScopeKind::RemoteShell, _, Some(host)) => format!("remote_shell({host})"),
+            (_, Some(label), _) => format!("{}({label})", self.kind.as_str()),
+            _ => self.kind.as_str().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaneObservationFrame {
+    pub title: Option<String>,
+    pub cwd: Option<String>,
+    pub recent_output: Vec<String>,
+    pub last_command: Option<String>,
+    pub last_exit_code: Option<i32>,
+    pub last_command_duration_secs: Option<f64>,
+    pub detected_remote_host: Option<String>,
+    pub has_shell_integration: bool,
+    pub is_alt_screen: bool,
+    pub is_busy: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaneRuntimeState {
+    pub mode: PaneMode,
+    pub shell_metadata_fresh: bool,
+    pub tmux_session: Option<String>,
+    pub scope_stack: Vec<PaneRuntimeScope>,
+    pub warnings: Vec<String>,
+}
+
+impl PaneRuntimeState {
+    pub fn from_observation(observation: &PaneObservationFrame) -> Self {
+        let tmux_scope = detect_tmux_scope(
+            observation.title.as_deref(),
+            observation.last_command.as_deref(),
+            &observation.recent_output,
+        );
+        let tmux_session = detect_tmux_session(
+            observation.title.as_deref(),
+            observation.last_command.as_deref(),
+            &observation.recent_output,
+        );
+        let mode = infer_pane_mode(
+            observation.title.as_deref(),
+            &observation.recent_output,
+            observation.last_command.as_deref(),
+            observation.has_shell_integration,
+            observation.is_alt_screen,
+        );
+        let shell_metadata_fresh = shell_metadata_is_fresh(
+            mode,
+            observation.has_shell_integration,
+            observation.last_command.as_deref(),
+            observation.cwd.as_deref(),
+        );
+
+        let mut scope_stack = Vec::new();
+        if observation.has_shell_integration
+            || observation.cwd.is_some()
+            || observation.last_command.is_some()
+        {
+            scope_stack.push(PaneRuntimeScope {
+                kind: PaneScopeKind::Shell,
+                label: None,
+                host: None,
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::ShellIntegration,
+            });
+        }
+
+        if let Some(host) = observation.detected_remote_host.clone() {
+            scope_stack.push(PaneRuntimeScope {
+                kind: PaneScopeKind::RemoteShell,
+                label: None,
+                host: Some(host),
+                confidence: PaneConfidence::Advisory,
+                evidence_source: PaneEvidenceSource::Osc7,
+            });
+        }
+
+        if let Some(scope) = tmux_scope {
+            scope_stack.push(scope);
+        }
+
+        if let Some(scope) =
+            detect_agent_cli_scope(observation.title.as_deref(), &observation.recent_output)
+        {
+            scope_stack.push(scope);
+        } else if mode == PaneMode::Tui {
+            scope_stack.push(PaneRuntimeScope {
+                kind: PaneScopeKind::InteractiveApp,
+                label: observation
+                    .title
+                    .clone()
+                    .filter(|title| !title.trim().is_empty()),
+                host: None,
+                confidence: PaneConfidence::Advisory,
+                evidence_source: if observation.is_alt_screen {
+                    PaneEvidenceSource::ShellIntegration
+                } else {
+                    PaneEvidenceSource::ScreenStructure
+                },
+            });
+        }
+
+        let mut warnings = Vec::new();
+        if !shell_metadata_fresh {
+            warnings.push(
+                "Shell-derived metadata may not describe the currently visible app.".to_string(),
+            );
+        }
+        if mode == PaneMode::Multiplexer {
+            warnings.push(
+                "Inspect the active multiplexer pane before trusting cwd or command metadata."
+                    .to_string(),
+            );
+        }
+        if observation.detected_remote_host.is_some() {
+            warnings.push(
+                "Remote host identity is inferred from terminal metadata and should be verified before destructive actions.".to_string(),
+            );
+        }
+
+        Self {
+            mode,
+            shell_metadata_fresh,
+            tmux_session,
+            scope_stack,
+            warnings,
+        }
+    }
+}
+
 fn looks_like_tmux_command(command: &str) -> bool {
     let trimmed = command.trim_start();
     trimmed == "tmux"
@@ -94,40 +299,123 @@ fn looks_like_dense_fullscreen_ui(recent_output: &[String]) -> bool {
             .is_some_and(|line| line_looks_like_tmux_status(line))
 }
 
-pub fn detect_tmux_session(
+fn parse_tmux_target(command: &str) -> Option<String> {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    for window in tokens.windows(2) {
+        if window[0] == "-t" {
+            return Some(window[1].trim_matches(&['"', '\''][..]).to_string());
+        }
+        if let Some(rest) = window[0].strip_prefix("-t") {
+            if !rest.is_empty() {
+                return Some(rest.trim_matches(&['"', '\''][..]).to_string());
+            }
+        }
+    }
+    None
+}
+
+fn detect_tmux_scope(
     title: Option<&str>,
     last_command: Option<&str>,
     recent_output: &[String],
-) -> Option<String> {
+) -> Option<PaneRuntimeScope> {
     if let Some(command) = last_command {
         if looks_like_tmux_command(command) {
-            let tokens: Vec<&str> = command.split_whitespace().collect();
-            for window in tokens.windows(2) {
-                if window[0] == "-t" {
-                    return Some(window[1].trim_matches(&['"', '\''][..]).to_string());
+            let label = parse_tmux_target(command).or_else(|| {
+                if command.trim_start().starts_with("tmate") {
+                    Some("tmate".to_string())
+                } else {
+                    Some("tmux".to_string())
                 }
-                if let Some(rest) = window[0].strip_prefix("-t") {
-                    if !rest.is_empty() {
-                        return Some(rest.trim_matches(&['"', '\''][..]).to_string());
-                    }
-                }
-            }
-            return Some("attached".to_string());
+            });
+            return Some(PaneRuntimeScope {
+                kind: PaneScopeKind::Multiplexer,
+                label,
+                host: None,
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::CommandLine,
+            });
         }
     }
 
-    if let Some(title) = title.filter(|t| title_looks_like_tmux(t)) {
-        let trimmed = title.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
+    if title.is_some_and(title_looks_like_tmux) {
+        return Some(PaneRuntimeScope {
+            kind: PaneScopeKind::Multiplexer,
+            label: Some("tmux".to_string()),
+            host: None,
+            confidence: PaneConfidence::Advisory,
+            evidence_source: PaneEvidenceSource::Title,
+        });
     }
 
     if recent_output
         .last()
         .is_some_and(|line| line_looks_like_tmux_status(line))
     {
-        return Some("visible".to_string());
+        return Some(PaneRuntimeScope {
+            kind: PaneScopeKind::Multiplexer,
+            label: Some("tmux".to_string()),
+            host: None,
+            confidence: PaneConfidence::Advisory,
+            evidence_source: PaneEvidenceSource::ScreenStructure,
+        });
+    }
+
+    None
+}
+
+pub fn detect_tmux_session(
+    _title: Option<&str>,
+    last_command: Option<&str>,
+    _recent_output: &[String],
+) -> Option<String> {
+    last_command
+        .filter(|command| looks_like_tmux_command(command))
+        .and_then(parse_tmux_target)
+}
+
+fn detect_agent_cli_scope(
+    title: Option<&str>,
+    recent_output: &[String],
+) -> Option<PaneRuntimeScope> {
+    let title_lower = title.map(str::to_ascii_lowercase);
+    let recent_lower: Vec<String> = recent_output
+        .iter()
+        .map(|line| line.to_ascii_lowercase())
+        .collect();
+
+    for (needle, label) in [
+        ("claude code", "claude_code"),
+        ("opencode", "opencode"),
+        ("codex", "codex"),
+    ] {
+        if title_lower
+            .as_deref()
+            .is_some_and(|value| value.contains(needle))
+        {
+            return Some(PaneRuntimeScope {
+                kind: PaneScopeKind::AgentCli,
+                label: Some(label.to_string()),
+                host: None,
+                confidence: PaneConfidence::Advisory,
+                evidence_source: PaneEvidenceSource::Title,
+            });
+        }
+
+        if recent_lower
+            .iter()
+            .filter(|line| line.contains(needle))
+            .count()
+            >= 2
+        {
+            return Some(PaneRuntimeScope {
+                kind: PaneScopeKind::AgentCli,
+                label: Some(label.to_string()),
+                host: None,
+                confidence: PaneConfidence::Advisory,
+                evidence_source: PaneEvidenceSource::ScreenStructure,
+            });
+        }
     }
 
     None
@@ -140,11 +428,14 @@ pub fn infer_pane_mode(
     has_shell_integration: bool,
     is_alt_screen: bool,
 ) -> PaneMode {
-    if detect_tmux_session(title, last_command, recent_output).is_some() {
+    if detect_tmux_scope(title, last_command, recent_output).is_some() {
         return PaneMode::Multiplexer;
     }
 
-    if is_alt_screen || looks_like_dense_fullscreen_ui(recent_output) {
+    if detect_agent_cli_scope(title, recent_output).is_some()
+        || is_alt_screen
+        || looks_like_dense_fullscreen_ui(recent_output)
+    {
         return PaneMode::Tui;
     }
 
@@ -185,11 +476,15 @@ pub struct TerminalContext {
     pub focused_has_shell_integration: bool,
     /// Whether shell-derived metadata such as cwd and last_command should be treated as fresh.
     pub focused_shell_metadata_fresh: bool,
+    /// Structured runtime scopes derived from the focused pane's current evidence.
+    pub focused_runtime_stack: Vec<PaneRuntimeScope>,
+    /// Warnings that should constrain interpretation of the focused pane.
+    pub focused_runtime_warnings: Vec<String>,
     /// Current working directory (from OSC 7 or manual detection)
     pub cwd: Option<String>,
     /// Last N lines of terminal output
     pub recent_output: Vec<String>,
-    /// Last command executed (from OSC 133 or heuristic)
+    /// Most recent command text when the backend can prove it.
     pub last_command: Option<String>,
     /// Last exit code
     pub last_exit_code: Option<i32>,
@@ -234,6 +529,8 @@ pub struct PaneSummary {
     pub mode: PaneMode,
     pub has_shell_integration: bool,
     pub shell_metadata_fresh: bool,
+    pub runtime_stack: Vec<PaneRuntimeScope>,
+    pub runtime_warnings: Vec<String>,
     pub tmux_session: Option<String>,
     pub cwd: Option<String>,
     pub last_command: Option<String>,
@@ -241,6 +538,27 @@ pub struct PaneSummary {
     pub is_busy: bool,
     /// Last ~10 lines of visible output
     pub recent_output: Vec<String>,
+}
+
+fn format_runtime_stack(scopes: &[PaneRuntimeScope]) -> String {
+    if scopes.is_empty() {
+        "unknown".to_string()
+    } else {
+        scopes
+            .iter()
+            .map(PaneRuntimeScope::summary)
+            .collect::<Vec<_>>()
+            .join(" > ")
+    }
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 impl TerminalContext {
@@ -252,6 +570,8 @@ impl TerminalContext {
             focused_pane_mode: PaneMode::Unknown,
             focused_has_shell_integration: false,
             focused_shell_metadata_fresh: false,
+            focused_runtime_stack: Vec::new(),
+            focused_runtime_warnings: Vec::new(),
             cwd: None,
             recent_output: Vec::new(),
             last_command: None,
@@ -327,19 +647,39 @@ impl TerminalContext {
             self.focused_shell_metadata_fresh,
         ));
         if let Some(host) = &self.focused_hostname {
-            prompt.push_str(&format!(" host=\"{}\"", host));
+            prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
         }
         if let Some(title) = &self.focused_title {
-            prompt.push_str(&format!(" title=\"{}\"", title));
+            prompt.push_str(&format!(" title=\"{}\"", xml_escape(title)));
         }
         if let Some(cwd) = &self.cwd {
-            prompt.push_str(&format!(" cwd=\"{}\"", cwd));
+            prompt.push_str(&format!(" cwd=\"{}\"", xml_escape(cwd)));
         }
         prompt.push_str("/>\n");
-        if !self.focused_shell_metadata_fresh {
-            prompt.push_str(
-                "<metadata_warning>Shell-derived metadata may be stale for the visible app in this pane. Prefer live pane inspection.</metadata_warning>\n",
-            );
+        if !self.focused_runtime_stack.is_empty() {
+            prompt.push_str("<runtime_stack>\n");
+            for scope in &self.focused_runtime_stack {
+                prompt.push_str(&format!(
+                    "  <scope kind=\"{}\" confidence=\"{}\" source=\"{}\"",
+                    scope.kind.as_str(),
+                    scope.confidence.as_str(),
+                    scope.evidence_source.as_str(),
+                ));
+                if let Some(label) = &scope.label {
+                    prompt.push_str(&format!(" label=\"{}\"", xml_escape(label)));
+                }
+                if let Some(host) = &scope.host {
+                    prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
+                }
+                prompt.push_str("/>\n");
+            }
+            prompt.push_str("</runtime_stack>\n");
+        }
+        for warning in &self.focused_runtime_warnings {
+            prompt.push_str(&format!(
+                "<metadata_warning>{}</metadata_warning>\n",
+                xml_escape(warning)
+            ));
         }
 
         let total_panes = 1 + self.other_panes.len();
@@ -352,12 +692,13 @@ impl TerminalContext {
             let host_label = self.focused_hostname.as_deref().unwrap_or("local");
             let cwd_label = self.cwd.as_deref().unwrap_or("?");
             prompt.push_str(&format!(
-                "  <pane index=\"{}\" focused=\"true\" host=\"{}\" cwd=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\"/>\n",
+                "  <pane index=\"{}\" focused=\"true\" host=\"{}\" cwd=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\" runtime=\"{}\"/>\n",
                 self.focused_pane_index,
-                host_label,
-                cwd_label,
+                xml_escape(host_label),
+                xml_escape(cwd_label),
                 self.focused_pane_mode.as_str(),
-                self.focused_shell_metadata_fresh
+                self.focused_shell_metadata_fresh,
+                xml_escape(&format_runtime_stack(&self.focused_runtime_stack))
             ));
             // Other panes
             for pane in &self.other_panes {
@@ -372,14 +713,15 @@ impl TerminalContext {
                 let tmux = pane
                     .tmux_session
                     .as_deref()
-                    .map(|session| format!(" tmux=\"{}\"", session))
+                    .map(|session| format!(" tmux=\"{}\"", xml_escape(session)))
                     .unwrap_or_default();
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" host=\"{}\" cwd=\"{}\" mode=\"{}\"{}{}{}/>\n",
+                    "  <pane index=\"{}\" host=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}/>\n",
                     pane.pane_index,
-                    host,
-                    cwd,
+                    xml_escape(host),
+                    xml_escape(cwd),
                     pane.mode.as_str(),
+                    xml_escape(&format_runtime_stack(&pane.runtime_stack)),
                     busy,
                     stale,
                     tmux
@@ -387,19 +729,25 @@ impl TerminalContext {
             }
             prompt.push_str("</panes>\n");
         } else if let Some(cwd) = &self.cwd {
-            prompt.push_str(&format!("<cwd>{}</cwd>\n", cwd));
+            prompt.push_str(&format!("<cwd>{}</cwd>\n", xml_escape(cwd)));
         }
 
         if let Some(branch) = &self.git_branch {
-            prompt.push_str(&format!("<git_branch>{}</git_branch>\n", branch));
+            prompt.push_str(&format!(
+                "<git_branch>{}</git_branch>\n",
+                xml_escape(branch)
+            ));
         }
 
         if let Some(host) = &self.ssh_host {
-            prompt.push_str(&format!("<ssh_host>{}</ssh_host>\n", host));
+            prompt.push_str(&format!("<ssh_host>{}</ssh_host>\n", xml_escape(host)));
         }
 
         if let Some(session) = &self.tmux_session {
-            prompt.push_str(&format!("<tmux_session>{}</tmux_session>\n", session));
+            prompt.push_str(&format!(
+                "<tmux_session>{}</tmux_session>\n",
+                xml_escape(session)
+            ));
         }
 
         if let Some(cmd) = &self.last_command {
@@ -410,17 +758,23 @@ impl TerminalContext {
             if let Some(dur) = self.last_command_duration_secs {
                 attrs.push_str(&format!(" duration=\"{:.1}s\"", dur));
             }
-            prompt.push_str(&format!("<last_command{}>{}</last_command>\n", attrs, cmd));
+            prompt.push_str(&format!(
+                "<last_command{}>{}</last_command>\n",
+                attrs,
+                xml_escape(cmd)
+            ));
         }
 
         if !self.command_history.is_empty() {
             prompt.push_str("<command_history>\n");
             for block in &self.command_history {
                 match block.exit_code {
-                    Some(code) => {
-                        prompt.push_str(&format!("$ {} (exit {})\n", block.command, code))
-                    }
-                    None => prompt.push_str(&format!("$ {}\n", block.command)),
+                    Some(code) => prompt.push_str(&format!(
+                        "$ {} (exit {})\n",
+                        xml_escape(&block.command),
+                        code
+                    )),
+                    None => prompt.push_str(&format!("$ {}\n", xml_escape(&block.command))),
                 }
             }
             prompt.push_str("</command_history>\n");
@@ -429,7 +783,7 @@ impl TerminalContext {
         if !self.recent_output.is_empty() {
             prompt.push_str("<terminal_output>\n");
             for line in &self.recent_output {
-                prompt.push_str(line);
+                prompt.push_str(&xml_escape(line));
                 prompt.push('\n');
             }
             prompt.push_str("</terminal_output>\n");
@@ -437,7 +791,7 @@ impl TerminalContext {
 
         if let Some(diff) = &self.git_diff {
             prompt.push_str("<git_diff>\n");
-            prompt.push_str(diff);
+            prompt.push_str(&xml_escape(diff));
             if !diff.ends_with('\n') {
                 prompt.push('\n');
             }
@@ -446,7 +800,7 @@ impl TerminalContext {
 
         if let Some(structure) = &self.project_structure {
             prompt.push_str("<project_structure>\n");
-            prompt.push_str(structure);
+            prompt.push_str(&xml_escape(structure));
             if !structure.ends_with('\n') {
                 prompt.push('\n');
             }
@@ -457,7 +811,7 @@ impl TerminalContext {
 
         if let Some(agents_md) = &self.agents_md {
             prompt.push_str("\n<agents_md>\n");
-            prompt.push_str(agents_md);
+            prompt.push_str(&xml_escape(agents_md));
             if !agents_md.ends_with('\n') {
                 prompt.push('\n');
             }
@@ -467,7 +821,7 @@ impl TerminalContext {
         if !self.skills.is_empty() {
             prompt.push_str("\n<skills>\nThe user can invoke these skills with /name. When a skill is invoked, follow its intent:\n");
             for (name, desc) in &self.skills {
-                prompt.push_str(&format!("  /{name} — {desc}\n"));
+                prompt.push_str(&format!("  /{} — {}\n", xml_escape(name), xml_escape(desc)));
             }
             prompt.push_str("</skills>\n");
         }
@@ -478,7 +832,10 @@ impl TerminalContext {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaneMode, detect_tmux_session, infer_pane_mode, shell_metadata_is_fresh};
+    use super::{
+        PaneConfidence, PaneEvidenceSource, PaneMode, PaneObservationFrame, PaneRuntimeState,
+        detect_tmux_session, infer_pane_mode, shell_metadata_is_fresh,
+    };
 
     #[test]
     fn detects_tmux_from_command_target() {
@@ -506,5 +863,63 @@ mod tests {
             Some("top"),
             Some("/tmp"),
         ));
+    }
+
+    #[test]
+    fn runtime_state_tracks_nested_tmux_and_agent_cli_scopes() {
+        let observation = PaneObservationFrame {
+            title: Some("Codex".to_string()),
+            cwd: Some("/srv/app".to_string()),
+            recent_output: vec![
+                "claude code".to_string(),
+                "0* api 1 deploy".to_string(),
+                "codex".to_string(),
+            ],
+            last_command: Some("tmux attach -t deploy".to_string()),
+            last_exit_code: Some(0),
+            last_command_duration_secs: Some(1.2),
+            detected_remote_host: Some("prod-2".to_string()),
+            has_shell_integration: true,
+            is_alt_screen: false,
+            is_busy: false,
+        };
+
+        let runtime = PaneRuntimeState::from_observation(&observation);
+        assert_eq!(runtime.mode, PaneMode::Multiplexer);
+        assert_eq!(runtime.tmux_session.as_deref(), Some("deploy"));
+        assert!(
+            runtime
+                .scope_stack
+                .iter()
+                .any(|scope| scope.host.as_deref() == Some("prod-2"))
+        );
+        assert!(runtime.scope_stack.iter().any(|scope| {
+            scope.label.as_deref() == Some("deploy")
+                && scope.evidence_source == PaneEvidenceSource::CommandLine
+                && scope.confidence == PaneConfidence::Strong
+        }));
+    }
+
+    #[test]
+    fn runtime_state_marks_agent_cli_as_tui_when_visible() {
+        let observation = PaneObservationFrame {
+            title: Some("Claude Code".to_string()),
+            cwd: None,
+            recent_output: vec!["Claude Code".to_string(), "Claude Code".to_string()],
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            detected_remote_host: None,
+            has_shell_integration: false,
+            is_alt_screen: false,
+            is_busy: false,
+        };
+
+        let runtime = PaneRuntimeState::from_observation(&observation);
+        assert_eq!(runtime.mode, PaneMode::Tui);
+        assert!(runtime.scope_stack.iter().any(|scope| {
+            scope.label.as_deref() == Some("claude_code")
+                && scope.evidence_source == PaneEvidenceSource::Title
+        }));
     }
 }

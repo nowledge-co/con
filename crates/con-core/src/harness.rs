@@ -5,6 +5,7 @@ use con_agent::{
 use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -201,6 +202,13 @@ impl AgentHarness {
         )
     }
 
+    pub fn spawn_detached<F>(&self, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.runtime.spawn(future);
+    }
+
     /// Classify user input: NLP, command, or skill.
     ///
     /// `is_remote` should be true when the focused pane is an SSH session,
@@ -228,22 +236,12 @@ impl AgentHarness {
     /// Build agent context from Ghostty terminal state.
     pub fn build_context_from_snapshot(
         &self,
-        recent_output: &[String],
-        cwd: Option<String>,
-        last_command: Option<String>,
-        last_exit_code: Option<i32>,
-        last_command_duration_secs: Option<f64>,
-        is_busy: bool,
         focused_pane_index: usize,
-        focused_hostname: Option<String>,
-        focused_title: Option<String>,
-        focused_pane_mode: con_agent::context::PaneMode,
-        focused_has_shell_integration: bool,
-        focused_shell_metadata_fresh: bool,
-        tmux_session: Option<String>,
+        focused_observation: &con_agent::context::PaneObservationFrame,
+        focused_runtime: &con_agent::context::PaneRuntimeState,
         other_panes: Vec<con_agent::context::PaneSummary>,
     ) -> TerminalContext {
-        let _ = is_busy; // available for future use
+        let cwd = focused_observation.cwd.clone();
 
         let agents_md = cwd.as_ref().and_then(|dir| {
             let agents_path = Path::new(dir).join("AGENTS.md");
@@ -336,23 +334,25 @@ impl AgentHarness {
             }
         });
 
-        let ssh_host = focused_hostname.clone();
+        let ssh_host = focused_observation.detected_remote_host.clone();
 
         TerminalContext {
             focused_pane_index,
-            focused_hostname,
-            focused_title,
-            focused_pane_mode,
-            focused_has_shell_integration,
-            focused_shell_metadata_fresh,
+            focused_hostname: focused_observation.detected_remote_host.clone(),
+            focused_title: focused_observation.title.clone(),
+            focused_pane_mode: focused_runtime.mode,
+            focused_has_shell_integration: focused_observation.has_shell_integration,
+            focused_shell_metadata_fresh: focused_runtime.shell_metadata_fresh,
+            focused_runtime_stack: focused_runtime.scope_stack.clone(),
+            focused_runtime_warnings: focused_runtime.warnings.clone(),
             cwd,
-            recent_output: recent_output.to_vec(),
-            last_command,
-            last_exit_code,
-            last_command_duration_secs,
+            recent_output: focused_observation.recent_output.clone(),
+            last_command: focused_observation.last_command.clone(),
+            last_exit_code: focused_observation.last_exit_code,
+            last_command_duration_secs: focused_observation.last_command_duration_secs,
             git_branch,
             ssh_host,
-            tmux_session,
+            tmux_session: focused_runtime.tmux_session.clone(),
             agents_md,
             skills: self.skills.summaries(),
             command_history: Vec::new(), // ghostty doesn't track command blocks

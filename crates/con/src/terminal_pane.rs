@@ -1,6 +1,7 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
-use con_agent::context::{PaneMode, detect_tmux_session, infer_pane_mode, shell_metadata_is_fresh};
+use con_agent::context::PaneObservationFrame;
+use con_ghostty::TerminalColors;
 use con_terminal::TerminalTheme;
 use gpui::*;
 
@@ -10,15 +11,6 @@ use crate::workspace::ConWorkspace;
 #[derive(Clone)]
 pub struct TerminalPane {
     entity: Entity<GhosttyView>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PaneAgentMetadata {
-    pub title: Option<String>,
-    pub mode: PaneMode,
-    pub has_shell_integration: bool,
-    pub shell_metadata_fresh: bool,
-    pub tmux_session: Option<String>,
 }
 
 impl TerminalPane {
@@ -73,15 +65,29 @@ impl TerminalPane {
         }
     }
 
-    pub fn set_theme(&self, theme: &TerminalTheme, cx: &mut App) {
+    pub fn set_theme(
+        &self,
+        theme: &TerminalTheme,
+        colors: &TerminalColors,
+        font_size: f32,
+        cx: &mut App,
+    ) {
         let is_dark = theme.name.to_lowercase().contains("dark");
-        self.entity
-            .read(cx)
-            .terminal()
-            .map(|terminal| terminal.set_color_scheme(is_dark));
+        if let Some(terminal) = self.entity.read(cx).terminal() {
+            if let Err(err) = terminal.update_appearance(colors, font_size) {
+                log::error!("Failed to update Ghostty surface appearance: {}", err);
+            }
+            terminal.set_color_scheme(is_dark);
+        }
     }
 
-    pub fn clear_scrollback(&self, _cx: &mut App) {}
+    pub fn clear_scrollback(&self, cx: &mut App) {
+        if let Some(terminal) = self.entity.read(cx).terminal() {
+            if let Err(err) = terminal.clear_screen_and_scrollback() {
+                log::error!("Failed to clear Ghostty scrollback: {}", err);
+            }
+        }
+    }
 
     pub fn notify(&self, cx: &mut App) {
         self.entity.update(cx, |_, cx| cx.notify());
@@ -160,33 +166,18 @@ impl TerminalPane {
             .and_then(|terminal| terminal.last_command_duration())
     }
 
-    pub fn agent_metadata(&self, cx: &App) -> PaneAgentMetadata {
-        let title = self.title(cx);
-        let recent_output = self.content_lines(12, cx);
-        let last_command = self.last_command(cx);
-        let cwd = self.current_dir(cx);
-        let has_shell_integration = self.has_shell_integration(cx);
-        let mode = infer_pane_mode(
-            title.as_deref(),
-            &recent_output,
-            last_command.as_deref(),
-            has_shell_integration,
-            self.is_alt_screen(cx),
-        );
-        let tmux_session =
-            detect_tmux_session(title.as_deref(), last_command.as_deref(), &recent_output);
-
-        PaneAgentMetadata {
-            title,
-            mode,
-            has_shell_integration,
-            shell_metadata_fresh: shell_metadata_is_fresh(
-                mode,
-                has_shell_integration,
-                last_command.as_deref(),
-                cwd.as_deref(),
-            ),
-            tmux_session,
+    pub fn observation_frame(&self, recent_output_lines: usize, cx: &App) -> PaneObservationFrame {
+        PaneObservationFrame {
+            title: self.title(cx),
+            cwd: self.current_dir(cx),
+            recent_output: self.content_lines(recent_output_lines, cx),
+            last_command: self.last_command(cx),
+            last_exit_code: self.last_exit_code(cx),
+            last_command_duration_secs: self.last_command_duration(cx).map(|d| d.as_secs_f64()),
+            detected_remote_host: self.detected_remote_host(cx),
+            has_shell_integration: self.has_shell_integration(cx),
+            is_alt_screen: self.is_alt_screen(cx),
+            is_busy: self.is_busy(cx),
         }
     }
 

@@ -687,11 +687,15 @@ pub struct PaneInfo {
     pub mode: PaneMode,
     /// Whether shell metadata like cwd and last_command is likely fresh for the visible app.
     pub shell_metadata_fresh: bool,
+    /// Structured runtime scopes inferred from pane-local evidence.
+    pub runtime_stack: Vec<crate::context::PaneRuntimeScope>,
+    /// Warnings about stale or advisory runtime metadata.
+    pub runtime_warnings: Vec<String>,
     /// tmux session hint when detected from the pane itself.
     pub tmux_session: Option<String>,
     /// Whether shell integration (OSC 133) is active.
     pub has_shell_integration: bool,
-    /// Last command executed (from OSC 133 tracking).
+    /// Most recent command text when the backend can prove it.
     pub last_command: Option<String>,
     /// Exit code of the last command.
     pub last_exit_code: Option<i32>,

@@ -120,7 +120,7 @@ kingston/
 |----------|------|-------|------|------|
 | GPU rendering | Metal + Blade (OpenGL) | WebView | wgpu | wgpu |
 | Text quality | Production (Zed-grade) | Web fonts | Good | Basic |
-| Cross-platform | macOS/Linux/Windows | All | All | All |
+| Product target today | macOS-native app | All | All | All |
 | Maturity | Zed production + 23+ apps | Very mature | Growing | Mature |
 | Terminal canvas | canvas() API | DOM hacks | Custom widget | Custom paint |
 | Rust-native | Yes | Hybrid JS/Rust | Yes | Yes |
@@ -301,7 +301,7 @@ We can revisit broader platform support later, but the current product boundary 
 - [x] Cmd+A select all, Cmd+K clear scrollback
 - [x] Configurable keybindings (config.toml keybindings section)
 - [ ] Plugin system (Lua or WASM)
-- [ ] Auto-update (Sparkle on macOS, appimage on Linux)
+- [ ] Auto-update (Sparkle on macOS)
 - [ ] CLI tool (`con` command for scripting)
 
 ### Phase 7: Agent Capabilities & Terminal Polish
@@ -395,12 +395,6 @@ This is a product boundary, not a convenience feature. con must support these to
 ```bash
 # macOS
 brew install rustup cmake
-
-# Linux
-sudo apt install rustup cmake libwayland-dev libxkbcommon-dev
-
-# Windows
-# Install rustup, cmake via winget/scoop
 ```
 
 ### Build
@@ -483,7 +477,7 @@ GPUI-CE implements the full `InputHandler` trait (modeled after `NSTextInputClie
 
 - `marked_text_range()` / `replace_and_mark_text_in_range()` for IME composition
 - `bounds_for_range()` for candidate window positioning
-- Platform implementations: macOS (AppKit), Linux X11 (xim crate), Windows (WM_IME_*)
+- GPUI-CE has broader platform support, but con currently ships the macOS AppKit path.
 - CJK input works. No blocker.
 
 ### 3. GPU Fallback: Not Needed
@@ -493,7 +487,6 @@ Ghostty has no software renderer — GPU-only. Same for con.
 **Rationale:** A desktop terminal emulator always has a GPU. The scenarios where it doesn't:
 
 - **Headless servers** — users SSH in, they use the remote machine's terminal, not con
-- **X11 forwarding** — OpenGL forwarding works via Blade; this is the Linux path already
 - **Containers** — con doesn't run inside Docker; it runs on the host
 
 If we ever need headless testing, we add a test-only software rasterizer. Not a user feature.
