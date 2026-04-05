@@ -2297,7 +2297,8 @@ impl Render for AgentPanel {
             panel = panel.child(
                 div()
                     .flex_shrink_0()
-                    .px(px(12.0))
+                    .pl(px(8.0))
+                    .pr(px(12.0))
                     .py(px(8.0))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                         let key = event.keystroke.key.as_str();
@@ -2344,34 +2345,19 @@ impl Render for AgentPanel {
                     .child(
                         div()
                             .flex()
-                            .items_center()
+                            .items_end()
                             .gap(px(8.0))
-                            .px(px(8.0))
-                            .py(px(6.0))
-                            .rounded(px(12.0))
+                            .pl(px(7.0))
+                            .pr(px(8.0))
+                            .py(px(8.0))
+                            .rounded(px(14.0))
                             .bg(theme.background)
-                            // Oven icon badge
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .size(px(26.0))
-                                    .flex_shrink_0()
-                                    .rounded(px(7.0))
-                                    .bg(theme.primary.opacity(0.10))
-                                    .child(
-                                        svg()
-                                            .path("phosphor/oven.svg")
-                                            .size(px(14.0))
-                                            .text_color(theme.primary),
-                                    ),
-                            )
                             // Text field
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
+                                    .font_family(".SystemUIFont")
                                     .text_size(px(13.0))
                                     .child(
                                         Input::new(&inline_input)
