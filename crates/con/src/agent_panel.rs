@@ -46,6 +46,11 @@ pub struct LoadConversation {
 }
 impl EventEmitter<LoadConversation> for AgentPanel {}
 
+pub struct DeleteConversation {
+    pub id: String,
+}
+impl EventEmitter<DeleteConversation> for AgentPanel {}
+
 pub struct CancelRequest;
 impl EventEmitter<CancelRequest> for AgentPanel {}
 
@@ -488,6 +493,11 @@ impl AgentPanel {
         if self.showing_history {
             self.conversation_list = con_agent::Conversation::list_all();
         }
+        cx.notify();
+    }
+
+    pub fn refresh_conversation_list(&mut self, cx: &mut Context<Self>) {
+        self.conversation_list = con_agent::Conversation::list_all();
         cx.notify();
     }
 
@@ -1935,18 +1945,21 @@ impl Render for AgentPanel {
             } else {
                 for (i, summary) in self.conversation_list.iter().enumerate() {
                     let conv_id = summary.id.clone();
+                    let delete_id = summary.id.clone();
                     let date = summary.created_at.format("%b %d, %H:%M").to_string();
+                    let msg_count = summary.message_count;
                     history = history.child(
                         div()
                             .id(SharedString::from(format!("conv-{i}")))
+                            .group("conv-row")
                             .flex()
                             .items_center()
                             .justify_between()
                             .px(px(12.0))
-                            .h(px(40.0))
+                            .h(px(44.0))
                             .rounded(px(6.0))
                             .cursor_pointer()
-                            .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                            .hover(|s| s.bg(theme.muted.opacity(0.06)))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _, cx| {
@@ -1959,22 +1972,47 @@ impl Render for AgentPanel {
                             )
                             .child(
                                 div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .overflow_x_hidden()
+                                    .flex()
+                                    .flex_col()
                                     .flex_1()
-                                    .child(truncate_str(&summary.title, 30)),
+                                    .overflow_x_hidden()
+                                    .gap(px(2.0))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(truncate_str(&summary.title, 36)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground.opacity(0.6))
+                                            .child(format!("{date}  ·  {msg_count} messages")),
+                                    ),
                             )
                             .child(
                                 div()
+                                    .id(SharedString::from(format!("del-wrap-{i}")))
                                     .flex()
                                     .items_center()
-                                    .gap(px(6.0))
                                     .flex_shrink_0()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(date)
-                                    .child(format!("{}m", summary.message_count)),
+                                    .invisible()
+                                    .group_hover("conv-row", |s| s.visible())
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        |_, _, cx| cx.stop_propagation(),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!("del-conv-{i}")))
+                                            .icon(Icon::default().path("phosphor/trash.svg"))
+                                            .ghost()
+                                            .xsmall()
+                                            .on_click(cx.listener(move |_this, _, _, cx| {
+                                                cx.emit(DeleteConversation {
+                                                    id: delete_id.clone(),
+                                                });
+                                            })),
+                                    ),
                             ),
                     );
                 }

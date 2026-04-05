@@ -198,6 +198,15 @@ impl Conversation {
         Ok(())
     }
 
+    /// Delete a saved conversation by ID.
+    pub fn delete(id: &str) -> anyhow::Result<()> {
+        let path = Self::conversation_path(id);
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
     /// Load a conversation by ID
     pub fn load(id: &str) -> anyhow::Result<Self> {
         let path = Self::conversation_path(id);

@@ -6,8 +6,8 @@ const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 
 use crate::agent_panel::{
-    AgentPanel, CancelRequest, EnableAutoApprove, LoadConversation, NewConversation, PanelState,
-    RerunFromMessage,
+    AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, LoadConversation,
+    NewConversation, PanelState, RerunFromMessage,
 };
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{
@@ -270,6 +270,8 @@ impl ConWorkspace {
         cx.subscribe_in(&agent_panel, window, Self::on_new_conversation)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_load_conversation)
+            .detach();
+        cx.subscribe_in(&agent_panel, window, Self::on_delete_conversation)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_cancel_request)
             .detach();
@@ -568,6 +570,22 @@ impl ConWorkspace {
             });
             self.save_session(cx);
         }
+    }
+
+    fn on_delete_conversation(
+        &mut self,
+        _panel: &Entity<AgentPanel>,
+        event: &DeleteConversation,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(e) = con_agent::Conversation::delete(&event.id) {
+            log::warn!("Failed to delete conversation: {}", e);
+        }
+        // Refresh the conversation list in the agent panel
+        self.agent_panel.update(cx, |panel, cx| {
+            panel.refresh_conversation_list(cx);
+        });
     }
 
     fn on_cancel_request(
@@ -1267,6 +1285,16 @@ impl ConWorkspace {
     fn quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_all_sessions();
         self.save_session(cx);
+        // Tear down ghostty surfaces before app exit to avoid Metal/NSView crashes.
+        // Hide views and unfocus first, then clear the tabs vector so GhosttyTerminal
+        // Drop runs (calling ghostty_surface_free) before cx.quit() exits the process.
+        for tab in &self.tabs {
+            for t in tab.pane_tree.all_terminals() {
+                t.set_ghostty_focus(false, cx);
+                t.set_native_view_visible(false, cx);
+            }
+        }
+        self.tabs.clear();
         cx.quit();
     }
 
