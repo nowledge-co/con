@@ -1319,7 +1319,7 @@ impl SettingsPanel {
         let models = provider_models(&self.selected_provider);
         let current_model = self.model_input.read(cx).value().to_string();
 
-        let mut provider_list = div().flex().flex_col().gap(px(4.0));
+        let mut provider_list = div().flex().flex_col().gap(px(1.0));
         for provider in ALL_PROVIDERS.iter() {
             let is_selected = *provider == self.selected_provider;
             let label = provider_label(provider);
@@ -1328,23 +1328,24 @@ impl SettingsPanel {
 
             let row = div()
                 .id(SharedString::from(format!("prov-{label}")))
-                .h(px(38.0))
-                .px(px(12.0))
+                .h(px(34.0))
+                .pl(px(10.0))
+                .pr(px(8.0))
                 .flex()
                 .items_center()
-                .gap(px(10.0))
-                .rounded(px(10.0))
+                .gap(px(8.0))
+                .rounded(px(8.0))
                 .cursor_pointer()
                 .bg(if is_selected {
-                    theme.primary.opacity(0.10)
+                    theme.primary.opacity(0.08)
                 } else {
                     theme.transparent
                 })
                 .hover(|s| {
                     if is_selected {
-                        s.bg(theme.primary.opacity(0.13))
+                        s.bg(theme.primary.opacity(0.10))
                     } else {
-                        s.bg(theme.muted.opacity(0.08))
+                        s.bg(theme.muted.opacity(0.06))
                     }
                 })
                 .on_mouse_down(
@@ -1352,21 +1353,26 @@ impl SettingsPanel {
                     cx.listener(move |this, _, window, cx| {
                         this.select_provider(provider_clone.clone(), window, cx);
                     }),
-                );
-            let row = row
-                .child(div().size(px(7.0)).rounded_full().bg(if is_selected {
-                    theme.primary
-                } else {
-                    theme.muted_foreground.opacity(0.20)
-                }))
+                )
+                .child(
+                    div()
+                        .w(px(3.0))
+                        .h(px(16.0))
+                        .rounded(px(1.5))
+                        .bg(if is_selected {
+                            theme.primary
+                        } else {
+                            theme.transparent
+                        }),
+                )
                 .child(
                     div()
                         .flex_1()
-                        .text_size(px(12.5))
+                        .text_size(px(12.0))
                         .font_weight(if is_selected {
                             FontWeight::SEMIBOLD
                         } else {
-                            FontWeight::MEDIUM
+                            FontWeight::NORMAL
                         })
                         .text_color(if is_selected {
                             theme.foreground
@@ -1375,116 +1381,99 @@ impl SettingsPanel {
                         })
                         .child(label),
                 )
-                .child(info_badge(
-                    if known_models == 0 {
-                        "Custom".to_string()
-                    } else {
-                        format!("{known_models}")
-                    },
-                    theme,
-                ));
+                .children(if known_models > 0 {
+                    Some(
+                        div()
+                            .text_size(px(9.5))
+                            .text_color(theme.muted_foreground.opacity(0.35))
+                            .child(format!("{known_models}")),
+                    )
+                } else {
+                    None
+                });
 
             provider_list = provider_list.child(row);
         }
 
-        let model_count_badge = if models.is_empty() {
-            "Custom".to_string()
-        } else {
-            format!("{} known", models.len())
-        };
+        let has_key = !self.api_key_input.read(cx).value().is_empty();
+        let has_url = !self.base_url_input.read(cx).value().is_empty();
 
         let provider_card = card(theme).child(
             div()
                 .px(px(16.0))
                 .py(px(14.0))
                 .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(12.0))
+                .flex_col()
+                .gap(px(8.0))
                 .child(
                     div()
-                        .flex_1()
                         .flex()
-                        .flex_col()
-                        .gap(px(3.0))
+                        .items_center()
+                        .justify_between()
                         .child(
                             div()
-                                .text_size(px(10.5))
+                                .text_size(px(16.0))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.primary)
-                                .child("ACTIVE PROVIDER"),
+                                .child(provider_name),
                         )
                         .child(
                             div()
-                                .text_size(px(18.0))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(provider_name),
+                                .size(px(8.0))
+                                .rounded_full()
+                                .bg(if has_key {
+                                    theme.success
+                                } else {
+                                    theme.muted_foreground.opacity(0.2)
+                                }),
                         ),
                 )
                 .child(
                     div()
                         .flex()
                         .flex_wrap()
-                        .justify_end()
                         .gap(px(6.0))
-                        .children([
-                            info_badge(model_count_badge.clone(), theme).into_any_element(),
-                            info_badge(
-                                if self.base_url_input.read(cx).value().is_empty() {
-                                    "Default endpoint".to_string()
-                                } else {
-                                    "Custom endpoint".to_string()
-                                },
-                                theme,
-                            )
-                            .into_any_element(),
-                            info_badge(
-                                if self.api_key_input.read(cx).value().is_empty() {
-                                    "No key set".to_string()
-                                } else {
-                                    "Credential configured".to_string()
-                                },
-                                theme,
-                            )
-                            .into_any_element(),
-                        ]),
+                        .text_size(px(10.5))
+                        .text_color(theme.muted_foreground.opacity(0.55))
+                        .child(if has_key { "Key set" } else { "No key" })
+                        .child("·")
+                        .child(if has_url {
+                            "Custom endpoint"
+                        } else {
+                            "Default endpoint"
+                        })
+                        .child("·")
+                        .child(if models.is_empty() {
+                            "Custom model"
+                        } else {
+                            "Known models"
+                        }),
                 ),
         );
 
         let mut model_card_content = card(theme).child(
             div()
                 .px(px(16.0))
-                .py(px(16.0))
+                .py(px(14.0))
                 .flex()
                 .flex_col()
-                .gap(px(12.0))
+                .gap(px(10.0))
                 .child(
                     div()
                         .flex()
-                        .items_start()
-                        .justify_between()
-                        .gap(px(12.0))
+                        .flex_col()
+                        .gap(px(2.0))
                         .child(
                             div()
-                                .flex_1()
-                                .flex()
-                                .flex_col()
-                                .gap(px(3.0))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child("Model"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.5))
-                                        .line_height(px(18.0))
-                                        .text_color(theme.muted_foreground.opacity(0.7))
-                                        .child("Set an explicit model or leave it blank to follow the provider default."),
-                                ),
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Model"),
                         )
-                        .child(info_badge(model_count_badge.clone(), theme)),
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme.muted_foreground.opacity(0.6))
+                                .child("Leave blank to use the provider's default model."),
+                        ),
                 )
                 .child(Input::new(&model_input)),
         );
@@ -1493,9 +1482,9 @@ impl SettingsPanel {
             let mut chips = div()
                 .flex()
                 .flex_wrap()
-                .gap(px(6.0))
+                .gap(px(4.0))
                 .px(px(16.0))
-                .pb(px(16.0));
+                .pb(px(14.0));
 
             for model in models {
                 let model_name = model.to_string();
@@ -1598,34 +1587,33 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .w(px(214.0))
+            .w(px(196.0))
             .flex_shrink_0()
             .child(group_label("Provider", &theme))
             .child(
                 card(theme).child(
                     div()
-                        .px(px(8.0))
-                        .py(px(8.0))
+                        .px(px(6.0))
+                        .py(px(6.0))
                         .flex()
                         .flex_col()
-                        .gap(px(4.0))
                         .child(provider_list),
                 ),
             );
 
+        let models_layout = div()
+            .flex()
+            .flex_1()
+            .gap(px(16.0))
+            .child(provider_column)
+            .child(right_col);
+
         section_content(
             "Models",
-            "Choose a provider, lock in a model, and tune the endpoint details without leaving the terminal.",
+            "Choose a provider, lock in a model, and tune the endpoint details.",
             theme,
         )
-        .child(
-            div()
-                .flex()
-                .flex_1()
-                .gap(px(20.0))
-                .child(provider_column)
-                .child(right_col),
-        )
+        .child(models_layout)
     }
 
     fn render_keys(&mut self, cx: &mut Context<Self>) -> Div {
@@ -1786,8 +1774,21 @@ impl Render for SettingsPanel {
         let viewport_w = viewport.width.as_f32();
         let viewport_h = viewport.height.as_f32();
         let compact = viewport_w < 980.0;
-        let sidebar_w = if compact { px(144.0) } else { px(160.0) };
-        let content_pad = if compact { px(18.0) } else { px(24.0) };
+        let narrow = viewport_w < 840.0;
+        let sidebar_w = if narrow {
+            px(48.0)
+        } else if compact {
+            px(144.0)
+        } else {
+            px(160.0)
+        };
+        let content_pad = if narrow {
+            px(14.0)
+        } else if compact {
+            px(18.0)
+        } else {
+            px(24.0)
+        };
         let card_width = {
             let target = match active {
                 SettingsSection::Appearance => (viewport_w * 0.84).clamp(720.0, 1100.0),
@@ -1813,53 +1814,71 @@ impl Render for SettingsPanel {
             .w(sidebar_w)
             .pt(px(8.0))
             .pb(px(12.0))
-            .px(px(8.0))
-            .gap(px(1.0))
+            .px(if narrow { px(4.0) } else { px(8.0) })
+            .gap(px(2.0))
             .flex_shrink_0();
 
         for section in ALL_SECTIONS {
             let is_active = *section == active;
             let section_val = *section;
-            sidebar = sidebar.child(
-                div()
-                    .id(SharedString::from(format!("nav-{}", section.label())))
-                    .flex()
-                    .items_center()
+            let mut nav_item = div()
+                .id(SharedString::from(format!("nav-{}", section.label())))
+                .flex()
+                .items_center()
+                .h(px(32.0))
+                .rounded(px(8.0))
+                .cursor_pointer()
+                .bg(if is_active {
+                    theme.muted.opacity(0.15)
+                } else {
+                    theme.transparent
+                })
+                .text_color(if is_active {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground
+                })
+                .font_weight(if is_active {
+                    FontWeight::MEDIUM
+                } else {
+                    FontWeight::NORMAL
+                })
+                .hover(|s| {
+                    if is_active {
+                        s
+                    } else {
+                        s.bg(theme.muted.opacity(0.08))
+                    }
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.active_section = section_val;
+                        cx.notify();
+                    }),
+                );
+
+            if narrow {
+                // Icon-only mode: centered icon, no label
+                nav_item = nav_item
+                    .justify_center()
+                    .size(px(36.0))
+                    .mx_auto()
+                    .child(
+                        svg()
+                            .path(section.icon())
+                            .size(px(16.0))
+                            .text_color(if is_active {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            }),
+                    );
+            } else {
+                nav_item = nav_item
                     .gap(px(8.0))
-                    .h(px(30.0))
                     .px(px(10.0))
-                    .rounded(px(6.0))
-                    .cursor_pointer()
                     .text_size(px(13.0))
-                    .bg(if is_active {
-                        theme.muted.opacity(0.15)
-                    } else {
-                        theme.transparent
-                    })
-                    .text_color(if is_active {
-                        theme.foreground
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .font_weight(if is_active {
-                        FontWeight::MEDIUM
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .hover(|s| {
-                        if is_active {
-                            s
-                        } else {
-                            s.bg(theme.muted.opacity(0.08))
-                        }
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.active_section = section_val;
-                            cx.notify();
-                        }),
-                    )
                     .child(
                         svg()
                             .path(section.icon())
@@ -1870,8 +1889,10 @@ impl Render for SettingsPanel {
                                 theme.muted_foreground
                             }),
                     )
-                    .child(section.label()),
-            );
+                    .child(section.label());
+            }
+
+            sidebar = sidebar.child(nav_item);
         }
 
         let content_scroll = div()
@@ -1933,23 +1954,49 @@ impl Render for SettingsPanel {
                     .child(
                         div()
                             .flex()
-                            .items_center()
-                            .justify_between()
-                            .h(px(48.0))
-                            .px(px(20.0))
+                            .flex_col()
                             .flex_shrink_0()
                             .child(
                                 div()
-                                    .text_size(px(13.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.foreground)
-                                    .child("Settings"),
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .h(px(44.0))
+                                    .px(px(20.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(13.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme.foreground)
+                                            .child("Settings"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(4.0))
+                                            .text_size(px(10.5))
+                                            .text_color(theme.muted_foreground.opacity(0.4))
+                                            .child(
+                                                div()
+                                                    .h(px(18.0))
+                                                    .px(px(5.0))
+                                                    .flex()
+                                                    .items_center()
+                                                    .rounded(px(4.0))
+                                                    .bg(theme.muted.opacity(0.12))
+                                                    .text_size(px(10.0))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(theme.muted_foreground.opacity(0.5))
+                                                    .child("Esc"),
+                                            )
+                                            .child("save & close"),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.muted_foreground.opacity(0.5))
-                                    .child("Esc save & close"),
+                                    .h(px(1.0))
+                                    .bg(theme.muted.opacity(0.10)),
                             ),
                     )
                     // Error banner
@@ -2077,19 +2124,6 @@ fn stacked_input_field(
         .child(Input::new(input))
 }
 
-fn info_badge(text: impl Into<String>, theme: &gpui_component::Theme) -> Div {
-    div()
-        .h(px(24.0))
-        .px(px(8.0))
-        .flex()
-        .items_center()
-        .rounded(px(7.0))
-        .bg(theme.muted.opacity(0.10))
-        .text_size(px(10.5))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(theme.muted_foreground.opacity(0.7))
-        .child(text.into())
-}
 
 fn import_step_item(
     title: &str,
