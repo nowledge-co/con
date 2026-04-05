@@ -94,7 +94,7 @@ useless_conversion = "allow"
 # Required by gpui-component for WASM compatibility
 psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
 # Fix multi-turn streaming history bug (assistant message dropped after tool call)
-# Upstream PR: https://github.com/0xPlaygrounds/rig/pull/TBD
+# Upstream PR: https://github.com/0xPlaygrounds/rig/pull/1601
 rig-core = { git = "https://github.com/wey-gu/rig.git", branch = "fix/streaming-multi-turn-history" }
 
 [profile.dev]

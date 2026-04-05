@@ -1353,8 +1353,9 @@ fn decode_key_escapes(input: &str) -> String {
             }
         } else if bytes[i] == b'x' && i + 2 < bytes.len() {
             // Bare hex without backslash: "x1b", "x03", etc.
+            // Weaker models (kimi-k2 via Groq) consistently omit the backslash.
             // Only match control characters (0x00-0x1F) and DEL (0x7F)
-            // to avoid false positives in normal text.
+            // to minimize false positives in normal text.
             let hex = &input[i + 1..i + 3];
             if hex.bytes().all(|b| b.is_ascii_hexdigit()) {
                 if let Ok(byte) = u8::from_str_radix(hex, 16) {
@@ -1532,31 +1533,25 @@ mod tests {
 
     #[test]
     fn decode_bare_hex_control_chars() {
-        // Weaker models omit the backslash: "x1b" should still decode
+        // Weaker models (kimi-k2) omit the backslash: "x1b" → ESC
         let decoded = decode_key_escapes("x1b");
-        assert_eq!(decoded.as_bytes(), &[0x1B], "bare x1b should decode to ESC");
+        assert_eq!(decoded.as_bytes(), &[0x1B], "bare x1b → ESC");
 
         let decoded = decode_key_escapes("x03");
-        assert_eq!(decoded.as_bytes(), &[0x03], "bare x03 should decode to Ctrl-C");
+        assert_eq!(decoded.as_bytes(), &[0x03], "bare x03 → Ctrl-C");
 
+        // tmux prefix + window number
         let decoded = decode_key_escapes("x02c");
-        assert_eq!(
-            decoded.as_bytes(),
-            &[0x02, b'c'],
-            "x02c should decode to Ctrl-B + c (tmux new window)"
-        );
+        assert_eq!(decoded.as_bytes(), &[0x02, b'c']);
     }
 
     #[test]
-    fn bare_hex_does_not_corrupt_normal_text() {
-        // "exit" contains "xi" but not "x" + two hex digits for a control char
-        assert_eq!(decode_key_escapes("exit"), "exit");
-        // "maximum" has "x" but followed by "im" which is not a control char range
+    fn bare_hex_safe_in_normal_text() {
+        // Only control chars (≤0x1F, 0x7F) match — printable hex values don't
+        assert_eq!(decode_key_escapes("exit"), "exit");    // 'x' + 'i' is not hex
+        assert_eq!(decode_key_escapes("hexdump"), "hexdump"); // 'x' + 'd' + 'u' — 0xdu invalid
+        assert_eq!(decode_key_escapes("x41"), "x41");      // 0x41 = 'A', not control
         assert_eq!(decode_key_escapes("maximum"), "maximum");
-        // "x41" is 0x41 = 'A', NOT a control char, so should stay literal
-        assert_eq!(decode_key_escapes("x41"), "x41");
-        // "hexdump" should not be affected
-        assert_eq!(decode_key_escapes("hexdump"), "hexdump");
     }
 
     #[test]
@@ -1568,7 +1563,7 @@ mod tests {
 
     #[test]
     fn decode_bare_hex_vim_sequence() {
-        // Weaker model sends: x1b:wqx0a (Escape, :wq, newline)
+        // kimi-k2 sends: x1b:wqx0a (Escape, :wq, newline)
         let decoded = decode_key_escapes("x1b:wqx0a");
         assert_eq!(decoded.as_bytes(), &[0x1B, b':', b'w', b'q', 0x0A]);
     }

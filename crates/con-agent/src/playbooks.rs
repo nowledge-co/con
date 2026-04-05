@@ -68,6 +68,15 @@ or create a new window with send_keys \"\\x02c\"
 pub const VIM_PLAYBOOK: &str = "\
 ## vim/nvim interaction via send_keys
 
+### Prefer heredoc over vim insert mode for writing new files
+If you need to CREATE a new file or REPLACE an entire file's contents, \
+navigate to a shell (or create one via tmux) and use heredoc:
+  send_keys \"cat > path/to/file << 'CONEOF'\\n\"
+  send_keys \"line 1\\nline 2\\nline 3\\n\"
+  send_keys \"CONEOF\\n\"
+This is faster and more reliable than typing into vim insert mode. \
+Use vim editing (below) when you need to MODIFY an existing file that is already open.
+
 ### Step 0: Always read_pane FIRST
 Before any vim operation, read_pane to understand:
 - Is vim actually visible right now? (if not, navigate to it first)
@@ -83,34 +92,30 @@ Before any vim operation, read_pane to understand:
 Send \\x1b (Escape) first to ensure you are in normal mode before any operation.
 
 ### Writing content to the current buffer
-To replace entire file content (turn-efficient approach):
+To replace entire file content:
 1. send_keys \"\\x1b\" (ensure normal mode) — read_pane to verify
 2. send_keys \"ggdG\" (go to top, delete everything) — read_pane to verify empty
 3. send_keys \"i\" (enter insert mode) then immediately send content in the SAME call:
-   send_keys \"i#!/bin/bash\\nline2\\nline3\\n...entire content...\"
+   send_keys \"iline1\\nline2\\nline3\\n...content...\"
    You can send up to ~50 lines in one send_keys call.
 4. read_pane to verify content was entered correctly
-5. send_keys \"\\x1b:w\\n\" (escape + save in one call)
+5. send_keys \"\\x1b\" then send_keys \":w\\n\" (escape, then save)
 6. read_pane to verify save succeeded (look for \"written\" message at bottom)
 
-This uses ~6 tool calls instead of 10+. Batch keystrokes when they don't require verification between them.
-
 To append content at the end:
-1. send_keys \"\\x1bGo\" (normal mode, go to last line, open new line below in insert mode)
+1. send_keys \"\\x1b\" then send_keys \"Go\" (normal mode, go to last line, open new line in insert)
 2. send_keys the content
-3. send_keys \"\\x1b:w\\n\" (normal mode, save)
+3. send_keys \"\\x1b\" then send_keys \":w\\n\"
 
 ### Saving and quitting
-- Save: send_keys \"\\x1b:w\\n\"
-- Save and quit: send_keys \"\\x1b:wq\\n\"
-- Quit without saving: send_keys \"\\x1b:q!\\n\"
-- Open a different file: send_keys \"\\x1b:e path/to/file\\n\"
+- Save: send_keys \"\\x1b\" then send_keys \":w\\n\"
+- Save and quit: send_keys \"\\x1b\" then send_keys \":wq\\n\"
+- Quit without saving: send_keys \"\\x1b\" then send_keys \":q!\\n\"
+- Open a different file: send_keys \"\\x1b\" then send_keys \":e path/to/file\\n\"
 
 ### Large content (more than 10 lines)
-Send content in chunks of 5-10 lines. After each chunk:
-1. read_pane to verify the chunk was received correctly
-2. If corruption is detected, undo with send_keys \"\\x1bu\" and retry the chunk
-3. Continue with the next chunk
+Prefer heredoc through a shell. If you must use vim, send content in chunks of 5-10 lines. \
+After each chunk, read_pane to verify. If corruption, undo with send_keys \"\\x1bu\" and retry.
 
 ### When vim is inside tmux
 If you need to navigate away from vim to a tmux shell, use the tmux prefix (\\x02) — \
