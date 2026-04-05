@@ -267,7 +267,7 @@ impl Tool for FileReadTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read the contents of a file.".to_string(),
+            description: "Read a LOCAL file on the workspace machine. This tool CANNOT read files on remote SSH hosts. For remote files, use read_pane to see editor content or send_keys to run cat in a remote shell.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -334,7 +334,7 @@ impl Tool for FileWriteTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Write content to a file. Creates the file if it doesn't exist."
+            description: "Write content to a LOCAL file on the workspace machine. Creates the file if it doesn't exist. CANNOT write to remote SSH hosts — use send_keys to operate remote editors or shell redirects instead."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -394,7 +394,7 @@ impl Tool for EditFileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Edit a file by replacing a specific text snippet. Safer than file_write — only changes the targeted section.".to_string(),
+            description: "Edit a LOCAL file on the workspace machine by replacing a specific text snippet. CANNOT edit files on remote SSH hosts — use send_keys with editor commands instead.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -475,7 +475,7 @@ impl Tool for ListFilesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List files and directories. Returns a tree-like listing.".to_string(),
+            description: "List LOCAL files and directories on the workspace machine. CANNOT list files on remote SSH hosts.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -602,7 +602,7 @@ impl Tool for SearchTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Search for text in files using grep. Returns matching lines with file paths and line numbers.".to_string(),
+            description: "Search for text in LOCAL files on the workspace machine using grep. CANNOT search remote SSH hosts. Returns matching lines with file paths and line numbers.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1004,7 +1004,7 @@ impl Tool for SendKeysTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send raw keystrokes to a specific con terminal pane. This operates on the visible target exactly as a user would type, so it is appropriate for tmux, editors, and other TUIs when done intentionally. For shell commands, prefer terminal_exec only when the pane exposes exec_visible_shell.".to_string(),
+            description: "Send raw keystrokes to a specific con terminal pane. This is THE primary tool for interacting with tmux, vim/nvim, and other TUIs. IMPORTANT: Always follow send_keys with read_pane to verify the action took effect. Common sequences: \\n (Enter), \\x1b (Escape), \\x03 (Ctrl-C), \\x02 (Ctrl-B, tmux prefix), \\x1b[A/B/C/D (arrow keys). For shell commands, prefer terminal_exec when exec_visible_shell is available.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

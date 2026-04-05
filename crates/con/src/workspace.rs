@@ -1049,8 +1049,56 @@ impl ConWorkspace {
             } else {
                 format!("\nnotes:\n- {}", control.notes.join("\n- "))
             };
+            let suggestion = match control.visible_target.kind {
+                con_agent::PaneVisibleTargetKind::TmuxSession => {
+                    format!(
+                        "\n\nSUGGESTED APPROACH: Use send_keys with tmux prefix (\\x02) to navigate to a shell pane, \
+                         then send your command. Steps:\n\
+                         1. send_keys(pane_index={idx}, keys=\"\\x02c\") to create a new tmux window with a shell\n\
+                         2. read_pane(pane_index={idx}) to verify you reached a shell prompt\n\
+                         3. send_keys(pane_index={idx}, keys=\"your_command\\n\") to execute\n\
+                         4. read_pane(pane_index={idx}) to see the output\n\
+                         Or switch to an existing shell window: send_keys(pane_index={idx}, keys=\"\\x02\") then send_keys(pane_index={idx}, keys=\"0\") for window 0.",
+                        idx = target_pane_index
+                    )
+                }
+                con_agent::PaneVisibleTargetKind::InteractiveApp => {
+                    let label = control.visible_target.label.as_deref().unwrap_or("");
+                    let lower = label.to_lowercase();
+                    if lower.contains("vim") || lower.contains("nvim") || lower.contains("neovim") {
+                        format!(
+                            "\n\nSUGGESTED APPROACH: Use send_keys to interact with vim/nvim directly. To write content:\n\
+                             1. send_keys(pane_index={idx}, keys=\"\\x1b\") to ensure normal mode\n\
+                             2. send_keys(pane_index={idx}, keys=\":%d\\n\") to clear the buffer\n\
+                             3. send_keys(pane_index={idx}, keys=\"i\") to enter insert mode\n\
+                             4. send_keys(pane_index={idx}, keys=\"your content here\") to type content\n\
+                             5. send_keys(pane_index={idx}, keys=\"\\x1b:w\\n\") to save\n\
+                             6. read_pane(pane_index={idx}) after each step to verify.",
+                            idx = target_pane_index
+                        )
+                    } else {
+                        format!(
+                            "\n\nSUGGESTED APPROACH: Use read_pane(pane_index={idx}) to inspect the current screen, then \
+                             send_keys(pane_index={idx}, ...) for keystroke-level interaction. \
+                             Use \\x1b (Escape) or \\x03 (Ctrl-C) to exit to a shell if needed. \
+                             Always verify with read_pane after each send_keys.",
+                            idx = target_pane_index
+                        )
+                    }
+                }
+                _ => {
+                    format!(
+                        "\n\nSUGGESTED APPROACH: Use read_pane(pane_index={idx}) to inspect the visible app, then \
+                         send_keys(pane_index={idx}, ...) for interaction. \
+                         Always verify with read_pane after sending keys.",
+                        idx = target_pane_index
+                    )
+                }
+            };
             let output = format!(
-                "Refused to execute shell command in pane {} because the visible target is not a proven shell.\nmode: {}\nactive_scope: {}\nhost: {}\nvisible_target: {}\ncontrol_channels: {}\ncontrol_capabilities: {}\nUse list_panes/read_pane/send_keys to inspect or interact with tmux, nvim, or other TUIs.{}",
+                "Refused to execute shell command in pane {} because the visible target is not a proven shell.\n\
+                 mode: {}\nactive_scope: {}\nhost: {}\nvisible_target: {}\n\
+                 control_channels: {}\ncontrol_capabilities: {}{}{}",
                 target_pane_index,
                 runtime.mode.as_str(),
                 active_scope,
@@ -1069,6 +1117,7 @@ impl ConWorkspace {
                     .collect::<Vec<_>>()
                     .join(", "),
                 notes,
+                suggestion,
             );
             let _ = req.response_tx.send(TerminalExecResponse {
                 output,

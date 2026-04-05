@@ -1013,11 +1013,11 @@ impl TerminalContext {
              - read_pane: Read last N lines from any pane (includes scrollback). Use to inspect output.\n\n\
              - send_keys: Send raw keystrokes to any pane. For TUI interaction: Ctrl-C (\\x03), arrows, Enter.\n\n\
              - search_panes: Search scrollback across all panes by regex. Find previous errors, output, etc.\n\n\
-             - file_read: Read a file. Supports line ranges (start_line, end_line). Read before editing.\n\
-             - file_write: Write a file. Creates parent directories. Read the file first if it exists.\n\
-             - edit_file: Surgical text replacement. old_text must match EXACTLY and be UNIQUE in the file.\n\n\
-             - list_files: List files in a directory. Respects .gitignore. Max 500 entries.\n\
-             - search: Search file contents by regex pattern. Returns file:line:match triples.\n\
+             - file_read: Read a LOCAL file on the workspace machine. CANNOT access files on remote SSH hosts.\n\
+             - file_write: Write a LOCAL file on the workspace machine. CANNOT write to remote SSH hosts.\n\
+             - edit_file: Surgical text replacement on LOCAL files only. old_text must match EXACTLY and be UNIQUE.\n\n\
+             - list_files: List LOCAL files in a directory. Respects .gitignore. Max 500 entries.\n\
+             - search: Search LOCAL file contents by regex pattern. Returns file:line:match triples.\n\
              </tools>\n\n\
              ## Multi-pane awareness\n\
              You have access to ALL terminal panes, not just the focused one.\n\
@@ -1035,8 +1035,29 @@ impl TerminalContext {
              - For tmux, vim, htop, dashboards, Codex CLI, Claude Code, and other TUIs: inspect first and respect the pane's available control channels.\n\
              - If a command fails (exit_code != 0), diagnose the error before retrying.\n\
              - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
-             </safety>\n\n",
+             </safety>\n\n\
+             <remote_file_rules>\n\
+             CRITICAL: file_read, file_write, edit_file, list_files, and search are LOCAL-ONLY tools.\n\
+             They access the workspace machine's filesystem, NOT remote hosts.\n\
+             When the focused pane is remote (host is set, or SSH/tmux scope exists):\n\
+             - NEVER use file_read to inspect a remote file — use read_pane to see what is on screen.\n\
+             - NEVER use file_write/edit_file for remote files — use send_keys to operate the remote editor or shell.\n\
+             - To read a remote file: navigate to a shell pane in tmux, then send_keys \"cat path/to/file\\n\" and read_pane.\n\
+             - To write a remote file: use send_keys to type content into an open editor (vim/nvim), or\n\
+               navigate to a remote shell and use send_keys \"cat > file << 'CONEOF'\\ncontent\\nCONEOF\\n\".\n\
+             - To edit a remote file: use send_keys with editor commands (vim :%s, :e, etc.).\n\
+             </remote_file_rules>\n\n\
+             <verify_before_act>\n\
+             MANDATORY: Before ANY send_keys call, you MUST read_pane first to confirm:\n\
+             1. What application is currently visible (shell, nvim, tmux window list, etc.)\n\
+             2. What mode that application is in (vim normal/insert, tmux prefix, etc.)\n\
+             3. Whether your keystrokes will go to the intended target\n\
+             After EVERY send_keys call, read_pane again to verify the action took effect.\n\
+             Never chain multiple send_keys without reading between them.\n\
+             </verify_before_act>\n\n",
         );
+
+        self.emit_tui_guide(&mut prompt);
 
         prompt.push_str("<terminal_context>\n");
         prompt.push_str(&format!(
@@ -1348,6 +1369,103 @@ impl TerminalContext {
 
         prompt
     }
+
+    /// Emit contextual TUI interaction guidance when any visible pane has a TUI target.
+    /// Only adds content when a TUI is detected — shell-only sessions are unchanged.
+    fn emit_tui_guide(&self, prompt: &mut String) {
+        use crate::control::PaneVisibleTargetKind;
+        use crate::playbooks;
+
+        let focused_is_tui = matches!(
+            self.focused_control.visible_target.kind,
+            PaneVisibleTargetKind::InteractiveApp
+                | PaneVisibleTargetKind::TmuxSession
+                | PaneVisibleTargetKind::AgentCli
+                | PaneVisibleTargetKind::UnknownTui
+        );
+        let any_other_pane_tui = self.other_panes.iter().any(|p| {
+            matches!(
+                p.control.visible_target.kind,
+                PaneVisibleTargetKind::InteractiveApp
+                    | PaneVisibleTargetKind::TmuxSession
+                    | PaneVisibleTargetKind::AgentCli
+                    | PaneVisibleTargetKind::UnknownTui
+            )
+        });
+        let is_remote = self.focused_hostname.is_some() || self.ssh_host.is_some();
+
+        if !focused_is_tui && !any_other_pane_tui && !is_remote {
+            return;
+        }
+
+        prompt.push_str("<tui_interaction_guide>\n");
+
+        // Remote work rules come first — they change what tools are valid
+        if is_remote {
+            prompt.push_str(playbooks::REMOTE_WORK);
+            prompt.push('\n');
+        }
+
+        if focused_is_tui || any_other_pane_tui {
+            prompt.push_str(playbooks::VERIFY_AFTER_ACT);
+            prompt.push('\n');
+        }
+
+        // Check for tmux anywhere in focused stack or other panes
+        let has_tmux = self
+            .focused_control
+            .target_stack
+            .iter()
+            .any(|t| t.kind == PaneVisibleTargetKind::TmuxSession)
+            || self.other_panes.iter().any(|p| {
+                p.control
+                    .target_stack
+                    .iter()
+                    .any(|t| t.kind == PaneVisibleTargetKind::TmuxSession)
+            });
+
+        // Check for vim/nvim in visible targets or titles
+        let has_vim = self.has_vim_visible()
+            || self
+                .other_panes
+                .iter()
+                .any(|p| is_vim_target(&p.control.visible_target, p.title.as_deref()));
+
+        if has_tmux {
+            prompt.push_str(playbooks::TMUX_PLAYBOOK);
+            prompt.push('\n');
+        }
+        if has_vim {
+            prompt.push_str(playbooks::VIM_PLAYBOOK);
+            prompt.push('\n');
+        }
+        if (focused_is_tui || any_other_pane_tui) && !has_tmux && !has_vim {
+            prompt.push_str(playbooks::GENERAL_TUI);
+            prompt.push('\n');
+        }
+
+        prompt.push_str("</tui_interaction_guide>\n\n");
+    }
+
+    fn has_vim_visible(&self) -> bool {
+        is_vim_target(&self.focused_control.visible_target, self.focused_title.as_deref())
+    }
+}
+
+fn is_vim_target(target: &crate::control::PaneVisibleTarget, title: Option<&str>) -> bool {
+    if let Some(label) = &target.label {
+        let lower = label.to_lowercase();
+        if lower.contains("vim") || lower.contains("nvim") || lower.contains("neovim") {
+            return true;
+        }
+    }
+    if let Some(title) = title {
+        let lower = title.to_lowercase();
+        if lower.contains("vim") || lower.contains("nvim") || lower.contains("neovim") {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -1689,5 +1807,248 @@ mod tests {
             scope.label.as_deref() == Some("claude_code")
                 && scope.evidence_source == PaneEvidenceSource::Title
         }));
+    }
+
+    // ── TUI guide emission tests ───────────────────────────────────
+
+    use super::PaneSummary;
+
+    fn make_shell_context() -> TerminalContext {
+        let runtime = PaneRuntimeState {
+            mode: PaneMode::Shell,
+            shell_metadata_fresh: true,
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
+            agent_cli: None,
+            tmux_session: None,
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: Vec::new(),
+            warnings: Vec::new(),
+        };
+        TerminalContext {
+            focused_pane_index: 1,
+            focused_hostname: None,
+            focused_hostname_confidence: None,
+            focused_hostname_source: None,
+            focused_title: None,
+            focused_pane_mode: PaneMode::Shell,
+            focused_has_shell_integration: true,
+            focused_shell_metadata_fresh: true,
+            focused_runtime_stack: Vec::new(),
+            focused_runtime_warnings: Vec::new(),
+            focused_control: PaneControlState::from_runtime(&runtime),
+            cwd: Some("/home/user".to_string()),
+            recent_output: Vec::new(),
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            git_branch: None,
+            ssh_host: None,
+            tmux_session: None,
+            agents_md: None,
+            skills: Vec::new(),
+            command_history: Vec::new(),
+            other_panes: Vec::new(),
+            git_diff: None,
+            project_structure: None,
+        }
+    }
+
+    #[test]
+    fn tui_guide_absent_for_plain_shell() {
+        let ctx = make_shell_context();
+        let prompt = ctx.to_system_prompt();
+        assert!(
+            !prompt.contains("<tui_interaction_guide>"),
+            "TUI guide should not appear for plain shell pane"
+        );
+    }
+
+    #[test]
+    fn tui_guide_emitted_for_tmux_focused_pane() {
+        let mut ctx = make_shell_context();
+        let runtime = PaneRuntimeState {
+            mode: PaneMode::Multiplexer,
+            shell_metadata_fresh: false,
+            remote_host: Some("haswell".to_string()),
+            remote_host_confidence: Some(PaneConfidence::Advisory),
+            remote_host_source: Some(PaneEvidenceSource::ScreenStructure),
+            agent_cli: None,
+            tmux_session: Some("work".to_string()),
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: vec![
+                super::PaneRuntimeScope {
+                    kind: super::PaneScopeKind::Multiplexer,
+                    label: Some("work".to_string()),
+                    host: Some("haswell".to_string()),
+                    confidence: PaneConfidence::Advisory,
+                    evidence_source: PaneEvidenceSource::ScreenStructure,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        ctx.focused_pane_mode = PaneMode::Multiplexer;
+        ctx.focused_shell_metadata_fresh = false;
+        ctx.focused_control = PaneControlState::from_runtime(&runtime);
+        let prompt = ctx.to_system_prompt();
+        assert!(
+            prompt.contains("<tui_interaction_guide>"),
+            "TUI guide should appear when focused pane is tmux"
+        );
+        assert!(
+            prompt.contains("tmux prefix"),
+            "Tmux playbook should be included"
+        );
+        assert!(
+            prompt.contains("Verify-after-act"),
+            "Verify-after-act should always be included"
+        );
+    }
+
+    #[test]
+    fn tui_guide_includes_vim_when_nvim_visible() {
+        let mut ctx = make_shell_context();
+        ctx.focused_title = Some("nvim test.sh".to_string());
+        let runtime = PaneRuntimeState {
+            mode: PaneMode::Tui,
+            shell_metadata_fresh: false,
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
+            agent_cli: None,
+            tmux_session: None,
+            active_scope: Some(super::PaneRuntimeScope {
+                kind: super::PaneScopeKind::InteractiveApp,
+                label: Some("nvim".to_string()),
+                host: None,
+                confidence: PaneConfidence::Advisory,
+                evidence_source: PaneEvidenceSource::Title,
+            }),
+            evidence: Vec::new(),
+            scope_stack: vec![super::PaneRuntimeScope {
+                kind: super::PaneScopeKind::InteractiveApp,
+                label: Some("nvim".to_string()),
+                host: None,
+                confidence: PaneConfidence::Advisory,
+                evidence_source: PaneEvidenceSource::Title,
+            }],
+            warnings: Vec::new(),
+        };
+        ctx.focused_pane_mode = PaneMode::Tui;
+        ctx.focused_shell_metadata_fresh = false;
+        ctx.focused_control = PaneControlState::from_runtime(&runtime);
+        let prompt = ctx.to_system_prompt();
+        assert!(
+            prompt.contains("<tui_interaction_guide>"),
+            "TUI guide should appear when nvim is visible"
+        );
+        assert!(
+            prompt.contains("vim/nvim interaction"),
+            "Vim playbook should be included when nvim is in the title"
+        );
+    }
+
+    #[test]
+    fn tui_guide_emitted_when_other_pane_has_tui() {
+        let mut ctx = make_shell_context();
+        // Focused pane is shell, but another pane has tmux
+        let tmux_runtime = PaneRuntimeState {
+            mode: PaneMode::Multiplexer,
+            shell_metadata_fresh: false,
+            remote_host: Some("haswell".to_string()),
+            remote_host_confidence: Some(PaneConfidence::Advisory),
+            remote_host_source: Some(PaneEvidenceSource::ScreenStructure),
+            agent_cli: None,
+            tmux_session: Some("work".to_string()),
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: vec![super::PaneRuntimeScope {
+                kind: super::PaneScopeKind::Multiplexer,
+                label: Some("work".to_string()),
+                host: None,
+                confidence: PaneConfidence::Advisory,
+                evidence_source: PaneEvidenceSource::ScreenStructure,
+            }],
+            warnings: Vec::new(),
+        };
+        ctx.other_panes.push(PaneSummary {
+            pane_index: 2,
+            hostname: Some("haswell".to_string()),
+            hostname_confidence: Some(PaneConfidence::Advisory),
+            hostname_source: Some(PaneEvidenceSource::ScreenStructure),
+            title: Some("tmux".to_string()),
+            mode: PaneMode::Multiplexer,
+            has_shell_integration: false,
+            shell_metadata_fresh: false,
+            control: PaneControlState::from_runtime(&tmux_runtime),
+            agent_cli: None,
+            active_scope: None,
+            evidence: Vec::new(),
+            runtime_stack: Vec::new(),
+            runtime_warnings: Vec::new(),
+            tmux_session: Some("work".to_string()),
+            cwd: None,
+            last_command: None,
+            last_exit_code: None,
+            is_busy: false,
+            recent_output: Vec::new(),
+        });
+        let prompt = ctx.to_system_prompt();
+        assert!(
+            prompt.contains("<tui_interaction_guide>"),
+            "TUI guide should appear when any other pane has a TUI target"
+        );
+    }
+
+    #[test]
+    fn remote_work_guide_emitted_for_ssh_pane() {
+        let mut ctx = make_shell_context();
+        ctx.focused_hostname = Some("haswell".to_string());
+        ctx.ssh_host = Some("haswell".to_string());
+        // Even a shell pane on a remote host should get the remote work guide
+        let prompt = ctx.to_system_prompt();
+        assert!(
+            prompt.contains("<tui_interaction_guide>"),
+            "TUI guide should appear for remote SSH pane"
+        );
+        assert!(
+            prompt.contains("LOCAL-ONLY"),
+            "Remote work guide should warn about local-only file tools"
+        );
+        assert!(
+            prompt.contains("CANNOT access this remote host"),
+            "Remote work guide should explicitly say files can't reach remote"
+        );
+    }
+
+    #[test]
+    fn system_prompt_contains_remote_file_rules_in_safety() {
+        let ctx = make_shell_context();
+        let prompt = ctx.to_system_prompt();
+        assert!(
+            prompt.contains("<remote_file_rules>"),
+            "Remote file rules should be in the system prompt"
+        );
+        assert!(
+            prompt.contains("NEVER use file_read to inspect a remote file"),
+            "Remote file rules should explicitly prohibit file_read on remote"
+        );
+    }
+
+    #[test]
+    fn system_prompt_contains_verify_before_act_in_safety() {
+        let ctx = make_shell_context();
+        let prompt = ctx.to_system_prompt();
+        assert!(
+            prompt.contains("<verify_before_act>"),
+            "Verify-before-act should be in the safety section"
+        );
+        assert!(
+            prompt.contains("MUST read_pane first"),
+            "Verify-before-act should require read_pane before send_keys"
+        );
     }
 }

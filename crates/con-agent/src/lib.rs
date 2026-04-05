@@ -2,6 +2,7 @@ pub mod context;
 pub mod control;
 pub mod conversation;
 pub mod hook;
+pub mod playbooks;
 pub mod provider;
 pub mod skills;
 pub mod tools;
