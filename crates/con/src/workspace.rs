@@ -1340,8 +1340,23 @@ impl ConWorkspace {
                     }
                 }
             }
+            PaneQuery::CheckBusy { pane_index } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let terminal = &all_terminals[pane_index - 1];
+                    PaneResponse::BusyStatus {
+                        is_busy: terminal.is_busy(cx),
+                        has_shell_integration: terminal.has_shell_integration(cx),
+                    }
+                }
+            }
             PaneQuery::WaitFor { .. } => {
-                // The WaitForTool drives its own polling loop using List and
+                // The WaitForTool drives its own polling loop using CheckBusy and
                 // ReadContent queries. This variant should never arrive here,
                 // but we handle it gracefully just in case.
                 PaneResponse::Error(
@@ -1925,20 +1940,16 @@ impl Render for ConWorkspace {
         let mut main_area = div().flex().flex_1().min_h_0().child(terminal_area);
 
         if self.agent_panel_open {
-            // Draggable divider — matches pane divider style
+            // Draggable divider — invisible, only visible on hover
             main_area = main_area
                 .child(
                     div()
                         .id("agent-panel-divider")
-                        .w(px(6.0))
+                        .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
                         .cursor_col_resize()
-                        .bg(theme.title_bar)
-                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
+                        .hover(|s| s.bg(theme.primary.opacity(0.15)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
@@ -1961,12 +1972,11 @@ impl Render for ConWorkspace {
         let mut tab_bar = div()
             .id("tab-bar")
             .flex()
-            .h(px(38.0))
-            .bg(theme.title_bar)
+            .h(px(36.0))
             .items_end()
             .pl(px(78.0)) // leave room for traffic lights
-            .pr(px(8.0))
-            .gap(px(0.0))
+            .pr(px(4.0))
+            .gap(px(1.0))
             .on_click(|event, window, _cx| {
                 if event.click_count() == 2 {
                     window.titlebar_double_click();
@@ -2001,7 +2011,7 @@ impl Render for ConWorkspace {
                     .rounded(px(4.0))
                     .ml(px(2.0))
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.muted.opacity(0.25)));
+                    .hover(|s| s.bg(theme.muted.opacity(0.15)));
                 // Only show on hover for inactive tabs
                 if !is_active {
                     close_el = close_el.invisible().group_hover("tab", |s| s.visible());
@@ -2047,22 +2057,22 @@ impl Render for ConWorkspace {
                 );
 
             if is_active {
-                // Active tab: rounded top corners, connects flush to content area below
+                // Active tab — subtle lift, connects to content below
                 tab_el = tab_el
-                    .rounded_t(px(8.0))
-                    .bg(theme.background)
+                    .rounded_t(px(7.0))
+                    .bg(theme.muted.opacity(0.08))
                     .text_color(theme.foreground)
                     .font_weight(FontWeight::MEDIUM);
             } else {
-                // Inactive tab: fully rounded, subtle hover
+                // Inactive tab — ghost, appears on hover
                 tab_el = tab_el
                     .rounded(px(6.0))
                     .mb(px(2.0))
-                    .text_color(theme.muted_foreground.opacity(0.55))
-                    .hover(|s| s.bg(theme.muted.opacity(0.08)));
+                    .text_color(theme.muted_foreground.opacity(0.5))
+                    .hover(|s| s.bg(theme.muted.opacity(0.06)));
             }
 
-            let mut tab_content = div().flex().items_center().gap(px(6.0)).w_full().min_w_0();
+            let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
 
             // Attention dot for tabs with pending agent activity
             if needs_attention {
@@ -2112,21 +2122,20 @@ impl Render for ConWorkspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(26.0))
-                .mb(px(3.0))
+                .size(px(24.0))
+                .mb(px(4.0))
                 .ml(px(4.0))
-                .rounded(px(6.0))
+                .rounded(px(5.0))
                 .cursor_pointer()
-                .text_color(theme.muted_foreground)
-                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground))
+                .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
                 .child(
                     svg()
                         .path("phosphor/plus.svg")
-                        .size(px(14.0))
-                        .text_color(theme.muted_foreground),
+                        .size(px(13.0))
+                        .text_color(theme.muted_foreground.opacity(0.5)),
                 ),
         );
 
@@ -2140,22 +2149,22 @@ impl Render for ConWorkspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(26.0))
-                .mb(px(3.0))
-                .rounded(px(6.0))
+                .size(px(24.0))
+                .mb(px(4.0))
+                .rounded(px(5.0))
                 .cursor_pointer()
-                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground))
+                .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_input_bar(&crate::ToggleInputBar, window, cx);
                 }))
                 .child(
                     svg()
                         .path("phosphor/square-half-bottom-fill.svg")
-                        .size(px(14.0))
+                        .size(px(13.0))
                         .text_color(if self.input_bar_visible {
                             theme.primary
                         } else {
-                            theme.muted_foreground
+                            theme.muted_foreground.opacity(0.5)
                         }),
                 ),
         );
@@ -2167,23 +2176,23 @@ impl Render for ConWorkspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(26.0))
-                .mb(px(3.0))
-                .mr(px(4.0))
-                .rounded(px(6.0))
+                .size(px(24.0))
+                .mb(px(4.0))
+                .mr(px(6.0))
+                .rounded(px(5.0))
                 .cursor_pointer()
-                .hover(|s| s.bg(theme.muted.opacity(0.15)).text_color(theme.foreground))
+                .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
                 }))
                 .child(
                     svg()
                         .path("phosphor/square-half-fill.svg")
-                        .size(px(14.0))
+                        .size(px(13.0))
                         .text_color(if self.agent_panel_open {
                             theme.primary
                         } else {
-                            theme.muted_foreground
+                            theme.muted_foreground.opacity(0.5)
                         }),
                 ),
         );
@@ -2193,7 +2202,7 @@ impl Render for ConWorkspace {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.background)
+            .bg(theme.title_bar)
             .font_family("Ioskeley Mono")
             .key_context("ConWorkspace")
             // Pane drag-to-resize: capture mouse move/up on root so it works

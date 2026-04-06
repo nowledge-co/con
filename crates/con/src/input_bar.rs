@@ -425,7 +425,7 @@ impl Render for InputBar {
                                 theme.muted_foreground.opacity(0.3)
                             }),
                     )
-                    .child("All"),
+                    .child("Broadcast"),
             );
 
             Some(pills)
@@ -530,8 +530,8 @@ impl Render for InputBar {
             // ── Flat container ──
             .child(
                 div()
-                    .px(px(10.0))
-                    .py(px(6.0))
+                    .px(px(12.0))
+                    .py(px(7.0))
                     .flex()
                     .flex_col()
                     .gap(px(4.0))
@@ -542,7 +542,7 @@ impl Render for InputBar {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(px(8.0))
                             .child(mode_prefix)
                             .child(
                                 div()

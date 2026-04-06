@@ -2090,8 +2090,8 @@ impl Render for AgentPanel {
             .flex()
             .items_center()
             .justify_between()
-            .h(px(38.0))
-            .px(px(12.0))
+            .h(px(36.0))
+            .px(px(14.0))
             .flex_shrink_0()
             .child(header_left)
             .child({
