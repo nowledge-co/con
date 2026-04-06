@@ -1072,7 +1072,8 @@ impl TerminalContext {
                 shell integration, inside tmux), use send_keys to type the command + Enter in a shell prompt.\n\n\
              ### Choose the right tool\n\
              - SHELL COMMANDS on a pane with `exec_visible_shell` → terminal_exec / batch_exec.\n\
-             - PARALLEL WORK across hosts → create_pane for each host, then batch_exec.\n\
+             - PARALLEL WORK across hosts → create_pane for each host, read_pane to confirm ready, \
+               then terminal_exec (if exec_visible_shell) or send_keys.\n\
              - SHELL COMMANDS on a pane WITHOUT `exec_visible_shell` → send_keys \"command\\n\" in a shell prompt.\n\
              - LONG-RUNNING commands → launch, then wait_for (not repeated read_pane).\n\
              - INTERACTIVE TUI (vim, tmux, htop) → send_keys + read_pane (follow playbooks).\n\
@@ -1091,8 +1092,8 @@ impl TerminalContext {
              - shell_exec: Run a command in a hidden LOCAL subprocess. Output not shown to user.\n\
                For local-only tasks: git, file searches, package lookups. Never for remote environments.\n\n\
              - create_pane: Create a new terminal pane (split in current tab). Optionally run a startup command \
-               (e.g. \"ssh cinnamon\"). Returns the new pane index. After creation, call list_panes to confirm \
-               the new pane's state before using it.\n\n\
+               (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it.\n\
+               Returns the new pane index. After creation, read_pane to observe what happened before proceeding.\n\n\
              - list_panes: List all panes with metadata, control state, capabilities, and addressing notes.\n\n\
              - read_pane: Read last N lines from any pane (includes scrollback).\n\n\
              - send_keys: Send keystrokes to a pane's PTY. Use for:\n\
@@ -1100,8 +1101,9 @@ impl TerminalContext {
                (b) Shell commands on panes without exec_visible_shell (SSH, tmux shells).\n\
                NEVER use to simulate con application shortcuts (Cmd+T, Cmd+W).\n\n\
              - wait_for: Wait for a pane to become idle or for a pattern to appear. Use after launching \
-               long-running commands instead of polling with read_pane. Idle mode requires shell integration — \
-               if absent, use pattern mode. Default timeout: 120s, max: 600s.\n\n\
+               long-running commands instead of polling with read_pane. Idle mode works universally: \
+               shell integration for precise detection, output quiescence (5s of no new output) as fallback. \
+               Default timeout: 120s, max: 600s.\n\n\
              - tmux_inspect: Inspect tmux adapter state for a pane containing a tmux session.\n\
              - search_panes: Search scrollback across panes by regex.\n\n\
              - file_read, file_write, edit_file: LOCAL filesystem only. Cannot access remote SSH hosts.\n\
@@ -1119,12 +1121,11 @@ impl TerminalContext {
              - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
              </safety>\n\n\
              <verify_before_act>\n\
-             MANDATORY: Before ANY send_keys call, read_pane first to confirm:\n\
-             1. What application is visible (shell, nvim, tmux, etc.)\n\
-             2. What mode it is in (vim normal/insert, shell prompt, etc.)\n\
-             3. Whether your keystrokes will reach the intended target\n\
-             After EVERY send_keys, read_pane again to verify the action took effect.\n\
-             Never chain multiple send_keys without reading between them.\n\
+             MANDATORY: Observe before acting. Never assume terminal state — always read_pane first.\n\
+             - Before send_keys: read_pane to see what is on screen and where keystrokes will go.\n\
+             - After send_keys: read_pane to verify the action took effect.\n\
+             - After create_pane: read_pane to see what the startup command produced.\n\
+             - Never chain multiple actions without observing between them.\n\
              </verify_before_act>\n\n",
         );
 

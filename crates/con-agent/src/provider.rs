@@ -425,7 +425,7 @@ macro_rules! build_and_stream {
             .tool(SendKeysTool::new($pane_tx.clone()))
             .tool(SearchPanesTool::new($pane_tx.clone()))
             .tool(CreatePaneTool::new($pane_tx.clone()))
-            .tool(WaitForTool::new($pane_tx))
+            .tool(WaitForTool::new($pane_tx, $cancelled.clone()))
             .tool(BatchExecTool::new($terminal_exec_tx))
             .default_max_turns($cfg.max_turns);
 

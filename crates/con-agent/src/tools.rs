@@ -3,6 +3,8 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use crate::context::PaneMode;
 use crate::control::{
@@ -1344,11 +1346,12 @@ pub struct WaitForOutput {
 
 pub struct WaitForTool {
     pane_tx: Sender<PaneRequest>,
+    cancel_flag: Arc<AtomicBool>,
 }
 
 impl WaitForTool {
-    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
-        Self { pane_tx }
+    pub fn new(pane_tx: Sender<PaneRequest>, cancel_flag: Arc<AtomicBool>) -> Self {
+        Self { pane_tx, cancel_flag }
     }
 }
 
@@ -1361,7 +1364,7 @@ impl Tool for WaitForTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Wait for a terminal pane to become idle or for a specific pattern to appear in its output. Use after terminal_exec or send_keys when you need to wait for a long-running command to finish or for specific output to appear before proceeding. Without a pattern, waits for the shell to become idle (requires shell integration). With a pattern, polls the last 50 lines of output until the pattern is found.".to_string(),
+            description: "Wait for a terminal pane to become idle or for a specific pattern to appear. Use after launching a command to wait for it to finish. Without a pattern, waits for idle — uses shell integration when available, falls back to output quiescence detection (5s of no new output) on remote panes. With a pattern, polls until the pattern appears in the last 50 lines. Prefer idle mode (no pattern) — it works universally and doesn't require guessing output text.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1407,11 +1410,30 @@ impl Tool for WaitForTool {
             })
             .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
 
-        // Block until workspace responds (timeout + 10s buffer for task overhead).
+        // Block until workspace responds, polling cancel_flag every 200ms
+        // for clean shutdown (same pattern as ConHook approval polling).
+        let cancel = self.cancel_flag.clone();
         let response = tokio::task::block_in_place(|| {
-            response_rx.recv_timeout(std::time::Duration::from_secs(timeout_secs + 10))
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_secs(timeout_secs + 10);
+            loop {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err("Cancelled");
+                }
+                match response_rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                    Ok(resp) => return Ok(resp),
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        if std::time::Instant::now() >= deadline {
+                            return Err("Wait timed out (no response from workspace)");
+                        }
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                        return Err("Pane query channel closed");
+                    }
+                }
+            }
         })
-        .map_err(|_| ToolError::CommandFailed("Wait timed out (no response from workspace)".into()))?;
+        .map_err(|e| ToolError::CommandFailed(e.into()))?;
 
         match response {
             PaneResponse::WaitComplete { status, output } => Ok(WaitForOutput { status, output }),
@@ -1655,7 +1677,7 @@ impl Tool for CreatePaneTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh cinnamon\"). The command is executed automatically when the pane opens — do NOT send the same command again via send_keys or terminal_exec. Returns the new pane's index. Call list_panes after creation to confirm the pane is ready.".to_string(),
+            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it. Returns the new pane's index. Use read_pane to observe the result before proceeding.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

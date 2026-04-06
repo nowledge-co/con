@@ -281,13 +281,24 @@ impl AgentHarness {
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                 .unwrap_or_default();
 
-            let diff_lines: Vec<&str> = diff.lines().collect();
-            let was_truncated = diff_lines.len() > 2000;
+            // Include stat summary (always) + diff content (capped at ~8K chars
+            // to keep the system prompt lean — large diffs drown model attention).
+            const MAX_DIFF_CHARS: usize = 8_000;
             let mut result = stat;
             result.push('\n');
-            result.push_str(&diff_lines[..diff_lines.len().min(2000)].join("\n"));
-            if was_truncated {
-                result.push_str("\n... (truncated)");
+            if diff.len() <= MAX_DIFF_CHARS {
+                result.push_str(&diff);
+            } else {
+                // Truncate at a line boundary near the char limit
+                let truncation_point = diff[..MAX_DIFF_CHARS]
+                    .rfind('\n')
+                    .unwrap_or(MAX_DIFF_CHARS);
+                result.push_str(&diff[..truncation_point]);
+                result.push_str(&format!(
+                    "\n... (diff truncated — {:.0}K of {:.0}K chars shown, see `git diff` for full)",
+                    truncation_point as f64 / 1000.0,
+                    diff.len() as f64 / 1000.0,
+                ));
             }
             Some(result)
         });

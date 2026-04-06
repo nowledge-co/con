@@ -30,6 +30,8 @@ Added a `pending_write: Option<Vec<u8>>` buffer to `GhosttyView`:
 
 The command travels with the view and fires exactly once, at the right time.
 
+Additionally, the `ensure_initialized()` error branch was hardened: if `new_surface()` fails, `pending_write` is cleared (no PTY to receive it) and `initialized` is set to `true` to prevent infinite retry on every layout cycle. Without this, a failed surface creation would cause the queued data to accumulate and the initialization attempt to repeat on every frame.
+
 ## What we learned
 
 1. **Silent drops are dangerous.** `if let Some(x) = maybe { x.do_thing() }` with no `else` branch is a silent failure pattern. In infrastructure code (PTY writes), this should at minimum `log::warn!`.

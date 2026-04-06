@@ -1360,6 +1360,15 @@ impl ConWorkspace {
                 timeout_secs,
                 pattern,
             } => {
+                // Normalize empty pattern to None — "".contains("") is always true in Rust,
+                // making empty pattern match instantly (useless). Treat as idle/quiescence.
+                let pattern = pattern.filter(|p| !p.is_empty());
+
+                log::info!(
+                    "[wait_for] pane={} timeout={:?} pattern={:?}",
+                    pane_index, timeout_secs, pattern,
+                );
+
                 if pane_index == 0 || pane_index > all_terminals.len() {
                     PaneResponse::Error(format!(
                         "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
@@ -1372,18 +1381,14 @@ impl ConWorkspace {
                     let timeout = timeout_secs.unwrap_or(120).min(600);
                     let response_tx = req.response_tx;
 
-                    // For idle mode without shell integration, return immediately
-                    if pattern.is_none() && !has_si {
-                        let output = pane.recent_lines(50, cx).join("\n");
-                        let _ = response_tx.send(PaneResponse::WaitComplete {
-                            status: "no_shell_integration".into(),
-                            output,
-                        });
-                        return;
-                    }
+                    log::info!(
+                        "[wait_for] has_si={} is_busy={}",
+                        has_si, pane.is_busy(cx),
+                    );
 
-                    // Check if already in target state
-                    if pattern.is_none() && !pane.is_busy(cx) {
+                    // Check if already in target state before spawning async task
+                    if pattern.is_none() && has_si && !pane.is_busy(cx) {
+                        log::info!("[wait_for] → early idle return");
                         let output = pane.recent_lines(50, cx).join("\n");
                         let _ = response_tx.send(PaneResponse::WaitComplete {
                             status: "idle".into(),
@@ -1402,13 +1407,45 @@ impl ConWorkspace {
                         }
                     }
 
+                    let use_quiescence = !has_si && pattern.is_none();
+
                     // Spawn async task — direct terminal access, no channel overhead
                     cx.spawn(async move |this, cx| {
                         let deadline = std::time::Instant::now()
                             + std::time::Duration::from_secs(timeout as u64);
-                        // Idle mode: 100ms polling (vs old 500ms + channel roundtrips)
-                        // Pattern mode: 500ms polling (content reads are heavier)
-                        let interval = if pattern.is_none() { 100 } else { 500 };
+
+                        // Three modes:
+                        // 1. Shell integration idle: 100ms polling, check is_busy/command_finished
+                        // 2. Pattern match: 500ms polling, check content
+                        // 3. Quiescence (no SI, no pattern): 500ms polling, detect output stable for 2s
+                        let interval: u64 = if has_si && pattern.is_none() { 100 } else { 500 };
+
+                        // Normalize terminal output for stable comparison.
+                        // ghostty_surface_read_text returns lines with trailing whitespace that
+                        // varies with cursor position — trim each line to get content-only text.
+                        let normalize_output = |lines: Vec<String>| -> String {
+                            lines.iter().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n")
+                        };
+
+                        // For quiescence mode: capture baseline INSIDE async task to
+                        // avoid race between snapshot and first poll.
+                        // 4 polls × 500ms = 2s — fast enough for interactive use,
+                        // long enough to avoid false positives from progress output.
+                        const QUIET_THRESHOLD: u32 = 4;
+                        let mut last_snapshot = if use_quiescence {
+                            match this.update(cx, |_, cx| normalize_output(pane.recent_lines(50, cx))) {
+                                Ok(s) if !s.is_empty() => s,
+                                _ => {
+                                    // Terminal not ready yet — use sentinel that won't match real output.
+                                    // First real poll will set the actual baseline.
+                                    log::info!("[wait_for] quiescence: empty baseline, deferring to first poll");
+                                    String::new()
+                                }
+                            }
+                        } else {
+                            String::new()
+                        };
+                        let mut stable_count: u32 = 0;
 
                         loop {
                             cx.background_executor()
@@ -1429,19 +1466,47 @@ impl ConWorkspace {
                             let done = this
                                 .update(cx, |_, cx| {
                                     if let Some(ref pat) = pattern {
+                                        // Pattern mode
                                         let content = pane.recent_lines(50, cx).join("\n");
                                         if content.contains(pat.as_str()) {
                                             Some(("matched".to_string(), content))
                                         } else {
                                             None
                                         }
-                                    } else {
-                                        // Check command_finished signal first (one-shot, precise)
-                                        if pane.take_command_finished(cx).is_some() || !pane.is_busy(cx)
+                                    } else if has_si {
+                                        // Shell integration idle mode
+                                        if pane.take_command_finished(cx).is_some()
+                                            || !pane.is_busy(cx)
                                         {
                                             let output = pane.recent_lines(50, cx).join("\n");
                                             Some(("idle".to_string(), output))
                                         } else {
+                                            None
+                                        }
+                                    } else {
+                                        // Quiescence mode: output unchanged for QUIET_THRESHOLD polls
+                                        let current = normalize_output(pane.recent_lines(50, cx));
+                                        if current.is_empty() {
+                                            // Terminal not producing output yet — don't count as stable
+                                            None
+                                        } else if last_snapshot.is_empty() {
+                                            // First non-empty snapshot — set baseline, start counting
+                                            log::info!("[wait_for] quiescence: baseline set ({} bytes)", current.len());
+                                            last_snapshot = current;
+                                            stable_count = 0;
+                                            None
+                                        } else if current == last_snapshot {
+                                            stable_count += 1;
+                                            log::info!("[wait_for] quiescence: stable {}/{}", stable_count, QUIET_THRESHOLD);
+                                            if stable_count >= QUIET_THRESHOLD {
+                                                Some(("idle".to_string(), current))
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            log::info!("[wait_for] quiescence: output changed, resetting (stable was {})", stable_count);
+                                            last_snapshot = current;
+                                            stable_count = 0;
                                             None
                                         }
                                     }
@@ -1848,20 +1913,33 @@ impl ConWorkspace {
 
     pub(crate) fn on_terminal_process_exited(
         &mut self,
-        _entity: &Entity<GhosttyView>,
+        entity: &Entity<GhosttyView>,
         _event: &GhosttyProcessExited,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Treat like close-pane request
-        let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
+        // Find which tab contains the dead pane (may not be the active tab).
+        let entity_id = entity.entity_id();
+        let tab_idx = self
+            .tabs
+            .iter()
+            .position(|tab| tab.pane_tree.pane_id_for_entity(entity_id).is_some());
+        let Some(tab_idx) = tab_idx else { return };
+
+        let pane_tree = &mut self.tabs[tab_idx].pane_tree;
         if pane_tree.pane_count() > 1 {
-            pane_tree.close_focused();
-            pane_tree.focused_terminal().focus(window, cx);
+            // Close the specific pane whose process exited, not the focused pane.
+            if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
+                pane_tree.close_pane(pane_id);
+            }
+            if tab_idx == self.active_tab {
+                pane_tree.focused_terminal().focus(window, cx);
+            }
         } else if self.tabs.len() > 1 {
-            self.close_tab(&CloseTab, window, cx);
+            // Last pane in this tab — close the tab.
+            self.close_tab_by_index(tab_idx, window, cx);
         } else {
-            // Last pane in last tab — quit the app
+            // Last pane in last tab — quit the app.
             self.cancel_all_sessions();
             cx.quit();
         }
@@ -2205,9 +2283,10 @@ impl Render for ConWorkspace {
                     }),
             );
 
-            // Title — flexible, truncates with overflow
+            // Title — fills remaining space, pushes close button to right
             tab_content = tab_content.child(
                 div()
+                    .flex_1()
                     .min_w_0()
                     .overflow_x_hidden()
                     .whitespace_nowrap()
