@@ -2383,7 +2383,7 @@ impl Render for AgentPanel {
                                             .cleanable(false),
                                     ),
                             )
-                            .child(send_button.mt(px(2.0))),
+                            .child(send_button.mt(px(3.0))),
                     ),
             );
         }
