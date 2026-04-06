@@ -58,6 +58,9 @@ pub struct GhosttyView {
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
     last_title: Option<String>,
+    /// Data queued for the PTY before the surface was created.
+    /// Flushed once in `ensure_initialized()` after the terminal exists.
+    pending_write: Option<Vec<u8>>,
 }
 
 /// Register ghostty key bindings. Call once at startup.
@@ -122,11 +125,24 @@ impl GhosttyView {
             last_bounds: None,
             scale_factor: 1.0,
             last_title: None,
+            pending_write: None,
         }
     }
 
     pub fn terminal(&self) -> Option<&Arc<GhosttyTerminal>> {
         self.terminal.as_ref()
+    }
+
+    /// Queue data to write to the PTY. If the terminal is already initialized,
+    /// writes immediately. Otherwise, buffers until `ensure_initialized()` runs.
+    pub fn write_or_queue(&mut self, data: &[u8]) {
+        if let Some(ref terminal) = self.terminal {
+            terminal.write_to_pty(data);
+        } else {
+            self.pending_write
+                .get_or_insert_with(Vec::new)
+                .extend_from_slice(data);
+        }
     }
 
     pub fn title(&self) -> Option<String> {
@@ -207,6 +223,11 @@ impl GhosttyView {
                     height_px,
                     scale
                 );
+
+                // Flush any data queued before the surface existed.
+                if let Some(data) = self.pending_write.take() {
+                    self.terminal.as_ref().unwrap().write_to_pty(&data);
+                }
             }
             Err(e) => {
                 log::error!("Failed to create ghostty surface: {}", e);
@@ -270,16 +291,16 @@ impl GhosttyView {
         }
     }
 
-    /// Convert GPUI window-global position to view-local pixel coordinates.
-    fn view_local_px(&self, pos: Point<Pixels>) -> (f64, f64) {
-        let scale = self.scale_factor as f64;
+    /// Convert GPUI window-global position to view-local logical coordinates.
+    /// Ghostty expects logical pixels (it scales internally via content_scale).
+    fn view_local_pos(&self, pos: Point<Pixels>) -> (f64, f64) {
         if let Some(ref bounds) = self.last_bounds {
             (
-                f64::from(pos.x - bounds.origin.x) * scale,
-                f64::from(pos.y - bounds.origin.y) * scale,
+                f64::from(pos.x - bounds.origin.x),
+                f64::from(pos.y - bounds.origin.y),
             )
         } else {
-            (f64::from(pos.x) * scale, f64::from(pos.y) * scale)
+            (f64::from(pos.x), f64::from(pos.y))
         }
     }
 
@@ -537,7 +558,7 @@ impl Render for GhosttyView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
                     if let Some(ref terminal) = this.terminal {
-                        let (x, y) = this.view_local_px(event.position);
+                        let (x, y) = this.view_local_pos(event.position);
                         terminal.send_mouse_pos(x, y, 0);
                         terminal.send_mouse_button(true, MouseButton::Left, 0);
                     }
@@ -549,7 +570,7 @@ impl Render for GhosttyView {
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
                     if let Some(ref terminal) = this.terminal {
-                        let (x, y) = this.view_local_px(event.position);
+                        let (x, y) = this.view_local_pos(event.position);
                         terminal.send_mouse_pos(x, y, 0);
                         terminal.send_mouse_button(false, MouseButton::Left, 0);
                     }
@@ -557,7 +578,7 @@ impl Render for GhosttyView {
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
                 if let Some(ref terminal) = this.terminal {
-                    let (x, y) = this.view_local_px(event.position);
+                    let (x, y) = this.view_local_pos(event.position);
                     terminal.send_mouse_pos(x, y, 0);
                 }
             }))
