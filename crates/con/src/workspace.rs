@@ -2040,10 +2040,10 @@ impl Render for ConWorkspace {
                 .group("tab")
                 .flex()
                 .items_center()
-                .px(px(12.0))
-                .h(px(32.0))
-                .text_size(px(12.5))
-                .max_w(px(200.0))
+                .px(px(10.0))
+                .h(px(30.0))
+                .text_size(px(12.0))
+                .max_w(px(180.0))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.activate_tab(index, window, cx);
@@ -2057,19 +2057,19 @@ impl Render for ConWorkspace {
                 );
 
             if is_active {
-                // Active tab — subtle lift, connects to content below
+                // Active tab — lifted surface, connects to content below
                 tab_el = tab_el
                     .rounded_t(px(7.0))
-                    .bg(theme.muted.opacity(0.08))
+                    .bg(theme.background)
                     .text_color(theme.foreground)
                     .font_weight(FontWeight::MEDIUM);
             } else {
-                // Inactive tab — ghost, appears on hover
+                // Inactive tab — quiet, appears on hover
                 tab_el = tab_el
                     .rounded(px(6.0))
                     .mb(px(2.0))
-                    .text_color(theme.muted_foreground.opacity(0.5))
-                    .hover(|s| s.bg(theme.muted.opacity(0.06)));
+                    .text_color(theme.muted_foreground.opacity(0.45))
+                    .hover(|s| s.bg(theme.muted.opacity(0.08)));
             }
 
             let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
