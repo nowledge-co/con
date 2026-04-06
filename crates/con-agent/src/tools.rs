@@ -1364,7 +1364,7 @@ impl Tool for WaitForTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Wait for a terminal pane to become idle or for a specific pattern to appear. Use after launching a command to wait for it to finish. Without a pattern, waits for idle — uses shell integration when available, falls back to output quiescence detection (5s of no new output) on remote panes. With a pattern, polls until the pattern appears in the last 50 lines. Prefer idle mode (no pattern) — it works universally and doesn't require guessing output text.".to_string(),
+            description: "Wait for a terminal pane to become idle or for a specific pattern to appear. Use after launching a command to wait for it to finish. Without a pattern, waits for idle — works universally (shell integration or output quiescence). With a pattern, polls until the text appears. Prefer idle mode (no pattern). Returns status: idle, matched, or timeout. On timeout, read_pane to check progress and call wait_for again if needed.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1372,13 +1372,9 @@ impl Tool for WaitForTool {
                         "type": "integer",
                         "description": "Target pane index (from list_panes)"
                     },
-                    "timeout_secs": {
-                        "type": "integer",
-                        "description": "Seconds to wait before returning timeout (default: 30). Prefer short timeouts — if a command times out, read_pane to assess and call wait_for again."
-                    },
                     "pattern": {
                         "type": "string",
-                        "description": "Optional text pattern to wait for in the pane output. If omitted, waits for the pane to become idle (is_busy == false)."
+                        "description": "Text to wait for in pane output. If omitted, waits for the pane to become idle — preferred."
                     }
                 },
                 "required": ["pane_index"]

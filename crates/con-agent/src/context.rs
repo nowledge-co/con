@@ -1101,9 +1101,9 @@ impl TerminalContext {
                (b) Shell commands on panes without exec_visible_shell (SSH, tmux shells).\n\
                NEVER use to simulate con application shortcuts (Cmd+T, Cmd+W).\n\n\
              - wait_for: Wait for a pane to become idle or for a pattern to appear. Use after launching \
-               long-running commands instead of polling with read_pane. Idle mode works universally: \
-               shell integration for precise detection, output quiescence (2s of stable output) as fallback. \
-               Default timeout: 30s. Prefer short timeouts — if it times out, read_pane to check and wait_for again.\n\n\
+               long-running commands instead of polling with read_pane. Idle mode (no pattern) works universally — \
+               shell integration for precise detection, output quiescence as fallback. On timeout, \
+               read_pane to check progress and call wait_for again.\n\n\
              - tmux_inspect: Inspect tmux adapter state for a pane containing a tmux session.\n\
              - search_panes: Search scrollback across panes by regex.\n\n\
              - file_read, file_write, edit_file: LOCAL filesystem only. Cannot access remote SSH hosts.\n\
