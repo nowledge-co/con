@@ -20,8 +20,8 @@ pub use provider::{
 };
 pub use skills::{Skill, SkillRegistry};
 pub use tools::{
-    BatchExecTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool,
-    PaneInfo, PaneQuery, PaneRequest, PaneResponse, ReadPaneTool, SearchPanesTool, SearchTool,
-    SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecResponse, TerminalExecTool,
-    TmuxInspectTool,
+    BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
+    ListPanesTool, PaneInfo, PaneQuery, PaneRequest, PaneResponse, ReadPaneTool, SearchPanesTool,
+    SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecResponse,
+    TerminalExecTool, TmuxInspectTool, WaitForTool,
 };

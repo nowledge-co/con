@@ -69,6 +69,14 @@ pub struct ConWorkspace {
     terminal_theme: TerminalTheme,
     /// Shared Ghostty app instance for all panes in this window.
     ghostty_app: std::sync::Arc<con_ghostty::GhosttyApp>,
+    /// Pending create-pane requests that need a window context to process.
+    pending_create_pane_requests: Vec<PendingCreatePane>,
+}
+
+/// A deferred create-pane request waiting for a window-aware context.
+struct PendingCreatePane {
+    command: Option<String>,
+    response_tx: crossbeam_channel::Sender<con_agent::PaneResponse>,
 }
 
 // ── Theme conversion ──────────────────────────────────────────
@@ -333,6 +341,7 @@ impl ConWorkspace {
             agent_panel_drag: None,
             terminal_theme,
             ghostty_app,
+            pending_create_pane_requests: Vec::new(),
         }
     }
 
@@ -697,7 +706,7 @@ impl ConWorkspace {
     ) {
         match event.action_id.as_str() {
             "toggle-agent" => {
-                self.agent_panel_open = !self.agent_panel_open;
+                self.toggle_agent_panel(&ToggleAgentPanel, window, cx);
             }
             "settings" => {
                 self.settings_panel.update(cx, |panel, cx| {
@@ -1182,7 +1191,7 @@ impl ConWorkspace {
     }
 
     fn handle_pane_request_for_tab(
-        &self,
+        &mut self,
         tab_idx: usize,
         req: con_agent::PaneRequest,
         cx: &mut Context<Self>,
@@ -1331,6 +1340,24 @@ impl ConWorkspace {
                     }
                 }
             }
+            PaneQuery::WaitFor { .. } => {
+                // The WaitForTool drives its own polling loop using List and
+                // ReadContent queries. This variant should never arrive here,
+                // but we handle it gracefully just in case.
+                PaneResponse::Error(
+                    "WaitFor is handled by the tool's polling loop, not the workspace".into(),
+                )
+            }
+            PaneQuery::CreatePane { command } => {
+                // Creating a terminal requires a Window, which is not available
+                // in the poll loop. Defer to the next render cycle.
+                self.pending_create_pane_requests.push(PendingCreatePane {
+                    command,
+                    response_tx: req.response_tx,
+                });
+                cx.notify();
+                return;
+            }
         };
 
         let _ = req.response_tx.send(response);
@@ -1339,10 +1366,24 @@ impl ConWorkspace {
     fn toggle_agent_panel(
         &mut self,
         _: &ToggleAgentPanel,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.agent_panel_open = !self.agent_panel_open;
+        if self.agent_panel_open {
+            if self.input_bar_visible {
+                self.input_bar.focus_handle(cx).focus(window, cx);
+            } else {
+                let focused_inline = self
+                    .agent_panel
+                    .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
+                if !focused_inline {
+                    self.focus_terminal(window, cx);
+                }
+            }
+        } else {
+            self.focus_terminal(window, cx);
+        }
         self.save_session(cx);
         cx.notify();
     }
@@ -1728,6 +1769,29 @@ impl ConWorkspace {
 
 impl Render for ConWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Process any deferred create-pane requests that need window access.
+        // Creates a split within the agent's tab so the new pane is addressable
+        // by index alongside existing panes (not isolated in a separate tab).
+        let pending = std::mem::take(&mut self.pending_create_pane_requests);
+        for req in pending {
+            let terminal = self.create_terminal(None, window, cx);
+            self.tabs[self.active_tab]
+                .pane_tree
+                .split(SplitDirection::Horizontal, terminal.clone());
+            terminal.focus(window, cx);
+
+            if let Some(cmd) = &req.command {
+                let cmd_with_newline = format!("{}\n", cmd);
+                terminal.write(cmd_with_newline.as_bytes(), cx);
+            }
+
+            // Return the 1-indexed position of the new pane in the flat pane list
+            let pane_index = self.tabs[self.active_tab].pane_tree.pane_count();
+            let _ = req.response_tx.send(con_agent::PaneResponse::PaneCreated { pane_index });
+
+            cx.notify();
+        }
+
         let active_terminal = self.active_terminal().clone();
 
         // If a modal was dismissed internally (escape/backdrop), restore terminal focus

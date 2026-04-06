@@ -18,9 +18,9 @@ use crate::context::TerminalContext;
 use crate::conversation::{AgentStep, Conversation, Message};
 use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{
-    BatchExecTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool,
-    PaneRequest, ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool,
-    TerminalExecRequest, TerminalExecTool, TmuxInspectTool,
+    BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
+    ListPanesTool, PaneRequest, ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool,
+    ShellExecTool, TerminalExecRequest, TerminalExecTool, TmuxInspectTool, WaitForTool,
 };
 
 // ── Provider enum ───────────────────────────────────────────────────
@@ -423,7 +423,9 @@ macro_rules! build_and_stream {
             .tool(TmuxInspectTool::new($pane_tx.clone()))
             .tool(ReadPaneTool::new($pane_tx.clone()))
             .tool(SendKeysTool::new($pane_tx.clone()))
-            .tool(SearchPanesTool::new($pane_tx))
+            .tool(SearchPanesTool::new($pane_tx.clone()))
+            .tool(CreatePaneTool::new($pane_tx.clone()))
+            .tool(WaitForTool::new($pane_tx))
             .tool(BatchExecTool::new($terminal_exec_tx))
             .default_max_turns($cfg.max_turns);
 
