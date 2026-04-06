@@ -1967,7 +1967,7 @@ impl Render for ConWorkspace {
                 );
         }
 
-        // Tab bar — flat, borderless, macOS-native feel
+        // Tab bar — full-width tabs fill available space
         let tab_count = self.tabs.len();
         let mut tab_bar = div()
             .id("tab-bar")
@@ -1975,13 +1975,15 @@ impl Render for ConWorkspace {
             .h(px(36.0))
             .items_end()
             .pl(px(78.0)) // leave room for traffic lights
-            .pr(px(4.0))
-            .gap(px(1.0))
+            .pr(px(6.0))
             .on_click(|event, window, _cx| {
                 if event.click_count() == 2 {
                     window.titlebar_double_click();
                 }
             });
+
+        // Tabs container — each tab takes equal share of available width
+        let mut tabs_container = div().flex().flex_1().min_w_0().items_end();
 
         for (index, tab) in self.tabs.iter().enumerate() {
             let is_active = index == self.active_tab;
@@ -1991,7 +1993,7 @@ impl Render for ConWorkspace {
 
             // Truncate long titles
             let display_title: String = if title.len() > 24 {
-                format!("{}...", &title[..21])
+                format!("{}…", &title[..22])
             } else {
                 title
             };
@@ -2006,10 +2008,9 @@ impl Render for ConWorkspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .size(px(18.0))
+                    .size(px(16.0))
                     .flex_shrink_0()
                     .rounded(px(4.0))
-                    .ml(px(2.0))
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.muted.opacity(0.15)));
                 // Only show on hover for inactive tabs
@@ -2027,8 +2028,8 @@ impl Render for ConWorkspace {
                         .child(
                             svg()
                                 .path("phosphor/x.svg")
-                                .size(px(12.0))
-                                .text_color(theme.muted_foreground),
+                                .size(px(10.0))
+                                .text_color(theme.muted_foreground.opacity(0.5)),
                         ),
                 )
             } else {
@@ -2039,11 +2040,13 @@ impl Render for ConWorkspace {
                 .id(ElementId::Name(format!("tab-{}", index).into()))
                 .group("tab")
                 .flex()
+                .flex_1()
+                .min_w_0()
                 .items_center()
+                .justify_center()
                 .px(px(10.0))
                 .h(px(30.0))
-                .text_size(px(12.0))
-                .max_w(px(180.0))
+                .text_size(px(11.5))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.activate_tab(index, window, cx);
@@ -2066,19 +2069,25 @@ impl Render for ConWorkspace {
             } else {
                 // Inactive tab — quiet, appears on hover
                 tab_el = tab_el
-                    .rounded(px(6.0))
-                    .mb(px(2.0))
+                    .rounded_t(px(6.0))
+                    .mb(px(1.0))
                     .text_color(theme.muted_foreground.opacity(0.45))
-                    .hover(|s| s.bg(theme.muted.opacity(0.08)));
+                    .hover(|s| s.bg(theme.muted.opacity(0.06)));
             }
 
-            let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
+            let mut tab_content = div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(5.0))
+                .w_full()
+                .min_w_0();
 
             // Attention dot for tabs with pending agent activity
             if needs_attention {
                 tab_content = tab_content.child(
                     div()
-                        .size(px(6.0))
+                        .size(px(5.0))
                         .rounded_full()
                         .flex_shrink_0()
                         .bg(theme.primary),
@@ -2089,19 +2098,18 @@ impl Render for ConWorkspace {
             tab_content = tab_content.child(
                 svg()
                     .path("phosphor/terminal.svg")
-                    .size(px(13.0))
+                    .size(px(12.0))
                     .flex_shrink_0()
                     .text_color(if is_active {
-                        theme.foreground
+                        theme.foreground.opacity(0.7)
                     } else {
-                        theme.muted_foreground.opacity(0.5)
+                        theme.muted_foreground.opacity(0.4)
                     }),
             );
 
             // Title — flexible, truncates with overflow
             tab_content = tab_content.child(
                 div()
-                    .flex_1()
                     .min_w_0()
                     .overflow_x_hidden()
                     .whitespace_nowrap()
@@ -2112,19 +2120,22 @@ impl Render for ConWorkspace {
                 tab_content = tab_content.child(close);
             }
 
-            tab_bar = tab_bar.child(tab_el.child(tab_content));
+            tabs_container = tabs_container.child(tab_el.child(tab_content));
         }
 
+        tab_bar = tab_bar.child(tabs_container);
+
+        // Right-side controls — compact row
+        let mut tab_controls = div().flex().items_center().gap(px(2.0)).mb(px(4.0)).flex_shrink_0();
+
         // "+" button for new tab
-        tab_bar = tab_bar.child(
+        tab_controls = tab_controls.child(
             div()
                 .id("tab-new")
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(24.0))
-                .mb(px(4.0))
-                .ml(px(4.0))
+                .size(px(22.0))
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
@@ -2134,23 +2145,19 @@ impl Render for ConWorkspace {
                 .child(
                     svg()
                         .path("phosphor/plus.svg")
-                        .size(px(13.0))
-                        .text_color(theme.muted_foreground.opacity(0.5)),
+                        .size(px(12.0))
+                        .text_color(theme.muted_foreground.opacity(0.45)),
                 ),
         );
 
-        // Spacer pushes right-side controls to the edge
-        tab_bar = tab_bar.child(div().flex_1());
-
-        // Input bar toggle button
-        tab_bar = tab_bar.child(
+        // Input bar toggle
+        tab_controls = tab_controls.child(
             div()
                 .id("toggle-input-bar")
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(24.0))
-                .mb(px(4.0))
+                .size(px(22.0))
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
@@ -2160,25 +2167,23 @@ impl Render for ConWorkspace {
                 .child(
                     svg()
                         .path("phosphor/square-half-bottom-fill.svg")
-                        .size(px(13.0))
+                        .size(px(12.0))
                         .text_color(if self.input_bar_visible {
                             theme.primary
                         } else {
-                            theme.muted_foreground.opacity(0.5)
+                            theme.muted_foreground.opacity(0.4)
                         }),
                 ),
         );
 
-        // Agent panel toggle button
-        tab_bar = tab_bar.child(
+        // Agent panel toggle
+        tab_controls = tab_controls.child(
             div()
                 .id("toggle-agent-panel")
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(24.0))
-                .mb(px(4.0))
-                .mr(px(6.0))
+                .size(px(22.0))
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
@@ -2188,14 +2193,16 @@ impl Render for ConWorkspace {
                 .child(
                     svg()
                         .path("phosphor/square-half-fill.svg")
-                        .size(px(13.0))
+                        .size(px(12.0))
                         .text_color(if self.agent_panel_open {
                             theme.primary
                         } else {
-                            theme.muted_foreground.opacity(0.5)
+                            theme.muted_foreground.opacity(0.4)
                         }),
                 ),
         );
+
+        tab_bar = tab_bar.child(tab_controls);
 
         let mut root = div()
             .relative()
