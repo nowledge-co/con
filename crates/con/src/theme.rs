@@ -50,18 +50,13 @@ pub fn init_theme(cx: &mut App, terminal_theme: &str) {
     } else {
         apply_gpui_theme_by_name(terminal_theme, cx);
     }
-    // Always show scrollbar on hover — macOS default "Scrolling" fades too fast
-    Theme::global_mut(cx).scrollbar_show = ScrollbarShow::Hover;
-    // Transparent scrollbar track — only the thumb is visible.
-    // Prevents bg mismatch when scrollbar overlays different surface colors.
-    Theme::global_mut(cx).colors.scrollbar = gpui::transparent_black();
-
     let mode = if terminal_theme.contains("light") {
         ThemeMode::Light
     } else {
         ThemeMode::Dark
     };
     Theme::change(mode, None, cx);
+    apply_scrollbar_overrides(cx);
 }
 
 /// Switch the GPUI theme to match a terminal theme.
@@ -78,6 +73,14 @@ pub fn sync_gpui_theme(
         ThemeMode::Dark
     };
     Theme::change(mode, Some(window), cx);
+    apply_scrollbar_overrides(cx);
+}
+
+/// Apply con's scrollbar overrides after any Theme::change call.
+/// Must run AFTER Theme::change because it resets colors from the theme config.
+fn apply_scrollbar_overrides(cx: &mut App) {
+    Theme::global_mut(cx).scrollbar_show = ScrollbarShow::Hover;
+    Theme::global_mut(cx).colors.scrollbar = gpui::transparent_black();
 }
 
 /// Generate a GPUI theme dynamically from terminal ANSI colors and register it.

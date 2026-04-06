@@ -5,6 +5,7 @@ use gpui_component::clipboard::Clipboard;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
+use gpui_component::tag::Tag;
 use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{ActiveTheme, Icon, Sizable as _};
 
@@ -264,6 +265,12 @@ impl PanelState {
             msg.duration_ms = duration_ms;
             self.messages.push(msg);
         }
+        // Auto-collapse steps on completed messages to reduce scroll noise
+        if let Some(last) = self.messages.last_mut() {
+            if !last.steps.is_empty() {
+                last.steps_collapsed = true;
+            }
+        }
         // Move active tool calls into the message's step timeline
         for tc in self.tool_calls.drain(..) {
             let args_display = format_tool_args(&tc.tool_name, &tc.args);
@@ -297,7 +304,11 @@ impl PanelState {
                 self.update_thinking(&text);
             }
             HarnessEvent::Step(step) => {
-                self.add_step(&format!("{:?}", step));
+                // Format step as human-readable string, not Debug repr
+                let label = format!("{:?}", step);
+                // Clean up Thinking("model_name") → Thinking(model_name)
+                let label = label.replace("Thinking(\"", "Thinking(").replace("\")", ")");
+                self.add_step(&label);
             }
             HarnessEvent::Token(token) => {
                 self.update_streaming(&token);
@@ -693,15 +704,16 @@ impl AgentPanel {
             },
         });
         if let Some(last) = self.state.messages.last_mut() {
+            let human_name = humanize_tool_name(&approval.tool_name);
             let (status, label) = if allowed {
                 (
                     StepStatus::Complete,
-                    format!("Allowed: {}", approval.tool_name),
+                    format!("Allowed {}", human_name),
                 )
             } else {
                 (
                     StepStatus::Denied,
-                    format!("Denied: {}", approval.tool_name),
+                    format!("Denied {}", human_name),
                 )
             };
             last.steps.push(StepEntry {
@@ -761,6 +773,8 @@ impl AgentPanel {
                 "list_panes" | "read_pane" => "Reading pane…",
                 "list_files" => "Listing files…",
                 "send_keys" => "Sending keys…",
+                "wait_for" => "Waiting…",
+                "create_pane" => "Creating pane…",
                 _ => "Running tool…",
             };
             return Some((tool_icon(&tc.tool_name), label));
@@ -776,12 +790,12 @@ impl AgentPanel {
 /// Markdown style for chat messages — readable prose with breathing room.
 fn chat_markdown_style() -> TextViewStyle {
     TextViewStyle::default()
-        .paragraph_gap(rems(0.75))
+        .paragraph_gap(rems(0.65))
         .heading_font_size(|level, _base| match level {
-            1 => px(17.0),
-            2 => px(15.5),
-            3 => px(14.5),
-            _ => px(14.0),
+            1 => px(16.5),
+            2 => px(15.0),
+            3 => px(14.0),
+            _ => px(13.5),
         })
 }
 
@@ -797,6 +811,8 @@ fn tool_icon(tool_name: &str) -> &'static str {
         "list_panes" => "phosphor/columns.svg",
         "read_pane" => "phosphor/eye.svg",
         "send_keys" => "phosphor/keyboard.svg",
+        "wait_for" => "phosphor/hourglass.svg",
+        "create_pane" => "phosphor/plus.svg",
         _ => "phosphor/gear.svg",
     }
 }
@@ -841,6 +857,35 @@ fn format_tool_args(tool_name: &str, args: &str) -> String {
                     return keys.to_string();
                 }
             }
+            "wait_for" => {
+                let idx = v.get("pane_index").and_then(|i| i.as_u64());
+                let pattern = v.get("pattern").and_then(|p| p.as_str()).unwrap_or("");
+                let timeout = v.get("timeout_secs").and_then(|t| t.as_u64());
+                let mut parts = Vec::new();
+                if let Some(i) = idx {
+                    parts.push(format!("pane {}", i));
+                }
+                if !pattern.is_empty() {
+                    parts.push(format!("\"{}\"", pattern));
+                }
+                if let Some(t) = timeout {
+                    parts.push(format!("{}s", t));
+                }
+                return if parts.is_empty() {
+                    "waiting…".to_string()
+                } else {
+                    parts.join(" · ")
+                };
+            }
+            "create_pane" => {
+                let cmd = v.get("command").and_then(|c| c.as_str());
+                let dir = v.get("directory").and_then(|d| d.as_str());
+                return match (cmd, dir) {
+                    (Some(c), _) => c.to_string(),
+                    (None, Some(d)) => d.to_string(),
+                    _ => "new pane".to_string(),
+                };
+            }
             "read_pane" | "list_panes" => {
                 if let Some(idx) = v.get("pane_index").and_then(|i| i.as_u64()) {
                     return format!("pane {}", idx);
@@ -876,6 +921,7 @@ fn humanize_tool_name(name: &str) -> String {
         "read_pane" => "Read Pane".to_string(),
         "send_keys" => "Send Keys".to_string(),
         "create_pane" => "New Pane".to_string(),
+        "wait_for" => "Wait For".to_string(),
         _ => {
             // Fallback: title-case with _ → space
             name.split('_')
@@ -923,6 +969,7 @@ fn format_tool_result(tool_name: &str, raw: &str) -> String {
         "terminal_exec" | "shell_exec" => format_exec_result(&value),
         "list_panes" => format_list_panes_result(&value),
         "search" | "search_panes" => format_search_result(&value),
+        "wait_for" => format_wait_for_result(&value),
         _ => format_generic_result(&value),
     }
 }
@@ -1077,18 +1124,108 @@ fn format_search_result(value: &serde_json::Value) -> String {
     }
 }
 
-/// Fallback: pretty-print JSON objects, or return strings directly.
+/// wait_for: show status + relevant output snippet.
+fn format_wait_for_result(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(obj) => {
+            let status = obj
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let output = obj
+                .get("output")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut out = format!("status: {}", status);
+            let trimmed = output.trim();
+            if !trimmed.is_empty() {
+                out.push_str(&format!("\n{}", trimmed));
+            }
+            out
+        }
+        serde_json::Value::String(s) => s.clone(),
+        _ => format_generic_result(value),
+    }
+}
+
+/// Fallback: render JSON values as human-readable text, not raw JSON dumps.
 fn format_generic_result(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(s) => s.clone(),
-        _ => serde_json::to_string_pretty(value).unwrap_or_else(|_| format!("{:?}", value)),
+        serde_json::Value::Null => "(empty)".to_string(),
+        serde_json::Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Object(obj) => {
+            // Render as clean key: value lines
+            let mut out = String::new();
+            for (key, val) in obj {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                let val_str = match val {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Null => "—".to_string(),
+                    serde_json::Value::Bool(b) => {
+                        if *b { "yes" } else { "no" }.to_string()
+                    }
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Array(arr) => {
+                        if arr.len() <= 3 {
+                            arr.iter()
+                                .map(|v| match v {
+                                    serde_json::Value::String(s) => s.clone(),
+                                    _ => v.to_string(),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        } else {
+                            format!("{} items", arr.len())
+                        }
+                    }
+                    serde_json::Value::Object(_) => format!("({} fields)", val.as_object().map_or(0, |o| o.len())),
+                };
+                out.push_str(&format!("{}: {}", key, val_str));
+            }
+            out
+        }
+        serde_json::Value::Array(arr) => {
+            if arr.is_empty() {
+                "(empty list)".to_string()
+            } else {
+                let mut out = String::new();
+                for (i, item) in arr.iter().enumerate() {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    match item {
+                        serde_json::Value::String(s) => out.push_str(s),
+                        serde_json::Value::Object(obj) => {
+                            // Render object items as inline key=value
+                            let parts: Vec<String> = obj
+                                .iter()
+                                .map(|(k, v)| {
+                                    let v_str = match v {
+                                        serde_json::Value::String(s) => s.clone(),
+                                        _ => v.to_string(),
+                                    };
+                                    format!("{}={}", k, v_str)
+                                })
+                                .collect();
+                            out.push_str(&format!("{}. {}", i, parts.join("  ")));
+                        }
+                        _ => out.push_str(&format!("{}. {}", i, item)),
+                    }
+                }
+                out
+            }
+        }
     }
 }
 
 /// Render a result block — subtle bg, monospace for multi-line, inline for short text.
 fn render_result_block(
     content: &str,
-    id_prefix: &str,
+    _id_prefix: &str,
     theme: &gpui_component::Theme,
 ) -> AnyElement {
     let is_short = content.lines().count() <= 1 && content.len() < 80;
@@ -1100,29 +1237,36 @@ fn render_result_block(
             .py(px(1.0))
             .text_size(px(10.5))
             .font_family("Ioskeley Mono")
-            .text_color(theme.muted_foreground.opacity(0.55))
+            .text_color(theme.muted_foreground.opacity(0.5))
             .overflow_x_hidden()
+            .whitespace_nowrap()
             .child(content.to_string())
             .into_any_element()
     } else {
-        // Multi-line result — code block in subtle bg
-        let md: SharedString = format!("```\n{content}\n```").into();
+        // Multi-line result — direct monospace rendering, no markdown overhead
+        let mut lines_el = div().flex().flex_col().gap(px(0.5));
+        for line in content.lines() {
+            lines_el = lines_el.child(
+                div()
+                    .whitespace_nowrap()
+                    .child(if line.is_empty() { " " } else { line }.to_string()),
+            );
+        }
         div()
             .ml(px(22.0))
             .mr(px(4.0))
             .mt(px(2.0))
-            .mb(px(4.0))
-            .px(px(10.0))
-            .py(px(6.0))
+            .mb(px(2.0))
+            .px(px(8.0))
+            .py(px(5.0))
             .rounded(px(6.0))
             .bg(theme.muted.opacity(0.04))
             .overflow_x_hidden()
-            .child(
-                TextView::markdown(ElementId::Name(id_prefix.to_string().into()), md)
-                    .selectable(true)
-                    .style(chat_markdown_style())
-                    .text_xs(),
-            )
+            .font_family("Ioskeley Mono")
+            .text_size(px(10.5))
+            .line_height(px(15.0))
+            .text_color(theme.muted_foreground.opacity(0.6))
+            .child(lines_el)
             .into_any_element()
     }
 }
@@ -1271,9 +1415,9 @@ impl Render for AgentPanel {
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
             .px(px(14.0))
-            .pt(px(10.0))
+            .pt(px(12.0))
             .pb(px(64.0))
-            .gap(px(14.0));
+            .gap(px(16.0));
 
         for (msg_idx, msg) in self.state.messages.iter().enumerate() {
             let is_user = msg.role == "user";
@@ -1282,12 +1426,13 @@ impl Render for AgentPanel {
             let mut msg_el = div().flex().flex_col().gap(px(4.0));
 
             if is_system {
-                // System greeting — quiet, centered
+                // System greeting — quiet, subtle
                 msg_el = msg_el.child(
                     div()
-                        .px(px(4.0))
+                        .px(px(6.0))
+                        .py(px(8.0))
                         .text_size(px(12.5))
-                        .text_color(theme.muted_foreground.opacity(0.45))
+                        .text_color(theme.muted_foreground.opacity(0.40))
                         .line_height(px(19.0))
                         .child(msg.content.clone()),
                 );
@@ -1391,16 +1536,16 @@ impl Render for AgentPanel {
                             .flex()
                             .flex_col()
                             .items_end()
-                            .gap(px(2.0))
+                            .gap(px(3.0))
                             // Bubble
                             .child(
                                 div()
-                                    .max_w(rems(20.0))
+                                    .max_w(rems(22.0))
                                     .px(px(12.0))
-                                    .py(px(7.0))
+                                    .py(px(8.0))
                                     .rounded(px(14.0))
                                     .rounded_tr(px(4.0))
-                                    .bg(theme.primary.opacity(0.07))
+                                    .bg(theme.primary.opacity(0.06))
                                     .child(render_user_message_text(&user_content, msg_idx, theme)),
                             )
                             // Action row — appears on hover, below bubble
@@ -1497,28 +1642,29 @@ impl Render for AgentPanel {
                 let mut header_row = div()
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
-                    .pb(px(2.0))
+                    .gap(px(6.0))
+                    .pb(px(3.0))
                     .child(
                         svg()
                             .path("phosphor/oven.svg")
                             .size(px(13.0))
-                            .text_color(theme.primary.opacity(0.6)),
+                            .text_color(theme.primary.opacity(0.55)),
                     )
                     .child(
                         div()
                             .text_size(px(11.5))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground.opacity(0.65))
+                            .text_color(theme.foreground.opacity(0.60))
                             .child(model_label),
                     );
                 if let Some(dur) = msg_duration_ms {
-                    header_row = header_row.child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.3))
-                            .child(format!("· {}", format_duration_ms(dur))),
-                    );
+                    header_row = header_row
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(theme.muted_foreground.opacity(0.28))
+                                .child(format!("· {}", format_duration_ms(dur))),
+                        );
                 }
                 msg_el = msg_el.child(header_row);
 
@@ -1545,7 +1691,7 @@ impl Render for AgentPanel {
                                 .flex()
                                 .items_center()
                                 .gap(px(5.0))
-                                .ml(px(18.0))
+                                .ml(px(19.0))
                                 .py(px(2.0))
                                 .px(px(4.0))
                                 .rounded(px(4.0))
@@ -1595,7 +1741,7 @@ impl Render for AgentPanel {
                             };
                             msg_el = msg_el.child(
                                 div()
-                                    .ml(px(22.0))
+                                    .ml(px(23.0))
                                     .mr(px(4.0))
                                     .mt(px(1.0))
                                     .mb(px(2.0))
@@ -1629,11 +1775,11 @@ impl Render for AgentPanel {
                     let content: SharedString = msg.content.clone().into();
                     msg_el = msg_el.child(
                         div()
-                            .ml(px(18.0))
+                            .ml(px(19.0))
                             .pr(px(4.0))
                             .text_size(px(13.5))
                             .line_height(px(22.0))
-                            .text_color(theme.foreground.opacity(0.88))
+                            .text_color(theme.foreground.opacity(0.90))
                             .child(
                                 TextView::markdown(
                                     ElementId::Name(format!("msg-md-{msg_idx}").into()),
@@ -1645,10 +1791,10 @@ impl Render for AgentPanel {
                             ),
                     );
 
-                    // Copy button
+                    // Copy button — slightly tighter
                     let content_for_clip = assistant_content_for_copy;
                     msg_el = msg_el.child(
-                        div().ml(px(18.0)).child(
+                        div().ml(px(19.0)).mt(px(2.0)).child(
                             Clipboard::new(format!("copy-asst-{msg_idx}"))
                                 .value(SharedString::from(content_for_clip)),
                         ),
@@ -1673,7 +1819,7 @@ impl Render for AgentPanel {
                         .flex()
                         .items_center()
                         .gap(px(5.0))
-                        .ml(px(18.0))
+                        .ml(px(19.0))
                         .py(px(2.0))
                         .px(px(4.0))
                         .rounded(px(4.0))
@@ -1707,90 +1853,92 @@ impl Render for AgentPanel {
                 );
 
                 if !collapsed {
-                    let mut steps_el = div().flex().flex_col().ml(px(18.0)).gap(px(1.0));
+                    let mut steps_el = div().flex().flex_col().ml(px(19.0)).gap(px(2.0));
 
                     for (step_idx, step) in msg.steps.iter().enumerate() {
                         let icon_color = match step.status {
-                            StepStatus::Running => theme.warning.opacity(0.7),
-                            StepStatus::Complete => theme.muted_foreground.opacity(0.5),
+                            StepStatus::Running => theme.warning,
+                            StepStatus::Complete => theme.muted_foreground.opacity(0.4),
                             StepStatus::Denied => theme.danger.opacity(0.7),
                         };
 
                         let has_detail = step.detail.is_some();
                         let detail_collapsed = step.detail_collapsed;
 
-                        // Step row — flat, no dots, no borders
-                        // Parse label "Human Name: detail" into (name, detail) for better typography
+                        // Parse label "Human Name: detail" into (name, detail)
                         let (step_name, step_detail) =
                             if let Some(colon_pos) = step.label.find(": ") {
                                 (&step.label[..colon_pos], Some(&step.label[colon_pos + 2..]))
                             } else {
                                 (step.label.as_str(), None)
                             };
-                        let mut step_header = div()
+
+                        // Step row — two-line layout: [icon + name + duration + chevron] / [args]
+                        // Top line: icon, name, spacer, duration, chevron
+                        let mut top_line = div()
                             .flex()
                             .items_center()
-                            .gap(px(5.0))
-                            .py(px(2.0))
-                            .px(px(4.0))
+                            .gap(px(6.0))
                             .child(
                                 svg()
                                     .path(step.icon)
-                                    .size(px(11.0))
+                                    .size(px(12.0))
                                     .flex_shrink_0()
                                     .text_color(icon_color),
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.muted_foreground.opacity(0.5))
+                                    .text_size(px(12.0))
+                                    .text_color(theme.muted_foreground.opacity(0.55))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .flex_shrink_0()
                                     .child(step_name.to_string()),
+                            )
+                            .child(div().flex_1()); // spacer
+
+                        if let Some(dur) = step.duration {
+                            top_line = top_line.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(10.0))
+                                    .text_color(theme.muted_foreground.opacity(0.28))
+                                    .child(format_step_duration(dur)),
                             );
+                        }
+
+                        if has_detail {
+                            top_line = top_line.child(
+                                svg()
+                                    .path(if detail_collapsed {
+                                        "phosphor/caret-right.svg"
+                                    } else {
+                                        "phosphor/caret-down.svg"
+                                    })
+                                    .size(px(10.0))
+                                    .flex_shrink_0()
+                                    .text_color(theme.muted_foreground.opacity(0.30)),
+                            );
+                        }
+
+                        // Build step header as a column: top line + optional args line
+                        let mut step_header = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .py(px(3.0))
+                            .px(px(4.0))
+                            .child(top_line);
+
+                        // Args on second line — consistent indent with approval card
                         if let Some(detail_text) = step_detail {
                             step_header = step_header.child(
                                 div()
+                                    .ml(px(18.0)) // align with text after icon
                                     .text_size(px(11.0))
-                                    .text_color(theme.muted_foreground.opacity(0.65))
+                                    .text_color(theme.muted_foreground.opacity(0.45))
                                     .font_family("Ioskeley Mono")
                                     .overflow_x_hidden()
-                                    .flex_1()
-                                    .child(truncate_str(detail_text, 40)),
-                            );
-                        }
-
-                        // Duration — right-aligned, subtle
-                        if let Some(dur) = step.duration {
-                            let dur_text = if dur.as_secs() >= 60 {
-                                format!("{}m {}s", dur.as_secs() / 60, dur.as_secs() % 60)
-                            } else if dur.as_millis() >= 1000 {
-                                format!("{:.1}s", dur.as_secs_f64())
-                            } else {
-                                format!("{}ms", dur.as_millis())
-                            };
-                            step_header = step_header.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(9.5))
-                                    .text_color(theme.muted_foreground.opacity(0.3))
-                                    .child(dur_text),
-                            );
-                        }
-
-                        // Chevron for expandable steps
-                        if has_detail {
-                            let detail_chevron = if detail_collapsed {
-                                "phosphor/caret-right.svg"
-                            } else {
-                                "phosphor/caret-down.svg"
-                            };
-                            step_header = step_header.child(
-                                svg()
-                                    .path(detail_chevron)
-                                    .size(px(10.0))
-                                    .flex_shrink_0()
-                                    .text_color(theme.muted_foreground.opacity(0.35)),
+                                    .whitespace_nowrap()
+                                    .child(truncate_str(detail_text, 60)),
                             );
                         }
 
@@ -1803,8 +1951,8 @@ impl Render for AgentPanel {
                                         "step-detail-{msg_idx}-{step_idx}"
                                     )))
                                     .cursor_pointer()
-                                    .rounded(px(4.0))
-                                    .hover(|s| s.bg(theme.muted.opacity(0.06)))
+                                    .rounded(px(5.0))
+                                    .hover(|s| s.bg(theme.muted.opacity(0.05)))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
@@ -1821,7 +1969,7 @@ impl Render for AgentPanel {
                             step_el = step_el.child(step_header);
                         }
 
-                        // Expanded detail — subtle bg, no border
+                        // Expanded detail
                         if let Some(detail) = &step.detail {
                             if !detail_collapsed {
                                 let preview = result_preview(detail, TOOL_RESULT_PREVIEW_LINES);
@@ -1844,27 +1992,43 @@ impl Render for AgentPanel {
             messages_content = messages_content.child(msg_el);
         }
 
-        // ── Active tool calls (flat inline rows) ─────────────────
-        if !self.state.tool_calls.is_empty() {
-            let mut tc_container = div().flex().flex_col().ml(px(18.0)).gap(px(1.0));
+        // ── Active tool calls (skip if awaiting approval — the card shows it) ──
+        // Collect call_ids that have pending approvals to avoid duplicate rendering.
+        let pending_call_ids: std::collections::HashSet<&str> = self
+            .state
+            .pending_approvals
+            .iter()
+            .map(|a| a.call_id.as_str())
+            .collect();
 
-            for (tc_idx, tc) in self.state.tool_calls.iter().enumerate() {
+        let visible_tool_calls: Vec<_> = self
+            .state
+            .tool_calls
+            .iter()
+            .enumerate()
+            .filter(|(_, tc)| !pending_call_ids.contains(tc.call_id.as_str()))
+            .collect();
+
+        if !visible_tool_calls.is_empty() {
+            let mut tc_container = div().flex().flex_col().ml(px(19.0)).gap(px(2.0));
+
+            for (tc_idx, tc) in visible_tool_calls {
                 let is_done = tc.result.is_some();
                 let icon = tool_icon(&tc.tool_name);
                 let args_display = format_tool_args(&tc.tool_name, &tc.args);
                 let human_name = humanize_tool_name(&tc.tool_name);
 
                 let icon_color = if is_done {
-                    theme.muted_foreground.opacity(0.5)
+                    theme.muted_foreground.opacity(0.4)
                 } else {
-                    theme.warning.opacity(0.7)
+                    theme.warning
                 };
 
-                // Single row: icon/spinner + name + args (mono) + duration
+                // Icon or spinner
                 let icon_el: AnyElement = if is_done {
                     svg()
                         .path(icon)
-                        .size(px(11.0))
+                        .size(px(12.0))
                         .flex_shrink_0()
                         .text_color(icon_color)
                         .into_any_element()
@@ -1874,53 +2038,56 @@ impl Render for AgentPanel {
                         .child(Spinner::new().small().color(theme.warning))
                         .into_any_element()
                 };
-                let mut tc_row = div()
+
+                let dur = tc.duration.unwrap_or_else(|| tc.started_at.elapsed());
+
+                // Two-line layout matching completed steps
+                let top_line = div()
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
-                    .py(px(2.0))
-                    .px(px(4.0))
+                    .gap(px(6.0))
                     .child(icon_el)
                     .child(
                         div()
-                            .text_size(px(11.0))
-                            .text_color(theme.muted_foreground.opacity(0.5))
+                            .text_size(px(12.0))
+                            .text_color(theme.muted_foreground.opacity(0.55))
                             .font_weight(FontWeight::MEDIUM)
-                            .flex_shrink_0()
                             .child(human_name),
                     )
+                    .child(div().flex_1()) // spacer
                     .child(
                         div()
+                            .flex_shrink_0()
+                            .text_size(px(10.0))
+                            .text_color(theme.muted_foreground.opacity(0.28))
+                            .child(format_step_duration(dur)),
+                    );
+
+                let mut tc_row = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.0))
+                    .py(px(3.0))
+                    .px(px(4.0))
+                    .child(top_line);
+
+                // Args on second line
+                if !args_display.is_empty() {
+                    tc_row = tc_row.child(
+                        div()
+                            .ml(px(18.0))
                             .text_size(px(11.0))
-                            .text_color(theme.muted_foreground.opacity(0.55))
+                            .text_color(theme.muted_foreground.opacity(0.45))
                             .font_family("Ioskeley Mono")
                             .overflow_x_hidden()
                             .whitespace_nowrap()
-                            .flex_1()
-                            .min_w_0()
-                            .child(truncate_str(&args_display, 40)),
+                            .child(truncate_str(&args_display, 60)),
                     );
-
-                // Duration
-                let dur = tc.duration.unwrap_or_else(|| tc.started_at.elapsed());
-                let dur_text = if dur.as_secs() >= 60 {
-                    format!("{}m {}s", dur.as_secs() / 60, dur.as_secs() % 60)
-                } else if dur.as_millis() >= 1000 {
-                    format!("{:.1}s", dur.as_secs_f64())
-                } else {
-                    format!("{}ms", dur.as_millis())
-                };
-                tc_row = tc_row.child(
-                    div()
-                        .flex_shrink_0()
-                        .text_size(px(9.5))
-                        .text_color(theme.muted_foreground.opacity(0.3))
-                        .child(dur_text),
-                );
+                }
 
                 let mut tc_el = div().flex().flex_col().child(tc_row);
 
-                // Result preview — subtle bg block
+                // Result preview
                 if let Some(result) = &tc.result {
                     let formatted = format_tool_result(&tc.tool_name, result);
                     let preview = result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES);
@@ -1941,60 +2108,65 @@ impl Render for AgentPanel {
             let deny_idx = i;
             let human_tool = humanize_tool_name(&approval.tool_name);
 
-            // Approval card — subtle warning accent, clean layout
+            // Approval card — clean, confident layout
             let approval_el = div()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
-                .ml(px(18.0))
+                .gap(px(8.0))
+                .ml(px(19.0))
                 .mr(px(4.0))
-                .px(px(10.0))
-                .py(px(8.0))
-                .rounded(px(8.0))
+                .px(px(12.0))
+                .py(px(10.0))
+                .rounded(px(10.0))
                 .bg(theme.warning.opacity(0.04))
-                // Header row — tool icon + name + args (monospace)
+                // Header — tool info
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(5.0))
+                        .gap(px(6.0))
                         .child(
                             svg()
                                 .path(icon)
-                                .size(px(11.0))
+                                .size(px(13.0))
                                 .flex_shrink_0()
-                                .text_color(theme.warning.opacity(0.7)),
+                                .text_color(theme.warning.opacity(0.70)),
                         )
                         .child(
                             div()
-                                .text_size(px(11.0))
+                                .text_size(px(12.5))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.foreground.opacity(0.7))
+                                .text_color(theme.foreground.opacity(0.70))
                                 .flex_shrink_0()
                                 .child(human_tool),
                         )
                         .child(
-                            div()
-                                .text_size(px(11.0))
-                                .font_family("Ioskeley Mono")
-                                .text_color(theme.foreground.opacity(0.5))
-                                .overflow_x_hidden()
-                                .flex_1()
-                                .min_w_0()
-                                .whitespace_nowrap()
-                                .child(truncate_str(&args_display, 60)),
+                            Tag::warning()
+                                .outline()
+                                .xsmall()
+                                .child("Approve?"),
                         ),
                 )
-                // Action row — compact buttons
+                // Args — monospace, full width
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .font_family("Ioskeley Mono")
+                        .text_color(theme.muted_foreground.opacity(0.55))
+                        .overflow_x_hidden()
+                        .whitespace_nowrap()
+                        .child(truncate_str(&args_display, 80)),
+                )
+                // Action row — clear hierarchy
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(4.0))
+                        .gap(px(6.0))
                         .child(
                             Button::new(format!("allow-{i}"))
                                 .label("Allow")
-                                .xsmall()
+                                .small()
                                 .primary()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.resolve_approval(allow_idx, true, cx);
@@ -2003,7 +2175,7 @@ impl Render for AgentPanel {
                         .child(
                             Button::new(format!("allow-all-{i}"))
                                 .label("Allow All")
-                                .xsmall()
+                                .small()
                                 .ghost()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.auto_approve = true;
@@ -2014,7 +2186,7 @@ impl Render for AgentPanel {
                         .child(
                             Button::new(format!("deny-{i}"))
                                 .label("Deny")
-                                .xsmall()
+                                .small()
                                 .ghost()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.resolve_approval(deny_idx, false, cx);
@@ -2025,8 +2197,9 @@ impl Render for AgentPanel {
             messages_content = messages_content.child(approval_el);
         }
 
-        // ── Status indicator — matches step row layout ──────────
-        if let Some((icon, label)) = self.status_text() {
+        // ── Status indicator (hidden when approval cards are visible — they ARE the status) ──
+        if self.state.pending_approvals.is_empty() {
+        if let Some((_icon, label)) = self.status_text() {
             let status_color = match self.state.status {
                 AgentStatus::Thinking => theme.warning,
                 AgentStatus::Responding => theme.success,
@@ -2034,34 +2207,31 @@ impl Render for AgentPanel {
             };
             messages_content = messages_content.child(
                 div()
-                    .ml(px(18.0))
+                    .ml(px(19.0))
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
-                    .py(px(2.0))
+                    .gap(px(6.0))
+                    .py(px(3.0))
                     .px(px(4.0))
                     .child(
-                        svg()
-                            .path(icon)
-                            .size(px(11.0))
-                            .flex_shrink_0()
-                            .text_color(status_color.opacity(0.55)),
+                        Spinner::new().small().color(status_color),
                     )
                     .child(
                         div()
-                            .text_size(px(11.0))
-                            .text_color(theme.muted_foreground.opacity(0.45))
+                            .text_size(px(12.0))
+                            .text_color(theme.muted_foreground.opacity(0.50))
                             .child(label),
                     ),
             );
         }
+        } // end pending_approvals.is_empty() guard
 
         // ── Header ──────────────────────────────────────────────
-        let status_indicator = match self.state.status {
+        let status_indicator: AnyElement = match self.state.status {
             AgentStatus::Idle => div()
-                .size(px(6.0))
+                .size(px(7.0))
                 .rounded_full()
-                .bg(theme.muted_foreground.opacity(0.3))
+                .bg(theme.muted_foreground.opacity(0.25))
                 .into_any_element(),
             AgentStatus::Thinking => Spinner::new()
                 .small()
@@ -2073,43 +2243,35 @@ impl Render for AgentPanel {
                 .into_any_element(),
         };
 
-        // Model label — show short name (e.g. "claude-sonnet-4-6" → "Sonnet 4.6")
+        // Model label
         let model_display = humanize_model_name(&self.model_name);
 
         let mut header_left = div()
             .flex()
             .items_center()
-            .gap(px(7.0))
-            // Oven icon
+            .gap(px(8.0))
             .child(
                 svg()
                     .path("phosphor/oven.svg")
                     .size(px(14.0))
                     .text_color(theme.primary),
             )
-            // Model name
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.foreground.opacity(0.7))
+                    .text_size(px(12.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.foreground.opacity(0.75))
                     .child(model_display),
             )
-            // Status indicator — idle dot, spinner when actively thinking/responding
             .child(status_indicator);
 
-        // Auto-approve badge
+        // Auto-approve badge — use Tag component
         if self.auto_approve {
             header_left = header_left.child(
-                div()
-                    .px(px(5.0))
-                    .py(px(1.0))
-                    .rounded(px(3.0))
-                    .bg(theme.warning.opacity(0.10))
-                    .text_color(theme.warning)
-                    .text_size(px(9.0))
-                    .font_weight(FontWeight::BOLD)
-                    .child("AUTO"),
+                Tag::warning()
+                    .outline()
+                    .xsmall()
+                    .child("YOLO"),
             );
         }
 
@@ -2117,17 +2279,20 @@ impl Render for AgentPanel {
             .flex()
             .items_center()
             .justify_between()
-            .h(px(36.0))
+            .h(px(40.0))
             .px(px(14.0))
             .flex_shrink_0()
             .child(header_left)
             .child({
                 let mut actions = div().flex().items_center().gap(px(2.0));
 
-                // Stop button — visible when agent is working
+                // Stop button
                 if self.state.status != AgentStatus::Idle {
                     actions = actions.child(
-                        icon_button("agent-stop", "phosphor/stop.svg", theme)
+                        Button::new("agent-stop")
+                            .icon(Icon::default().path("phosphor/stop.svg"))
+                            .ghost()
+                            .xsmall()
                             .tooltip("Stop")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.emit(CancelRequest);
@@ -2140,18 +2305,20 @@ impl Render for AgentPanel {
 
                 actions
                     .child(
-                        icon_button(
-                            "agent-history-toggle",
-                            "phosphor/clock-counter-clockwise.svg",
-                            theme,
-                        )
-                        .tooltip("History")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_history(cx);
-                        })),
+                        Button::new("agent-history-toggle")
+                            .icon(Icon::default().path("phosphor/clock-counter-clockwise.svg"))
+                            .ghost()
+                            .xsmall()
+                            .tooltip("History")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_history(cx);
+                            })),
                     )
                     .child(
-                        icon_button("agent-new-chat", "phosphor/plus.svg", theme)
+                        Button::new("agent-new-chat")
+                            .icon(Icon::default().path("phosphor/plus.svg"))
+                            .ghost()
+                            .xsmall()
                             .tooltip("New Chat")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.emit(NewConversation);
@@ -2432,12 +2599,6 @@ impl Render for AgentPanel {
     }
 }
 
-fn icon_button(id: &str, icon_path: &str, _theme: &gpui_component::Theme) -> Button {
-    Button::new(SharedString::from(id.to_string()))
-        .icon(Icon::default().path(SharedString::from(icon_path.to_string())))
-        .ghost()
-        .xsmall()
-}
 
 /// Convert model ID to a human-readable short name.
 fn humanize_model_name(model: &str) -> String {
@@ -2462,6 +2623,17 @@ fn humanize_model_name(model: &str) -> String {
     }
     // Fallback: show as-is but truncated
     truncate_str(model, 24)
+}
+
+/// Format a step/tool call duration.
+fn format_step_duration(dur: std::time::Duration) -> String {
+    if dur.as_secs() >= 60 {
+        format!("{}m {}s", dur.as_secs() / 60, dur.as_secs() % 60)
+    } else if dur.as_millis() >= 1000 {
+        format!("{:.1}s", dur.as_secs_f64())
+    } else {
+        format!("{}ms", dur.as_millis())
+    }
 }
 
 /// Format milliseconds into a human-readable duration string.

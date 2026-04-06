@@ -61,7 +61,7 @@ fn default_split_down() -> String {
     "cmd-shift-d".into()
 }
 fn default_focus_input() -> String {
-    "cmd-k".into()
+    "cmd-i".into()
 }
 fn default_toggle_input_bar() -> String {
     "ctrl-`".into()
