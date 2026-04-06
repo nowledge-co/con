@@ -37,10 +37,10 @@ Is this a shell command on a pane WITHOUT exec_visible_shell?
   → send_keys "command\n" (after read_pane to confirm shell prompt)
 
 Need to run on a host not currently connected?
-  → create_pane(command: "ssh hostname") → read_pane to confirm connected
+  → create_pane(command: "ssh hostname") — output shows connection result
 
 Need to run on multiple hosts in parallel?
-  → create_pane for each host → read_pane to confirm each is ready
+  → create_pane for each host — each returns output showing connection state
   → terminal_exec (if exec_visible_shell) or send_keys for each
 
 Need to interact with a TUI (vim, htop, etc.)?
@@ -56,12 +56,68 @@ Need file operations on a remote host?
   → send_keys with heredoc (Level 3 — no direct remote file access)
 ```
 
-## Core Principle: Observe Before Acting
+## Tool Design Principles
+
+These principles govern the design of every agent tool. They are derived from production failures — each one exists because violating it caused a real, observable breakdown in agent behavior.
+
+### 1. Don't force the model to predict
+
+If a tool requires the model to guess what will happen, the tool is broken. The model doesn't know what apt will print, whether SSH will ask for a password, or how long a build takes. When we force predictions, the model guesses wrong and the system hangs or fails silently.
+
+**Test**: Can the model use this tool correctly with zero domain knowledge about the command it's running? If not, the tool needs to observe on the model's behalf.
+
+Applied:
+- `wait_for` idle mode: the system detects completion (via shell integration or quiescence) — the model doesn't guess output text
+- `create_pane` returns initial output: the model sees "connected" or "Password:" — doesn't predict auth method
+- Pattern mode is last resort, not default
+
+### 2. If a parameter exists, the model will fill it
+
+Every schema parameter is a decision point. Models are thorough — they fill optional parameters "to be safe." If the system knows the right value (timeouts, polling intervals, buffer sizes), don't expose it. The model should express **intent**, not **mechanics**.
+
+**Test**: For each optional parameter, ask: "Is there ever a case where the model choosing a value produces a better outcome than the system's default?" If no, remove it from the schema. Keep it in the Rust struct for internal use.
+
+Applied:
+- `timeout_secs` removed from `wait_for` schema — system uses 30s default, model retries on timeout
+- Polling intervals are internal — never exposed
+
+### 3. Tool responses must be self-contained for the next decision
+
+A tool response should contain everything the model needs to decide its next action. If the model must immediately call another tool to understand what happened, the first tool's response is incomplete.
+
+**Test**: After receiving this response, can the model decide what to do next without another tool call? If not, include the missing information.
+
+Applied:
+- `create_pane` returns `output` alongside `pane_index` — no follow-up `read_pane` needed
+- `wait_for` returns `output` (last 50 lines) alongside `status` — on timeout, the model can see what's happening
+- `terminal_exec` returns stdout/stderr/exit_code — complete picture
+
+### 4. Degrade gracefully, never refuse
+
+When a capability isn't available (no shell integration, no OSC 133), fall back to something useful. Never return an error that says "can't help" when a less precise but functional alternative exists.
+
+**Test**: Does this tool work on a bare SSH pane with no shell integration? If not, what's the fallback?
+
+Applied:
+- `wait_for` without shell integration → quiescence detection (output stability)
+- `terminal_exec` without `exec_visible_shell` → clear error with suggested alternative (send_keys)
+
+### 5. Normalize at the boundary
+
+Data from external systems (terminal grid, PTY output, FFI returns) has quirks the model can't handle — trailing whitespace from cursor position, ANSI codes, encoding variations. Normalize at the system boundary, before the data reaches any comparison logic or the model.
+
+**Test**: If I run the same command twice and `diff` the tool's output, do I get identical results? If not, normalize whatever varies.
+
+Applied:
+- `trim_end()` on each line before quiescence comparison — cursor position doesn't affect stability detection
+- `recent_lines()` returns plain text (no ANSI) — model sees clean content
+- Empty pattern `""` normalized to `None` — Rust's `"".contains("")` edge case handled at entry
+
+## Observe Before Acting
 
 The agent must never assume terminal state. Before acting on any pane:
 - Before send_keys: read_pane to see what is on screen
 - After send_keys: read_pane to verify the action took effect
-- After create_pane: read_pane to observe what the startup command produced
 - Never chain multiple actions without observing between them
 
 ## Tools
