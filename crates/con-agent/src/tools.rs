@@ -756,6 +756,9 @@ pub enum PaneQuery {
     },
     /// Return tmux adapter state for a pane whose target stack contains tmux.
     InspectTmux { pane_index: usize },
+    /// Lightweight busy check for a single pane (used by wait_for polling).
+    /// Returns only is_busy + has_shell_integration, avoiding full List forensics.
+    CheckBusy { pane_index: usize },
     /// Wait for a pane to become idle or match a pattern.
     WaitFor {
         pane_index: usize,
@@ -775,6 +778,11 @@ pub enum PaneResponse {
     TmuxInfo(TmuxControlState),
     /// Search results: Vec of (pane_index, line_number, line_text).
     SearchResults(Vec<(usize, usize, String)>),
+    /// Lightweight busy-check response.
+    BusyStatus {
+        is_busy: bool,
+        has_shell_integration: bool,
+    },
     /// Response from a wait_for operation.
     WaitComplete { status: String, output: String },
     /// A new pane was created successfully.
@@ -801,7 +809,7 @@ impl Tool for ListPanesTool {
     const NAME: &'static str = "list_panes";
     type Error = ToolError;
     type Args = ListPanesArgs;
-    type Output = String;
+    type Output = serde_json::Value;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
@@ -836,7 +844,7 @@ impl Tool for ListPanesTool {
         log::info!("[list_panes] Got response");
 
         match response {
-            PaneResponse::PaneList(panes) => serde_json::to_string_pretty(&panes)
+            PaneResponse::PaneList(panes) => serde_json::to_value(&panes)
                 .map_err(|e| ToolError::CommandFailed(e.to_string())),
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
@@ -865,7 +873,7 @@ impl Tool for TmuxInspectTool {
     const NAME: &'static str = "tmux_inspect";
     type Error = ToolError;
     type Args = TmuxInspectArgs;
-    type Output = String;
+    type Output = serde_json::Value;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
@@ -902,7 +910,7 @@ impl Tool for TmuxInspectTool {
         })?;
 
         match response {
-            PaneResponse::TmuxInfo(info) => serde_json::to_string_pretty(&info)
+            PaneResponse::TmuxInfo(info) => serde_json::to_value(&info)
                 .map_err(|e| ToolError::CommandFailed(e.to_string())),
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
@@ -1128,7 +1136,7 @@ impl Tool for BatchExecTool {
     const NAME: &'static str = "batch_exec";
     type Error = ToolError;
     type Args = BatchExecArgs;
-    type Output = String;
+    type Output = serde_json::Value;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
@@ -1163,7 +1171,7 @@ impl Tool for BatchExecTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         if args.commands.is_empty() {
-            return Ok("[]".to_string());
+            return Ok(serde_json::Value::Array(vec![]));
         }
 
         log::info!(
@@ -1209,7 +1217,7 @@ impl Tool for BatchExecTool {
                 .collect()
         });
 
-        serde_json::to_string_pretty(&results).map_err(|e| ToolError::CommandFailed(e.to_string()))
+        serde_json::to_value(&results).map_err(|e| ToolError::CommandFailed(e.to_string()))
     }
 }
 
@@ -1342,53 +1350,6 @@ impl WaitForTool {
     pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
         Self { pane_tx }
     }
-
-    /// Send a PaneQuery::List and return the PaneInfo for the target pane.
-    fn query_pane_info(&self, pane_index: usize) -> Result<PaneInfo, ToolError> {
-        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
-        self.pane_tx
-            .send(PaneRequest {
-                query: PaneQuery::List,
-                response_tx,
-            })
-            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
-
-        let response = response_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .map_err(|_| ToolError::CommandFailed("Pane query timed out".into()))?;
-
-        match response {
-            PaneResponse::PaneList(panes) => panes
-                .into_iter()
-                .find(|p| p.index == pane_index)
-                .ok_or_else(|| {
-                    ToolError::CommandFailed(format!("Pane {} not found", pane_index))
-                }),
-            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
-            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
-        }
-    }
-
-    /// Send a PaneQuery::ReadContent and return the text.
-    fn query_pane_content(&self, pane_index: usize, lines: usize) -> Result<String, ToolError> {
-        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
-        self.pane_tx
-            .send(PaneRequest {
-                query: PaneQuery::ReadContent { pane_index, lines },
-                response_tx,
-            })
-            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
-
-        let response = response_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .map_err(|_| ToolError::CommandFailed("Pane query timed out".into()))?;
-
-        match response {
-            PaneResponse::Content(content) => Ok(content),
-            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
-            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
-        }
-    }
 }
 
 impl Tool for WaitForTool {
@@ -1424,8 +1385,6 @@ impl Tool for WaitForTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let timeout_secs = args.timeout_secs.unwrap_or(120).min(600);
-        let poll_interval = std::time::Duration::from_millis(500);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
         log::info!(
             "[wait_for] pane={} timeout={}s pattern={:?}",
@@ -1434,51 +1393,30 @@ impl Tool for WaitForTool {
             args.pattern
         );
 
-        loop {
-            if std::time::Instant::now() >= deadline {
-                // Timeout — grab final output and return
-                let output = tokio::task::block_in_place(|| {
-                    self.query_pane_content(args.pane_index, 50)
-                })
-                .unwrap_or_default();
-                return Ok(WaitForOutput {
-                    status: "timeout".to_string(),
-                    output,
-                });
-            }
+        // Delegate to workspace — it has direct terminal access and runs an
+        // async GPUI task with 100ms/500ms polling, no channel roundtrips per tick.
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::WaitFor {
+                    pane_index: args.pane_index,
+                    timeout_secs: Some(timeout_secs),
+                    pattern: args.pattern,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
 
-            let check_result: Result<Option<WaitForOutput>, ToolError> =
-                tokio::task::block_in_place(|| {
-                    if let Some(ref pattern) = args.pattern {
-                        // Pattern mode: check last 50 lines for the pattern
-                        let content = self.query_pane_content(args.pane_index, 50)?;
-                        if content.contains(pattern.as_str()) {
-                            return Ok(Some(WaitForOutput {
-                                status: "matched".to_string(),
-                                output: content,
-                            }));
-                        }
-                        Ok(None)
-                    } else {
-                        // Idle mode: check is_busy flag
-                        let info = self.query_pane_info(args.pane_index)?;
-                        if !info.is_busy {
-                            let content = self.query_pane_content(args.pane_index, 50)?;
-                            return Ok(Some(WaitForOutput {
-                                status: "idle".to_string(),
-                                output: content,
-                            }));
-                        }
-                        Ok(None)
-                    }
-                });
-            let check_result = check_result?;
+        // Block until workspace responds (timeout + 10s buffer for task overhead).
+        let response = tokio::task::block_in_place(|| {
+            response_rx.recv_timeout(std::time::Duration::from_secs(timeout_secs + 10))
+        })
+        .map_err(|_| ToolError::CommandFailed("Wait timed out (no response from workspace)".into()))?;
 
-            if let Some(result) = check_result {
-                return Ok(result);
-            }
-
-            tokio::time::sleep(poll_interval).await;
+        match response {
+            PaneResponse::WaitComplete { status, output } => Ok(WaitForOutput { status, output }),
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }
     }
 }
@@ -1692,6 +1630,12 @@ pub struct CreatePaneArgs {
     pub command: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct CreatePaneOutput {
+    pub pane_index: usize,
+    pub command: Option<String>,
+}
+
 pub struct CreatePaneTool {
     pane_tx: Sender<PaneRequest>,
 }
@@ -1706,18 +1650,18 @@ impl Tool for CreatePaneTool {
     const NAME: &'static str = "create_pane";
     type Error = ToolError;
     type Args = CreatePaneArgs;
-    type Output = String;
+    type Output = CreatePaneOutput;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Create a new terminal pane (split in current tab). Optionally run a command in it (e.g. \"ssh cinnamon\"). Returns the new pane's index for use with other tools.".to_string(),
+            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh cinnamon\"). The command is executed automatically when the pane opens — do NOT send the same command again via send_keys or terminal_exec. Returns the new pane's index. Call list_panes after creation to confirm the pane is ready.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Optional command to run in the new pane (e.g. \"ssh cinnamon\", \"htop\")"
+                        "description": "Optional startup command executed automatically in the new pane. Do NOT re-send this command — it already ran."
                     }
                 }
             }),
@@ -1727,6 +1671,7 @@ impl Tool for CreatePaneTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         log::info!("[create_pane] Tool called, command: {:?}", args.command);
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        let command_echo = args.command.clone();
         self.pane_tx
             .send(PaneRequest {
                 query: PaneQuery::CreatePane {
@@ -1746,9 +1691,10 @@ impl Tool for CreatePaneTool {
         })?;
 
         match response {
-            PaneResponse::PaneCreated { pane_index } => {
-                Ok(format!("Created new pane with index {}", pane_index))
-            }
+            PaneResponse::PaneCreated { pane_index } => Ok(CreatePaneOutput {
+                pane_index,
+                command: command_echo,
+            }),
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }

@@ -511,7 +511,8 @@ impl AgentHarness {
                             continue;
                         }
                         log::error!("[harness] provider.send() failed: {}", msg);
-                        let _ = harness_tx.send(HarnessEvent::Error(msg));
+                        let user_msg = friendly_error(&msg);
+                        let _ = harness_tx.send(HarnessEvent::Error(user_msg));
                         break;
                     }
                 }
@@ -837,6 +838,39 @@ fn has_natural_language_signals(input: &str) -> bool {
 }
 
 /// Classify errors as transient (worth retrying) vs permanent.
+/// Produce a user-friendly error message from a verbose provider error.
+/// Detects known failure patterns and translates them into actionable guidance.
+fn friendly_error(msg: &str) -> String {
+    // Empty tool_call_id: the streaming parser failed to parse the model's
+    // tool call (missing name/id). This is a provider compatibility issue.
+    if msg.contains("tool_call_id") && msg.contains("invalid") {
+        return format!(
+            "The model returned a malformed tool call (empty name or call_id). \
+             This is a known compatibility issue with some providers' streaming format. \
+             Try a different model, or retry the request.\n\nRaw error: {}",
+            short_error_detail(msg),
+        );
+    }
+    // ToolNotFoundError with empty name — same root cause
+    if msg.contains("ToolNotFoundError") && msg.contains("\"\"") {
+        return "The model returned a tool call with an empty name. \
+                This usually means the provider's streaming format is incompatible. \
+                Try a different model."
+            .to_string();
+    }
+    msg.to_string()
+}
+
+/// Extract the JSON error body from a verbose provider error, if present.
+fn short_error_detail(msg: &str) -> &str {
+    // Look for the JSON portion: {"type":"error",...}
+    if let Some(start) = msg.find("{\"type\":") {
+        &msg[start..]
+    } else {
+        msg
+    }
+}
+
 /// Rig surfaces HTTP errors as stringified messages, so we match on substrings.
 fn is_transient_error(msg: &str) -> bool {
     // HTTP 429 rate limit

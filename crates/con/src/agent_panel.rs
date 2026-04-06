@@ -342,6 +342,7 @@ impl PanelState {
 pub struct AgentPanel {
     state: PanelState,
     scroll_handle: ScrollHandle,
+    history_scroll_handle: ScrollHandle,
     showing_history: bool,
     conversation_list: Vec<ConversationSummary>,
     auto_approve: bool,
@@ -422,6 +423,7 @@ impl AgentPanel {
         Self {
             state: PanelState::new(),
             scroll_handle: ScrollHandle::new(),
+            history_scroll_handle: ScrollHandle::new(),
             showing_history: false,
             conversation_list: Vec::new(),
             auto_approve: false,
@@ -453,6 +455,7 @@ impl AgentPanel {
         Self {
             state,
             scroll_handle: ScrollHandle::new(),
+            history_scroll_handle: ScrollHandle::new(),
             showing_history: false,
             conversation_list: Vec::new(),
             auto_approve: false,
@@ -858,22 +861,39 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
-/// "list_panes" → "List Panes", "terminal_exec" → "Terminal Exec"
+/// Human-friendly tool name labels.
 fn humanize_tool_name(name: &str) -> String {
-    name.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(c) => {
-                    let mut s = c.to_uppercase().to_string();
-                    s.extend(chars);
-                    s
-                }
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    match name {
+        "terminal_exec" | "shell_exec" => "Run".to_string(),
+        "batch_exec" => "Batch Run".to_string(),
+        "file_read" => "Read".to_string(),
+        "file_write" => "Write".to_string(),
+        "edit_file" => "Edit".to_string(),
+        "list_files" => "List Files".to_string(),
+        "search" => "Search".to_string(),
+        "search_panes" => "Search Panes".to_string(),
+        "list_panes" => "List Panes".to_string(),
+        "read_pane" => "Read Pane".to_string(),
+        "send_keys" => "Send Keys".to_string(),
+        "create_pane" => "New Pane".to_string(),
+        _ => {
+            // Fallback: title-case with _ → space
+            name.split('_')
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        Some(c) => {
+                            let mut s = c.to_uppercase().to_string();
+                            s.extend(chars);
+                            s
+                        }
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    }
 }
 
 /// Unwrap Rig's double-encoding: Rig calls `serde_json::to_string()` on tool Output,
@@ -1065,6 +1085,48 @@ fn format_generic_result(value: &serde_json::Value) -> String {
     }
 }
 
+/// Render a result block — subtle bg, monospace for multi-line, inline for short text.
+fn render_result_block(
+    content: &str,
+    id_prefix: &str,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    let is_short = content.lines().count() <= 1 && content.len() < 80;
+
+    if is_short && content != "(no output)" {
+        // Short result — inline, no code block
+        div()
+            .ml(px(22.0))
+            .py(px(1.0))
+            .text_size(px(10.5))
+            .font_family("Ioskeley Mono")
+            .text_color(theme.muted_foreground.opacity(0.55))
+            .overflow_x_hidden()
+            .child(content.to_string())
+            .into_any_element()
+    } else {
+        // Multi-line result — code block in subtle bg
+        let md: SharedString = format!("```\n{content}\n```").into();
+        div()
+            .ml(px(22.0))
+            .mr(px(4.0))
+            .mt(px(2.0))
+            .mb(px(4.0))
+            .px(px(10.0))
+            .py(px(6.0))
+            .rounded(px(6.0))
+            .bg(theme.muted.opacity(0.04))
+            .overflow_x_hidden()
+            .child(
+                TextView::markdown(ElementId::Name(id_prefix.to_string().into()), md)
+                    .selectable(true)
+                    .style(chat_markdown_style())
+                    .text_xs(),
+            )
+            .into_any_element()
+    }
+}
+
 /// Create a preview of a tool result — first N lines + count of remaining.
 fn result_preview(formatted: &str, max_lines: usize) -> String {
     let lines: Vec<&str> = formatted.lines().collect();
@@ -1201,16 +1263,12 @@ impl Render for AgentPanel {
         let theme = cx.theme();
 
         // ── Messages ──────────────────────────────────────────────
-        let mut messages_area = div()
+        let mut messages_content = div()
             .id("agent-messages")
-            .relative()
             .flex()
             .flex_col()
-            .flex_1()
-            .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle)
-            .vertical_scrollbar(&self.scroll_handle)
             .px(px(14.0))
             .pt(px(10.0))
             .pb(px(64.0))
@@ -1766,30 +1824,12 @@ impl Render for AgentPanel {
                         if let Some(detail) = &step.detail {
                             if !detail_collapsed {
                                 let preview = result_preview(detail, TOOL_RESULT_PREVIEW_LINES);
-                                let md: SharedString = format!("```\n{preview}\n```").into();
                                 step_el = step_el.child(
-                                    div()
-                                        .ml(px(22.0))
-                                        .mr(px(4.0))
-                                        .mt(px(2.0))
-                                        .mb(px(4.0))
-                                        .px(px(10.0))
-                                        .py(px(6.0))
-                                        .rounded(px(6.0))
-                                        .bg(theme.muted.opacity(0.04))
-                                        .overflow_x_hidden()
-                                        .child(
-                                            TextView::markdown(
-                                                ElementId::Name(
-                                                    format!("step-result-{msg_idx}-{step_idx}")
-                                                        .into(),
-                                                ),
-                                                md,
-                                            )
-                                            .selectable(true)
-                                            .style(chat_markdown_style())
-                                            .text_xs(),
-                                        ),
+                                    render_result_block(
+                                        &preview,
+                                        &format!("step-result-{msg_idx}-{step_idx}"),
+                                        theme,
+                                    ),
                                 );
                             }
                         }
@@ -1800,7 +1840,7 @@ impl Render for AgentPanel {
                 }
             }
 
-            messages_area = messages_area.child(msg_el);
+            messages_content = messages_content.child(msg_el);
         }
 
         // ── Active tool calls (flat inline rows) ─────────────────
@@ -1819,35 +1859,44 @@ impl Render for AgentPanel {
                     theme.warning.opacity(0.7)
                 };
 
-                // Single row: icon + name + args (mono) + duration
+                // Single row: icon/spinner + name + args (mono) + duration
+                let icon_el: AnyElement = if is_done {
+                    svg()
+                        .path(icon)
+                        .size(px(11.0))
+                        .flex_shrink_0()
+                        .text_color(icon_color)
+                        .into_any_element()
+                } else {
+                    div()
+                        .flex_shrink_0()
+                        .child(Spinner::new().small().color(theme.warning))
+                        .into_any_element()
+                };
                 let mut tc_row = div()
                     .flex()
                     .items_center()
                     .gap(px(5.0))
                     .py(px(2.0))
                     .px(px(4.0))
-                    .child(
-                        svg()
-                            .path(icon)
-                            .size(px(11.0))
-                            .flex_shrink_0()
-                            .text_color(icon_color),
-                    )
+                    .child(icon_el)
                     .child(
                         div()
                             .text_size(px(11.0))
                             .text_color(theme.muted_foreground.opacity(0.5))
                             .font_weight(FontWeight::MEDIUM)
                             .flex_shrink_0()
-                            .child(format!("{human_name}")),
+                            .child(human_name),
                     )
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(theme.muted_foreground.opacity(0.65))
+                            .text_color(theme.muted_foreground.opacity(0.55))
                             .font_family("Ioskeley Mono")
                             .overflow_x_hidden()
+                            .whitespace_nowrap()
                             .flex_1()
+                            .min_w_0()
                             .child(truncate_str(&args_display, 40)),
                     );
 
@@ -1874,32 +1923,13 @@ impl Render for AgentPanel {
                 if let Some(result) = &tc.result {
                     let formatted = format_tool_result(&tc.tool_name, result);
                     let preview = result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES);
-                    let md: SharedString = format!("```\n{preview}\n```").into();
                     tc_el = tc_el.child(
-                        div()
-                            .ml(px(22.0))
-                            .mr(px(4.0))
-                            .mt(px(2.0))
-                            .mb(px(4.0))
-                            .px(px(10.0))
-                            .py(px(6.0))
-                            .rounded(px(6.0))
-                            .bg(theme.muted.opacity(0.04))
-                            .overflow_x_hidden()
-                            .child(
-                                TextView::markdown(
-                                    ElementId::Name(format!("tc-result-{tc_idx}").into()),
-                                    md,
-                                )
-                                .selectable(true)
-                                .style(chat_markdown_style())
-                                .text_xs(),
-                            ),
+                        render_result_block(&preview, &format!("tc-result-{tc_idx}"), theme),
                     );
                 }
                 tc_container = tc_container.child(tc_el);
             }
-            messages_area = messages_area.child(tc_container);
+            messages_content = messages_content.child(tc_container);
         }
 
         // ── Pending approvals ───────────────────────────────────
@@ -1910,18 +1940,18 @@ impl Render for AgentPanel {
             let deny_idx = i;
             let human_tool = humanize_tool_name(&approval.tool_name);
 
-            // Approval card — clean, flat, aligned with assistant content
+            // Approval card — subtle warning accent, clean layout
             let approval_el = div()
                 .flex()
                 .flex_col()
-                .gap(px(6.0))
+                .gap(px(4.0))
                 .ml(px(18.0))
                 .mr(px(4.0))
                 .px(px(10.0))
                 .py(px(8.0))
                 .rounded(px(8.0))
-                .bg(theme.muted.opacity(0.04))
-                // Header row — tool icon + name + "requires approval"
+                .bg(theme.warning.opacity(0.04))
+                // Header row — tool icon + name + args (monospace)
                 .child(
                     div()
                         .flex()
@@ -1930,32 +1960,29 @@ impl Render for AgentPanel {
                         .child(
                             svg()
                                 .path(icon)
-                                .size(px(12.0))
+                                .size(px(11.0))
                                 .flex_shrink_0()
                                 .text_color(theme.warning.opacity(0.7)),
                         )
                         .child(
                             div()
-                                .text_size(px(11.5))
+                                .text_size(px(11.0))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.foreground.opacity(0.75))
+                                .text_color(theme.foreground.opacity(0.7))
+                                .flex_shrink_0()
                                 .child(human_tool),
                         )
                         .child(
                             div()
-                                .text_size(px(10.5))
-                                .text_color(theme.muted_foreground.opacity(0.4))
-                                .child("requires approval"),
+                                .text_size(px(11.0))
+                                .font_family("Ioskeley Mono")
+                                .text_color(theme.foreground.opacity(0.5))
+                                .overflow_x_hidden()
+                                .flex_1()
+                                .min_w_0()
+                                .whitespace_nowrap()
+                                .child(truncate_str(&args_display, 60)),
                         ),
-                )
-                // Command preview — monospace
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .font_family("Ioskeley Mono")
-                        .text_color(theme.foreground.opacity(0.6))
-                        .overflow_x_hidden()
-                        .child(truncate_str(&args_display, 80)),
                 )
                 // Action row — compact buttons
                 .child(
@@ -1963,11 +1990,10 @@ impl Render for AgentPanel {
                         .flex()
                         .items_center()
                         .gap(px(4.0))
-                        .pt(px(2.0))
                         .child(
                             Button::new(format!("allow-{i}"))
                                 .label("Allow")
-                                .small()
+                                .xsmall()
                                 .primary()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.resolve_approval(allow_idx, true, cx);
@@ -1976,7 +2002,7 @@ impl Render for AgentPanel {
                         .child(
                             Button::new(format!("allow-all-{i}"))
                                 .label("Allow All")
-                                .small()
+                                .xsmall()
                                 .ghost()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.auto_approve = true;
@@ -1987,7 +2013,7 @@ impl Render for AgentPanel {
                         .child(
                             Button::new(format!("deny-{i}"))
                                 .label("Deny")
-                                .small()
+                                .xsmall()
                                 .ghost()
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.resolve_approval(deny_idx, false, cx);
@@ -1995,7 +2021,7 @@ impl Render for AgentPanel {
                         ),
                 );
 
-            messages_area = messages_area.child(approval_el);
+            messages_content = messages_content.child(approval_el);
         }
 
         // ── Status indicator — matches step row layout ──────────
@@ -2005,7 +2031,7 @@ impl Render for AgentPanel {
                 AgentStatus::Responding => theme.success,
                 AgentStatus::Idle => theme.muted_foreground,
             };
-            messages_area = messages_area.child(
+            messages_content = messages_content.child(
                 div()
                     .ml(px(18.0))
                     .flex()
@@ -2146,22 +2172,18 @@ impl Render for AgentPanel {
             .child(header);
 
         if self.showing_history {
-            let mut history = div()
+            let mut history_content = div()
                 .id("agent-history-list")
-                .relative()
                 .flex()
                 .flex_col()
-                .flex_1()
-                .min_h_0()
                 .overflow_y_scroll()
-                .track_scroll(&self.scroll_handle)
-                .vertical_scrollbar(&self.scroll_handle)
+                .track_scroll(&self.history_scroll_handle)
                 .px(px(12.0))
                 .pt(px(8.0))
                 .gap(px(1.0));
 
             if self.conversation_list.is_empty() {
-                history = history.child(
+                history_content = history_content.child(
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
@@ -2180,7 +2202,7 @@ impl Render for AgentPanel {
                         .filter(|m| !m.is_empty())
                         .map(|m| format!(" · {}", humanize_model_name(m)))
                         .unwrap_or_default();
-                    history = history.child(
+                    history_content = history_content.child(
                         div()
                             .id(SharedString::from(format!("conv-{i}")))
                             .group("conv-row")
@@ -2250,9 +2272,25 @@ impl Render for AgentPanel {
                     );
                 }
             }
-            panel = panel.child(history);
+            // Container: relative + scrollbar on container, content scrolls inside
+            panel = panel.child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(history_content)
+                    .vertical_scrollbar(&self.history_scroll_handle),
+            );
         } else {
-            panel = panel.child(messages_area);
+            // Container: relative + scrollbar on container, content scrolls inside
+            panel = panel.child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(messages_content)
+                    .vertical_scrollbar(&self.scroll_handle),
+            );
         }
 
         // Inline input — shown when main input bar is hidden

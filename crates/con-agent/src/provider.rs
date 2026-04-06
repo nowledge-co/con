@@ -898,24 +898,39 @@ async fn consume_stream<R: Send + 'static>(
                 }
                 StreamedAssistantContent::ToolCall { tool_call, .. } => {
                     tool_call_count += 1;
+                    if tool_call.function.name.is_empty() || tool_call.id.is_empty() {
+                        log::warn!(
+                            "[agent] Malformed tool call: name={:?} id={:?} args={:?}",
+                            tool_call.function.name,
+                            tool_call.id,
+                            tool_call.function.arguments,
+                        );
+                    }
                     log::info!(
                         target: "con_agent::flow",
-                        "{{\"event\":\"tool_call\",\"name\":\"{}\",\"call_id\":\"{}\",\"seq\":{}}}",
+                        "{{\"event\":\"tool_call\",\"name\":\"{}\",\"call_id\":\"{}\",\"args\":{},\"seq\":{}}}",
                         tool_call.function.name,
                         tool_call.id,
+                        tool_call.function.arguments,
                         tool_call_count,
                     );
-                    log::info!("[agent] Stream: tool_call: {}", tool_call.function.name);
                 }
                 _ => {}
             },
             Ok(MultiTurnStreamItem::StreamUserItem(user_item)) => {
+                // Log the full tool result content for debugging provider compatibility
+                let result_preview = format!("{:?}", user_item);
+                let preview = if result_preview.len() > 500 {
+                    format!("{}...", &result_preview[..500])
+                } else {
+                    result_preview
+                };
                 log::info!(
                     target: "con_agent::flow",
-                    "{{\"event\":\"tool_result\",\"elapsed_ms\":{}}}",
+                    "{{\"event\":\"tool_result\",\"elapsed_ms\":{},\"preview\":\"{}\"}}",
                     stream_start.elapsed().as_millis(),
+                    preview.replace('"', "\\\"").replace('\n', "\\n"),
                 );
-                log::info!("[agent] Stream: tool result: {:?}", user_item);
             }
             Ok(MultiTurnStreamItem::FinalResponse(final_resp)) => {
                 log::info!(

@@ -1355,13 +1355,112 @@ impl ConWorkspace {
                     }
                 }
             }
-            PaneQuery::WaitFor { .. } => {
-                // The WaitForTool drives its own polling loop using CheckBusy and
-                // ReadContent queries. This variant should never arrive here,
-                // but we handle it gracefully just in case.
-                PaneResponse::Error(
-                    "WaitFor is handled by the tool's polling loop, not the workspace".into(),
-                )
+            PaneQuery::WaitFor {
+                pane_index,
+                timeout_secs,
+                pattern,
+            } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let pane = all_terminals[pane_index - 1].clone();
+                    let has_si = pane.has_shell_integration(cx);
+                    let timeout = timeout_secs.unwrap_or(120).min(600);
+                    let response_tx = req.response_tx;
+
+                    // For idle mode without shell integration, return immediately
+                    if pattern.is_none() && !has_si {
+                        let output = pane.recent_lines(50, cx).join("\n");
+                        let _ = response_tx.send(PaneResponse::WaitComplete {
+                            status: "no_shell_integration".into(),
+                            output,
+                        });
+                        return;
+                    }
+
+                    // Check if already in target state
+                    if pattern.is_none() && !pane.is_busy(cx) {
+                        let output = pane.recent_lines(50, cx).join("\n");
+                        let _ = response_tx.send(PaneResponse::WaitComplete {
+                            status: "idle".into(),
+                            output,
+                        });
+                        return;
+                    }
+                    if let Some(ref pat) = pattern {
+                        let content = pane.recent_lines(50, cx).join("\n");
+                        if content.contains(pat.as_str()) {
+                            let _ = response_tx.send(PaneResponse::WaitComplete {
+                                status: "matched".into(),
+                                output: content,
+                            });
+                            return;
+                        }
+                    }
+
+                    // Spawn async task — direct terminal access, no channel overhead
+                    cx.spawn(async move |this, cx| {
+                        let deadline = std::time::Instant::now()
+                            + std::time::Duration::from_secs(timeout as u64);
+                        // Idle mode: 100ms polling (vs old 500ms + channel roundtrips)
+                        // Pattern mode: 500ms polling (content reads are heavier)
+                        let interval = if pattern.is_none() { 100 } else { 500 };
+
+                        loop {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(interval))
+                                .await;
+
+                            if std::time::Instant::now() >= deadline {
+                                let output = this
+                                    .update(cx, |_, cx| pane.recent_lines(50, cx).join("\n"))
+                                    .unwrap_or_default();
+                                let _ = response_tx.send(PaneResponse::WaitComplete {
+                                    status: "timeout".into(),
+                                    output,
+                                });
+                                return;
+                            }
+
+                            let done = this
+                                .update(cx, |_, cx| {
+                                    if let Some(ref pat) = pattern {
+                                        let content = pane.recent_lines(50, cx).join("\n");
+                                        if content.contains(pat.as_str()) {
+                                            Some(("matched".to_string(), content))
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        // Check command_finished signal first (one-shot, precise)
+                                        if pane.take_command_finished(cx).is_some() || !pane.is_busy(cx)
+                                        {
+                                            let output = pane.recent_lines(50, cx).join("\n");
+                                            Some(("idle".to_string(), output))
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                })
+                                .ok()
+                                .flatten();
+
+                            if let Some((status, output)) = done {
+                                let _ = response_tx.send(PaneResponse::WaitComplete {
+                                    status,
+                                    output,
+                                });
+                                return;
+                            }
+                        }
+                    })
+                    .detach();
+                    return; // Response sent by spawned task
+                }
             }
             PaneQuery::CreatePane { command } => {
                 // Creating a terminal requires a Window, which is not available
@@ -2042,8 +2141,8 @@ impl Render for ConWorkspace {
                 .flex()
                 .flex_1()
                 .min_w_0()
+                .max_w(px(200.0))
                 .items_center()
-                .justify_center()
                 .px(px(10.0))
                 .h(px(30.0))
                 .text_size(px(11.5))
@@ -2078,7 +2177,6 @@ impl Render for ConWorkspace {
             let mut tab_content = div()
                 .flex()
                 .items_center()
-                .justify_center()
                 .gap(px(5.0))
                 .w_full()
                 .min_w_0();

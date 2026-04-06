@@ -23,6 +23,9 @@ Do not assume you know what is on screen — always read first.
 pub const TMUX_PLAYBOOK: &str = "\
 ## tmux interaction via send_keys
 
+tmux intercepts its prefix key from the PTY stream. Sending \\x02 (Ctrl-B) via send_keys \
+is a terminal protocol sequence — it reaches tmux, NOT a con application shortcut. This is correct usage.
+
 The default tmux prefix key is Ctrl-B (\\x02). Some users remap it to Ctrl-A (\\x01) — \
 if the default does not work, try \\x01 and read_pane to check.
 
@@ -143,8 +146,10 @@ pub const REMOTE_WORK: &str = "\
 
 The focused pane is connected to a remote host. Remember:
 - file_read, file_write, edit_file, list_files, search are LOCAL-ONLY — they CANNOT access this remote host.
-- To read remote files: use read_pane to see editor content, or navigate to a remote shell and send_keys \"cat file\\n\".
-- To write remote files: use send_keys to operate the remote editor, or use heredoc in a remote shell.
-- To run remote commands: use send_keys in a remote shell pane, NOT shell_exec (which is local).
-- The cwd shown in context may be LOCAL — it does NOT reflect the remote working directory.
+- To run remote commands: if the pane has `exec_visible_shell`, use terminal_exec. \
+Otherwise, send_keys \"command\\n\" in a remote shell prompt.
+- To read remote files: send_keys \"cat file\\n\" then read_pane.
+- To write remote files: use heredoc via send_keys, or operate an open editor with send_keys.
+- shell_exec runs on the LOCAL machine — never use it for remote work.
+- The cwd shown in shell metadata may be LOCAL — it does NOT reflect the remote working directory.
 ";

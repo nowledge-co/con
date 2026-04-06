@@ -19,6 +19,7 @@ gpui-component-assets.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
+tracing = { version = "0.1", features = ["log"] }
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
