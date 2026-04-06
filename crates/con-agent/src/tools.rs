@@ -1374,7 +1374,7 @@ impl Tool for WaitForTool {
                     },
                     "timeout_secs": {
                         "type": "integer",
-                        "description": "Maximum seconds to wait (default: 120, max: 600)"
+                        "description": "Seconds to wait before returning timeout (default: 30). Prefer short timeouts — if a command times out, read_pane to assess and call wait_for again."
                     },
                     "pattern": {
                         "type": "string",
@@ -1387,7 +1387,7 @@ impl Tool for WaitForTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let timeout_secs = args.timeout_secs.unwrap_or(120).min(600);
+        let timeout_secs = args.timeout_secs.unwrap_or(30).min(120);
 
         log::info!(
             "[wait_for] pane={} timeout={}s pattern={:?}",

@@ -1378,7 +1378,7 @@ impl ConWorkspace {
                 } else {
                     let pane = all_terminals[pane_index - 1].clone();
                     let has_si = pane.has_shell_integration(cx);
-                    let timeout = timeout_secs.unwrap_or(120).min(600);
+                    let timeout = timeout_secs.unwrap_or(30).min(120);
                     let response_tx = req.response_tx;
 
                     log::info!(

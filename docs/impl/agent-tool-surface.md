@@ -108,7 +108,7 @@ Wait for a pane to become idle or match a text pattern.
 ```
 Parameters:
   pane_index: usize
-  timeout_secs: Option<u64>      Default 120. Max 600.
+  timeout_secs: Option<u64>      Default 30. Max 120. Short timeouts + retry preferred.
   pattern: Option<String>        Wait for this text to appear in output.
 
 Returns:
