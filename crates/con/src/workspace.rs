@@ -2221,21 +2221,19 @@ impl Render for ConWorkspace {
             tabs_container = tabs_container.child(tab_el.child(tab_content));
         }
 
-        tab_bar = tab_bar.child(tabs_container);
-
-        // Right-side controls — compact row
-        let mut tab_controls = div().flex().items_center().gap(px(2.0)).mb(px(4.0)).flex_shrink_0();
-
-        // "+" button for new tab
-        tab_controls = tab_controls.child(
+        // "+" button — right of last tab, inside tabs container
+        tabs_container = tabs_container.child(
             div()
                 .id("tab-new")
                 .flex()
                 .items_center()
                 .justify_center()
                 .size(px(22.0))
+                .mb(px(4.0))
+                .ml(px(2.0))
                 .rounded(px(5.0))
                 .cursor_pointer()
+                .flex_shrink_0()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
@@ -2247,6 +2245,11 @@ impl Render for ConWorkspace {
                         .text_color(theme.muted_foreground.opacity(0.45)),
                 ),
         );
+
+        tab_bar = tab_bar.child(tabs_container);
+
+        // Right-side controls — compact row
+        let mut tab_controls = div().flex().items_center().gap(px(2.0)).mb(px(4.0)).flex_shrink_0();
 
         // Input bar toggle
         tab_controls = tab_controls.child(
