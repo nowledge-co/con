@@ -27,9 +27,9 @@ impl InputMode {
 
     fn icon(self) -> &'static str {
         match self {
-            Self::Smart => "phosphor/magic-wand.svg",
+            Self::Smart => "phosphor/magic-wand-duotone.svg",
             Self::Shell => "phosphor/terminal.svg",
-            Self::Agent => "phosphor/oven.svg",
+            Self::Agent => "phosphor/oven-duotone.svg",
         }
     }
 
@@ -238,10 +238,7 @@ impl InputBar {
     }
 
     pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.mode = self.mode.next();
-        let placeholder = self.placeholder().to_string();
-        self.input_state
-            .update(cx, |s, cx| s.set_placeholder(&placeholder, window, cx));
+        self.set_mode(self.mode.next(), window, cx);
         cx.notify();
     }
 
@@ -254,15 +251,23 @@ impl InputBar {
         cx.notify();
     }
 
-    fn toggle_select_all(&mut self, cx: &mut Context<Self>) {
+    fn toggle_select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_pane_ids.len() == self.panes.len() {
             // Deselect all — reverts to focused-pane-only
             self.selected_pane_ids.clear();
         } else {
             // Select all
             self.selected_pane_ids = self.panes.iter().map(|p| p.id).collect();
+            self.set_mode(InputMode::Shell, window, cx);
         }
         cx.notify();
+    }
+
+    fn set_mode(&mut self, mode: InputMode, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = mode;
+        let placeholder = self.placeholder().to_string();
+        self.input_state
+            .update(cx, |s, cx| s.set_placeholder(&placeholder, window, cx));
     }
 
     fn placeholder(&self) -> &str {
@@ -391,6 +396,7 @@ impl Render for InputBar {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .gap(px(3.0))
                     .h(px(20.0))
                     .px(px(5.0))
                     .rounded(px(4.0))
@@ -405,9 +411,19 @@ impl Render for InputBar {
                     .hover(|s| s.bg(theme.muted.opacity(0.08)))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.toggle_select_all(cx);
+                        cx.listener(|this, _, window, cx| {
+                            this.toggle_select_all(window, cx);
                         }),
+                    )
+                    .child(
+                        svg()
+                            .path("phosphor/broadcast-duotone.svg")
+                            .size(px(11.0))
+                            .text_color(if all_selected {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground.opacity(0.3)
+                            }),
                     )
                     .child("All"),
             );
