@@ -2311,7 +2311,7 @@ impl Render for AgentPanel {
             panel = panel.child(
                 div()
                     .flex_shrink_0()
-                    .pl(px(8.0))
+                    .pl(px(6.0))
                     .pr(px(12.0))
                     .py(px(8.0))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
@@ -2363,7 +2363,7 @@ impl Render for AgentPanel {
                     .child(
                         div()
                             .flex()
-                            .items_end()
+                            .items_start()
                             .gap(px(8.0))
                             .pl(px(7.0))
                             .pr(px(8.0))
@@ -2383,7 +2383,7 @@ impl Render for AgentPanel {
                                             .cleanable(false),
                                     ),
                             )
-                            .child(send_button),
+                            .child(send_button.mt(px(2.0))),
                     ),
             );
         }
