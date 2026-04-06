@@ -538,8 +538,8 @@ impl Render for GhosttyView {
                     window.focus(&focus, cx);
                     if let Some(ref terminal) = this.terminal {
                         let (x, y) = this.view_local_px(event.position);
-                        terminal.send_mouse_button(true, MouseButton::Left, 0);
                         terminal.send_mouse_pos(x, y, 0);
+                        terminal.send_mouse_button(true, MouseButton::Left, 0);
                     }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -550,8 +550,8 @@ impl Render for GhosttyView {
                 cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
                     if let Some(ref terminal) = this.terminal {
                         let (x, y) = this.view_local_px(event.position);
-                        terminal.send_mouse_button(false, MouseButton::Left, 0);
                         terminal.send_mouse_pos(x, y, 0);
+                        terminal.send_mouse_button(false, MouseButton::Left, 0);
                     }
                 }),
             )
