@@ -391,10 +391,15 @@ impl PaneTree {
         let theme = cx.theme();
 
         match node {
-            PaneNode::Leaf { id: _, terminal } => div()
-                .size_full()
-                .child(terminal.render_child())
-                .into_any_element(),
+            PaneNode::Leaf { id, terminal } => {
+                let is_focused = *id == focused_id;
+                let mut pane_el = div().size_full().child(terminal.render_child());
+                // In multi-pane layouts, dim unfocused panes subtly
+                if has_splits && !is_focused {
+                    pane_el = pane_el.opacity(0.65);
+                }
+                pane_el.into_any_element()
+            }
             PaneNode::Split {
                 split_id,
                 direction,
