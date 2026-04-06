@@ -1503,7 +1503,12 @@ impl ConWorkspace {
     }
 
     fn close_tab_by_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs.len() <= 1 || index >= self.tabs.len() {
+        if index >= self.tabs.len() {
+            return;
+        }
+        if self.tabs.len() <= 1 {
+            // Last tab — quit the app (matches terminal process exit behavior)
+            self.quit(&Quit, window, cx);
             return;
         }
         // Save the closing tab's conversation
