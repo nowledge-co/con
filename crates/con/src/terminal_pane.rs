@@ -59,10 +59,8 @@ impl TerminalPane {
         false
     }
 
-    pub fn write(&self, data: &[u8], cx: &App) {
-        if let Some(terminal) = self.entity.read(cx).terminal() {
-            terminal.write_to_pty(data);
-        }
+    pub fn write(&self, data: &[u8], cx: &mut App) {
+        self.entity.update(cx, |view, _| view.write_or_queue(data));
     }
 
     pub fn set_theme(
