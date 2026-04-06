@@ -79,15 +79,16 @@ Parameters:
 Returns:
   pane_index: usize          The new pane's 1-indexed position.
   command: Option<String>    Echo of the startup command.
+  output: String             Initial terminal output (settled via quiescence).
 ```
 
-Implementation: deferred to render cycle (ghostty surfaces need a window context). The command is written to the PTY via `write_or_queue()` which buffers data if the ghostty surface hasn't initialized yet, flushing when `ensure_initialized()` completes.
+Implementation: pane creation is deferred to render cycle (ghostty surfaces need a window context). The command is written to the PTY via `write_or_queue()` which buffers data if the ghostty surface hasn't initialized yet, flushing when `ensure_initialized()` completes. After creation, the tool polls `read_pane` with quiescence detection (3 stable polls × 500ms = 1.5s, max 8s budget) and returns the settled output.
 
 Design notes:
 - The `command` executes automatically — the model must NOT re-send it via send_keys.
 - Returns `CreatePaneOutput` struct (not a string) to avoid double-encoding.
+- **Output is included in the response.** The model sees what happened (SSH connected with prompt, password prompt, connection refused) without a follow-up `read_pane`. This eliminates the "guess what SSH will do" anti-pattern — the model observes, doesn't predict.
 - New pane is a horizontal split within the agent's tab.
-- The agent should read_pane after creation to observe what happened.
 
 ### Level 2: Command Execution
 

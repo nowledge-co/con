@@ -1652,6 +1652,9 @@ pub struct CreatePaneArgs {
 pub struct CreatePaneOutput {
     pub pane_index: usize,
     pub command: Option<String>,
+    /// Initial terminal output after pane creation and command execution.
+    /// Gives the model immediate observability — no need for a follow-up read_pane.
+    pub output: String,
 }
 
 pub struct CreatePaneTool {
@@ -1661,6 +1664,74 @@ pub struct CreatePaneTool {
 impl CreatePaneTool {
     pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
         Self { pane_tx }
+    }
+
+    /// Wait for the new pane to produce initial output and settle.
+    /// Uses the same quiescence principle as wait_for: poll read_pane until
+    /// output stops changing. Returns whatever is on screen when it stabilizes.
+    /// Bounded to ~8s total — enough for SSH key auth + MOTD, fast enough
+    /// to not feel stuck.
+    async fn wait_for_initial_output(&self, pane_index: usize) -> String {
+        const POLL_MS: u64 = 500;
+        const SETTLE_POLLS: u32 = 3; // 1.5s of stable output
+        const MAX_POLLS: u32 = 16; // 8s total budget
+
+        let mut last_snapshot = String::new();
+        let mut stable_count: u32 = 0;
+
+        for _ in 0..MAX_POLLS {
+            tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
+
+            let (tx, rx) = crossbeam_channel::bounded(1);
+            let sent = self.pane_tx.send(PaneRequest {
+                query: PaneQuery::ReadContent {
+                    pane_index,
+                    lines: 50,
+                },
+                response_tx: tx,
+            });
+            if sent.is_err() {
+                break;
+            }
+
+            let content = match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(PaneResponse::Content(c)) => c,
+                _ => continue,
+            };
+
+            // Normalize: trim trailing whitespace per line (same as wait_for quiescence)
+            let normalized: String = content
+                .lines()
+                .map(|l| l.trim_end())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            if normalized.is_empty() {
+                // Terminal not producing output yet
+                continue;
+            }
+
+            if normalized == last_snapshot {
+                stable_count += 1;
+                if stable_count >= SETTLE_POLLS {
+                    log::info!(
+                        "[create_pane] output settled after {} polls ({} bytes)",
+                        MAX_POLLS - (MAX_POLLS - stable_count - 1),
+                        normalized.len()
+                    );
+                    return normalized;
+                }
+            } else {
+                last_snapshot = normalized;
+                stable_count = 0;
+            }
+        }
+
+        log::info!(
+            "[create_pane] output budget exhausted, returning current ({} bytes)",
+            last_snapshot.len()
+        );
+        last_snapshot
     }
 }
 
@@ -1673,7 +1744,7 @@ impl Tool for CreatePaneTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it. Returns the new pane's index. Use read_pane to observe the result before proceeding.".to_string(),
+            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it via send_keys. Returns the pane index and the initial terminal output (waits for output to settle). Check the output to see what happened — e.g. SSH connected with prompt, or asking for a password.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1688,6 +1759,7 @@ impl Tool for CreatePaneTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         log::info!("[create_pane] Tool called, command: {:?}", args.command);
+        let has_command = args.command.is_some();
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
         let command_echo = args.command.clone();
         self.pane_tx
@@ -1709,10 +1781,22 @@ impl Tool for CreatePaneTool {
         })?;
 
         match response {
-            PaneResponse::PaneCreated { pane_index } => Ok(CreatePaneOutput {
-                pane_index,
-                command: command_echo,
-            }),
+            PaneResponse::PaneCreated { pane_index } => {
+                // If a command was provided (e.g. "ssh host"), wait for initial output
+                // to settle so the model can observe the result immediately.
+                // This eliminates the need for a follow-up read_pane/wait_for after SSH.
+                let output = if has_command {
+                    self.wait_for_initial_output(pane_index).await
+                } else {
+                    String::new()
+                };
+
+                Ok(CreatePaneOutput {
+                    pane_index,
+                    command: command_echo,
+                    output,
+                })
+            }
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }

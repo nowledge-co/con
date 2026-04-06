@@ -1093,7 +1093,8 @@ impl TerminalContext {
                For local-only tasks: git, file searches, package lookups. Never for remote environments.\n\n\
              - create_pane: Create a new terminal pane (split in current tab). Optionally run a startup command \
                (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it.\n\
-               Returns the new pane index. After creation, read_pane to observe what happened before proceeding.\n\n\
+               Returns the pane index AND initial output (waits for output to settle). \
+               Check the output to see what happened — no need for a separate read_pane.\n\n\
              - list_panes: List all panes with metadata, control state, capabilities, and addressing notes.\n\n\
              - read_pane: Read last N lines from any pane (includes scrollback).\n\n\
              - send_keys: Send keystrokes to a pane's PTY. Use for:\n\
