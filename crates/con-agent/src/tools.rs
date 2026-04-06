@@ -1666,20 +1666,28 @@ impl CreatePaneTool {
         Self { pane_tx }
     }
 
-    /// Wait for the new pane to produce initial output and settle.
-    /// Uses the same quiescence principle as wait_for: poll read_pane until
-    /// output stops changing. Returns whatever is on screen when it stabilizes.
-    /// Bounded to ~8s total — enough for SSH key auth + MOTD, fast enough
-    /// to not feel stuck.
+    /// Wait for the new pane's command to produce meaningful output and settle.
+    ///
+    /// Two-phase detection:
+    ///   Phase 1 (change): Wait for content to CHANGE from the initial command echo.
+    ///     The local shell echoes the command immediately, but the actual program
+    ///     (SSH handshake, server connection) takes 1-5s to produce output. If we
+    ///     settle on the echo, we return before the program responds.
+    ///   Phase 2 (stability): Once content changed, wait for it to stabilize.
+    ///     The program's output (MOTD, prompt, error) streams in and eventually stops.
+    ///
+    /// Budget: 30 polls × 500ms = 15s total. Enough for SSH over slow networks.
     async fn wait_for_initial_output(&self, pane_index: usize) -> String {
         const POLL_MS: u64 = 500;
-        const SETTLE_POLLS: u32 = 3; // 1.5s of stable output
-        const MAX_POLLS: u32 = 16; // 8s total budget
+        const SETTLE_POLLS: u32 = 3; // 1.5s of stable output after change
+        const MAX_POLLS: u32 = 30; // 15s total budget
 
+        let mut initial_snapshot = String::new();
         let mut last_snapshot = String::new();
         let mut stable_count: u32 = 0;
+        let mut phase_changed = false;
 
-        for _ in 0..MAX_POLLS {
+        for poll_num in 0..MAX_POLLS {
             tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
 
             let (tx, rx) = crossbeam_channel::bounded(1);
@@ -1699,7 +1707,7 @@ impl CreatePaneTool {
                 _ => continue,
             };
 
-            // Normalize: trim trailing whitespace per line (same as wait_for quiescence)
+            // Normalize: trim trailing whitespace per line (cursor position artifacts)
             let normalized: String = content
                 .lines()
                 .map(|l| l.trim_end())
@@ -1707,16 +1715,40 @@ impl CreatePaneTool {
                 .join("\n");
 
             if normalized.is_empty() {
-                // Terminal not producing output yet
                 continue;
             }
 
+            if !phase_changed {
+                // Phase 1: waiting for content to change from initial echo
+                if initial_snapshot.is_empty() {
+                    // First non-empty snapshot — likely command echo
+                    initial_snapshot = normalized.clone();
+                    last_snapshot = normalized;
+                    log::info!("[create_pane] phase 1: initial echo captured ({} bytes)", initial_snapshot.len());
+                    continue;
+                }
+
+                if normalized != initial_snapshot {
+                    // Content changed — the command produced actual output
+                    phase_changed = true;
+                    last_snapshot = normalized;
+                    stable_count = 0;
+                    log::info!("[create_pane] phase 2: content changed at poll {}", poll_num);
+                    continue;
+                }
+
+                // Content unchanged from echo — command hasn't responded yet
+                // (SSH handshake, network latency, etc.)
+                continue;
+            }
+
+            // Phase 2: content has changed, wait for stability
             if normalized == last_snapshot {
                 stable_count += 1;
                 if stable_count >= SETTLE_POLLS {
                     log::info!(
-                        "[create_pane] output settled after {} polls ({} bytes)",
-                        MAX_POLLS - (MAX_POLLS - stable_count - 1),
+                        "[create_pane] output settled at poll {} ({} bytes)",
+                        poll_num,
                         normalized.len()
                     );
                     return normalized;
@@ -1728,7 +1760,8 @@ impl CreatePaneTool {
         }
 
         log::info!(
-            "[create_pane] output budget exhausted, returning current ({} bytes)",
+            "[create_pane] budget exhausted (phase_changed={}), returning ({} bytes)",
+            phase_changed,
             last_snapshot.len()
         );
         last_snapshot

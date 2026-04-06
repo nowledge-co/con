@@ -139,7 +139,13 @@ Returns:
   output: String             Initial terminal output (settled via quiescence).
 ```
 
-Implementation: pane creation is deferred to render cycle (ghostty surfaces need a window context). The command is written to the PTY via `write_or_queue()` which buffers data if the ghostty surface hasn't initialized yet, flushing when `ensure_initialized()` completes. After creation, the tool polls `read_pane` with quiescence detection (3 stable polls × 500ms = 1.5s, max 8s budget) and returns the settled output.
+Implementation: pane creation is deferred to render cycle (ghostty surfaces need a window context). The command is written to the PTY via `write_or_queue()` which buffers data if the ghostty surface hasn't initialized yet, flushing when `ensure_initialized()` completes.
+
+After creation, the tool uses **two-phase output detection** (max 15s budget):
+- **Phase 1 (change)**: Wait for content to change from the initial command echo. The local shell echoes the command immediately, but the program (SSH handshake, server connection) takes 1-5s to respond. Settling on the echo returns the wrong content.
+- **Phase 2 (stability)**: Once content changed, wait for 3 consecutive stable polls (1.5s). The program's output (MOTD, prompt, error) streams in and eventually stops.
+
+This correctly handles: SSH key auth (echo → pause → MOTD+prompt), SSH password (echo → pause → "Password:"), connection errors (echo → pause → error message), and fast local commands (echo → output → prompt).
 
 Design notes:
 - The `command` executes automatically — the model must NOT re-send it via send_keys.
