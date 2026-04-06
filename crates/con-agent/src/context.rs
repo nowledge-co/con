@@ -1072,7 +1072,7 @@ impl TerminalContext {
                 shell integration, inside tmux), use send_keys to type the command + Enter in a shell prompt.\n\n\
              ### Choose the right tool\n\
              - SHELL COMMANDS on a pane with `exec_visible_shell` → terminal_exec / batch_exec.\n\
-             - PARALLEL WORK across hosts → create_pane for each host, read_pane to confirm ready, \
+             - PARALLEL WORK across hosts → create_pane for each host (output shows connection state), \
                then terminal_exec (if exec_visible_shell) or send_keys.\n\
              - SHELL COMMANDS on a pane WITHOUT `exec_visible_shell` → send_keys \"command\\n\" in a shell prompt.\n\
              - LONG-RUNNING commands → launch, then wait_for (not repeated read_pane).\n\
@@ -1122,10 +1122,10 @@ impl TerminalContext {
              - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
              </safety>\n\n\
              <verify_before_act>\n\
-             MANDATORY: Observe before acting. Never assume terminal state — always read_pane first.\n\
+             MANDATORY: Observe before acting. Never assume terminal state.\n\
              - Before send_keys: read_pane to see what is on screen and where keystrokes will go.\n\
              - After send_keys: read_pane to verify the action took effect.\n\
-             - After create_pane: read_pane to see what the startup command produced.\n\
+             - After create_pane: check the returned output to see what happened (output is included).\n\
              - Never chain multiple actions without observing between them.\n\
              </verify_before_act>\n\n",
         );
@@ -2119,8 +2119,8 @@ mod tests {
             "Verify-before-act should be in the system prompt"
         );
         assert!(
-            prompt.contains("read_pane first"),
-            "Verify-before-act should require read_pane before send_keys"
+            prompt.contains("Observe before acting"),
+            "Verify-before-act should require observation before acting"
         );
     }
 

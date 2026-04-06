@@ -118,6 +118,7 @@ Applied:
 The agent must never assume terminal state. Before acting on any pane:
 - Before send_keys: read_pane to see what is on screen
 - After send_keys: read_pane to verify the action took effect
+- After create_pane: check the returned output (included in response)
 - Never chain multiple actions without observing between them
 
 ## Tools
