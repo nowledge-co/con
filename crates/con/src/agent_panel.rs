@@ -2363,7 +2363,7 @@ impl Render for AgentPanel {
                     .child(
                         div()
                             .flex()
-                            .items_start()
+                            .items_center()
                             .gap(px(8.0))
                             .pl(px(7.0))
                             .pr(px(8.0))
@@ -2383,7 +2383,7 @@ impl Render for AgentPanel {
                                             .cleanable(false),
                                     ),
                             )
-                            .child(send_button.mt(px(3.0))),
+                            .child(send_button),
                     ),
             );
         }
