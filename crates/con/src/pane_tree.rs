@@ -95,6 +95,11 @@ impl PaneTree {
 
     /// Close the focused pane, returning true if the tree still has panes
     pub fn close_focused(&mut self) -> bool {
+        self.close_pane(self.focused_pane_id)
+    }
+
+    /// Close a specific pane by ID, returning true if the tree still has panes
+    pub fn close_pane(&mut self, pane_id: PaneId) -> bool {
         if self.pane_count() <= 1 {
             return false;
         }
@@ -106,7 +111,7 @@ impl PaneTree {
                 terminal: placeholder_terminal,
             },
         );
-        self.root = Self::remove_leaf(old_root, self.focused_pane_id);
+        self.root = Self::remove_leaf(old_root, pane_id);
         if Self::find_terminal(&self.root, self.focused_pane_id).is_none() {
             self.focused_pane_id = Self::first_pane_id(&self.root);
         }

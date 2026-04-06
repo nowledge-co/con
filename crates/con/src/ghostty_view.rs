@@ -61,6 +61,8 @@ pub struct GhosttyView {
     /// Data queued for the PTY before the surface was created.
     /// Flushed once in `ensure_initialized()` after the terminal exists.
     pending_write: Option<Vec<u8>>,
+    /// Guard: emit GhosttyProcessExited exactly once, not every 8ms tick.
+    process_exit_emitted: bool,
 }
 
 /// Register ghostty key bindings. Call once at startup.
@@ -95,7 +97,8 @@ impl GhosttyView {
                             if terminal.take_needs_render() {
                                 cx.notify();
                             }
-                            if !terminal.is_alive() {
+                            if !terminal.is_alive() && !view.process_exit_emitted {
+                                view.process_exit_emitted = true;
                                 cx.emit(GhosttyProcessExited);
                             }
                             let title = terminal.title();
@@ -126,6 +129,7 @@ impl GhosttyView {
             scale_factor: 1.0,
             last_title: None,
             pending_write: None,
+            process_exit_emitted: false,
         }
     }
 
@@ -231,6 +235,10 @@ impl GhosttyView {
             }
             Err(e) => {
                 log::error!("Failed to create ghostty surface: {}", e);
+                // Discard queued writes — no PTY exists.
+                self.pending_write = None;
+                // Mark initialized to prevent infinite retry on every layout.
+                self.initialized = true;
                 unsafe {
                     let _: () = msg_send![nsview, removeFromSuperview];
                 }
@@ -318,13 +326,26 @@ impl GhosttyView {
 
         let keystroke = &event.keystroke;
 
-        // Cmd (platform) keys are reserved for app shortcuts.
+        // App-level shortcuts — skip forwarding so GPUI action dispatch handles them.
+        // All other Cmd/Ctrl combos pass through to ghostty (e.g. cmd-k for clear screen).
         if keystroke.modifiers.platform {
-            return;
+            match keystroke.key.as_str() {
+                // Tab management
+                "q" | "w" | "t" | "," => return,
+                // Splits (cmd-d, cmd-shift-d)
+                "d" => return,
+                // Agent & input
+                "l" | "i" => return,
+                // Edit menu (handled by OS)
+                "c" | "v" | "x" | "z" | "a" => return,
+                // Command palette (cmd-shift-p)
+                "p" if keystroke.modifiers.shift => return,
+                // Everything else (including cmd-k) passes to terminal
+                _ => {}
+            }
         }
 
         // Ctrl+` is reserved for toggle-input-bar (app shortcut).
-        // Don't forward to ghostty so GPUI's action dispatch handles it.
         if keystroke.modifiers.control && keystroke.key == "`" {
             return;
         }
@@ -598,6 +619,9 @@ impl Render for GhosttyView {
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 this.handle_key_down(event);
+                // Force repaint — some ghostty key bindings (e.g. cmd-k clear screen)
+                // modify the terminal without emitting GHOSTTY_ACTION_RENDER.
+                cx.notify();
                 cx.emit(GhosttyFocusChanged);
             }))
             .child(
