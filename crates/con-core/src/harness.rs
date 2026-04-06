@@ -390,102 +390,133 @@ impl AgentHarness {
         let (approval_tx, approval_rx) = crossbeam_channel::unbounded();
 
         self.runtime.spawn(async move {
-            let (agent_tx, agent_rx) = crossbeam_channel::unbounded();
+            let conv_snapshot = conversation.lock().clone();
+            let provider = AgentProvider::new(agent_config);
+            let request_start = std::time::Instant::now();
 
-            // Bridge AgentEvent → HarnessEvent on a blocking thread.
-            // The bridge terminates when agent_tx is dropped (provider.send returns).
-            let htx = harness_tx.clone();
-            let per_request_approval_tx = approval_tx.clone();
-            let bridge = tokio::task::spawn_blocking(move || {
-                let bridge_start = std::time::Instant::now();
-                while let Ok(event) = agent_rx.recv() {
-                    let mapped = match event {
-                        AgentEvent::Thinking => HarnessEvent::Thinking,
-                        AgentEvent::ThinkingDelta(t) => HarnessEvent::ThinkingDelta(t),
-                        AgentEvent::Token(t) => HarnessEvent::Token(t),
-                        AgentEvent::Step(s) => HarnessEvent::Step(s),
-                        AgentEvent::ToolCallStart {
-                            call_id,
-                            tool_name,
-                            args,
-                        } => {
-                            if is_dangerous(&tool_name) {
-                                let _ = htx.send(HarnessEvent::ToolApprovalNeeded {
-                                    call_id: call_id.clone(),
-                                    tool_name: tool_name.clone(),
-                                    args: args.clone(),
-                                    approval_tx: per_request_approval_tx.clone(),
-                                });
-                            }
-                            HarnessEvent::ToolCallStart {
+            const MAX_RETRIES: u32 = 3;
+            let mut attempt = 0u32;
+
+            loop {
+                if cancelled.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let (agent_tx, agent_rx) = crossbeam_channel::unbounded();
+
+                // Bridge AgentEvent → HarnessEvent on a blocking thread.
+                // Recreated per attempt so each stream gets a fresh channel.
+                let htx = harness_tx.clone();
+                let per_request_approval_tx = approval_tx.clone();
+                let bridge = tokio::task::spawn_blocking(move || {
+                    let bridge_start = std::time::Instant::now();
+                    while let Ok(event) = agent_rx.recv() {
+                        let mapped = match event {
+                            AgentEvent::Thinking => HarnessEvent::Thinking,
+                            AgentEvent::ThinkingDelta(t) => HarnessEvent::ThinkingDelta(t),
+                            AgentEvent::Token(t) => HarnessEvent::Token(t),
+                            AgentEvent::Step(s) => HarnessEvent::Step(s),
+                            AgentEvent::ToolCallStart {
                                 call_id,
                                 tool_name,
                                 args,
+                            } => {
+                                if is_dangerous(&tool_name) {
+                                    let _ = htx.send(HarnessEvent::ToolApprovalNeeded {
+                                        call_id: call_id.clone(),
+                                        tool_name: tool_name.clone(),
+                                        args: args.clone(),
+                                        approval_tx: per_request_approval_tx.clone(),
+                                    });
+                                }
+                                HarnessEvent::ToolCallStart {
+                                    call_id,
+                                    tool_name,
+                                    args,
+                                }
                             }
+                            AgentEvent::ToolCallComplete {
+                                call_id,
+                                tool_name,
+                                result,
+                            } => HarnessEvent::ToolCallComplete {
+                                call_id,
+                                tool_name,
+                                result,
+                            },
+                            AgentEvent::Done(mut m) => {
+                                let duration_ms = bridge_start.elapsed().as_millis() as u64;
+                                m.duration_ms = Some(duration_ms);
+                                HarnessEvent::ResponseComplete(m)
+                            }
+                            AgentEvent::Error(e) => HarnessEvent::Error(e),
+                        };
+                        if htx.send(mapped).is_err() {
+                            break;
                         }
-                        AgentEvent::ToolCallComplete {
-                            call_id,
-                            tool_name,
-                            result,
-                        } => HarnessEvent::ToolCallComplete {
-                            call_id,
-                            tool_name,
-                            result,
-                        },
-                        AgentEvent::Done(mut m) => {
-                            // Attach total request duration to the message
-                            let duration_ms = bridge_start.elapsed().as_millis() as u64;
-                            m.duration_ms = Some(duration_ms);
-                            HarnessEvent::ResponseComplete(m)
+                    }
+                });
+
+                log::info!("[harness] provider.send() attempt {}", attempt + 1);
+                let result = provider
+                    .send(
+                        &conv_snapshot,
+                        &context,
+                        agent_tx,
+                        approval_rx.clone(),
+                        terminal_exec_tx.clone(),
+                        pane_tx.clone(),
+                        cancelled.clone(),
+                    )
+                    .await;
+
+                // Wait for bridge to drain before inspecting the result
+                let _ = bridge.await;
+
+                match result {
+                    Ok(mut assistant_msg) => {
+                        let duration_ms = request_start.elapsed().as_millis() as u64;
+                        assistant_msg.duration_ms = Some(duration_ms);
+                        log::info!(
+                            "[harness] provider.send() completed: {} chars in {}ms",
+                            assistant_msg.content.len(),
+                            duration_ms,
+                        );
+                        let mut conv = conversation.lock();
+                        conv.add_message(assistant_msg);
+                        if let Err(e) = conv.save() {
+                            log::warn!("Failed to auto-save conversation: {}", e);
                         }
-                        AgentEvent::Error(e) => HarnessEvent::Error(e),
-                    };
-                    if htx.send(mapped).is_err() {
+                        break;
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if attempt < MAX_RETRIES && is_transient_error(&msg) {
+                            let delay_ms = 1000 * 2u64.pow(attempt); // 1s, 2s, 4s
+                            log::warn!(
+                                "[harness] Transient error (attempt {}/{}), retrying in {}ms: {}",
+                                attempt + 1,
+                                MAX_RETRIES + 1,
+                                delay_ms,
+                                msg,
+                            );
+                            let _ = harness_tx.send(HarnessEvent::Error(format!(
+                                "Retrying ({}/{})… {}",
+                                attempt + 1,
+                                MAX_RETRIES,
+                                short_error(&msg),
+                            )));
+                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                            attempt += 1;
+                            continue;
+                        }
+                        log::error!("[harness] provider.send() failed: {}", msg);
+                        let _ = harness_tx.send(HarnessEvent::Error(msg));
                         break;
                     }
                 }
-            });
-
-            let conv_snapshot = conversation.lock().clone();
-
-            let provider = AgentProvider::new(agent_config);
-
-            log::info!("[harness] Calling provider.send()");
-            let request_start = std::time::Instant::now();
-            match provider
-                .send(
-                    &conv_snapshot,
-                    &context,
-                    agent_tx,
-                    approval_rx,
-                    terminal_exec_tx,
-                    pane_tx,
-                    cancelled,
-                )
-                .await
-            {
-                Ok(mut assistant_msg) => {
-                    let duration_ms = request_start.elapsed().as_millis() as u64;
-                    assistant_msg.duration_ms = Some(duration_ms);
-                    log::info!(
-                        "[harness] provider.send() completed: {} chars in {}ms",
-                        assistant_msg.content.len(),
-                        duration_ms,
-                    );
-                    let mut conv = conversation.lock();
-                    conv.add_message(assistant_msg);
-                    if let Err(e) = conv.save() {
-                        log::warn!("Failed to auto-save conversation: {}", e);
-                    }
-                }
-                Err(e) => {
-                    log::error!("[harness] provider.send() failed: {}", e);
-                    let _ = harness_tx.send(HarnessEvent::Error(e.to_string()));
-                }
             }
 
-            log::info!("[harness] Waiting for bridge thread to finish");
-            let _ = bridge.await;
             log::info!("[harness] Request complete");
         });
     }
@@ -803,4 +834,39 @@ fn has_natural_language_signals(input: &str) -> bool {
     }
 
     false
+}
+
+/// Classify errors as transient (worth retrying) vs permanent.
+/// Rig surfaces HTTP errors as stringified messages, so we match on substrings.
+fn is_transient_error(msg: &str) -> bool {
+    // HTTP 429 rate limit
+    msg.contains("429") || msg.contains("rate_limit") || msg.contains("Rate limit")
+    // Server-side transient
+    || msg.contains("500") || msg.contains("502") || msg.contains("503")
+    || msg.contains("Internal Server Error") || msg.contains("Bad Gateway")
+    || msg.contains("Service Unavailable") || msg.contains("overloaded")
+    // Network transient
+    || msg.contains("connection reset") || msg.contains("timed out")
+    || msg.contains("Connection reset")
+}
+
+/// Extract a short, user-facing error summary from a verbose provider error.
+fn short_error(msg: &str) -> &str {
+    if msg.contains("429") || msg.contains("rate_limit") {
+        "rate limited"
+    } else if msg.contains("500") || msg.contains("Internal Server Error") {
+        "server error (500)"
+    } else if msg.contains("502") || msg.contains("Bad Gateway") {
+        "bad gateway (502)"
+    } else if msg.contains("503") || msg.contains("Service Unavailable") {
+        "service unavailable (503)"
+    } else if msg.contains("overloaded") {
+        "provider overloaded"
+    } else if msg.contains("timed out") {
+        "request timed out"
+    } else if msg.contains("connection reset") || msg.contains("Connection reset") {
+        "connection reset"
+    } else {
+        "transient error"
+    }
 }
