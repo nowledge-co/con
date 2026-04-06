@@ -524,6 +524,11 @@ impl AgentProvider {
             );
         }
 
+        log::info!(
+            target: "con_agent::flow",
+            "{{\"event\":\"request_start\",\"provider\":\"{:?}\",\"model\":\"{}\",\"system_chars\":{},\"history_msgs\":{},\"user_chars\":{}}}",
+            kind, model, system_prompt.len(), chat_history.len(), last_user_msg.len(),
+        );
         let _ = event_tx.send(AgentEvent::Step(AgentStep::Thinking(format!(
             "{}:{}",
             kind,
@@ -854,6 +859,8 @@ async fn consume_stream<R: Send + 'static>(
     event_tx: &Sender<AgentEvent>,
     cancelled: &AtomicBool,
 ) -> Result<String> {
+    let stream_start = std::time::Instant::now();
+    let mut tool_call_count = 0u32;
     let mut response_text = String::new();
     // Track whether we received streaming reasoning deltas.
     // If so, the final Reasoning block is redundant (it contains the same text).
@@ -888,11 +895,24 @@ async fn consume_stream<R: Send + 'static>(
                     }
                 }
                 StreamedAssistantContent::ToolCall { tool_call, .. } => {
+                    tool_call_count += 1;
+                    log::info!(
+                        target: "con_agent::flow",
+                        "{{\"event\":\"tool_call\",\"name\":\"{}\",\"call_id\":\"{}\",\"seq\":{}}}",
+                        tool_call.function.name,
+                        tool_call.id,
+                        tool_call_count,
+                    );
                     log::info!("[agent] Stream: tool_call: {}", tool_call.function.name);
                 }
                 _ => {}
             },
             Ok(MultiTurnStreamItem::StreamUserItem(user_item)) => {
+                log::info!(
+                    target: "con_agent::flow",
+                    "{{\"event\":\"tool_result\",\"elapsed_ms\":{}}}",
+                    stream_start.elapsed().as_millis(),
+                );
                 log::info!("[agent] Stream: tool result: {:?}", user_item);
             }
             Ok(MultiTurnStreamItem::FinalResponse(final_resp)) => {
@@ -938,6 +958,13 @@ async fn consume_stream<R: Send + 'static>(
             }
         }
     }
+    log::info!(
+        target: "con_agent::flow",
+        "{{\"event\":\"stream_end\",\"chars\":{},\"tool_calls\":{},\"elapsed_ms\":{}}}",
+        response_text.len(),
+        tool_call_count,
+        stream_start.elapsed().as_millis(),
+    );
     log::info!(
         "[agent] Stream consumption complete: {} chars",
         response_text.len(),
