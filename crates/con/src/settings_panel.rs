@@ -570,6 +570,32 @@ impl SettingsPanel {
         cx.notify();
     }
 
+    fn browse_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose a background image".into()),
+        });
+
+        let input = self.background_image_input.clone();
+        cx.spawn_in(window, async move |_, window| {
+            let path = paths.await.ok()?.ok()??.into_iter().next()?;
+            let path_text = path.to_string_lossy().to_string();
+
+            window
+                .update(|window, cx| {
+                    _ = input.update(cx, |state, cx| {
+                        state.set_value(&path_text, window, cx);
+                    });
+                })
+                .ok()?;
+
+            Some(())
+        })
+        .detach();
+    }
+
     /// Save the custom theme to the user themes directory and apply it.
     fn apply_custom_theme(&mut self, cx: &mut Context<Self>) {
         let preview = match &self.custom_theme_preview {
@@ -1229,6 +1255,14 @@ impl SettingsPanel {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.paste_theme_from_clipboard(window, cx);
             }));
+        let browse_background_image_btn = Button::new("browse-background-image")
+            .label("Browse…")
+            .icon(Icon::default().path("phosphor/folder-open.svg"))
+            .small()
+            .ghost()
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.browse_background_image(window, cx);
+            }));
         let open_catalog_btn = Button::new("theme-catalog-link")
             .label("Browse Themes")
             .icon(Icon::default().path("phosphor/arrow-square-out.svg"))
@@ -1398,12 +1432,47 @@ impl SettingsPanel {
                             div()
                                 .px(px(16.0))
                                 .pt(px(12.0))
-                                .child(stacked_input_field(
-                                    "Image Path",
-                                    "PNG and JPEG are supported. The image is applied per terminal, so splits will repeat it.",
-                                    &background_image_input,
-                                    theme,
-                                )),
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(6.0))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(2.0))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.5))
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .child("Image Path"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.5))
+                                                        .line_height(px(16.0))
+                                                        .text_color(
+                                                            theme.muted_foreground.opacity(0.65),
+                                                        )
+                                                        .child(
+                                                            "Choose a PNG or JPEG. The image is applied per terminal, so splits will repeat it.",
+                                                        ),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(8.0))
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .child(Input::new(&background_image_input)),
+                                                )
+                                                .child(browse_background_image_btn),
+                                        ),
+                                ),
                         )
                         .child(row_separator(theme))
                         .child(
