@@ -307,7 +307,9 @@ impl PanelState {
                 // Format step as human-readable string, not Debug repr
                 let label = format!("{:?}", step);
                 // Clean up Thinking("model_name") → Thinking(model_name)
-                let label = label.replace("Thinking(\"", "Thinking(").replace("\")", ")");
+                let label = label
+                    .replace("Thinking(\"", "Thinking(")
+                    .replace("\")", ")");
                 self.add_step(&label);
             }
             HarnessEvent::Token(token) => {
@@ -706,15 +708,9 @@ impl AgentPanel {
         if let Some(last) = self.state.messages.last_mut() {
             let human_name = humanize_tool_name(&approval.tool_name);
             let (status, label) = if allowed {
-                (
-                    StepStatus::Complete,
-                    format!("Allowed {}", human_name),
-                )
+                (StepStatus::Complete, format!("Allowed {}", human_name))
             } else {
-                (
-                    StepStatus::Denied,
-                    format!("Denied {}", human_name),
-                )
+                (StepStatus::Denied, format!("Denied {}", human_name))
             };
             last.steps.push(StepEntry {
                 icon: if allowed {
@@ -1132,10 +1128,7 @@ fn format_wait_for_result(value: &serde_json::Value) -> String {
                 .get("status")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            let output = obj
-                .get("output")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let output = obj.get("output").and_then(|v| v.as_str()).unwrap_or("");
             let mut out = format!("status: {}", status);
             let trimmed = output.trim();
             if !trimmed.is_empty() {
@@ -1165,9 +1158,7 @@ fn format_generic_result(value: &serde_json::Value) -> String {
                 let val_str = match val {
                     serde_json::Value::String(s) => s.clone(),
                     serde_json::Value::Null => "—".to_string(),
-                    serde_json::Value::Bool(b) => {
-                        if *b { "yes" } else { "no" }.to_string()
-                    }
+                    serde_json::Value::Bool(b) => if *b { "yes" } else { "no" }.to_string(),
                     serde_json::Value::Number(n) => n.to_string(),
                     serde_json::Value::Array(arr) => {
                         if arr.len() <= 3 {
@@ -1182,7 +1173,9 @@ fn format_generic_result(value: &serde_json::Value) -> String {
                             format!("{} items", arr.len())
                         }
                     }
-                    serde_json::Value::Object(_) => format!("({} fields)", val.as_object().map_or(0, |o| o.len())),
+                    serde_json::Value::Object(_) => {
+                        format!("({} fields)", val.as_object().map_or(0, |o| o.len()))
+                    }
                 };
                 out.push_str(&format!("{}: {}", key, val_str));
             }
@@ -1658,13 +1651,12 @@ impl Render for AgentPanel {
                             .child(model_label),
                     );
                 if let Some(dur) = msg_duration_ms {
-                    header_row = header_row
-                        .child(
-                            div()
-                                .text_size(px(10.0))
-                                .text_color(theme.muted_foreground.opacity(0.28))
-                                .child(format!("· {}", format_duration_ms(dur))),
-                        );
+                    header_row = header_row.child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(theme.muted_foreground.opacity(0.28))
+                            .child(format!("· {}", format_duration_ms(dur))),
+                    );
                 }
                 msg_el = msg_el.child(header_row);
 
@@ -1973,13 +1965,11 @@ impl Render for AgentPanel {
                         if let Some(detail) = &step.detail {
                             if !detail_collapsed {
                                 let preview = result_preview(detail, TOOL_RESULT_PREVIEW_LINES);
-                                step_el = step_el.child(
-                                    render_result_block(
-                                        &preview,
-                                        &format!("step-result-{msg_idx}-{step_idx}"),
-                                        theme,
-                                    ),
-                                );
+                                step_el = step_el.child(render_result_block(
+                                    &preview,
+                                    &format!("step-result-{msg_idx}-{step_idx}"),
+                                    theme,
+                                ));
                             }
                         }
 
@@ -2091,9 +2081,11 @@ impl Render for AgentPanel {
                 if let Some(result) = &tc.result {
                     let formatted = format_tool_result(&tc.tool_name, result);
                     let preview = result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES);
-                    tc_el = tc_el.child(
-                        render_result_block(&preview, &format!("tc-result-{tc_idx}"), theme),
-                    );
+                    tc_el = tc_el.child(render_result_block(
+                        &preview,
+                        &format!("tc-result-{tc_idx}"),
+                        theme,
+                    ));
                 }
                 tc_container = tc_container.child(tc_el);
             }
@@ -2140,12 +2132,7 @@ impl Render for AgentPanel {
                                 .flex_shrink_0()
                                 .child(human_tool),
                         )
-                        .child(
-                            Tag::warning()
-                                .outline()
-                                .xsmall()
-                                .child("Approve?"),
-                        ),
+                        .child(Tag::warning().outline().xsmall().child("Approve?")),
                 )
                 // Args — monospace, full width
                 .child(
@@ -2199,31 +2186,29 @@ impl Render for AgentPanel {
 
         // ── Status indicator (hidden when approval cards are visible — they ARE the status) ──
         if self.state.pending_approvals.is_empty() {
-        if let Some((_icon, label)) = self.status_text() {
-            let status_color = match self.state.status {
-                AgentStatus::Thinking => theme.warning,
-                AgentStatus::Responding => theme.success,
-                AgentStatus::Idle => theme.muted_foreground,
-            };
-            messages_content = messages_content.child(
-                div()
-                    .ml(px(19.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .py(px(3.0))
-                    .px(px(4.0))
-                    .child(
-                        Spinner::new().small().color(status_color),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(theme.muted_foreground.opacity(0.50))
-                            .child(label),
-                    ),
-            );
-        }
+            if let Some((_icon, label)) = self.status_text() {
+                let status_color = match self.state.status {
+                    AgentStatus::Thinking => theme.warning,
+                    AgentStatus::Responding => theme.success,
+                    AgentStatus::Idle => theme.muted_foreground,
+                };
+                messages_content = messages_content.child(
+                    div()
+                        .ml(px(19.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .py(px(3.0))
+                        .px(px(4.0))
+                        .child(Spinner::new().small().color(status_color))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(theme.muted_foreground.opacity(0.50))
+                                .child(label),
+                        ),
+                );
+            }
         } // end pending_approvals.is_empty() guard
 
         // ── Header ──────────────────────────────────────────────
@@ -2267,12 +2252,7 @@ impl Render for AgentPanel {
 
         // Auto-approve badge — use Tag component
         if self.auto_approve {
-            header_left = header_left.child(
-                Tag::warning()
-                    .outline()
-                    .xsmall()
-                    .child("YOLO"),
-            );
+            header_left = header_left.child(Tag::warning().outline().xsmall().child("YOLO"));
         }
 
         let header = div()
@@ -2598,7 +2578,6 @@ impl Render for AgentPanel {
         panel
     }
 }
-
 
 /// Convert model ID to a human-readable short name.
 fn humanize_model_name(model: &str) -> String {

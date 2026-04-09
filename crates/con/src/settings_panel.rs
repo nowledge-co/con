@@ -1044,13 +1044,7 @@ impl SettingsPanel {
                     .child(Input::new(&custom_theme_name_input)),
             )
             // Action buttons — compact row
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(paste_btn),
-            );
+            .child(div().flex().items_center().gap(px(6.0)).child(paste_btn));
 
         // Preview card with save/preview actions
         if let Some(preview) = preview_actions {
