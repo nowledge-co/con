@@ -443,6 +443,7 @@ impl ConWorkspace {
                         mode: runtime.mode,
                         has_shell_integration: observation.has_shell_integration,
                         shell_metadata_fresh: runtime.shell_metadata_fresh,
+                        observation_support: observation.support.clone(),
                         control,
                         agent_cli: runtime.agent_cli.clone(),
                         active_scope: runtime.active_scope.clone(),
@@ -1232,6 +1233,7 @@ impl ConWorkspace {
                             hostname_source: runtime.remote_host_source,
                             mode: runtime.mode,
                             shell_metadata_fresh: runtime.shell_metadata_fresh,
+                            observation_support: observation.support.clone(),
                             address_space: control.address_space,
                             visible_target: control.visible_target.clone(),
                             target_stack: control.target_stack.clone(),
@@ -2714,10 +2716,9 @@ impl Render for ConWorkspace {
 /// Derive a display name for a pane from available signals.
 ///
 /// Priority:
-/// 1. Remote hostname (SSH session detected via OSC 7, title, or persistent tracking)
-/// 2. Terminal title — cleaned: strip `user@host:` prefix for local sessions,
-///    use the path part if it's a typical `user@host: /path` pattern
-/// 3. CWD directory name (skip bare home directories like `/Users/name`)
+/// 1. Proven remote hostname
+/// 2. CWD directory name (skip bare home directories like `/Users/name`)
+/// 3. Raw terminal title
 /// 4. Fallback "Pane N"
 fn pane_display_name(
     hostname: &Option<String>,
@@ -2728,34 +2729,6 @@ fn pane_display_name(
     // SSH session → show hostname
     if let Some(host) = hostname {
         return host.clone();
-    }
-
-    // Terminal title set by shell
-    if let Some(title) = title {
-        // Many shells set title to "user@host: /path" or "dirname — user@host"
-        // For local sessions, extract the meaningful part
-        let cleaned = if let Some(colon_pos) = title.find(':') {
-            let before = title[..colon_pos].trim();
-            let after = title[colon_pos + 1..].trim();
-            // If before-colon contains @, it's user@host — use the path after colon
-            if before.contains('@') {
-                if after.is_empty() {
-                    before.to_string()
-                } else {
-                    shorten_path(after)
-                }
-            } else {
-                before.to_string()
-            }
-        } else if title.contains('@') {
-            // Just "user@host" without path — use as-is
-            title.clone()
-        } else {
-            title.clone()
-        };
-        if !cleaned.is_empty() {
-            return cleaned;
-        }
     }
 
     // CWD basename
@@ -2777,18 +2750,13 @@ fn pane_display_name(
         }
     }
 
-    format!("Pane {}", pane_id + 1)
-}
-
-/// Shorten a path for display: ~/foo/bar → bar, /long/deep/path → path
-fn shorten_path(path: &str) -> String {
-    let trimmed = path.trim();
-    if trimmed == "~" || trimmed == "/" {
-        return trimmed.to_string();
+    // Raw title from the visible surface
+    if let Some(title) = title {
+        let title = title.trim();
+        if !title.is_empty() {
+            return title.to_string();
+        }
     }
-    // Use the last path component
-    std::path::Path::new(trimmed)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| trimmed.to_string())
+
+    format!("Pane {}", pane_id + 1)
 }

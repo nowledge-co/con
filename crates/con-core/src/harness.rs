@@ -357,6 +357,7 @@ impl AgentHarness {
             focused_pane_mode: focused_runtime.mode,
             focused_has_shell_integration: focused_observation.has_shell_integration,
             focused_shell_metadata_fresh: focused_runtime.shell_metadata_fresh,
+            focused_observation_support: focused_observation.support.clone(),
             focused_runtime_stack: focused_runtime.scope_stack.clone(),
             focused_runtime_warnings: focused_runtime.warnings.clone(),
             focused_control,

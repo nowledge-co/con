@@ -41,10 +41,10 @@ This is still phase one.
 What it solves:
 
 - the model can see that a con pane showing tmux is still only addressable as a con pane
-- the model can see nested situations such as `remote shell -> tmux -> agent CLI` instead of flattening them into one label
+- the model can represent nested situations such as `remote shell -> tmux -> agent CLI` instead of flattening them into one label
 - shell execution safety is computed from typed capability data
 - prompt, tools, and runtime guards share one vocabulary
-- tmux now has an explicit inspectable adapter state with session/front-target reporting, rather than being implied only through generic pane metadata
+- tmux now has an explicit inspectable adapter slot, rather than being implied only through generic pane metadata
 
 What it does not solve yet:
 
@@ -52,6 +52,7 @@ What it does not solve yet:
 - tmux-native command execution
 - editor-native control
 - foreground-process truth from Ghostty for nested remote runtimes
+- manual tmux/editor detection on the current embedded Ghostty backend when command text and alternate-screen state are not exported
 
 ## First principles
 
@@ -186,7 +187,7 @@ These should be explicit product-level types, not just strings in prompt XML.
 - `AgentCli`
 - `Dashboard`
 - `Pager`
-- `UnknownTui`
+- `Unknown`
 
 ### Execution targets
 

@@ -1,10 +1,8 @@
-use std::sync::OnceLock;
-
 use serde::{Deserialize, Serialize};
 
 use crate::control::{
-    PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneControlState,
-    PaneVisibleTarget, PaneVisibleTargetKind, format_target_stack,
+    format_target_stack, PaneAddressSpace, PaneControlCapability, PaneControlChannel,
+    PaneControlState, PaneVisibleTarget, PaneVisibleTargetKind,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -53,6 +51,7 @@ impl PaneScopeKind {
 #[serde(rename_all = "snake_case")]
 pub enum PaneEvidenceSource {
     ShellIntegration,
+    SurfaceState,
     Osc7,
     CommandLine,
     Title,
@@ -63,6 +62,7 @@ impl PaneEvidenceSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ShellIntegration => "shell_integration",
+            Self::SurfaceState => "surface_state",
             Self::Osc7 => "osc7",
             Self::CommandLine => "command_line",
             Self::Title => "title",
@@ -107,6 +107,50 @@ impl PaneRuntimeScope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaneObservationSupport {
+    /// Whether the backend can provide authoritative foreground command text.
+    pub foreground_command: bool,
+    /// Whether the backend can provide authoritative alternate-screen state.
+    pub alternate_screen: bool,
+    /// Whether the backend can provide authoritative remote-host identity.
+    pub remote_host_identity: bool,
+}
+
+impl PaneObservationSupport {
+    pub fn backend_limit_note(&self) -> Option<String> {
+        let mut missing = Vec::new();
+        if !self.foreground_command {
+            missing.push("foreground command text");
+        }
+        if !self.alternate_screen {
+            missing.push("alternate-screen state");
+        }
+        if !self.remote_host_identity {
+            missing.push("remote-host identity");
+        }
+
+        if missing.is_empty() {
+            return None;
+        }
+
+        Some(format!(
+            "Embedded Ghostty does not currently export authoritative {} for this pane. Unproven foreground runtimes must stay unknown.",
+            missing.join(", ")
+        ))
+    }
+}
+
+impl Default for PaneObservationSupport {
+    fn default() -> Self {
+        Self {
+            foreground_command: false,
+            alternate_screen: false,
+            remote_host_identity: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaneObservationFrame {
     pub title: Option<String>,
     pub cwd: Option<String>,
@@ -114,10 +158,12 @@ pub struct PaneObservationFrame {
     pub last_command: Option<String>,
     pub last_exit_code: Option<i32>,
     pub last_command_duration_secs: Option<f64>,
-    pub detected_remote_host: Option<String>,
+    pub support: PaneObservationSupport,
     pub has_shell_integration: bool,
     pub is_alt_screen: bool,
     pub is_busy: bool,
+    pub input_generation: u64,
+    pub last_command_finished_input_generation: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,7 +208,6 @@ struct StickyFact {
 #[derive(Debug, Clone, Default)]
 pub struct PaneRuntimeObserver {
     generation: u64,
-    remote_host: Option<StickyFact>,
     multiplexer: Option<StickyFact>,
     tmux_session: Option<StickyFact>,
     agent_cli: Option<StickyFact>,
@@ -172,103 +217,54 @@ impl PaneRuntimeObserver {
     pub fn observe(&mut self, observation: PaneObservationFrame) -> PaneRuntimeState {
         self.generation += 1;
 
-        let detected_mode = infer_pane_mode(
-            observation.title.as_deref(),
-            &observation.recent_output,
-            observation.last_command.as_deref(),
-            observation.has_shell_integration,
-            observation.is_alt_screen,
-        );
-
         let shell_metadata_fresh = shell_metadata_is_fresh(
-            detected_mode,
             observation.has_shell_integration,
-            observation.last_command.as_deref(),
-            observation.cwd.as_deref(),
+            observation.input_generation,
+            observation.last_command_finished_input_generation,
         );
 
-        let remote_host_hint = detect_remote_host_hint(
-            observation.title.as_deref(),
-            observation.detected_remote_host.as_deref(),
-            &observation.recent_output,
-        );
-        let tmux_scope = detect_tmux_scope(
-            observation.title.as_deref(),
-            observation.last_command.as_deref(),
-            &observation.recent_output,
-        );
-        let tmux_session = detect_tmux_session(
-            observation.title.as_deref(),
-            observation.last_command.as_deref(),
-            &observation.recent_output,
-        );
-        let agent_cli_scope =
-            detect_agent_cli_scope(observation.title.as_deref(), &observation.recent_output);
-
-        self.remote_host = Self::merge_fact(
-            self.remote_host.take(),
-            remote_host_hint.map(|(value, confidence, source)| StickyFact {
-                value,
-                confidence,
-                source,
-                generation: self.generation,
-            }),
-            detected_mode != PaneMode::Shell || !shell_metadata_fresh,
-            self.generation,
-            12,
-        );
-        self.multiplexer = Self::merge_fact(
-            self.multiplexer.take(),
-            tmux_scope.as_ref().map(|scope| StickyFact {
+        if shell_metadata_fresh {
+            self.multiplexer = None;
+            self.tmux_session = None;
+            self.agent_cli = None;
+        } else if let Some(scope) = detect_tmux_scope(observation.last_command.as_deref()) {
+            self.multiplexer = Some(StickyFact {
                 value: scope.label.clone().unwrap_or_else(|| "tmux".to_string()),
                 confidence: scope.confidence,
                 source: scope.evidence_source,
                 generation: self.generation,
-            }),
-            detected_mode != PaneMode::Shell,
-            self.generation,
-            12,
-        );
-        self.tmux_session = Self::merge_fact(
-            self.tmux_session.take(),
-            tmux_session.map(|value| StickyFact {
-                value,
-                confidence: PaneConfidence::Strong,
-                source: PaneEvidenceSource::CommandLine,
-                generation: self.generation,
-            }),
-            detected_mode != PaneMode::Shell,
-            self.generation,
-            12,
-        );
-        self.agent_cli = Self::merge_fact(
-            self.agent_cli.take(),
-            agent_cli_scope.as_ref().and_then(|scope| {
-                scope.label.clone().map(|value| StickyFact {
+            });
+            self.tmux_session =
+                detect_tmux_session(observation.last_command.as_deref()).map(|value| StickyFact {
                     value,
-                    confidence: scope.confidence,
-                    source: scope.evidence_source,
+                    confidence: PaneConfidence::Strong,
+                    source: PaneEvidenceSource::CommandLine,
                     generation: self.generation,
-                })
-            }),
-            detected_mode != PaneMode::Shell,
-            self.generation,
-            8,
-        );
+                });
+            self.agent_cli = None;
+        } else if let Some(scope) = detect_agent_cli_scope(observation.last_command.as_deref()) {
+            self.agent_cli = scope.label.clone().map(|value| StickyFact {
+                value,
+                confidence: scope.confidence,
+                source: scope.evidence_source,
+                generation: self.generation,
+            });
+            self.multiplexer = None;
+            self.tmux_session = None;
+        }
 
         let mode = if self.multiplexer.is_some() {
             PaneMode::Multiplexer
-        } else if self.agent_cli.is_some() || detected_mode == PaneMode::Tui {
+        } else if self.agent_cli.is_some() || observation.is_alt_screen {
             PaneMode::Tui
+        } else if shell_metadata_fresh {
+            PaneMode::Shell
         } else {
-            detected_mode
+            PaneMode::Unknown
         };
 
         let mut scope_stack = Vec::new();
-        if observation.has_shell_integration
-            || observation.cwd.is_some()
-            || observation.last_command.is_some()
-        {
+        if shell_metadata_fresh {
             scope_stack.push(PaneRuntimeScope {
                 kind: PaneScopeKind::Shell,
                 label: None,
@@ -280,21 +276,16 @@ impl PaneRuntimeObserver {
 
         let mut evidence = Vec::new();
 
-        if let Some(remote_host) = &self.remote_host {
-            scope_stack.push(PaneRuntimeScope {
-                kind: PaneScopeKind::RemoteShell,
-                label: None,
-                host: Some(remote_host.value.clone()),
-                confidence: remote_host.confidence,
-                evidence_source: remote_host.source,
-            });
+        if shell_metadata_fresh {
             evidence.push(PaneEvidence {
-                subject: "remote_host".to_string(),
-                value: Some(remote_host.value.clone()),
-                source: remote_host.source,
-                confidence: remote_host.confidence,
-                generation: remote_host.generation,
-                note: Some("Pane-local host evidence".to_string()),
+                subject: "shell_prompt".to_string(),
+                value: Some("confirmed".to_string()),
+                source: PaneEvidenceSource::ShellIntegration,
+                confidence: PaneConfidence::Strong,
+                generation: self.generation,
+                note: Some(
+                    "Ghostty shell integration observed a clean shell prompt after the most recent input.".to_string(),
+                ),
             });
         }
 
@@ -312,7 +303,7 @@ impl PaneRuntimeObserver {
                 source: multiplexer.source,
                 confidence: multiplexer.confidence,
                 generation: multiplexer.generation,
-                note: Some("tmux-like pane structure".to_string()),
+                note: Some("The proven foreground command is tmux/tmate.".to_string()),
             });
         }
 
@@ -330,56 +321,55 @@ impl PaneRuntimeObserver {
                 source: agent_cli.source,
                 confidence: agent_cli.confidence,
                 generation: agent_cli.generation,
-                note: Some("Visible agent CLI chrome".to_string()),
+                note: Some(
+                    "The proven foreground command matches a supported agent CLI.".to_string(),
+                ),
             });
-        } else if mode == PaneMode::Tui {
+        } else if observation.is_alt_screen {
             scope_stack.push(PaneRuntimeScope {
                 kind: PaneScopeKind::InteractiveApp,
-                label: observation
-                    .title
-                    .clone()
-                    .filter(|title| !title.trim().is_empty()),
+                label: command_label(observation.last_command.as_deref()),
                 host: None,
-                confidence: PaneConfidence::Advisory,
-                evidence_source: if observation.is_alt_screen {
-                    PaneEvidenceSource::ShellIntegration
-                } else {
-                    PaneEvidenceSource::ScreenStructure
-                },
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::SurfaceState,
+            });
+            evidence.push(PaneEvidence {
+                subject: "interactive_app".to_string(),
+                value: command_label(observation.last_command.as_deref()),
+                source: PaneEvidenceSource::SurfaceState,
+                confidence: PaneConfidence::Strong,
+                generation: self.generation,
+                note: Some(
+                    "Ghostty reports alternate-screen mode for the visible surface.".to_string(),
+                ),
             });
         }
 
         let active_scope = scope_stack.last().cloned();
         let tmux_session = self.tmux_session.as_ref().map(|value| value.value.clone());
         let agent_cli = self.agent_cli.as_ref().map(|value| value.value.clone());
-        let remote_host = self.remote_host.as_ref().map(|value| value.value.clone());
-        let remote_host_confidence = self.remote_host.as_ref().map(|value| value.confidence);
-        let remote_host_source = self.remote_host.as_ref().map(|value| value.source);
 
         let mut warnings = Vec::new();
         if !shell_metadata_fresh {
             warnings.push(
-                "Shell-derived metadata may not describe the currently visible app.".to_string(),
+                "Visible shell prompt is not confirmed. Treat cwd and last_command as historical shell metadata, not foreground-app truth.".to_string(),
             );
+        }
+        if let Some(note) = observation.support.backend_limit_note() {
+            warnings.push(note);
         }
         if mode == PaneMode::Multiplexer {
             warnings.push(
-                "Inspect the active multiplexer pane before trusting cwd or command metadata."
-                    .to_string(),
-            );
-        }
-        if remote_host.is_some() {
-            warnings.push(
-                "Remote host identity is inferred from terminal metadata and should be verified before destructive actions.".to_string(),
+                "con only knows that tmux/tmate is the foreground command of this outer pane. It does not yet know the active inner tmux window or pane.".to_string(),
             );
         }
 
         PaneRuntimeState {
             mode,
             shell_metadata_fresh,
-            remote_host,
-            remote_host_confidence,
-            remote_host_source,
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
             agent_cli,
             tmux_session,
             active_scope,
@@ -388,307 +378,49 @@ impl PaneRuntimeObserver {
             warnings,
         }
     }
-
-    fn merge_fact(
-        previous: Option<StickyFact>,
-        fresh: Option<StickyFact>,
-        allow_retention: bool,
-        generation: u64,
-        ttl: u64,
-    ) -> Option<StickyFact> {
-        if let Some(fresh) = fresh {
-            return Some(fresh);
-        }
-
-        match previous {
-            Some(previous)
-                if allow_retention && generation.saturating_sub(previous.generation) <= ttl =>
-            {
-                Some(previous)
-            }
-            _ => None,
-        }
-    }
 }
 
 fn looks_like_tmux_command(command: &str) -> bool {
-    let trimmed = command.trim_start();
-    trimmed == "tmux"
-        || trimmed.starts_with("tmux ")
-        || trimmed == "tmate"
-        || trimmed.starts_with("tmate ")
+    command_basename(command)
+        .as_deref()
+        .is_some_and(|name| matches!(name, "tmux" | "tmate"))
 }
 
-fn title_looks_like_tmux(title: &str) -> bool {
-    let title_lower = title.to_ascii_lowercase();
-    if title_lower.contains("tmux") || title_lower.contains("tmate") {
-        return true;
-    }
+fn is_env_assignment(token: &str) -> bool {
+    token.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
 
-    // Detect tmux status indicators commonly embedded in terminal titles.
-    // tmux sets the window title to patterns like:
-    //   "haswell ❐ 0 ● 4 nvim"
-    //   "hostname ❐ session ● N window-name"
-    // The ❐ (U+2750) and similar box/window symbols are tmux indicators.
-    if title.contains('❐') || title.contains('❑') || title.contains('❏') {
-        return true;
-    }
-
-    // tmux window-list patterns in titles: "N window-name" with status symbols
-    // like ● (active), ○, ◉, * (classic tmux), - (last), # (flagged)
-    let tmux_window_markers = ['●', '○', '◉'];
-    let has_window_marker = tmux_window_markers.iter().any(|m| title.contains(*m));
-    if has_window_marker {
-        // Verify there's a digit before/near the marker, suggesting "N● name" or "N name"
-        let has_numbered_window = title
-            .split_whitespace()
-            .any(|token| token.chars().next().is_some_and(|c| c.is_ascii_digit()));
-        if has_numbered_window {
-            return true;
+fn command_basename(command: &str) -> Option<String> {
+    let mut tokens = command.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        let token = token.trim_matches(&['"', '\''][..]);
+        if token.is_empty() {
+            continue;
         }
-    }
-
-    false
-}
-
-fn line_looks_like_tmux_status(line: &str) -> bool {
-    let line = line.trim();
-    if line.is_empty() {
-        return false;
-    }
-
-    // Modern tmux status bar indicators: ❐ (session), ↑ (uptime), ↗ (prefix)
-    // Example: "❐ 0  ↑ 63d 6h 21m  <4 nvim      ↗  | 11:31 | 05 Apr  w  haswell"
-    if line.contains('❐') || line.contains('❑') || line.contains('❏') {
-        return true;
-    }
-
-    // Classic tmux: "0:bash  1:vim*  2:htop-" with N:name patterns
-    let tokens: Vec<&str> = line.split_whitespace().collect();
-    let colon_windows = tokens
-        .iter()
-        .filter(|token| {
-            token
-                .split_once(':')
-                .is_some_and(|(idx, _)| !idx.is_empty() && idx.chars().all(|c| c.is_ascii_digit()))
-        })
-        .count();
-    if colon_windows >= 2 {
-        return true;
-    }
-
-    // Classic tmux: "0* bash  1 vim  2- htop" with number-name pairs
-    let numbered_windows = tokens
-        .windows(2)
-        .filter(|pair| {
-            pair[0]
-                .chars()
-                .all(|c| c.is_ascii_digit() || c == '*' || c == '-')
-                && pair[1]
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-        })
-        .count();
-    if numbered_windows >= 2 {
-        return true;
-    }
-
-    // Modern tmux with ● window markers: "1 model-serving  2 ops 3 nekomaster  4 nvim"
-    // or with ↑ uptime indicators
-    if line.contains('↑') && line.chars().any(|c| c.is_ascii_digit()) {
-        // ↑ followed by an uptime pattern like "63d" or "5h" is very tmux-specific
-        let has_uptime = tokens.iter().any(|token| {
-            token.ends_with('d') || token.ends_with('h') || token.ends_with('m')
-        }) && tokens
-            .iter()
-            .any(|token| token.chars().all(|c| c.is_ascii_digit()));
-        if has_uptime {
-            return true;
+        if is_env_assignment(token) || matches!(token, "env" | "sudo" | "command" | "nohup") {
+            continue;
         }
-    }
-
-    false
-}
-
-fn local_hostname_aliases() -> &'static [String] {
-    static LOCAL_HOSTNAME_ALIASES: OnceLock<Vec<String>> = OnceLock::new();
-    LOCAL_HOSTNAME_ALIASES.get_or_init(|| {
-        let raw = gethostname::gethostname()
-            .to_string_lossy()
-            .trim()
+        let basename = token
+            .rsplit('/')
+            .next()
+            .unwrap_or(token)
             .to_ascii_lowercase();
-        let mut aliases = Vec::new();
-        if !raw.is_empty() {
-            aliases.push(raw.clone());
-            if let Some(short) = raw.split('.').next() {
-                if !short.is_empty() {
-                    aliases.push(short.to_string());
-                }
-            }
-        }
-        aliases.sort();
-        aliases.dedup();
-        aliases
-    })
-}
-
-fn normalize_host_candidate(raw: &str) -> Option<String> {
-    let candidate = raw
-        .trim()
-        .trim_matches(|c: char| {
-            matches!(
-                c,
-                '"' | '\'' | '`' | '[' | ']' | '(' | ')' | '{' | '}' | '<' | '>' | ',' | ';'
-            )
-        })
-        .trim_matches('.');
-
-    if candidate.is_empty() || candidate.contains('/') || candidate.contains('\\') {
-        return None;
-    }
-
-    if candidate.starts_with('-')
-        || !candidate
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
-    {
-        return None;
-    }
-
-    let lower = candidate.to_ascii_lowercase();
-    if matches!(
-        lower.as_str(),
-        "localhost"
-            | "local"
-            | "terminal"
-            | "tmux"
-            | "tmate"
-            | "zellij"
-            | "vim"
-            | "nvim"
-            | "top"
-            | "htop"
-            | "nvtop"
-            | "claude"
-            | "codex"
-            | "opencode"
-    ) {
-        return None;
-    }
-
-    Some(candidate.to_string())
-}
-
-fn is_local_hostname(candidate: &str) -> bool {
-    let lower = candidate.to_ascii_lowercase();
-    local_hostname_aliases().iter().any(|alias| alias == &lower)
-}
-
-fn host_candidate_from_user_at_host(text: &str) -> Option<String> {
-    text.split_whitespace().find_map(|token| {
-        let (_, host) = token.rsplit_once('@')?;
-        let host = normalize_host_candidate(host)?;
-        (!is_local_hostname(&host)).then_some(host)
-    })
-}
-
-fn host_candidate_from_tmux_status(line: &str) -> Option<String> {
-    if !line_looks_like_tmux_status(line) {
-        return None;
-    }
-
-    line.split_whitespace().rev().find_map(|token| {
-        if token.contains(':')
-            || token
-                .chars()
-                .all(|c| c.is_ascii_digit() || matches!(c, '*' | '-' | '.'))
-        {
-            return None;
-        }
-        let candidate = normalize_host_candidate(token)?;
-        (!is_local_hostname(&candidate)).then_some(candidate)
-    })
-}
-
-fn host_candidate_from_title(title: &str) -> Option<String> {
-    // Try user@host first (e.g. "user@myserver:~/dir")
-    if let Some(host) = host_candidate_from_user_at_host(title) {
-        return Some(host);
-    }
-
-    // Try tmux-style titles: "hostname ❐ 0 ● 4 nvim"
-    // The hostname is the first token, before the tmux session indicator.
-    if title_looks_like_tmux(title) {
-        let first_token = title.split_whitespace().next()?;
-        // The first token should look like a hostname, not a tmux artifact
-        let candidate = normalize_host_candidate(first_token)?;
-        if !is_local_hostname(&candidate) {
-            return Some(candidate);
+        if !basename.is_empty() {
+            return Some(basename);
         }
     }
-
     None
 }
 
-fn detect_remote_host_hint(
-    title: Option<&str>,
-    osc7_host: Option<&str>,
-    recent_output: &[String],
-) -> Option<(String, PaneConfidence, PaneEvidenceSource)> {
-    if let Some(host) = osc7_host
-        .and_then(normalize_host_candidate)
-        .filter(|host| !is_local_hostname(host))
-    {
-        return Some((host, PaneConfidence::Advisory, PaneEvidenceSource::Osc7));
-    }
-
-    if let Some(host) = title.and_then(host_candidate_from_user_at_host) {
-        return Some((host, PaneConfidence::Advisory, PaneEvidenceSource::Title));
-    }
-
-    if let Some(host) = recent_output.iter().rev().find_map(|line| {
-        host_candidate_from_user_at_host(line).or_else(|| host_candidate_from_tmux_status(line))
-    }) {
-        return Some((
-            host,
-            PaneConfidence::Advisory,
-            PaneEvidenceSource::ScreenStructure,
-        ));
-    }
-
-    if let Some(host) = title.and_then(host_candidate_from_title) {
-        return Some((host, PaneConfidence::Advisory, PaneEvidenceSource::Title));
-    }
-
-    None
-}
-
-fn looks_like_dense_fullscreen_ui(recent_output: &[String]) -> bool {
-    if recent_output.len() < 8 {
-        return false;
-    }
-
-    let non_empty = recent_output
-        .iter()
-        .filter(|line| !line.trim().is_empty())
-        .count();
-    if non_empty * 10 < recent_output.len() * 7 {
-        return false;
-    }
-
-    let has_box_drawing = recent_output.iter().any(|line| {
-        line.chars().any(|c| {
-            matches!(
-                c,
-                '│' | '─' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼'
-            )
-        })
-    });
-
-    has_box_drawing
-        || recent_output
-            .last()
-            .is_some_and(|line| line_looks_like_tmux_status(line))
+fn command_label(command: Option<&str>) -> Option<String> {
+    command_basename(command?).map(|name| match name.as_str() {
+        "claude" | "claude-code" => "claude_code".to_string(),
+        "codex" => "codex".to_string(),
+        "opencode" | "open-code" => "opencode".to_string(),
+        other => other.to_string(),
+    })
 }
 
 fn parse_tmux_target(command: &str) -> Option<String> {
@@ -706,135 +438,71 @@ fn parse_tmux_target(command: &str) -> Option<String> {
     None
 }
 
-fn detect_tmux_scope(
-    title: Option<&str>,
-    last_command: Option<&str>,
-    recent_output: &[String],
-) -> Option<PaneRuntimeScope> {
-    if let Some(command) = last_command {
-        if looks_like_tmux_command(command) {
-            let label = parse_tmux_target(command).or_else(|| {
-                if command.trim_start().starts_with("tmate") {
-                    Some("tmate".to_string())
-                } else {
-                    Some("tmux".to_string())
-                }
-            });
-            return Some(PaneRuntimeScope {
-                kind: PaneScopeKind::Multiplexer,
-                label,
-                host: None,
-                confidence: PaneConfidence::Strong,
-                evidence_source: PaneEvidenceSource::CommandLine,
-            });
+fn detect_tmux_scope(last_command: Option<&str>) -> Option<PaneRuntimeScope> {
+    let command = last_command?;
+    if !looks_like_tmux_command(command) {
+        return None;
+    }
+
+    let label = parse_tmux_target(command).or_else(|| {
+        if command_basename(command).as_deref() == Some("tmate") {
+            Some("tmate".to_string())
+        } else {
+            Some("tmux".to_string())
         }
-    }
-
-    if title.is_some_and(title_looks_like_tmux) {
-        return Some(PaneRuntimeScope {
-            kind: PaneScopeKind::Multiplexer,
-            label: Some("tmux".to_string()),
-            host: None,
-            confidence: PaneConfidence::Advisory,
-            evidence_source: PaneEvidenceSource::Title,
-        });
-    }
-
-    if recent_output
-        .last()
-        .is_some_and(|line| line_looks_like_tmux_status(line))
-    {
-        return Some(PaneRuntimeScope {
-            kind: PaneScopeKind::Multiplexer,
-            label: Some("tmux".to_string()),
-            host: None,
-            confidence: PaneConfidence::Advisory,
-            evidence_source: PaneEvidenceSource::ScreenStructure,
-        });
-    }
-
-    None
+    });
+    Some(PaneRuntimeScope {
+        kind: PaneScopeKind::Multiplexer,
+        label,
+        host: None,
+        confidence: PaneConfidence::Strong,
+        evidence_source: PaneEvidenceSource::CommandLine,
+    })
 }
 
-pub fn detect_tmux_session(
-    _title: Option<&str>,
-    last_command: Option<&str>,
-    _recent_output: &[String],
-) -> Option<String> {
+pub fn detect_tmux_session(last_command: Option<&str>) -> Option<String> {
     last_command
         .filter(|command| looks_like_tmux_command(command))
         .and_then(parse_tmux_target)
 }
 
-fn detect_agent_cli_scope(
-    title: Option<&str>,
-    recent_output: &[String],
-) -> Option<PaneRuntimeScope> {
-    let title_lower = title.map(str::to_ascii_lowercase);
-    let recent_lower: Vec<String> = recent_output
-        .iter()
-        .map(|line| line.to_ascii_lowercase())
-        .collect();
+fn detect_agent_cli_scope(last_command: Option<&str>) -> Option<PaneRuntimeScope> {
+    let label = match command_basename(last_command?)?.as_str() {
+        "claude" | "claude-code" => "claude_code",
+        "codex" => "codex",
+        "opencode" | "open-code" => "opencode",
+        _ => return None,
+    };
 
-    for (needle, label) in [
-        ("claude code", "claude_code"),
-        ("codex cli", "codex"),
-        ("codex", "codex"),
-        ("open code", "opencode"),
-        ("open-code", "opencode"),
-        ("opencode", "opencode"),
-    ] {
-        if title_lower
-            .as_deref()
-            .is_some_and(|value| value.contains(needle))
-        {
-            return Some(PaneRuntimeScope {
-                kind: PaneScopeKind::AgentCli,
-                label: Some(label.to_string()),
-                host: None,
-                confidence: PaneConfidence::Advisory,
-                evidence_source: PaneEvidenceSource::Title,
-            });
-        }
-
-        if recent_lower
-            .iter()
-            .filter(|line| line.contains(needle))
-            .count()
-            >= 2
-        {
-            return Some(PaneRuntimeScope {
-                kind: PaneScopeKind::AgentCli,
-                label: Some(label.to_string()),
-                host: None,
-                confidence: PaneConfidence::Advisory,
-                evidence_source: PaneEvidenceSource::ScreenStructure,
-            });
-        }
-    }
-
-    None
+    Some(PaneRuntimeScope {
+        kind: PaneScopeKind::AgentCli,
+        label: Some(label.to_string()),
+        host: None,
+        confidence: PaneConfidence::Strong,
+        evidence_source: PaneEvidenceSource::CommandLine,
+    })
 }
 
 pub fn infer_pane_mode(
-    title: Option<&str>,
-    recent_output: &[String],
     last_command: Option<&str>,
     has_shell_integration: bool,
     is_alt_screen: bool,
+    input_generation: u64,
+    last_command_finished_input_generation: u64,
 ) -> PaneMode {
-    if detect_tmux_scope(title, last_command, recent_output).is_some() {
+    if detect_tmux_scope(last_command).is_some() {
         return PaneMode::Multiplexer;
     }
 
-    if detect_agent_cli_scope(title, recent_output).is_some()
-        || is_alt_screen
-        || looks_like_dense_fullscreen_ui(recent_output)
-    {
+    if detect_agent_cli_scope(last_command).is_some() || is_alt_screen {
         return PaneMode::Tui;
     }
 
-    if has_shell_integration || last_command.is_some() {
+    if shell_metadata_is_fresh(
+        has_shell_integration,
+        input_generation,
+        last_command_finished_input_generation,
+    ) {
         return PaneMode::Shell;
     }
 
@@ -842,16 +510,11 @@ pub fn infer_pane_mode(
 }
 
 pub fn shell_metadata_is_fresh(
-    mode: PaneMode,
     has_shell_integration: bool,
-    last_command: Option<&str>,
-    cwd: Option<&str>,
+    input_generation: u64,
+    last_command_finished_input_generation: u64,
 ) -> bool {
-    if mode != PaneMode::Shell {
-        return false;
-    }
-
-    has_shell_integration || last_command.is_some() || cwd.is_some()
+    has_shell_integration && input_generation == last_command_finished_input_generation
 }
 
 pub fn direct_terminal_exec_is_safe(runtime: &PaneRuntimeState) -> bool {
@@ -879,6 +542,8 @@ pub struct TerminalContext {
     pub focused_has_shell_integration: bool,
     /// Whether shell-derived metadata such as cwd and last_command should be treated as fresh.
     pub focused_shell_metadata_fresh: bool,
+    /// What the backend can actually prove for the focused pane.
+    pub focused_observation_support: PaneObservationSupport,
     /// Structured runtime scopes derived from the focused pane's current evidence.
     pub focused_runtime_stack: Vec<PaneRuntimeScope>,
     /// Warnings that should constrain interpretation of the focused pane.
@@ -936,6 +601,7 @@ pub struct PaneSummary {
     pub mode: PaneMode,
     pub has_shell_integration: bool,
     pub shell_metadata_fresh: bool,
+    pub observation_support: PaneObservationSupport,
     pub control: PaneControlState,
     pub agent_cli: Option<String>,
     pub active_scope: Option<PaneRuntimeScope>,
@@ -1003,17 +669,18 @@ impl TerminalContext {
             focused_pane_mode: PaneMode::Unknown,
             focused_has_shell_integration: false,
             focused_shell_metadata_fresh: false,
+            focused_observation_support: PaneObservationSupport::default(),
             focused_runtime_stack: Vec::new(),
             focused_runtime_warnings: Vec::new(),
             focused_control: PaneControlState {
                 address_space: PaneAddressSpace::ConPane,
                 target_stack: vec![PaneVisibleTarget {
-                    kind: PaneVisibleTargetKind::UnknownTui,
+                    kind: PaneVisibleTargetKind::Unknown,
                     label: None,
                     host: None,
                 }],
                 visible_target: PaneVisibleTarget {
-                    kind: PaneVisibleTargetKind::UnknownTui,
+                    kind: PaneVisibleTargetKind::Unknown,
                     label: None,
                     host: None,
                 },
@@ -1068,13 +735,13 @@ impl TerminalContext {
              2. **Terminal protocol sequences** (\\x02c for tmux prefix+c, \\x1b for Escape, \\x03 for Ctrl-C):\n\
                 These travel through the PTY to the remote program. send_keys is the correct tool for these.\n\
              3. **Shell commands** (ls, apt update, git status):\n\
-                Use terminal_exec when `exec_visible_shell` is available. When it is NOT (SSH without \
-                shell integration, inside tmux), use send_keys to type the command + Enter in a shell prompt.\n\n\
+                Use terminal_exec when `exec_visible_shell` is available. When it is NOT, first observe the pane \
+                and only use send_keys if a shell prompt is visibly present.\n\n\
              ### Choose the right tool\n\
              - SHELL COMMANDS on a pane with `exec_visible_shell` → terminal_exec / batch_exec.\n\
              - PARALLEL WORK across hosts → create_pane for each host (output shows connection state), \
                then terminal_exec (if exec_visible_shell) or send_keys.\n\
-             - SHELL COMMANDS on a pane WITHOUT `exec_visible_shell` → send_keys \"command\\n\" in a shell prompt.\n\
+             - SHELL COMMANDS on a pane WITHOUT `exec_visible_shell` → use read_pane first, then send_keys \"command\\n\" only if a shell prompt is visibly present.\n\
              - LONG-RUNNING commands → launch, then wait_for (not repeated read_pane).\n\
              - INTERACTIVE TUI (vim, tmux, htop) → send_keys + read_pane (follow playbooks).\n\
              - LOCAL FILE operations → file_read, file_write, edit_file, search, list_files.\n\
@@ -1115,9 +782,10 @@ impl TerminalContext {
              - NEVER execute rm -rf, DROP TABLE, or destructive commands without explicit user confirmation.\n\
              - Check is_alive before executing — false means PTY exited, commands will fail.\n\
              - If is_busy is true, a command is already running — wait or use a different pane.\n\
-             - Observation is not control. Seeing tmux or nvim does not mean con has a native control channel.\n\
+             - Observation is not control. Pane title and visible screen text are raw observations, not typed runtime facts.\n\
+             - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
              - Addressing is layered. A con pane index ≠ tmux pane id ≠ tmux window index ≠ editor buffer.\n\
-             - When pane mode is not `shell` or shell metadata is stale, do NOT trust cwd/hostname/last_command.\n\
+             - When pane mode is not `shell` or shell metadata is stale, do NOT trust cwd/hostname/last_command and do NOT assume a shell prompt.\n\
              - If a command fails (exit_code != 0), diagnose the error before retrying.\n\
              - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
              </safety>\n\n\
@@ -1139,6 +807,12 @@ impl TerminalContext {
             self.focused_pane_mode.as_str(),
             self.focused_has_shell_integration,
             self.focused_shell_metadata_fresh,
+        ));
+        prompt.push_str(&format!(
+            " supports_foreground_command=\"{}\" supports_alt_screen=\"{}\" supports_remote_host_identity=\"{}\"",
+            self.focused_observation_support.foreground_command,
+            self.focused_observation_support.alternate_screen,
+            self.focused_observation_support.remote_host_identity,
         ));
         if let Some(host) = &self.focused_hostname {
             prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
@@ -1245,6 +919,12 @@ impl TerminalContext {
                 xml_escape(&format_control_channels(&self.focused_control.channels)),
                 xml_escape(&format_control_capabilities(&self.focused_control.capabilities))
             ));
+            prompt.push_str(&format!(
+                " supports_foreground_command=\"{}\" supports_alt_screen=\"{}\" supports_remote_host_identity=\"{}\"",
+                self.focused_observation_support.foreground_command,
+                self.focused_observation_support.alternate_screen,
+                self.focused_observation_support.remote_host_identity,
+            ));
             if let Some(host) = &self.focused_hostname {
                 prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
                 if let Some(confidence) = self.focused_hostname_confidence {
@@ -1315,8 +995,14 @@ impl TerminalContext {
                     .as_ref()
                     .map(|tmux| format!(" tmux_mode=\"{}\"", tmux.mode.as_str()))
                     .unwrap_or_default();
+                let support = format!(
+                    " supports_foreground_command=\"{}\" supports_alt_screen=\"{}\" supports_remote_host_identity=\"{}\"",
+                    pane.observation_support.foreground_command,
+                    pane.observation_support.alternate_screen,
+                    pane.observation_support.remote_host_identity,
+                );
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}{}{}{}{}{}{}/>\n",
+                    "  <pane index=\"{}\" cwd=\"{}\" mode=\"{}\" runtime=\"{}\"{}{}{}{}{}{}{}{}{}{}{}{}/>\n",
                     pane.pane_index,
                     xml_escape(cwd),
                     pane.mode.as_str(),
@@ -1331,7 +1017,8 @@ impl TerminalContext {
                     target_stack,
                     tmux_control,
                     control_channels,
-                    control_capabilities
+                    control_capabilities,
+                    support,
                 ));
                 for note in &pane.control.notes {
                     prompt.push_str(&format!(
@@ -1454,7 +1141,6 @@ impl TerminalContext {
             PaneVisibleTargetKind::InteractiveApp
                 | PaneVisibleTargetKind::TmuxSession
                 | PaneVisibleTargetKind::AgentCli
-                | PaneVisibleTargetKind::UnknownTui
         );
         let any_other_pane_tui = self.other_panes.iter().any(|p| {
             matches!(
@@ -1462,7 +1148,6 @@ impl TerminalContext {
                 PaneVisibleTargetKind::InteractiveApp
                     | PaneVisibleTargetKind::TmuxSession
                     | PaneVisibleTargetKind::AgentCli
-                    | PaneVisibleTargetKind::UnknownTui
             )
         });
         let is_remote = self.focused_hostname.is_some() || self.ssh_host.is_some();
@@ -1502,7 +1187,7 @@ impl TerminalContext {
             || self
                 .other_panes
                 .iter()
-                .any(|p| is_vim_target(&p.control.visible_target, p.title.as_deref()));
+                .any(|p| is_vim_target(&p.control.visible_target));
 
         if has_tmux {
             prompt.push_str(playbooks::TMUX_PLAYBOOK);
@@ -1521,24 +1206,15 @@ impl TerminalContext {
     }
 
     fn has_vim_visible(&self) -> bool {
-        is_vim_target(&self.focused_control.visible_target, self.focused_title.as_deref())
+        is_vim_target(&self.focused_control.visible_target)
     }
 }
 
-fn is_vim_target(target: &crate::control::PaneVisibleTarget, title: Option<&str>) -> bool {
-    if let Some(label) = &target.label {
+fn is_vim_target(target: &crate::control::PaneVisibleTarget) -> bool {
+    target.label.as_ref().is_some_and(|label| {
         let lower = label.to_lowercase();
-        if lower.contains("vim") || lower.contains("nvim") || lower.contains("neovim") {
-            return true;
-        }
-    }
-    if let Some(title) = title {
-        let lower = title.to_lowercase();
-        if lower.contains("vim") || lower.contains("nvim") || lower.contains("neovim") {
-            return true;
-        }
-    }
-    false
+        lower.contains("vim") || lower.contains("nvim") || lower.contains("neovim")
+    })
 }
 
 #[cfg(test)]
@@ -1546,237 +1222,209 @@ mod tests {
     use crate::control::PaneControlState;
 
     use super::{
-        PaneConfidence, PaneEvidenceSource, PaneMode, PaneObservationFrame, PaneRuntimeObserver,
-        PaneRuntimeState, TerminalContext, detect_remote_host_hint, detect_tmux_session,
-        direct_terminal_exec_is_safe, host_candidate_from_title, infer_pane_mode,
-        line_looks_like_tmux_status, shell_metadata_is_fresh, title_looks_like_tmux,
+        detect_tmux_session, direct_terminal_exec_is_safe, infer_pane_mode,
+        shell_metadata_is_fresh, PaneConfidence, PaneEvidenceSource, PaneMode,
+        PaneObservationFrame, PaneObservationSupport, PaneRuntimeObserver, PaneRuntimeScope,
+        PaneRuntimeState, PaneScopeKind, TerminalContext,
     };
 
     #[test]
     fn detects_tmux_from_command_target() {
-        let session = detect_tmux_session(None, Some("tmux attach -t model-serving"), &Vec::new());
+        let session = detect_tmux_session(Some("tmux attach -t model-serving"));
         assert_eq!(session.as_deref(), Some("model-serving"));
     }
 
     #[test]
-    fn infers_tmux_from_status_line() {
-        let recent = vec![
-            "nvtop 1.4.1".to_string(),
-            "0* 63d 1m 45m 1 model-serving 2 ops 3 nekomaster".to_string(),
-        ];
-        assert_eq!(
-            infer_pane_mode(None, &recent, None, false, false),
-            PaneMode::Multiplexer
-        );
+    fn shell_metadata_is_fresh_requires_command_boundary() {
+        assert!(shell_metadata_is_fresh(true, 0, 0));
+        assert!(!shell_metadata_is_fresh(true, 2, 1));
+        assert!(!shell_metadata_is_fresh(false, 0, 0));
     }
 
     #[test]
-    fn shell_metadata_is_stale_inside_tui() {
-        assert!(!shell_metadata_is_fresh(
-            PaneMode::Tui,
-            true,
-            Some("top"),
-            Some("/tmp"),
-        ));
+    fn infer_pane_mode_requires_confirmed_shell_prompt() {
+        assert_eq!(infer_pane_mode(None, true, false, 0, 0), PaneMode::Shell);
+        assert_eq!(infer_pane_mode(None, true, false, 2, 1), PaneMode::Unknown);
     }
 
     #[test]
-    fn runtime_state_tracks_nested_tmux_and_agent_cli_scopes() {
+    fn title_and_screen_do_not_create_structured_tmux_state() {
         let observation = PaneObservationFrame {
-            title: Some("Codex".to_string()),
-            cwd: Some("/srv/app".to_string()),
+            title: Some("haswell ❐ 0 ● 4 nvim".to_string()),
+            cwd: None,
             recent_output: vec![
-                "claude code".to_string(),
-                "0* api 1 deploy".to_string(),
-                "codex".to_string(),
+                "❐ 0  ↑ 63d 6h 21m  <4 nvim      ↗  | 11:31 | 05 Apr  w  haswell".to_string(),
             ],
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            support: PaneObservationSupport::default(),
+            has_shell_integration: false,
+            is_alt_screen: false,
+            is_busy: false,
+            input_generation: 0,
+            last_command_finished_input_generation: 0,
+        };
+
+        let runtime = PaneRuntimeState::from_observation(&observation);
+        assert_eq!(runtime.mode, PaneMode::Unknown);
+        assert!(runtime.scope_stack.is_empty());
+        assert_eq!(runtime.tmux_session, None);
+    }
+
+    #[test]
+    fn runtime_state_tracks_tmux_from_command_line() {
+        let observation = PaneObservationFrame {
+            title: Some("tmux".to_string()),
+            cwd: Some("/home/w".to_string()),
+            recent_output: vec!["".to_string()],
             last_command: Some("tmux attach -t deploy".to_string()),
             last_exit_code: Some(0),
             last_command_duration_secs: Some(1.2),
-            detected_remote_host: Some("prod-2".to_string()),
+            support: PaneObservationSupport {
+                foreground_command: true,
+                ..PaneObservationSupport::default()
+            },
             has_shell_integration: true,
             is_alt_screen: false,
-            is_busy: false,
+            is_busy: true,
+            input_generation: 1,
+            last_command_finished_input_generation: 0,
         };
 
         let runtime = PaneRuntimeState::from_observation(&observation);
         assert_eq!(runtime.mode, PaneMode::Multiplexer);
         assert_eq!(runtime.tmux_session.as_deref(), Some("deploy"));
-        assert!(
-            runtime
-                .scope_stack
-                .iter()
-                .any(|scope| scope.host.as_deref() == Some("prod-2"))
-        );
-        assert!(runtime.scope_stack.iter().any(|scope| {
-            scope.label.as_deref() == Some("deploy")
-                && scope.evidence_source == PaneEvidenceSource::CommandLine
-                && scope.confidence == PaneConfidence::Strong
-        }));
-    }
-
-    #[test]
-    fn detects_remote_host_from_tmux_status_when_osc7_is_missing() {
-        let hint = detect_remote_host_hint(
-            Some("haswell"),
-            None,
-            &vec![
-                "nvtop 1.4.1".to_string(),
-                "0* 63d 3h 22m 1 model-serving 2 ops 3 nekomaster haswell".to_string(),
-            ],
-        );
-
         assert_eq!(
-            hint,
-            Some((
-                "haswell".to_string(),
-                PaneConfidence::Advisory,
-                PaneEvidenceSource::ScreenStructure,
-            ))
+            runtime.active_scope.as_ref().map(PaneRuntimeScope::summary),
+            Some("multiplexer(deploy)".to_string())
         );
     }
 
     #[test]
-    fn runtime_state_uses_inferred_remote_host_without_osc7() {
-        let observation = PaneObservationFrame {
-            title: Some("haswell".to_string()),
-            cwd: Some("/home/w".to_string()),
-            recent_output: vec![
-                "nvtop 1.4.1".to_string(),
-                "0* 63d 3h 22m 1 model-serving 2 ops 3 nekomaster haswell".to_string(),
-            ],
-            last_command: None,
-            last_exit_code: None,
-            last_command_duration_secs: None,
-            detected_remote_host: None,
-            has_shell_integration: true,
-            is_alt_screen: false,
-            is_busy: false,
-        };
-
-        let runtime = PaneRuntimeState::from_observation(&observation);
-        assert_eq!(runtime.remote_host.as_deref(), Some("haswell"));
-        assert_eq!(
-            runtime.remote_host_source,
-            Some(PaneEvidenceSource::ScreenStructure)
-        );
-    }
-
-    #[test]
-    fn observer_retains_remote_host_across_sparse_tui_frames() {
+    fn observer_retains_tmux_scope_until_shell_prompt_returns() {
         let mut observer = PaneRuntimeObserver::default();
 
-        let first = PaneObservationFrame {
-            title: Some("haswell".to_string()),
+        let tmux = PaneObservationFrame {
+            title: Some("tmux".to_string()),
             cwd: Some("/home/w".to_string()),
-            recent_output: vec![
-                "nvtop 1.4.1".to_string(),
-                "0* 63d 3h 22m 1 model-serving 2 ops 3 nekomaster haswell".to_string(),
-            ],
-            last_command: None,
+            recent_output: vec!["".to_string()],
+            last_command: Some("tmux a -t work".to_string()),
             last_exit_code: None,
             last_command_duration_secs: None,
-            detected_remote_host: None,
+            support: PaneObservationSupport {
+                foreground_command: true,
+                ..PaneObservationSupport::default()
+            },
             has_shell_integration: true,
             is_alt_screen: false,
-            is_busy: false,
+            is_busy: true,
+            input_generation: 1,
+            last_command_finished_input_generation: 0,
         };
-        let second = PaneObservationFrame {
-            title: Some("haswell".to_string()),
+        let sparse = PaneObservationFrame {
+            title: Some("tmux".to_string()),
             cwd: Some("/home/w".to_string()),
-            recent_output: vec!["gpu0".to_string(), "gpu1".to_string()],
+            recent_output: vec!["".to_string()],
             last_command: None,
             last_exit_code: None,
             last_command_duration_secs: None,
-            detected_remote_host: None,
-            has_shell_integration: false,
-            is_alt_screen: false,
-            is_busy: false,
-        };
-
-        let first_runtime = observer.observe(first);
-        let second_runtime = observer.observe(second);
-
-        assert_eq!(first_runtime.remote_host.as_deref(), Some("haswell"));
-        assert_eq!(second_runtime.remote_host.as_deref(), Some("haswell"));
-        assert_eq!(second_runtime.mode, PaneMode::Multiplexer);
-    }
-
-    #[test]
-    fn observer_clears_remote_host_when_fresh_local_shell_returns() {
-        let mut observer = PaneRuntimeObserver::default();
-
-        let remote_tmux = PaneObservationFrame {
-            title: Some("haswell".to_string()),
-            cwd: Some("/home/w".to_string()),
-            recent_output: vec![
-                "nvtop 1.4.1".to_string(),
-                "0* 63d 3h 22m 1 model-serving 2 ops 3 nekomaster haswell".to_string(),
-            ],
-            last_command: None,
-            last_exit_code: None,
-            last_command_duration_secs: None,
-            detected_remote_host: None,
+            support: PaneObservationSupport::default(),
             has_shell_integration: true,
             is_alt_screen: false,
-            is_busy: false,
+            is_busy: true,
+            input_generation: 1,
+            last_command_finished_input_generation: 0,
         };
-        let local_shell = PaneObservationFrame {
-            title: Some("kingston".to_string()),
+        let shell = PaneObservationFrame {
+            title: Some("bash".to_string()),
             cwd: Some("/Users/weyl/conductor/workspaces/con/kingston".to_string()),
-            recent_output: vec!["cargo test".to_string()],
+            recent_output: vec!["$".to_string()],
             last_command: Some("cargo test".to_string()),
             last_exit_code: Some(0),
             last_command_duration_secs: Some(1.0),
-            detected_remote_host: None,
+            support: PaneObservationSupport {
+                foreground_command: true,
+                ..PaneObservationSupport::default()
+            },
             has_shell_integration: true,
             is_alt_screen: false,
             is_busy: false,
+            input_generation: 1,
+            last_command_finished_input_generation: 1,
         };
 
-        observer.observe(remote_tmux);
-        let runtime = observer.observe(local_shell);
+        let tmux_runtime = observer.observe(tmux);
+        let sparse_runtime = observer.observe(sparse);
+        let shell_runtime = observer.observe(shell);
 
-        assert_eq!(runtime.remote_host, None);
-        assert_eq!(runtime.mode, PaneMode::Shell);
+        assert_eq!(tmux_runtime.mode, PaneMode::Multiplexer);
+        assert_eq!(sparse_runtime.mode, PaneMode::Multiplexer);
+        assert_eq!(shell_runtime.mode, PaneMode::Shell);
+        assert_eq!(shell_runtime.tmux_session, None);
     }
 
     #[test]
-    fn observer_retains_agent_cli_across_sparse_tui_frames() {
-        let mut observer = PaneRuntimeObserver::default();
-
-        let first = PaneObservationFrame {
-            title: Some("Claude Code".to_string()),
-            cwd: None,
-            recent_output: vec!["Claude Code".to_string(), "Claude Code".to_string()],
-            last_command: None,
+    fn runtime_state_tracks_agent_cli_from_command_line() {
+        let observation = PaneObservationFrame {
+            title: Some("Codex".to_string()),
+            cwd: Some("/tmp".to_string()),
+            recent_output: vec!["".to_string()],
+            last_command: Some("codex".to_string()),
             last_exit_code: None,
             last_command_duration_secs: None,
-            detected_remote_host: None,
-            has_shell_integration: false,
+            support: PaneObservationSupport {
+                foreground_command: true,
+                ..PaneObservationSupport::default()
+            },
+            has_shell_integration: true,
             is_alt_screen: false,
-            is_busy: false,
-        };
-        let second = PaneObservationFrame {
-            title: Some("Claude Code".to_string()),
-            cwd: None,
-            recent_output: vec!["Reviewing files".to_string()],
-            last_command: None,
-            last_exit_code: None,
-            last_command_duration_secs: None,
-            detected_remote_host: None,
-            has_shell_integration: false,
-            is_alt_screen: false,
-            is_busy: false,
+            is_busy: true,
+            input_generation: 1,
+            last_command_finished_input_generation: 0,
         };
 
-        observer.observe(first);
-        let runtime = observer.observe(second);
-
-        assert_eq!(runtime.agent_cli.as_deref(), Some("claude_code"));
+        let runtime = PaneRuntimeState::from_observation(&observation);
+        assert_eq!(runtime.mode, PaneMode::Tui);
+        assert_eq!(runtime.agent_cli.as_deref(), Some("codex"));
         assert_eq!(
-            runtime.active_scope.and_then(|scope| scope.label),
-            Some("claude_code".to_string())
+            runtime.active_scope.as_ref().map(PaneRuntimeScope::summary),
+            Some("agent_cli(codex)".to_string())
+        );
+    }
+
+    #[test]
+    fn alt_screen_creates_strong_interactive_scope() {
+        let observation = PaneObservationFrame {
+            title: Some("nvim test.sh".to_string()),
+            cwd: Some("/tmp".to_string()),
+            recent_output: vec!["".to_string()],
+            last_command: Some("nvim test.sh".to_string()),
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            support: PaneObservationSupport {
+                foreground_command: true,
+                alternate_screen: true,
+                ..PaneObservationSupport::default()
+            },
+            has_shell_integration: true,
+            is_alt_screen: true,
+            is_busy: true,
+            input_generation: 1,
+            last_command_finished_input_generation: 0,
+        };
+
+        let runtime = PaneRuntimeState::from_observation(&observation);
+        assert_eq!(runtime.mode, PaneMode::Tui);
+        assert_eq!(
+            runtime.active_scope,
+            Some(PaneRuntimeScope {
+                kind: PaneScopeKind::InteractiveApp,
+                label: Some("nvim".to_string()),
+                host: None,
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::SurfaceState,
+            })
         );
     }
 
@@ -1804,6 +1452,7 @@ mod tests {
             focused_pane_mode: PaneMode::Shell,
             focused_has_shell_integration: false,
             focused_shell_metadata_fresh: false,
+            focused_observation_support: PaneObservationSupport::default(),
             focused_runtime_stack: Vec::new(),
             focused_runtime_warnings: Vec::new(),
             focused_control: PaneControlState::from_runtime(&runtime),
@@ -1845,47 +1494,32 @@ mod tests {
         let tmux_runtime = PaneRuntimeState {
             mode: PaneMode::Multiplexer,
             shell_metadata_fresh: false,
-            remote_host: Some("haswell".to_string()),
-            remote_host_confidence: Some(PaneConfidence::Advisory),
-            remote_host_source: Some(PaneEvidenceSource::ScreenStructure),
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
             agent_cli: None,
-            tmux_session: Some("nvim".to_string()),
-            active_scope: None,
+            tmux_session: Some("work".to_string()),
+            active_scope: Some(PaneRuntimeScope {
+                kind: PaneScopeKind::Multiplexer,
+                label: Some("work".to_string()),
+                host: None,
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::CommandLine,
+            }),
             evidence: Vec::new(),
-            scope_stack: Vec::new(),
+            scope_stack: vec![PaneRuntimeScope {
+                kind: PaneScopeKind::Multiplexer,
+                label: Some("work".to_string()),
+                host: None,
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::CommandLine,
+            }],
             warnings: Vec::new(),
         };
 
         assert!(direct_terminal_exec_is_safe(&shell_runtime));
         assert!(!direct_terminal_exec_is_safe(&tmux_runtime));
     }
-
-    #[test]
-    fn runtime_state_marks_agent_cli_as_tui_when_visible() {
-        let observation = PaneObservationFrame {
-            title: Some("Claude Code".to_string()),
-            cwd: None,
-            recent_output: vec!["Claude Code".to_string(), "Claude Code".to_string()],
-            last_command: None,
-            last_exit_code: None,
-            last_command_duration_secs: None,
-            detected_remote_host: None,
-            has_shell_integration: false,
-            is_alt_screen: false,
-            is_busy: false,
-        };
-
-        let runtime = PaneRuntimeState::from_observation(&observation);
-        assert_eq!(runtime.mode, PaneMode::Tui);
-        assert!(runtime.scope_stack.iter().any(|scope| {
-            scope.label.as_deref() == Some("claude_code")
-                && scope.evidence_source == PaneEvidenceSource::Title
-        }));
-    }
-
-    // ── TUI guide emission tests ───────────────────────────────────
-
-    use super::PaneSummary;
 
     fn make_shell_context() -> TerminalContext {
         let runtime = PaneRuntimeState {
@@ -1910,6 +1544,7 @@ mod tests {
             focused_pane_mode: PaneMode::Shell,
             focused_has_shell_integration: true,
             focused_shell_metadata_fresh: true,
+            focused_observation_support: PaneObservationSupport::default(),
             focused_runtime_stack: Vec::new(),
             focused_runtime_warnings: Vec::new(),
             focused_control: PaneControlState::from_runtime(&runtime),
@@ -1946,22 +1581,26 @@ mod tests {
         let runtime = PaneRuntimeState {
             mode: PaneMode::Multiplexer,
             shell_metadata_fresh: false,
-            remote_host: Some("haswell".to_string()),
-            remote_host_confidence: Some(PaneConfidence::Advisory),
-            remote_host_source: Some(PaneEvidenceSource::ScreenStructure),
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
             agent_cli: None,
             tmux_session: Some("work".to_string()),
-            active_scope: None,
+            active_scope: Some(PaneRuntimeScope {
+                kind: PaneScopeKind::Multiplexer,
+                label: Some("work".to_string()),
+                host: None,
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::CommandLine,
+            }),
             evidence: Vec::new(),
-            scope_stack: vec![
-                super::PaneRuntimeScope {
-                    kind: super::PaneScopeKind::Multiplexer,
-                    label: Some("work".to_string()),
-                    host: Some("haswell".to_string()),
-                    confidence: PaneConfidence::Advisory,
-                    evidence_source: PaneEvidenceSource::ScreenStructure,
-                },
-            ],
+            scope_stack: vec![PaneRuntimeScope {
+                kind: PaneScopeKind::Multiplexer,
+                label: Some("work".to_string()),
+                host: None,
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::CommandLine,
+            }],
             warnings: Vec::new(),
         };
         ctx.focused_pane_mode = PaneMode::Multiplexer;
@@ -1983,196 +1622,13 @@ mod tests {
     }
 
     #[test]
-    fn tui_guide_includes_vim_when_nvim_visible() {
+    fn title_only_vim_does_not_emit_vim_playbook() {
         let mut ctx = make_shell_context();
         ctx.focused_title = Some("nvim test.sh".to_string());
-        let runtime = PaneRuntimeState {
-            mode: PaneMode::Tui,
-            shell_metadata_fresh: false,
-            remote_host: None,
-            remote_host_confidence: None,
-            remote_host_source: None,
-            agent_cli: None,
-            tmux_session: None,
-            active_scope: Some(super::PaneRuntimeScope {
-                kind: super::PaneScopeKind::InteractiveApp,
-                label: Some("nvim".to_string()),
-                host: None,
-                confidence: PaneConfidence::Advisory,
-                evidence_source: PaneEvidenceSource::Title,
-            }),
-            evidence: Vec::new(),
-            scope_stack: vec![super::PaneRuntimeScope {
-                kind: super::PaneScopeKind::InteractiveApp,
-                label: Some("nvim".to_string()),
-                host: None,
-                confidence: PaneConfidence::Advisory,
-                evidence_source: PaneEvidenceSource::Title,
-            }],
-            warnings: Vec::new(),
-        };
-        ctx.focused_pane_mode = PaneMode::Tui;
-        ctx.focused_shell_metadata_fresh = false;
-        ctx.focused_control = PaneControlState::from_runtime(&runtime);
         let prompt = ctx.to_system_prompt();
         assert!(
-            prompt.contains("<tui_interaction_guide>"),
-            "TUI guide should appear when nvim is visible"
+            !prompt.contains("vim/nvim interaction"),
+            "Vim playbook should not appear from title-only observations"
         );
-        assert!(
-            prompt.contains("vim/nvim interaction"),
-            "Vim playbook should be included when nvim is in the title"
-        );
-    }
-
-    #[test]
-    fn tui_guide_emitted_when_other_pane_has_tui() {
-        let mut ctx = make_shell_context();
-        // Focused pane is shell, but another pane has tmux
-        let tmux_runtime = PaneRuntimeState {
-            mode: PaneMode::Multiplexer,
-            shell_metadata_fresh: false,
-            remote_host: Some("haswell".to_string()),
-            remote_host_confidence: Some(PaneConfidence::Advisory),
-            remote_host_source: Some(PaneEvidenceSource::ScreenStructure),
-            agent_cli: None,
-            tmux_session: Some("work".to_string()),
-            active_scope: None,
-            evidence: Vec::new(),
-            scope_stack: vec![super::PaneRuntimeScope {
-                kind: super::PaneScopeKind::Multiplexer,
-                label: Some("work".to_string()),
-                host: None,
-                confidence: PaneConfidence::Advisory,
-                evidence_source: PaneEvidenceSource::ScreenStructure,
-            }],
-            warnings: Vec::new(),
-        };
-        ctx.other_panes.push(PaneSummary {
-            pane_index: 2,
-            hostname: Some("haswell".to_string()),
-            hostname_confidence: Some(PaneConfidence::Advisory),
-            hostname_source: Some(PaneEvidenceSource::ScreenStructure),
-            title: Some("tmux".to_string()),
-            mode: PaneMode::Multiplexer,
-            has_shell_integration: false,
-            shell_metadata_fresh: false,
-            control: PaneControlState::from_runtime(&tmux_runtime),
-            agent_cli: None,
-            active_scope: None,
-            evidence: Vec::new(),
-            runtime_stack: Vec::new(),
-            runtime_warnings: Vec::new(),
-            tmux_session: Some("work".to_string()),
-            cwd: None,
-            last_command: None,
-            last_exit_code: None,
-            is_busy: false,
-            recent_output: Vec::new(),
-        });
-        let prompt = ctx.to_system_prompt();
-        assert!(
-            prompt.contains("<tui_interaction_guide>"),
-            "TUI guide should appear when any other pane has a TUI target"
-        );
-    }
-
-    #[test]
-    fn remote_work_guide_emitted_for_ssh_pane() {
-        let mut ctx = make_shell_context();
-        ctx.focused_hostname = Some("haswell".to_string());
-        ctx.ssh_host = Some("haswell".to_string());
-        // Even a shell pane on a remote host should get the remote work guide
-        let prompt = ctx.to_system_prompt();
-        assert!(
-            prompt.contains("<tui_interaction_guide>"),
-            "TUI guide should appear for remote SSH pane"
-        );
-        assert!(
-            prompt.contains("LOCAL-ONLY"),
-            "Remote work guide should warn about local-only file tools"
-        );
-        assert!(
-            prompt.contains("CANNOT access this remote host"),
-            "Remote work guide should explicitly say files can't reach remote"
-        );
-    }
-
-    #[test]
-    fn system_prompt_contains_local_only_file_rules() {
-        let ctx = make_shell_context();
-        let prompt = ctx.to_system_prompt();
-        // Remote file rules moved to contextual playbooks::REMOTE_WORK,
-        // but the tools section still marks file tools as local-only.
-        assert!(
-            prompt.contains("LOCAL filesystem only"),
-            "File tools should be marked as local-only in the tools section"
-        );
-    }
-
-    #[test]
-    fn system_prompt_contains_verify_before_act() {
-        let ctx = make_shell_context();
-        let prompt = ctx.to_system_prompt();
-        assert!(
-            prompt.contains("<verify_before_act>"),
-            "Verify-before-act should be in the system prompt"
-        );
-        assert!(
-            prompt.contains("Observe before acting"),
-            "Verify-before-act should require observation before acting"
-        );
-    }
-
-    // ── tmux/SSH detection tests ───────────────────────────────────
-
-    #[test]
-    fn title_detects_tmux_from_unicode_indicators() {
-        // Real-world tmux title from user's SSH session
-        assert!(title_looks_like_tmux("haswell ❐ 0 ● 4 nvim"));
-        // Classic tmux/tmate
-        assert!(title_looks_like_tmux("tmux: my-session"));
-        assert!(title_looks_like_tmux("tmate"));
-        // Other Unicode box symbols
-        assert!(title_looks_like_tmux("server ❑ 0 ○ 2 bash"));
-        assert!(title_looks_like_tmux("host ❏ 1 ◉ 3 htop"));
-        // Plain hostname — not tmux
-        assert!(!title_looks_like_tmux("haswell"));
-        assert!(!title_looks_like_tmux("user@server:/home"));
-        // nvim alone is not tmux
-        assert!(!title_looks_like_tmux("nvim test.sh"));
-    }
-
-    #[test]
-    fn status_line_detects_modern_tmux() {
-        // Real-world tmux status bar from user's session
-        assert!(line_looks_like_tmux_status(
-            " ❐ 0  ↑ 63d 6h 21m  <4 nvim      ↗  | 11:31 | 05 Apr  w  haswell "
-        ));
-        // Classic tmux status
-        assert!(line_looks_like_tmux_status("0:bash  1:vim*  2:htop-"));
-        // Plain text — not tmux
-        assert!(!line_looks_like_tmux_status("$ cargo test"));
-        assert!(!line_looks_like_tmux_status(""));
-    }
-
-    #[test]
-    fn host_extracted_from_tmux_title() {
-        // "haswell ❐ 0 ● 4 nvim" — hostname is "haswell"
-        let host = host_candidate_from_title("haswell ❐ 0 ● 4 nvim");
-        assert_eq!(host.as_deref(), Some("haswell"));
-    }
-
-    #[test]
-    fn host_extracted_from_user_at_host_title() {
-        // SSH sets titles like "user@myserver" (no colon in the token)
-        let host = host_candidate_from_title("user@myserver ~/project");
-        assert_eq!(host.as_deref(), Some("myserver"));
-    }
-
-    #[test]
-    fn no_host_from_plain_title() {
-        assert_eq!(host_candidate_from_title("nvim test.sh"), None);
-        assert_eq!(host_candidate_from_title("Terminal"), None);
     }
 }

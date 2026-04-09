@@ -19,7 +19,8 @@ The current agent context model is still mostly a snapshot:
 - cwd
 - recent output
 - last command
-- remote host hint
+- PTY input generation
+- last completed command boundary
 - a small amount of pane-mode inference
 
 That is enough to avoid some bad mistakes, but it is not enough to answer the real question:
@@ -119,10 +120,12 @@ Current implementation in con:
 - `last_command`
 - `last_exit_code`
 - `last_command_duration_secs`
-- `detected_remote_host`
+- `support`
 - `has_shell_integration`
 - `is_alt_screen`
 - `is_busy`
+- `input_generation`
+- `last_command_finished_input_generation`
 
 Suggested fields:
 
@@ -158,10 +161,9 @@ Suggested sources:
 - `pty_foreground`
 - `pty_child`
 - `shell_integration`
+- `command_line`
+- `surface_state`
 - `ghostty_action`
-- `screen_structure`
-- `screen_text`
-- `title`
 - `cwd_artifact`
 - `user_label`
 - `manual_override`
@@ -227,7 +229,7 @@ Example:
 
 That is the abstraction the product actually needs.
 
-## Strong signals vs advisory signals
+## Strong signals vs raw observations
 
 ### Strong signals
 
@@ -273,31 +275,28 @@ Alternate-screen entry is a strong signal that the visible runtime is no longer 
 
 It should invalidate shell-metadata freshness for visible-app claims.
 
-### Advisory signals
+Current embedded Ghostty note:
 
-These help with classification but must not create false certainty.
+the runtime model is ready for this signal, but the public embedded surface API does not export it yet. con therefore treats alternate-screen support as an explicit backend capability, and it is currently false on Ghostty panes.
 
-#### Screen structure
+### Raw observations
 
-Useful examples:
+These remain valuable to the model, but con does not promote them into typed runtime state.
 
-- tmux status bar patterns
+#### Screen text and structure
+
+Examples:
+
+- tmux status bars
 - boxed layouts
 - agent CLI banners
 - vim-like rulers
 
-This is valuable, but it is inherently advisory.
+These stay in `read_pane` / prompt output as raw observations. They do not create `PaneRuntimeState` facts.
 
 #### Title
 
-Useful for:
-
-- `user@host`
-- `tmux`
-- session names
-- explicit program titles
-
-Titles are helpful but not authoritative.
+Titles are useful for human inspection, but they are not authoritative foreground-runtime identity.
 
 #### Filesystem artifacts
 
@@ -326,6 +325,13 @@ Important limit:
 
 the embedded C API does not currently expose the same rich semantic prompt and runtime internals that Ghostty uses internally.
 
+More concretely, the current embedded path does not export:
+
+- authoritative foreground command text
+- authoritative alternate-screen state
+- authoritative remote-host identity
+- foreground process or process-group identity
+
 Important consequence:
 
 we should not design the pane-runtime system around assumptions that Ghostty will tell us the exact foreground app or nested scope stack today.
@@ -349,9 +355,10 @@ This matters because a product design that depends on remote hostname coming fro
 
 Current con behavior reflects that limit:
 
-- remote host identity is merged from pane-local evidence, not OSC 7 alone
-- tmux status lines and pane titles can contribute advisory host hints
-- when no evidence survives that merge, the runtime model keeps host as `unknown` instead of collapsing to `local`
+- remote host identity is left `unknown` unless con has a stronger backend fact
+- tmux and agent-CLI identity only enter typed runtime state through authoritative command-line or surface-state evidence
+- pane titles and screen structure remain raw observations for the model, not runtime facts
+- prompt and `list_panes` expose backend-support flags so the model can see when Ghostty cannot prove command text, alternate-screen state, or remote-host identity
 - each tab now owns per-pane runtime observers that persist defensible facts across sparse frames and feed every consumer from the same state
 
 ## Probe design
@@ -384,23 +391,21 @@ Purpose:
 
 Purpose:
 
-- recognize tmux-like layouts, agent CLI chrome, and dense TUIs when stronger probes are unavailable
+- expose screen text and layout as raw observations for the model and the user
 
 Constraint:
 
-this probe is advisory only.
+this probe does not create typed runtime facts.
 
 ### `RemoteContextProbe`
 
 Purpose:
 
-- keep remote scope identity stable without overstating certainty
-- distinguish remote-shell hints from truly proven foreground identity
+- accept only explicit remote-runtime contracts when they exist
 
 Likely evidence:
 
 - persistent SSH target
-- title hints
 - user-confirmed labels
 - future explicit integration markers
 
@@ -440,10 +445,10 @@ The observer must invalidate stale metadata aggressively.
 
 Examples:
 
-- When a pane enters alternate screen, shell cwd and last command become advisory for visible-app claims.
+- When a pane enters alternate screen, shell cwd and last command stop being trusted for visible-app claims.
 - When the foreground process group changes from `zsh` to `tmux`, shell prompt assumptions must be downgraded immediately.
 - When the foreground process group returns to a shell and OSC 133 prompt markers resume, shell metadata can become fresh again.
-- When the pane is inside `ssh`, local foreground identity is still useful, but remote runtime identity must be represented as lower-confidence unless supported by stronger evidence.
+- When the pane is inside `ssh`, remote runtime identity must stay `unknown` unless supported by stronger evidence.
 
 ## Agent-facing contract
 
@@ -486,7 +491,16 @@ Shipped in con:
 - `PaneObservationFrame`, `PaneEvidence`, `PaneRuntimeState`, and `PaneRuntimeObserver`
 - per-tab observer maps keyed by `PaneId`
 - shared observer output consumed by agent context, `list_panes`, sidebar naming, and smart-input remote classification
-- stateful retention for remote host, tmux, and external agent CLI identity with explicit invalidation when a fresh shell returns
+- Ghostty command-boundary tracking (`input_generation` vs `last_command_finished_input_generation`) for shell freshness
+- explicit observation-support flags surfaced to the prompt and `list_panes`
+- stateful retention for authoritative tmux and external agent CLI identity, with explicit invalidation when a fresh shell returns
+- no title- or screen-pattern heuristics promoted into typed runtime state
+
+Current Ghostty embedded status:
+
+- `support.foreground_command = false`
+- `support.alternate_screen = false`
+- `support.remote_host_identity = false`
 
 ### Phase 2
 
@@ -502,7 +516,7 @@ Shipped in con:
 
 ### Phase 4
 
-- add external-agent CLI classifiers based on strong evidence first, advisory screen evidence second
+- add external-agent CLI classifiers based only on explicit backend evidence
 - expose runtime summaries in `list_panes` and agent context
 
 ### Phase 5

@@ -3,8 +3,8 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use crate::context::PaneMode;
 use crate::control::{
@@ -675,8 +675,8 @@ impl Tool for SearchTool {
 
 /// Metadata about a single terminal pane.
 ///
-/// Includes connection state to prevent executing commands on the wrong
-/// host (e.g., running a remote command locally after SSH disconnects).
+/// Includes runtime and control state so the agent does not execute against
+/// the wrong target or over-trust missing backend facts.
 #[derive(Debug, Clone, Serialize)]
 pub struct PaneInfo {
     pub index: usize,
@@ -687,7 +687,7 @@ pub struct PaneInfo {
     pub cols: usize,
     /// Whether the PTY child process is still running.
     pub is_alive: bool,
-    /// Effective hostname inferred from pane-local evidence.
+    /// Proven hostname when the backend can actually supply one.
     pub hostname: Option<String>,
     /// Confidence for the effective hostname, when detected.
     pub hostname_confidence: Option<crate::context::PaneConfidence>,
@@ -697,6 +697,8 @@ pub struct PaneInfo {
     pub mode: PaneMode,
     /// Whether shell metadata like cwd and last_command is likely fresh for the visible app.
     pub shell_metadata_fresh: bool,
+    /// What the backend can authoritatively observe for this pane today.
+    pub observation_support: crate::context::PaneObservationSupport,
     /// The only address space valid for pane_index today.
     pub address_space: PaneAddressSpace,
     /// The best-known visible target inside this con pane.
@@ -786,9 +788,14 @@ pub enum PaneResponse {
         has_shell_integration: bool,
     },
     /// Response from a wait_for operation.
-    WaitComplete { status: String, output: String },
+    WaitComplete {
+        status: String,
+        output: String,
+    },
     /// A new pane was created successfully.
-    PaneCreated { pane_index: usize },
+    PaneCreated {
+        pane_index: usize,
+    },
     Error(String),
 }
 
@@ -816,7 +823,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, runtime state, and control state: address space, visible target, nested target_stack, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, runtime state, backend-support flags, and control state: address space, visible target, nested target_stack, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -846,8 +853,9 @@ impl Tool for ListPanesTool {
         log::info!("[list_panes] Got response");
 
         match response {
-            PaneResponse::PaneList(panes) => serde_json::to_value(&panes)
-                .map_err(|e| ToolError::CommandFailed(e.to_string())),
+            PaneResponse::PaneList(panes) => {
+                serde_json::to_value(&panes).map_err(|e| ToolError::CommandFailed(e.to_string()))
+            }
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }
@@ -880,7 +888,7 @@ impl Tool for TmuxInspectTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Inspect the tmux adapter state for a specific con pane. Returns the detected tmux session, tmux control mode, the front-most target inside tmux, and the reason native tmux pane/window control is or is not available. Use this when a pane's target_stack includes tmux.".to_string(),
+            description: "Inspect the tmux adapter state for a specific con pane. Returns tmux adapter details only when tmux has been authoritatively detected for that pane, including the explicit reason native tmux pane/window control is or is not available. Use this when a pane's target_stack includes tmux.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -912,8 +920,9 @@ impl Tool for TmuxInspectTool {
         })?;
 
         match response {
-            PaneResponse::TmuxInfo(info) => serde_json::to_value(&info)
-                .map_err(|e| ToolError::CommandFailed(e.to_string())),
+            PaneResponse::TmuxInfo(info) => {
+                serde_json::to_value(&info).map_err(|e| ToolError::CommandFailed(e.to_string()))
+            }
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }
@@ -1351,7 +1360,10 @@ pub struct WaitForTool {
 
 impl WaitForTool {
     pub fn new(pane_tx: Sender<PaneRequest>, cancel_flag: Arc<AtomicBool>) -> Self {
-        Self { pane_tx, cancel_flag }
+        Self {
+            pane_tx,
+            cancel_flag,
+        }
     }
 }
 
@@ -1410,8 +1422,8 @@ impl Tool for WaitForTool {
         // for clean shutdown (same pattern as ConHook approval polling).
         let cancel = self.cancel_flag.clone();
         let response = tokio::task::block_in_place(|| {
-            let deadline = std::time::Instant::now()
-                + std::time::Duration::from_secs(timeout_secs + 10);
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs + 10);
             loop {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err("Cancelled");
@@ -1559,8 +1571,7 @@ fn split_at_standalone_esc(input: &str) -> Vec<String> {
                 Some(_) => {
                     // Push any accumulated bytes before this ESC
                     if start < i {
-                        let seg =
-                            String::from_utf8_lossy(&bytes[start..i]).into_owned();
+                        let seg = String::from_utf8_lossy(&bytes[start..i]).into_owned();
                         segments.push(seg);
                     }
                     // Push ESC as its own segment
@@ -1724,7 +1735,10 @@ impl CreatePaneTool {
                     // First non-empty snapshot — likely command echo
                     initial_snapshot = normalized.clone();
                     last_snapshot = normalized;
-                    log::info!("[create_pane] phase 1: initial echo captured ({} bytes)", initial_snapshot.len());
+                    log::info!(
+                        "[create_pane] phase 1: initial echo captured ({} bytes)",
+                        initial_snapshot.len()
+                    );
                     continue;
                 }
 
@@ -1733,7 +1747,10 @@ impl CreatePaneTool {
                     phase_changed = true;
                     last_snapshot = normalized;
                     stable_count = 0;
-                    log::info!("[create_pane] phase 2: content changed at poll {}", poll_num);
+                    log::info!(
+                        "[create_pane] phase 2: content changed at poll {}",
+                        poll_num
+                    );
                     continue;
                 }
 
@@ -1880,9 +1897,9 @@ mod tests {
     #[test]
     fn bare_hex_safe_in_normal_text() {
         // Only control chars (≤0x1F, 0x7F) match — printable hex values don't
-        assert_eq!(decode_key_escapes("exit"), "exit");    // 'x' + 'i' is not hex
+        assert_eq!(decode_key_escapes("exit"), "exit"); // 'x' + 'i' is not hex
         assert_eq!(decode_key_escapes("hexdump"), "hexdump"); // 'x' + 'd' + 'u' — 0xdu invalid
-        assert_eq!(decode_key_escapes("x41"), "x41");      // 0x41 = 'A', not control
+        assert_eq!(decode_key_escapes("x41"), "x41"); // 0x41 = 'A', not control
         assert_eq!(decode_key_escapes("maximum"), "maximum");
     }
 

@@ -24,17 +24,13 @@ con is still pre-release, so entries may group larger areas of work while the pr
 
 **AI Agent**
 - The agent system prompt has been restructured for sharper tool usage. Questions are answered with minimal side effects; tasks are executed carefully with verification. Each tool now has explicit guidelines so the agent picks the right one the first time.
-- Remote host detection works on Ghostty panes — the agent correctly identifies SSH sessions and targets the right host.
-- Remote panes no longer silently fall back to `local` when host evidence is missing. con now keeps host as `unknown` unless the pane itself provides a defensible signal, and it can recover advisory remote host hints from tmux status lines and pane titles when OSC 7 is absent.
 - Busy/idle detection works on Ghostty panes — the agent waits for a running command to finish before sending another.
-- Pane-aware context is more honest in tmux and terminal UIs. The agent now distinguishes ordinary shells from multiplexers and full-screen apps, and it stops over-trusting stale cwd or command metadata when the visible pane has moved on.
-- tmux awareness now comes from the pane itself instead of inherited app state, which reduces wrong assumptions after manually attaching to a session mid-chat.
-- Pane runtime is now modeled as a scope stack instead of a flat snapshot. The agent and pane tools can see advisory scopes such as remote shell, tmux, and branded agent CLIs with explicit freshness warnings when the visible screen has moved beyond the last shell prompt.
-- Pane runtime is now stateful instead of snapshot-only. Each tab keeps per-pane runtime observers so remote host, tmux, and external agent CLI identity survive sparse screen frames but are invalidated when a fresh shell returns.
+- Pane-aware context is stricter and more honest. con no longer guesses SSH hosts, tmux sessions, or agent CLIs from pane titles or status-line patterns. When the foreground runtime is not proven, it stays `unknown`.
+- Visible shell execution now depends on real Ghostty command boundaries instead of stale cwd or title clues. After any unconfirmed input, con stops trusting shell metadata until shell integration proves a fresh prompt again.
 - con now refuses `terminal_exec` and `batch_exec` on panes that are not proven plain-shell targets. This prevents the built-in agent from typing shell commands into tmux+nvim or other visible TUIs.
 - Pane control state is now typed and shared across the prompt, `list_panes`, and execution guards. The agent now sees each pane's address space, visible target, control channels, capabilities, and control notes instead of relying on flat pane heuristics.
-- Nested agent runtimes are now carried as a target stack, so panes can describe situations like remote shell -> tmux -> Codex CLI or Claude Code instead of flattening those layers into one ambiguous state.
-- tmux now has an explicit inspectable adapter state and a dedicated `tmux_inspect` tool. The agent can ask what tmux session is visible, what target is currently in front inside tmux, and why native tmux pane/window control is not yet available.
+- Pane metadata now also exposes backend observability limits directly. If embedded Ghostty cannot prove foreground command text, alternate-screen state, or remote-host identity for a pane, con says so instead of guessing.
+- The control plane can represent nested targets explicitly, and it now uses `unknown` for unproven foreground targets instead of pretending every ambiguous pane is a TUI.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.
@@ -45,10 +41,10 @@ con is still pre-release, so entries may group larger areas of work while the pr
 **Smart Input**
 - Command detection now scans your `$PATH` at startup instead of using a static word list. Any installed program — `hostname`, `terraform`, `kubectl`, or a custom script in `/usr/local/bin` — is correctly recognized as a shell command without manual configuration.
 - Commands with flags (`free -g`, `docker --version`) are now recognized by their syntax — even when the executable isn't on your local PATH.
-- SSH-aware classification — when you're in a remote session, commands like `systemctl`, `apt`, or `free` are correctly routed to the terminal instead of the AI agent.
+- Remote-sensitive classification now only activates when remote identity is proven. When con cannot prove a pane is remote, it stays conservative instead of guessing.
 
 **AI Agent**
-- The agent now sees your full pane layout (hostname, directory, busy status) directly in its context. When you have multiple panes open — especially SSH sessions to different machines — the agent targets the right pane without extra steps.
+- The agent now sees pane indexes, directories when available, busy status, control notes, and backend limits directly in its context. This reduces pane-targeting mistakes without pretending SSH or tmux identity is known when it is not.
 - Ghostty panes now report `has_shell_integration: true` in the agent's pane list, enabling the agent to use command tracking features.
 
 ### Fixed

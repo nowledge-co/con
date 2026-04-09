@@ -216,7 +216,7 @@ max_turns = 10              # max tool-use turns per request
 
 ## Input Classification
 
-`classify_input(input, is_remote)` determines whether user input is a skill invocation, a shell command, or a natural language query. The `is_remote` flag is derived from the focused pane's `detected_remote_host()`.
+`classify_input(input, is_remote)` determines whether user input is a skill invocation, a shell command, or a natural language query. The `is_remote` flag is only enabled when the focused pane's runtime state contains a proven remote host. con no longer guesses remote identity from pane titles or status-line text.
 
 1. **Skill** — starts with `/` and matches a registered skill name
 2. **Shell command** — structural analysis (see below)
@@ -245,27 +245,28 @@ When the focused pane is an SSH session, remote executables aren't on the local 
 
 The system prompt is built from a live pane snapshot, not process-wide environment variables. For the focused pane we derive host, title, pane mode (`shell`, `multiplexer`, `tui`, `unknown`), and whether shell metadata is fresh enough to trust for the visible app.
 
-When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, mode, shell-metadata freshness, and typed control state. That control state includes the pane's address space, front-most visible target, nested target stack, control channels, capabilities, and notes. This lets the agent target the right pane(s) immediately without confusing a con pane with a tmux pane or editor target.
+When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, mode, shell-metadata freshness, backend-support flags, and typed control state. That control state includes the pane's address space, front-most visible target, nested target stack, control channels, capabilities, and notes. This lets the agent target the right pane(s) immediately without confusing a con pane with a tmux pane or editor target.
 
 This matters for SSH, tmux, and full-screen TUIs:
 
-- `ssh_host` comes from pane-local evidence only. con prefers a detected host from the pane itself and now falls back to title/screen-structure hints when OSC 7 does not carry a usable remote hostname.
-- `tmux_session` is inferred from the pane itself (command/title/screen hints), not from `TMUX` in the parent process.
-- When remote identity is unknown, the prompt says `unknown`, not `local`.
+- `ssh_host` is only populated when a remote host is proven. If con cannot prove it, the prompt says `unknown`.
+- `tmux_session` only comes from authoritative command-line evidence, not from inherited process environment, pane titles, or status-line patterns.
+- Shell freshness now comes from Ghostty command-boundary tracking. After any unconfirmed PTY input, con stops trusting cwd and last-command metadata until shell integration proves a fresh prompt again.
+- Current embedded Ghostty panes explicitly report what the backend cannot prove yet. Today that includes authoritative foreground command text, alternate-screen state, and remote-host identity, so manual tmux/editor/SSH flows may remain `unknown` until Ghostty exports stronger facts.
 - When the pane mode is not `shell`, or shell metadata is stale, the prompt explicitly tells the model to inspect the live pane with `list_panes`, `read_pane`, and `send_keys` before making claims about cwd, hostname, or the running app.
 
-con now keeps a per-pane runtime observer for each tab. The observer persists pane-local facts across sparse frames, invalidates them when a fresh shell returns, and exposes merged runtime state to the prompt, `list_panes`, the sidebar, and smart-input classification.
+con now keeps a per-pane runtime observer for each tab. The observer persists authoritative pane-local facts across sparse frames, invalidates them when a fresh shell returns, and exposes merged runtime state to the prompt, `list_panes`, the sidebar, and smart-input classification.
 
 On top of that observer, con now derives a typed `PaneControlState` for each pane. This is the shared contract for prompt writing, `list_panes`, and visible-exec guards:
 
 - `address_space` says what `pane_index` actually refers to
 - `visible_target` says what app or runtime is currently in front
-- `target_stack` preserves nested layers such as remote shell -> tmux -> agent CLI
+- `target_stack` preserves nested layers when con can actually prove them
 - `control_channels` say how con may act
 - `control_capabilities` say what is allowed right now
 - `control_notes` explain important limits such as "this is tmux inside a con pane"
 
-con also now exposes a tmux-specific inspect surface. `tmux_inspect` returns the detected tmux session, the current tmux adapter mode, the front-most target inside tmux, and the explicit reason native tmux pane/window control is not yet available.
+con also now exposes a tmux-specific inspect surface. `tmux_inspect` returns tmux adapter state when tmux has been authoritatively detected, including the explicit reason native tmux pane/window control is not yet available.
 
 What is still missing is stronger backend truth for foreground runtime identity. The next layer is not more local heuristics; it is an upstream Ghostty observability contract for explicit foreground process and semantic prompt state. See `docs/impl/pane-runtime-observer.md`.
 

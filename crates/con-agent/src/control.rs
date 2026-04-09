@@ -24,7 +24,7 @@ pub enum PaneVisibleTargetKind {
     TmuxSession,
     AgentCli,
     InteractiveApp,
-    UnknownTui,
+    Unknown,
 }
 
 impl PaneVisibleTargetKind {
@@ -35,7 +35,7 @@ impl PaneVisibleTargetKind {
             Self::TmuxSession => "tmux_session",
             Self::AgentCli => "agent_cli",
             Self::InteractiveApp => "interactive_app",
-            Self::UnknownTui => "unknown_tui",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -166,7 +166,7 @@ impl PaneControlState {
         let mut notes = Vec::new();
         if !runtime.shell_metadata_fresh {
             notes.push(
-                "Shell-derived cwd and command metadata may describe an earlier shell frame, not the current visible target.".to_string(),
+                "Visible shell prompt is not confirmed. cwd and last_command may describe an earlier shell frame, not the current foreground target.".to_string(),
             );
         }
         if let Some(host) = &runtime.remote_host {
@@ -203,8 +203,12 @@ impl PaneControlState {
                     );
                 }
             }
-            PaneVisibleTargetKind::InteractiveApp | PaneVisibleTargetKind::UnknownTui => notes.push(
-                "This pane shows an interactive app. con can inspect screen state and send raw input, but it does not have app-native control for this target yet."
+            PaneVisibleTargetKind::InteractiveApp => notes.push(
+                "This pane shows a proven interactive app. con can inspect screen state and send raw input, but it does not have app-native control for this target yet."
+                    .to_string(),
+            ),
+            PaneVisibleTargetKind::Unknown => notes.push(
+                "The visible foreground target is not proven. Inspect the pane before sending raw input, and do not assume a shell prompt or a TUI-specific control channel."
                     .to_string(),
             ),
             PaneVisibleTargetKind::ShellPrompt | PaneVisibleTargetKind::RemoteShell => {}
@@ -357,7 +361,7 @@ fn fallback_visible_target(runtime: &PaneRuntimeState) -> PaneVisibleTarget {
                 }
             } else {
                 PaneVisibleTarget {
-                    kind: PaneVisibleTargetKind::UnknownTui,
+                    kind: PaneVisibleTargetKind::InteractiveApp,
                     label: runtime
                         .active_scope
                         .as_ref()
@@ -367,7 +371,7 @@ fn fallback_visible_target(runtime: &PaneRuntimeState) -> PaneVisibleTarget {
             }
         }
         PaneMode::Unknown => PaneVisibleTarget {
-            kind: PaneVisibleTargetKind::UnknownTui,
+            kind: PaneVisibleTargetKind::Unknown,
             label: runtime
                 .active_scope
                 .as_ref()
@@ -380,12 +384,11 @@ fn fallback_visible_target(runtime: &PaneRuntimeState) -> PaneVisibleTarget {
 #[cfg(test)]
 mod tests {
     use super::{
-        PaneControlCapability, PaneControlState, PaneVisibleTargetKind, TmuxControlMode,
-        fallback_visible_target, format_target_stack,
+        fallback_visible_target, format_target_stack, PaneControlCapability, PaneControlState,
+        PaneVisibleTargetKind, TmuxControlMode,
     };
     use crate::context::{
-        PaneConfidence, PaneEvidenceSource, PaneMode, PaneRuntimeScope, PaneRuntimeState,
-        PaneScopeKind,
+        PaneEvidenceSource, PaneMode, PaneRuntimeScope, PaneRuntimeState, PaneScopeKind,
     };
 
     #[test]
@@ -393,20 +396,26 @@ mod tests {
         let runtime = PaneRuntimeState {
             mode: PaneMode::Multiplexer,
             shell_metadata_fresh: false,
-            remote_host: Some("haswell".to_string()),
-            remote_host_confidence: Some(PaneConfidence::Advisory),
-            remote_host_source: Some(PaneEvidenceSource::ScreenStructure),
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
             agent_cli: None,
             tmux_session: Some("work".to_string()),
             active_scope: Some(PaneRuntimeScope {
                 kind: PaneScopeKind::Multiplexer,
                 label: Some("work".to_string()),
-                host: Some("haswell".to_string()),
-                confidence: PaneConfidence::Advisory,
-                evidence_source: PaneEvidenceSource::ScreenStructure,
+                host: None,
+                confidence: crate::context::PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::CommandLine,
             }),
             evidence: Vec::new(),
-            scope_stack: Vec::new(),
+            scope_stack: vec![PaneRuntimeScope {
+                kind: PaneScopeKind::Multiplexer,
+                label: Some("work".to_string()),
+                host: None,
+                confidence: crate::context::PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::CommandLine,
+            }],
             warnings: Vec::new(),
         };
 
@@ -416,11 +425,9 @@ mod tests {
             PaneVisibleTargetKind::TmuxSession
         );
         assert!(!control.allows_visible_shell_exec());
-        assert!(
-            !control
-                .capabilities
-                .contains(&PaneControlCapability::ExecVisibleShell)
-        );
+        assert!(!control
+            .capabilities
+            .contains(&PaneControlCapability::ExecVisibleShell));
     }
 
     #[test]
@@ -428,20 +435,26 @@ mod tests {
         let runtime = PaneRuntimeState {
             mode: PaneMode::Shell,
             shell_metadata_fresh: true,
-            remote_host: Some("prod".to_string()),
-            remote_host_confidence: Some(PaneConfidence::Strong),
-            remote_host_source: Some(PaneEvidenceSource::Osc7),
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
             agent_cli: None,
             tmux_session: None,
             active_scope: Some(PaneRuntimeScope {
-                kind: PaneScopeKind::RemoteShell,
+                kind: PaneScopeKind::Shell,
                 label: None,
-                host: Some("prod".to_string()),
-                confidence: PaneConfidence::Strong,
-                evidence_source: PaneEvidenceSource::Osc7,
+                host: None,
+                confidence: crate::context::PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::ShellIntegration,
             }),
             evidence: Vec::new(),
-            scope_stack: Vec::new(),
+            scope_stack: vec![PaneRuntimeScope {
+                kind: PaneScopeKind::Shell,
+                label: None,
+                host: None,
+                confidence: crate::context::PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::ShellIntegration,
+            }],
             warnings: Vec::new(),
         };
 
@@ -458,17 +471,17 @@ mod tests {
         let runtime = PaneRuntimeState {
             mode: PaneMode::Multiplexer,
             shell_metadata_fresh: false,
-            remote_host: Some("haswell".to_string()),
-            remote_host_confidence: Some(PaneConfidence::Strong),
-            remote_host_source: Some(PaneEvidenceSource::Osc7),
-            agent_cli: Some("codex".to_string()),
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
+            agent_cli: None,
             tmux_session: Some("work".to_string()),
             active_scope: Some(PaneRuntimeScope {
-                kind: PaneScopeKind::AgentCli,
-                label: Some("codex".to_string()),
+                kind: PaneScopeKind::Multiplexer,
+                label: Some("work".to_string()),
                 host: None,
-                confidence: PaneConfidence::Advisory,
-                evidence_source: PaneEvidenceSource::ScreenStructure,
+                confidence: crate::context::PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::CommandLine,
             }),
             evidence: Vec::new(),
             scope_stack: vec![
@@ -476,39 +489,28 @@ mod tests {
                     kind: PaneScopeKind::Shell,
                     label: None,
                     host: None,
-                    confidence: PaneConfidence::Strong,
+                    confidence: crate::context::PaneConfidence::Strong,
                     evidence_source: PaneEvidenceSource::ShellIntegration,
-                },
-                PaneRuntimeScope {
-                    kind: PaneScopeKind::RemoteShell,
-                    label: None,
-                    host: Some("haswell".to_string()),
-                    confidence: PaneConfidence::Strong,
-                    evidence_source: PaneEvidenceSource::Osc7,
                 },
                 PaneRuntimeScope {
                     kind: PaneScopeKind::Multiplexer,
                     label: Some("work".to_string()),
                     host: None,
-                    confidence: PaneConfidence::Strong,
+                    confidence: crate::context::PaneConfidence::Strong,
                     evidence_source: PaneEvidenceSource::CommandLine,
-                },
-                PaneRuntimeScope {
-                    kind: PaneScopeKind::AgentCli,
-                    label: Some("codex".to_string()),
-                    host: None,
-                    confidence: PaneConfidence::Advisory,
-                    evidence_source: PaneEvidenceSource::ScreenStructure,
                 },
             ],
             warnings: Vec::new(),
         };
 
         let control = PaneControlState::from_runtime(&runtime);
-        assert_eq!(control.visible_target.kind, PaneVisibleTargetKind::AgentCli);
+        assert_eq!(
+            control.visible_target.kind,
+            PaneVisibleTargetKind::TmuxSession
+        );
         assert_eq!(
             format_target_stack(&control.target_stack),
-            "shell_prompt(haswell) -> remote_shell(haswell) -> tmux_session(work) -> agent_cli(codex)"
+            "shell_prompt -> tmux_session(work)"
         );
         assert_eq!(
             control.tmux.as_ref().map(|tmux| tmux.mode),
@@ -520,13 +522,36 @@ mod tests {
                 .as_ref()
                 .and_then(|tmux| tmux.front_target.as_ref())
                 .map(|target| target.summary()),
-            Some("agent_cli(codex)".to_string())
+            None
         );
-        assert!(
-            control
-                .notes
-                .iter()
-                .any(|note| note.contains("nested inside tmux"))
+        assert!(control
+            .notes
+            .iter()
+            .any(|note| note.contains("outer con pane")));
+    }
+
+    #[test]
+    fn unknown_runtime_stays_unknown() {
+        let runtime = PaneRuntimeState {
+            mode: PaneMode::Unknown,
+            shell_metadata_fresh: false,
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
+            agent_cli: None,
+            tmux_session: None,
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: Vec::new(),
+            warnings: Vec::new(),
+        };
+
+        let control = PaneControlState::from_runtime(&runtime);
+        assert_eq!(control.visible_target.kind, PaneVisibleTargetKind::Unknown);
+        assert!(!control.allows_visible_shell_exec());
+        assert_eq!(
+            fallback_visible_target(&runtime).kind,
+            PaneVisibleTargetKind::Unknown
         );
     }
 }

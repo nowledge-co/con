@@ -1,6 +1,6 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
-use con_agent::context::PaneObservationFrame;
+use con_agent::context::{PaneObservationFrame, PaneObservationSupport};
 use con_ghostty::TerminalColors;
 use con_terminal::TerminalTheme;
 use gpui::*;
@@ -28,13 +28,6 @@ impl TerminalPane {
 
     pub fn is_alive(&self, cx: &App) -> bool {
         self.entity.read(cx).is_alive()
-    }
-
-    pub fn detected_remote_host(&self, cx: &App) -> Option<String> {
-        self.entity
-            .read(cx)
-            .terminal()
-            .and_then(|terminal| terminal.detected_remote_host())
     }
 
     pub fn is_busy(&self, cx: &App) -> bool {
@@ -172,10 +165,22 @@ impl TerminalPane {
             last_command: self.last_command(cx),
             last_exit_code: self.last_exit_code(cx),
             last_command_duration_secs: self.last_command_duration(cx).map(|d| d.as_secs_f64()),
-            detected_remote_host: self.detected_remote_host(cx),
+            support: PaneObservationSupport::default(),
             has_shell_integration: self.has_shell_integration(cx),
             is_alt_screen: self.is_alt_screen(cx),
             is_busy: self.is_busy(cx),
+            input_generation: self
+                .entity
+                .read(cx)
+                .terminal()
+                .map(|terminal| terminal.input_generation())
+                .unwrap_or(0),
+            last_command_finished_input_generation: self
+                .entity
+                .read(cx)
+                .terminal()
+                .map(|terminal| terminal.last_command_finished_input_generation())
+                .unwrap_or(0),
         }
     }
 

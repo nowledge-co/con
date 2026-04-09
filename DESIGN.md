@@ -155,13 +155,13 @@ The architecture must model that explicitly.
 
 **Three-layer design:**
 
-1. **Backend facts** — Ghostty action callbacks, process-exited state, titles, PWD, command-finished events, visible text
-2. **Pane runtime observer** — evidence merge, freshness, scope-stack inference, confidence
+1. **Backend facts** — Ghostty action callbacks, process-exited state, titles, PWD, command-finished events, PTY input generations, visible text
+2. **Pane runtime observer** — authoritative evidence merge, command-boundary freshness, scope-stack inference, confidence
 3. **Consumers** — agent prompt, `list_panes`, approvals, sidebar, notifications, resume surfaces
 
-**Important constraint:** shell metadata and visible-app identity are not the same thing. Once tmux or another TUI takes over the screen, cwd and last command become advisory unless stronger evidence says otherwise.
+**Important constraint:** shell metadata and visible-app identity are not the same thing. If con cannot prove the foreground runtime, it must say `unknown` instead of promoting title or screen-pattern guesses into product state.
 
-**Current foundation:** Ghostty already gives con strong terminal facts, but the embedded C API does not yet expose foreground-process identity or Ghostty's richer internal semantic prompt/runtime state. con therefore needs its own pane runtime observer instead of pushing more product logic into prompt heuristics.
+**Current foundation:** Ghostty already gives con strong terminal facts, but the embedded C API does not yet expose foreground-process identity, authoritative command text, alternate-screen state, remote-host identity, or Ghostty's richer internal semantic prompt/runtime state. con therefore needs its own pane runtime observer instead of pushing more product logic into prompt heuristics.
 
 **Long-term direction:** if con needs process-group identity or richer semantic prompt exports, the right move is to extend libghostty's C API upstream rather than reintroducing a second terminal runtime locally.
 
@@ -295,8 +295,9 @@ We can revisit broader platform support later, but the current product boundary 
 - [x] Command history in agent context (last 10 commands with exit codes)
 - [x] Inline AI suggestions (debounced completion engine with caching)
 - [x] Command block actions (copy output, re-run, explain via agent)
-- [x] SSH-aware agent (uses pane-local remote host detection)
-- [x] tmux/TUI-aware agent (pane-local mode + tmux session hints)
+- [x] Pane-safe agent execution guards and typed control-plane state
+- [ ] Authoritative SSH scope detection on embedded Ghostty
+- [ ] Authoritative tmux / TUI runtime detection on embedded Ghostty
 - [x] Conversation history + search (save/load/list, new chat, history panel)
 
 ### Phase 6: Polish
@@ -395,8 +396,8 @@ For agent CLIs and other tools that run *inside* the terminal:
 
 - con should detect them through the pane runtime observer, using strong evidence first:
   - shell/runtime transitions
-  - backend facts such as alternate screen and command lifecycle
-  - advisory screen structure only as a fallback
+  - backend facts such as command lifecycle and future alternate-screen exports
+- con must not promote pane-title or screen-structure heuristics into typed runtime state
 - Provides enhanced UX: notification rings, focus management
 - Does NOT try to "take over" — con is the host, not the agent
 - Optional: pipe agent's stderr/notifications to con's notification system

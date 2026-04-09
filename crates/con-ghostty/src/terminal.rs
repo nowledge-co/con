@@ -139,6 +139,10 @@ pub struct TerminalState {
     /// Whether a command is currently running (between command_start and command_finished).
     /// Set true when we write a command to PTY, cleared by COMMAND_FINISHED.
     pub is_busy: bool,
+    /// Monotonic counter incremented whenever input is sent into the PTY.
+    pub input_generation: u64,
+    /// The latest input generation that was followed by a shell command finish event.
+    pub last_command_finished_input_generation: u64,
     /// Surface handle — stored so clipboard callbacks can complete requests.
     pub surface: ffi::ghostty_surface_t,
 }
@@ -157,6 +161,8 @@ impl Default for TerminalState {
             command_finished_signal: None,
             command_history: Vec::with_capacity(MAX_COMMAND_HISTORY),
             is_busy: false,
+            input_generation: 0,
+            last_command_finished_input_generation: 0,
             surface: std::ptr::null_mut(),
         }
     }
@@ -368,6 +374,11 @@ pub struct GhosttyTerminal {
 }
 
 impl GhosttyTerminal {
+    fn mark_input_observed(&self) {
+        let mut state = self.state.lock();
+        state.input_generation = state.input_generation.saturating_add(1);
+    }
+
     /// Trigger a draw (ghostty renders into its Metal layer).
     pub fn draw(&self) {
         unsafe { ffi::ghostty_surface_draw(self.surface) }
@@ -456,6 +467,7 @@ impl GhosttyTerminal {
 
     /// Send a key event to the terminal. Returns true if ghostty consumed it.
     pub fn send_key(&self, key: ffi::ghostty_input_key_s) -> bool {
+        self.mark_input_observed();
         unsafe { ffi::ghostty_surface_key(self.surface, key) }
     }
 
@@ -465,6 +477,7 @@ impl GhosttyTerminal {
     /// It handles printable characters but NOT control characters like `\n` or `\r`.
     /// For writing command strings with newlines, use `write_to_pty` instead.
     pub fn send_text(&self, text: &str) {
+        self.mark_input_observed();
         if let Ok(cstr) = CString::new(text) {
             let len = cstr.as_bytes().len(); // excludes NUL, matches original text
             unsafe { ffi::ghostty_surface_text(self.surface, cstr.as_ptr(), len) }
@@ -611,17 +624,14 @@ impl GhosttyTerminal {
         self.state.lock().command_history.clone()
     }
 
-    /// Detect remote hostname from PWD (OSC 7 URIs contain file://hostname/path).
-    pub fn detected_remote_host(&self) -> Option<String> {
-        let pwd = self.state.lock().pwd.clone()?;
-        // OSC 7 sends URIs like "file://hostname/path"
-        if let Some(rest) = pwd.strip_prefix("file://") {
-            let host = rest.split('/').next().unwrap_or("");
-            if !host.is_empty() && host != "localhost" && host != "" {
-                return Some(host.to_string());
-            }
-        }
-        None
+    /// Monotonic counter that advances whenever input is sent to the PTY.
+    pub fn input_generation(&self) -> u64 {
+        self.state.lock().input_generation
+    }
+
+    /// Latest input generation confirmed by Ghostty shell integration as finished.
+    pub fn last_command_finished_input_generation(&self) -> u64 {
+        self.state.lock().last_command_finished_input_generation
     }
 
     /// Whether the terminal has a text selection.
@@ -936,6 +946,7 @@ unsafe extern "C" fn action_callback(
                     duration,
                 });
                 s.is_busy = false;
+                s.last_command_finished_input_generation = s.input_generation;
                 // Append to command history ring buffer
                 if s.command_history.len() >= MAX_COMMAND_HISTORY {
                     s.command_history.remove(0);
