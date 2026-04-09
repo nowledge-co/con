@@ -52,6 +52,9 @@ pub struct ConWorkspace {
     ui_opacity: f32,
     background_image: Option<String>,
     background_image_opacity: f32,
+    background_image_position: String,
+    background_image_fit: String,
+    background_image_repeat: bool,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -147,6 +150,9 @@ impl ConWorkspace {
         let background_image = config.appearance.background_image.clone();
         let background_image_opacity =
             Self::clamp_background_image_opacity(config.appearance.background_image_opacity);
+        let background_image_position = config.appearance.background_image_position.clone();
+        let background_image_fit = config.appearance.background_image_fit.clone();
+        let background_image_repeat = config.appearance.background_image_repeat;
         let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
         let session = Session::load().unwrap_or_default();
         let colors = theme_to_ghostty_colors(&terminal_theme);
@@ -156,6 +162,9 @@ impl ConWorkspace {
             Some(terminal_opacity),
             background_image.as_deref(),
             Some(background_image_opacity),
+            Some(&background_image_position),
+            Some(&background_image_fit),
+            Some(background_image_repeat),
         )
         .map(std::sync::Arc::new)
         .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
@@ -369,6 +378,9 @@ impl ConWorkspace {
             ui_opacity,
             background_image,
             background_image_opacity,
+            background_image_position,
+            background_image_fit,
+            background_image_repeat,
             agent_panel,
             input_bar,
             settings_panel,
@@ -904,6 +916,9 @@ impl ConWorkspace {
         self.background_image_opacity = Self::clamp_background_image_opacity(
             appearance_config.background_image_opacity,
         );
+        self.background_image_position = appearance_config.background_image_position.clone();
+        self.background_image_fit = appearance_config.background_image_fit.clone();
+        self.background_image_repeat = appearance_config.background_image_repeat;
         self.agent_panel
             .update(cx, |panel, _cx| panel.set_ui_opacity(self.ui_opacity));
         self.input_bar
@@ -977,6 +992,9 @@ impl ConWorkspace {
                     self.terminal_opacity,
                     self.background_image.as_deref(),
                     self.background_image_opacity,
+                    Some(&self.background_image_position),
+                    Some(&self.background_image_fit),
+                    self.background_image_repeat,
                     cx,
                 );
             }
@@ -987,6 +1005,9 @@ impl ConWorkspace {
             self.terminal_opacity,
             self.background_image.as_deref(),
             self.background_image_opacity,
+            Some(&self.background_image_position),
+            Some(&self.background_image_fit),
+            self.background_image_repeat,
         )
         {
             log::error!("Failed to update Ghostty appearance: {}", e);
@@ -1732,6 +1753,84 @@ impl ConWorkspace {
                             }
                             Err(err) => PaneResponse::Error(err),
                         }
+                    }
+                }
+            }
+            PaneQuery::TmuxRunCommand {
+                pane_index,
+                target,
+                location,
+                command,
+                window_name,
+                cwd,
+                detached,
+            } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let pane = all_terminals[pane_index - 1].clone();
+                    let (_, runtime) =
+                        self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+                    let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+                    if !control
+                        .capabilities
+                        .contains(&con_agent::PaneControlCapability::ExecTmuxCommand)
+                    {
+                        PaneResponse::Error(format!(
+                            "Pane {} does not currently expose tmux native run-command capability.\nvisible_target: {}\ncontrol_capabilities: {}",
+                            pane_index,
+                            control.visible_target.summary(),
+                            control
+                                .capabilities
+                                .iter()
+                                .map(|capability| capability.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ))
+                    } else if pane.is_busy(cx) {
+                        PaneResponse::Error(format!(
+                            "Pane {} is busy. Wait for the current command to finish before launching tmux-native commands from its shell anchor.",
+                            pane_index
+                        ))
+                    } else {
+                        let response_tx = req.response_tx;
+                        let nonce = format!(
+                            "tmux-exec-{}-{}",
+                            pane_index,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|duration| duration.as_nanos())
+                                .unwrap_or_default()
+                        );
+                        let shell_command = con_agent::tmux::build_tmux_exec_command(
+                            &nonce,
+                            location,
+                            target.as_deref(),
+                            &command,
+                            window_name.as_deref(),
+                            cwd.as_deref(),
+                            detached,
+                        );
+                        self.spawn_shell_anchor_command(
+                            tab_idx,
+                            pane,
+                            pane_index,
+                            shell_command,
+                            12,
+                            move |lines| {
+                                con_agent::tmux::parse_tmux_exec_lines(
+                                    &lines, &nonce, location, detached,
+                                )
+                                .map(con_agent::PaneResponse::TmuxExec)
+                            },
+                            response_tx,
+                            cx,
+                        );
+                        return;
                     }
                 }
             }

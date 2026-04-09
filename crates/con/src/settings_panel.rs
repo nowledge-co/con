@@ -76,6 +76,9 @@ pub struct SettingsPanel {
     ui_opacity_slider: Entity<SliderState>,
     background_image_input: Entity<InputState>,
     background_image_opacity_slider: Entity<SliderState>,
+    background_image_position_select: Entity<SelectState<Vec<String>>>,
+    background_image_fit_select: Entity<SelectState<Vec<String>>>,
+    background_image_repeat: bool,
     save_error: Option<String>,
 
     // Theme import
@@ -103,6 +106,20 @@ const ALL_PROVIDERS: &[ProviderKind] = &[
     ProviderKind::XAI,
 ];
 
+const BACKGROUND_IMAGE_POSITIONS: &[&str] = &[
+    "top-left",
+    "top-center",
+    "top-right",
+    "center-left",
+    "center",
+    "center-right",
+    "bottom-left",
+    "bottom-center",
+    "bottom-right",
+];
+
+const BACKGROUND_IMAGE_FITS: &[&str] = &["contain", "cover", "stretch", "none"];
+
 impl SettingsPanel {
     fn clamp_terminal_opacity(value: f32) -> f32 {
         value.clamp(0.25, 1.0)
@@ -126,6 +143,20 @@ impl SettingsPanel {
 
     fn background_image_opacity_value(&self) -> f32 {
         Self::clamp_background_image_opacity(self.config.appearance.background_image_opacity)
+    }
+
+    fn make_string_select(
+        options: &[&str],
+        current_value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<Vec<String>>> {
+        let items: Vec<String> = options.iter().map(|value| (*value).to_string()).collect();
+        let selected_index = items
+            .iter()
+            .position(|item| item == current_value)
+            .map(IndexPath::new);
+        cx.new(|cx| SelectState::new(items, selected_index, window, cx))
     }
 
     fn card_opacity(&self) -> f32 {
@@ -247,6 +278,18 @@ impl SettingsPanel {
                     config.appearance.background_image_opacity,
                 ))
         });
+        let background_image_position_select = Self::make_string_select(
+            BACKGROUND_IMAGE_POSITIONS,
+            &config.appearance.background_image_position,
+            window,
+            cx,
+        );
+        let background_image_fit_select = Self::make_string_select(
+            BACKGROUND_IMAGE_FITS,
+            &config.appearance.background_image_fit,
+            window,
+            cx,
+        );
         let custom_theme_name_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Save as, e.g. flexoki-amber", window, cx);
@@ -285,6 +328,28 @@ impl SettingsPanel {
             },
         )
         .detach();
+        cx.subscribe_in(
+            &background_image_position_select,
+            window,
+            |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.config.appearance.background_image_position = value.clone();
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &background_image_fit_select,
+            window,
+            |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.config.appearance.background_image_fit = value.clone();
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
 
         Self {
             visible: false,
@@ -307,6 +372,9 @@ impl SettingsPanel {
             ui_opacity_slider,
             background_image_input,
             background_image_opacity_slider,
+            background_image_position_select,
+            background_image_fit_select,
+            background_image_repeat: config.appearance.background_image_repeat,
             save_error: None,
             custom_theme_name_input,
             custom_theme_preview: None,
@@ -380,6 +448,21 @@ impl SettingsPanel {
                     cx,
                 );
             });
+            self.background_image_position_select.update(cx, |select, cx| {
+                select.set_selected_value(
+                    &self.config.appearance.background_image_position,
+                    window,
+                    cx,
+                );
+            });
+            self.background_image_fit_select.update(cx, |select, cx| {
+                select.set_selected_value(
+                    &self.config.appearance.background_image_fit,
+                    window,
+                    cx,
+                );
+            });
+            self.background_image_repeat = self.config.appearance.background_image_repeat;
             self.recording_key = None;
             self.focus_handle.focus(window, cx);
         }
@@ -645,6 +728,7 @@ impl SettingsPanel {
         self.config.appearance.background_image_opacity = Self::clamp_background_image_opacity(
             self.background_image_opacity_slider.read(cx).value().end(),
         );
+        self.config.appearance.background_image_repeat = self.background_image_repeat;
 
         // Keybindings are updated directly via record_keystroke — no reading needed
 
@@ -1094,10 +1178,20 @@ impl SettingsPanel {
         let ui_opacity_slider = self.ui_opacity_slider.clone();
         let background_image_input = self.background_image_input.clone();
         let background_image_opacity_slider = self.background_image_opacity_slider.clone();
+        let background_image_position_select = self.background_image_position_select.clone();
+        let background_image_fit_select = self.background_image_fit_select.clone();
         let terminal_opacity = self.terminal_opacity_value();
         let ui_opacity = self.ui_opacity_value();
         let background_image_opacity = self.background_image_opacity_value();
         let card_opacity = self.card_opacity();
+        let image_repeat_toggle = Switch::new("background-image-repeat")
+            .checked(self.background_image_repeat)
+            .small()
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.background_image_repeat = *checked;
+                this.config.appearance.background_image_repeat = *checked;
+                cx.notify();
+            }));
         let all_themes = con_terminal::TerminalTheme::all_available();
 
         // Split into built-in and user themes
@@ -1294,6 +1388,41 @@ impl SettingsPanel {
                                 )),
                         )
                         .child(row_separator(theme))
+                        .child(
+                            div()
+                                .px(px(16.0))
+                                .child(
+                                    select_row(
+                                        "Fit",
+                                        "Choose how the image fills the terminal.",
+                                        &background_image_fit_select,
+                                        theme,
+                                    ),
+                                ),
+                        )
+                        .child(row_separator(theme))
+                        .child(
+                            div()
+                                .px(px(16.0))
+                                .child(
+                                    select_row(
+                                        "Position",
+                                        "Anchor the image when it does not fill the full surface.",
+                                        &background_image_position_select,
+                                        theme,
+                                    ),
+                                ),
+                        )
+                        .child(row_separator(theme))
+                        .child(
+                            toggle_row(
+                                "Repeat",
+                                "Tile the image if the fit leaves empty space around it.",
+                                image_repeat_toggle,
+                                theme,
+                            ),
+                        )
+                        .child(row_separator(theme))
                         .child(slider_row(
                             "Image Strength",
                             "Blend the image more softly or let it come forward behind the terminal.",
@@ -1310,7 +1439,7 @@ impl SettingsPanel {
                                 .line_height(px(16.0))
                                 .text_color(theme.muted_foreground.opacity(0.65))
                                 .child(
-                                    "For fit, position, or repeat behavior, edit config.toml with Ghostty's background-image settings.",
+                                    "Ghostty renders the image per terminal, so splits will each draw their own copy.",
                                 ),
                         ),
                 ),
@@ -2323,6 +2452,84 @@ fn slider_row(
                 .w_full()
                 .child(Slider::new(slider).w_full()),
         )
+}
+
+fn select_row(
+    label: &str,
+    hint: &str,
+    select: &Entity<SelectState<Vec<String>>>,
+    theme: &gpui_component::Theme,
+) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .justify_between()
+        .gap(px(16.0))
+        .py(px(12.0))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .flex_1()
+                .max_w(px(300.0))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label.to_string()),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .line_height(px(16.0))
+                        .text_color(theme.muted_foreground.opacity(0.65))
+                        .child(hint.to_string()),
+                ),
+        )
+        .child(
+            div()
+                .w(px(176.0))
+                .flex_shrink_0()
+                .child(Select::new(select).small()),
+        )
+}
+
+fn toggle_row(
+    label: &str,
+    hint: &str,
+    toggle: Switch,
+    theme: &gpui_component::Theme,
+) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .justify_between()
+        .gap(px(16.0))
+        .px(px(16.0))
+        .py(px(12.0))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .flex_1()
+                .max_w(px(340.0))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label.to_string()),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .line_height(px(16.0))
+                        .text_color(theme.muted_foreground.opacity(0.65))
+                        .child(hint.to_string()),
+                ),
+        )
+        .child(div().pt(px(2.0)).child(toggle))
 }
 
 fn stacked_input_field(

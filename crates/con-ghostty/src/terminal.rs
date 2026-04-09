@@ -58,6 +58,9 @@ pub struct GhosttyConfigPatch {
     pub background_blur: Option<bool>,
     pub background_image: Option<String>,
     pub background_image_opacity: Option<f32>,
+    pub background_image_position: Option<String>,
+    pub background_image_fit: Option<String>,
+    pub background_image_repeat: Option<bool>,
 }
 
 impl GhosttyConfigPatch {
@@ -82,6 +85,15 @@ impl GhosttyConfigPatch {
         }
         if let Some(background_image_opacity) = patch.background_image_opacity {
             self.background_image_opacity = Some(background_image_opacity);
+        }
+        if let Some(background_image_position) = &patch.background_image_position {
+            self.background_image_position = Some(background_image_position.clone());
+        }
+        if let Some(background_image_fit) = &patch.background_image_fit {
+            self.background_image_fit = Some(background_image_fit.clone());
+        }
+        if let Some(background_image_repeat) = patch.background_image_repeat {
+            self.background_image_repeat = Some(background_image_repeat);
         }
     }
 
@@ -115,6 +127,18 @@ impl GhosttyConfigPatch {
                     "background-image-opacity = {:.2}\n",
                     background_image_opacity.max(0.0)
                 ));
+            }
+            if let Some(background_image_position) = &self.background_image_position {
+                s.push_str(&format!(
+                    "background-image-position = {}\n",
+                    background_image_position
+                ));
+            }
+            if let Some(background_image_fit) = &self.background_image_fit {
+                s.push_str(&format!("background-image-fit = {}\n", background_image_fit));
+            }
+            if let Some(background_image_repeat) = self.background_image_repeat {
+                s.push_str(&format!("background-image-repeat = {}\n", background_image_repeat));
             }
         }
         s
@@ -253,6 +277,9 @@ impl GhosttyApp {
         background_opacity: Option<f32>,
         background_image: Option<&str>,
         background_image_opacity: Option<f32>,
+        background_image_position: Option<&str>,
+        background_image_fit: Option<&str>,
+        background_image_repeat: Option<bool>,
     ) -> Result<Self, String> {
         ensure_ghostty_init()?;
 
@@ -264,6 +291,9 @@ impl GhosttyApp {
             background_blur: background_opacity.map(|opacity| opacity < 0.999),
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity,
+            background_image_position: background_image_position.map(ToOwned::to_owned),
+            background_image_fit: background_image_fit.map(ToOwned::to_owned),
+            background_image_repeat,
         };
         let config = build_ghostty_config(&appearance)?;
 
@@ -315,6 +345,9 @@ impl GhosttyApp {
             background_blur: None,
             background_image: None,
             background_image_opacity: None,
+            background_image_position: None,
+            background_image_fit: None,
+            background_image_repeat: None,
         })
     }
 
@@ -325,6 +358,9 @@ impl GhosttyApp {
         background_opacity: f32,
         background_image: Option<&str>,
         background_image_opacity: f32,
+        background_image_position: Option<&str>,
+        background_image_fit: Option<&str>,
+        background_image_repeat: bool,
     ) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {
             colors: Some(colors.clone()),
@@ -334,6 +370,9 @@ impl GhosttyApp {
             background_blur: Some(background_opacity < 0.999),
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity: background_image.map(|_| background_image_opacity),
+            background_image_position: background_image_position.map(ToOwned::to_owned),
+            background_image_fit: background_image_fit.map(ToOwned::to_owned),
+            background_image_repeat: background_image.map(|_| background_image_repeat),
         })
     }
 
@@ -535,6 +574,9 @@ impl GhosttyTerminal {
         background_opacity: f32,
         background_image: Option<&str>,
         background_image_opacity: f32,
+        background_image_position: Option<&str>,
+        background_image_fit: Option<&str>,
+        background_image_repeat: bool,
     ) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {
             colors: Some(colors.clone()),
@@ -544,6 +586,9 @@ impl GhosttyTerminal {
             background_blur: Some(background_opacity < 0.999),
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity: background_image.map(|_| background_image_opacity),
+            background_image_position: background_image_position.map(ToOwned::to_owned),
+            background_image_fit: background_image_fit.map(ToOwned::to_owned),
+            background_image_repeat: background_image.map(|_| background_image_repeat),
         })?;
         self.refresh();
         Ok(())

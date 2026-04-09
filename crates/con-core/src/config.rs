@@ -24,6 +24,12 @@ fn default_ui_opacity() -> f32 {
 fn default_background_image_opacity() -> f32 {
     0.55
 }
+fn default_background_image_position() -> String {
+    "center".into()
+}
+fn default_background_image_fit() -> String {
+    "contain".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -52,6 +58,9 @@ pub struct AppearanceConfig {
     pub ui_opacity: f32,
     pub background_image: Option<String>,
     pub background_image_opacity: f32,
+    pub background_image_position: String,
+    pub background_image_fit: String,
+    pub background_image_repeat: bool,
 }
 
 impl Default for AppearanceConfig {
@@ -61,6 +70,9 @@ impl Default for AppearanceConfig {
             ui_opacity: default_ui_opacity(),
             background_image: None,
             background_image_opacity: default_background_image_opacity(),
+            background_image_position: default_background_image_position(),
+            background_image_fit: default_background_image_fit(),
+            background_image_repeat: false,
         }
     }
 }
