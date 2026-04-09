@@ -913,9 +913,8 @@ impl ConWorkspace {
         self.terminal_opacity = Self::clamp_terminal_opacity(appearance_config.terminal_opacity);
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
         self.background_image = appearance_config.background_image.clone();
-        self.background_image_opacity = Self::clamp_background_image_opacity(
-            appearance_config.background_image_opacity,
-        );
+        self.background_image_opacity =
+            Self::clamp_background_image_opacity(appearance_config.background_image_opacity);
         self.background_image_position = appearance_config.background_image_position.clone();
         self.background_image_fit = appearance_config.background_image_fit.clone();
         self.background_image_repeat = appearance_config.background_image_repeat;
@@ -1008,8 +1007,7 @@ impl ConWorkspace {
             Some(&self.background_image_position),
             Some(&self.background_image_fit),
             self.background_image_repeat,
-        )
-        {
+        ) {
             log::error!("Failed to update Ghostty appearance: {}", e);
         }
         // Sync GPUI UI theme colors with terminal theme
@@ -1236,15 +1234,13 @@ impl ConWorkspace {
                     if control
                         .capabilities
                         .contains(&con_agent::PaneControlCapability::QueryTmux)
-                        && control
-                            .capabilities
-                            .contains(&con_agent::PaneControlCapability::SendTmuxKeys)
                     {
                         format!(
                             "\n\nSUGGESTED APPROACH: This pane exposes native tmux control. Prefer tmux-native tools over outer-pane send_keys.\n\
                              1. tmux_list_targets(pane_index={idx}) to discover tmux windows/panes\n\
                              2. tmux_capture_pane(pane_index={idx}, target=\"%<pane>\") to inspect the exact tmux pane\n\
-                             3. tmux_send_keys(pane_index={idx}, target=\"%<pane>\", literal_text=\"your_command\", append_enter=true) to act on that tmux pane",
+                             3. tmux_run_command(pane_index={idx}, location=\"new_window\", command=\"bash\", window_name=\"scratch\") to create a fresh shell target when needed\n\
+                             4. tmux_send_keys(pane_index={idx}, target=\"%<pane>\", literal_text=\"your_command\", append_enter=true) to act on an existing tmux pane",
                             idx = target_pane_index
                         )
                     } else {
@@ -1260,29 +1256,13 @@ impl ConWorkspace {
                     }
                 }
                 con_agent::PaneVisibleTargetKind::InteractiveApp => {
-                    let label = control.visible_target.label.as_deref().unwrap_or("");
-                    let lower = label.to_lowercase();
-                    if lower.contains("vim") || lower.contains("nvim") || lower.contains("neovim") {
-                        format!(
-                            "\n\nSUGGESTED APPROACH: Use send_keys to interact with vim/nvim directly. To write content:\n\
-                             1. send_keys(pane_index={idx}, keys=\"\\x1b\") to ensure normal mode\n\
-                             2. send_keys(pane_index={idx}, keys=\":%d\\n\") to clear the buffer\n\
-                             3. send_keys(pane_index={idx}, keys=\"i\") to enter insert mode\n\
-                             4. send_keys(pane_index={idx}, keys=\"your content here\") to type content\n\
-                             5. send_keys(pane_index={idx}, keys=\"\\x1b\") to return to normal mode\n\
-                             6. send_keys(pane_index={idx}, keys=\":w\\n\") to save\n\
-                             7. read_pane(pane_index={idx}) after each step to verify.",
-                            idx = target_pane_index
-                        )
-                    } else {
-                        format!(
-                            "\n\nSUGGESTED APPROACH: Use read_pane(pane_index={idx}) to inspect the current screen, then \
-                             send_keys(pane_index={idx}, ...) for keystroke-level interaction. \
-                             Use \\x1b (Escape) or \\x03 (Ctrl-C) to exit to a shell if needed. \
-                             Always verify with read_pane after each send_keys.",
-                            idx = target_pane_index
-                        )
-                    }
+                    format!(
+                        "\n\nSUGGESTED APPROACH: Use read_pane(pane_index={idx}) to inspect the current screen, then \
+                         send_keys(pane_index={idx}, ...) for keystroke-level interaction. \
+                         Use \\x1b (Escape) or \\x03 (Ctrl-C) to exit to a shell if needed. \
+                         Always verify with read_pane after each send_keys.",
+                        idx = target_pane_index
+                    )
                 }
                 _ => {
                     format!(

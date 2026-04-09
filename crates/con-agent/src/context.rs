@@ -1313,7 +1313,7 @@ impl TerminalContext {
                 You CANNOT send these. Use tools instead: create_pane for new terminals.\n\
              2. **Terminal protocol sequences** (\\x02c for tmux prefix+c, \\x1b for Escape, \\x03 for Ctrl-C):\n\
                 These travel through the PTY to the remote program. send_keys is correct for direct TUI interaction, \
-                but when a pane exposes tmux native control you should prefer tmux_list_targets / tmux_capture_pane / tmux_send_keys over outer-pane PTY keystrokes.\n\
+                but when a pane exposes tmux native control you should prefer tmux_list_targets / tmux_capture_pane / tmux_run_command / tmux_send_keys over outer-pane PTY keystrokes.\n\
              3. **Shell commands** (ls, apt update, git status):\n\
                 Use terminal_exec when `exec_visible_shell` is available. When it is NOT, first observe the pane \
                 and only use send_keys if a shell prompt is visibly present.\n\n\
@@ -1323,13 +1323,14 @@ impl TerminalContext {
              - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context` or `tmux_snapshot`. Only call list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
              - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_list_targets, then tmux_capture_pane.\n\
+             - TMUX NATIVE COMMAND LAUNCH on a pane with tmux native control → tmux_run_command to create a new tmux window or split for a shell, Codex CLI, Claude Code, OpenCode, or a long-running command.\n\
              - TMUX NATIVE INTERACTION on a pane with tmux native control → tmux_send_keys to a specific tmux pane target.\n\
              - TMUX WITHOUT native control → read_pane first, then outer-pane send_keys only as a fallback.\n\
              - PARALLEL WORK across hosts → create_pane for each host (output shows connection state), \
                then terminal_exec (if exec_visible_shell) or send_keys.\n\
              - SHELL COMMANDS on a pane WITHOUT `exec_visible_shell` → use read_pane first, then send_keys \"command\\n\" only if a shell prompt is visibly present.\n\
              - LONG-RUNNING commands → launch, then wait_for (not repeated read_pane).\n\
-             - INTERACTIVE TUI (vim, htop, menus) → send_keys + read_pane (follow playbooks).\n\
+             - INTERACTIVE TUI (htop, menus, agent CLIs without a stronger attachment) → send_keys + read_pane (follow playbooks).\n\
              - LOCAL FILE operations → file_read, file_write, edit_file, search, list_files.\n\
              - REMOTE FILE operations → send_keys in a remote shell (cat, heredoc, editor commands).\n\n\
              ## Turn efficiency\n\
@@ -1365,6 +1366,7 @@ impl TerminalContext {
              - tmux_inspect: Inspect tmux adapter state for a pane containing a tmux session.\n\
              - tmux_list_targets: List tmux windows/panes through a proven same-session tmux shell anchor.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
+             - tmux_run_command: Create a new tmux window or split pane and run a command there through a proven same-session tmux shell anchor.\n\
              - tmux_send_keys: Send text or tmux key names to a specific tmux pane target through a proven same-session tmux shell anchor.\n\
              - search_panes: Search scrollback across panes by regex.\n\n\
              - file_read, file_write, edit_file: LOCAL filesystem only. Cannot access remote SSH hosts.\n\
@@ -1383,7 +1385,7 @@ impl TerminalContext {
              - `screen_hints` are weak observations derived from the current visible screen snapshot. They can describe what appears to be on screen now, but they are not backend facts and must not unlock control.\n\
              - Do not end a session-state answer with a vague offer to \"inspect more closely\". Only propose a next step when a stronger fact source is concretely available, such as `probe_shell_context`, `tmux_snapshot`, or tmux native tools already present on the pane.\n\
              - Addressing is layered. A con pane index ≠ tmux pane id ≠ tmux window index ≠ editor buffer.\n\
-             - If list_panes shows `query_tmux` or `send_tmux_keys`, treat tmux as a native attachment. Do NOT navigate tmux by outer-pane send_keys unless the native path is unavailable.\n\
+             - If list_panes shows `query_tmux`, `exec_tmux_command`, or `send_tmux_keys`, treat tmux as a native attachment. Do NOT navigate tmux by outer-pane send_keys unless the native path is unavailable.\n\
              - When pane mode is not `shell` or shell metadata is stale, do NOT trust cwd/hostname/last_command and do NOT assume a shell prompt.\n\
              - If a command fails (exit_code != 0), diagnose the error before retrying.\n\
              - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
@@ -1897,13 +1899,8 @@ impl TerminalContext {
                         .iter()
                         .any(|scope| scope.kind == PaneScopeKind::Multiplexer)
             });
-        let has_vim = self.has_vim_visible()
-            || self
-                .other_panes
-                .iter()
-                .any(|p| is_vim_target(&p.control.visible_target));
 
-        if !focused_is_tui && !any_other_pane_tui && !is_remote && !has_tmux && !has_vim {
+        if !focused_is_tui && !any_other_pane_tui && !is_remote && !has_tmux {
             return;
         }
 
@@ -1915,7 +1912,7 @@ impl TerminalContext {
             prompt.push('\n');
         }
 
-        if focused_is_tui || any_other_pane_tui || has_tmux || has_vim {
+        if focused_is_tui || any_other_pane_tui || has_tmux {
             prompt.push_str(playbooks::VERIFY_AFTER_ACT);
             prompt.push('\n');
         }
@@ -1925,28 +1922,13 @@ impl TerminalContext {
             prompt.push_str(playbooks::TMUX_PLAYBOOK);
             prompt.push('\n');
         }
-        if has_vim {
-            prompt.push_str(playbooks::VIM_PLAYBOOK);
-            prompt.push('\n');
-        }
-        if (focused_is_tui || any_other_pane_tui) && !has_tmux && !has_vim {
+        if (focused_is_tui || any_other_pane_tui) && !has_tmux {
             prompt.push_str(playbooks::GENERAL_TUI);
             prompt.push('\n');
         }
 
         prompt.push_str("</tui_interaction_guide>\n\n");
     }
-
-    fn has_vim_visible(&self) -> bool {
-        is_vim_target(&self.focused_control.visible_target)
-    }
-}
-
-fn is_vim_target(target: &crate::control::PaneVisibleTarget) -> bool {
-    target.label.as_ref().is_some_and(|label| {
-        let lower = label.to_lowercase();
-        lower.contains("vim") || lower.contains("nvim") || lower.contains("neovim")
-    })
 }
 
 #[cfg(test)]
@@ -2499,17 +2481,6 @@ mod tests {
     }
 
     #[test]
-    fn title_only_vim_does_not_emit_vim_playbook() {
-        let mut ctx = make_shell_context();
-        ctx.focused_title = Some("nvim test.sh".to_string());
-        let prompt = ctx.to_system_prompt();
-        assert!(
-            !prompt.contains("vim/nvim interaction"),
-            "Vim playbook should not appear from title-only observations"
-        );
-    }
-
-    #[test]
     fn derive_screen_hints_marks_visible_prompt_and_htop_as_observations() {
         let hints = derive_screen_hints(&[
             "Tasks: 105, 738 thr, 692 kthr; 1 running".to_string(),
@@ -2542,10 +2513,14 @@ mod tests {
             panes: vec![TmuxPaneInfo {
                 session_name: "work".to_string(),
                 window_id: "@4".to_string(),
+                window_index: "4".to_string(),
                 window_name: "shell".to_string(),
+                window_target: "work:4".to_string(),
                 pane_id: "%17".to_string(),
                 pane_index: "0".to_string(),
+                target: "work:4.0".to_string(),
                 pane_active: true,
+                window_active: true,
                 pane_current_command: Some("zsh".to_string()),
                 pane_current_path: Some("/home/w/repo".to_string()),
             }],

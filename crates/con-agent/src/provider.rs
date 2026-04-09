@@ -21,7 +21,7 @@ use crate::tools::{
     BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
     ListPanesTool, PaneRequest, ProbeShellContextTool, ReadPaneTool, SearchPanesTool, SearchTool,
     SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecTool, TmuxCaptureTool,
-    TmuxInspectTool, TmuxListTool, TmuxSendKeysTool, WaitForTool,
+    TmuxInspectTool, TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
 };
 
 // ── Provider enum ───────────────────────────────────────────────────
@@ -425,6 +425,7 @@ macro_rules! build_and_stream {
             .tool(TmuxListTool::new($pane_tx.clone()))
             .tool(TmuxCaptureTool::new($pane_tx.clone()))
             .tool(TmuxSendKeysTool::new($pane_tx.clone()))
+            .tool(TmuxRunCommandTool::new($pane_tx.clone()))
             .tool(ProbeShellContextTool::new($pane_tx.clone()))
             .tool(ReadPaneTool::new($pane_tx.clone()))
             .tool(SendKeysTool::new($pane_tx.clone()))

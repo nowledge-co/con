@@ -6,10 +6,14 @@ const PREFIX: &str = "__CON_TMUX__";
 pub struct TmuxPaneInfo {
     pub session_name: String,
     pub window_id: String,
+    pub window_index: String,
     pub window_name: String,
+    pub window_target: String,
     pub pane_id: String,
     pub pane_index: String,
+    pub target: String,
     pub pane_active: bool,
+    pub window_active: bool,
     pub pane_current_command: Option<String>,
     pub pane_current_path: Option<String>,
 }
@@ -25,6 +29,28 @@ pub struct TmuxCapture {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TmuxExecLocation {
+    NewWindow,
+    SplitHorizontal,
+    SplitVertical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TmuxExecResult {
+    pub location: TmuxExecLocation,
+    pub detached: bool,
+    pub session_name: String,
+    pub window_id: String,
+    pub window_index: String,
+    pub window_name: String,
+    pub window_target: String,
+    pub pane_id: String,
+    pub pane_index: String,
+    pub target: String,
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
@@ -33,7 +59,7 @@ pub fn build_tmux_list_command(nonce: &str) -> String {
     format!(
         r#"sh -lc '
 printf "%s\n" "__CON_TMUX_BEGIN_{nonce}__"
-tmux list-panes -a -F "__CON_TMUX__\t#{{session_name}}\t#{{window_id}}\t#{{window_name}}\t#{{pane_id}}\t#{{pane_index}}\t#{{pane_active}}\t#{{pane_current_command}}\t#{{pane_current_path}}" 2>/dev/null
+tmux list-panes -a -F "__CON_TMUX__\t#{{session_name}}\t#{{window_id}}\t#{{window_index}}\t#{{window_name}}\t#{{pane_id}}\t#{{pane_index}}\t#{{pane_active}}\t#{{window_active}}\t#{{pane_current_command}}\t#{{pane_current_path}}" 2>/dev/null
 printf "%s\n" "__CON_TMUX_END_{nonce}__"
 '"#,
     )
@@ -55,23 +81,29 @@ pub fn parse_tmux_list_lines(lines: &[String], nonce: &str) -> Result<TmuxSnapsh
     let mut panes = Vec::new();
     for line in &lines[begin_idx + 1..end_idx] {
         let trimmed = line.trim_end_matches('\r');
-        let mut parts = trimmed.splitn(9, '\t');
+        let mut parts = trimmed.splitn(11, '\t');
         if parts.next() != Some(PREFIX) {
             continue;
         }
         let fields: Vec<_> = parts.collect();
-        if fields.len() != 8 {
+        if fields.len() != 10 {
             continue;
         }
+        let window_target = format!("{}:{}", fields[0], fields[2]);
+        let target = format!("{}.{}", window_target, fields[5]);
         panes.push(TmuxPaneInfo {
             session_name: fields[0].to_string(),
             window_id: fields[1].to_string(),
-            window_name: fields[2].to_string(),
-            pane_id: fields[3].to_string(),
-            pane_index: fields[4].to_string(),
-            pane_active: fields[5] == "1",
-            pane_current_command: optional_field(fields[6]),
-            pane_current_path: optional_field(fields[7]),
+            window_index: fields[2].to_string(),
+            window_name: fields[3].to_string(),
+            window_target,
+            pane_id: fields[4].to_string(),
+            pane_index: fields[5].to_string(),
+            target,
+            pane_active: fields[6] == "1",
+            window_active: fields[7] == "1",
+            pane_current_command: optional_field(fields[8]),
+            pane_current_path: optional_field(fields[9]),
         });
     }
 
@@ -156,6 +188,111 @@ pub fn build_tmux_send_keys_command(
     Ok(format!("sh -lc {}", shell_quote(&commands.join(" && "))))
 }
 
+pub fn build_tmux_exec_command(
+    nonce: &str,
+    location: TmuxExecLocation,
+    target: Option<&str>,
+    command: &str,
+    window_name: Option<&str>,
+    cwd: Option<&str>,
+    detached: bool,
+) -> String {
+    let mut args = vec![
+        "tmux".to_string(),
+        match location {
+            TmuxExecLocation::NewWindow => "new-window".to_string(),
+            TmuxExecLocation::SplitHorizontal | TmuxExecLocation::SplitVertical => {
+                "split-window".to_string()
+            }
+        },
+        "-P".to_string(),
+        "-F".to_string(),
+        shell_quote(&format!(
+            "__CON_TMUX_EXEC__\t#{{session_name}}\t#{{window_id}}\t#{{window_index}}\t#{{window_name}}\t#{{pane_id}}\t#{{pane_index}}"
+        )),
+    ];
+
+    if detached {
+        args.push("-d".to_string());
+    }
+    if let Some(target) = target {
+        args.push("-t".to_string());
+        args.push(shell_quote(target));
+    }
+    match location {
+        TmuxExecLocation::SplitHorizontal => args.push("-h".to_string()),
+        TmuxExecLocation::SplitVertical => args.push("-v".to_string()),
+        TmuxExecLocation::NewWindow => {}
+    }
+    if let Some(window_name) = window_name {
+        if matches!(location, TmuxExecLocation::NewWindow) {
+            args.push("-n".to_string());
+            args.push(shell_quote(window_name));
+        }
+    }
+    if let Some(cwd) = cwd {
+        args.push("-c".to_string());
+        args.push(shell_quote(cwd));
+    }
+    args.push(shell_quote(command));
+
+    format!(
+        r#"sh -lc '
+printf "%s\n" "__CON_TMUX_EXEC_BEGIN_{nonce}__"
+{}
+printf "%s\n" "__CON_TMUX_EXEC_END_{nonce}__"
+'"#,
+        args.join(" ")
+    )
+}
+
+pub fn parse_tmux_exec_lines(
+    lines: &[String],
+    nonce: &str,
+    location: TmuxExecLocation,
+    detached: bool,
+) -> Result<TmuxExecResult, String> {
+    let begin = format!("__CON_TMUX_EXEC_BEGIN_{nonce}__");
+    let end = format!("__CON_TMUX_EXEC_END_{nonce}__");
+
+    let end_idx = lines
+        .iter()
+        .rposition(|line| line.trim_end() == end)
+        .ok_or_else(|| "tmux exec end marker not found in pane output".to_string())?;
+    let begin_idx = lines[..end_idx]
+        .iter()
+        .rposition(|line| line.trim_end() == begin)
+        .ok_or_else(|| "tmux exec begin marker not found in pane output".to_string())?;
+
+    for line in &lines[begin_idx + 1..end_idx] {
+        let trimmed = line.trim_end_matches('\r');
+        let mut parts = trimmed.splitn(8, '\t');
+        if parts.next() != Some("__CON_TMUX_EXEC__") {
+            continue;
+        }
+        let fields: Vec<_> = parts.collect();
+        if fields.len() != 6 {
+            continue;
+        }
+        let window_target = format!("{}:{}", fields[0], fields[2]);
+        let target = format!("{}.{}", window_target, fields[5]);
+        return Ok(TmuxExecResult {
+            location,
+            detached,
+            session_name: fields[0].to_string(),
+            window_id: fields[1].to_string(),
+            window_index: fields[2].to_string(),
+            window_name: fields[3].to_string(),
+            window_target,
+            pane_id: fields[4].to_string(),
+            pane_index: fields[5].to_string(),
+            target,
+        });
+    }
+
+    Err("tmux exec markers were present but no target row was parsed".to_string())
+}
+
 fn optional_field(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -168,21 +305,24 @@ fn optional_field(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_tmux_capture_command, build_tmux_list_command, build_tmux_send_keys_command,
-        parse_tmux_capture_lines, parse_tmux_list_lines,
+        TmuxExecLocation, build_tmux_capture_command, build_tmux_exec_command,
+        build_tmux_list_command, build_tmux_send_keys_command, parse_tmux_capture_lines,
+        parse_tmux_exec_lines, parse_tmux_list_lines,
     };
 
     #[test]
     fn list_parser_extracts_tmux_panes() {
         let lines = vec![
             "__CON_TMUX_BEGIN_x__".to_string(),
-            "__CON_TMUX__\twork\t@1\tshell\t%3\t0\t1\tzsh\t/home/w".to_string(),
-            "__CON_TMUX__\twork\t@2\tcodex\t%7\t1\t0\tcodex\t/home/w/repo".to_string(),
+            "__CON_TMUX__\twork\t@1\t1\tshell\t%3\t0\t1\t1\tzsh\t/home/w".to_string(),
+            "__CON_TMUX__\twork\t@2\t2\tcodex\t%7\t1\t0\t0\tcodex\t/home/w/repo".to_string(),
             "__CON_TMUX_END_x__".to_string(),
         ];
         let snapshot = parse_tmux_list_lines(&lines, "x").expect("parse");
         assert_eq!(snapshot.panes.len(), 2);
         assert_eq!(snapshot.panes[1].pane_id, "%7");
+        assert_eq!(snapshot.panes[1].window_index, "2");
+        assert_eq!(snapshot.panes[1].target, "work:2.1");
         assert_eq!(
             snapshot.panes[1].pane_current_command.as_deref(),
             Some("codex")
@@ -210,8 +350,34 @@ mod tests {
             build_tmux_capture_command("n", Some("%3"), 80)
                 .contains("__CON_TMUX_CAPTURE_BEGIN_n__")
         );
+        assert!(
+            build_tmux_exec_command(
+                "n",
+                TmuxExecLocation::NewWindow,
+                None,
+                "htop",
+                Some("monitor"),
+                Some("/tmp"),
+                true,
+            )
+            .contains("__CON_TMUX_EXEC_BEGIN_n__")
+        );
         let cmd = build_tmux_send_keys_command("%3", Some("ls"), &[], true).expect("cmd");
         assert!(cmd.contains("tmux send-keys"));
         assert!(cmd.contains("Enter"));
+    }
+
+    #[test]
+    fn exec_parser_extracts_spawned_target() {
+        let lines = vec![
+            "__CON_TMUX_EXEC_BEGIN_x__".to_string(),
+            "__CON_TMUX_EXEC__\twork\t@9\t9\tmonitor\t%31\t0".to_string(),
+            "__CON_TMUX_EXEC_END_x__".to_string(),
+        ];
+        let exec =
+            parse_tmux_exec_lines(&lines, "x", TmuxExecLocation::NewWindow, true).expect("exec");
+        assert_eq!(exec.window_target, "work:9");
+        assert_eq!(exec.target, "work:9.0");
+        assert!(exec.detached);
     }
 }

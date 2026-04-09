@@ -70,6 +70,7 @@ That attachment currently supports:
 
 - tmux target discovery
 - tmux pane capture
+- tmux-native command launch into a new window or split pane
 - tmux-native send-keys to a chosen tmux target
 
 This is the right abstraction because it scales across:
@@ -82,8 +83,7 @@ without needing app-specific screen scraping.
 
 What it does not solve yet:
 
-- tmux-native pane and window addressing
-- tmux-native command execution
+- authoritative foreground-process truth inside arbitrary tmux targets after manual user interaction
 - editor-native control
 - foreground-process truth from Ghostty for nested remote runtimes
 - manual tmux/editor detection on the current embedded Ghostty backend when command text and alternate-screen state are not exported

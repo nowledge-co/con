@@ -64,7 +64,13 @@ impl ConHook {
 pub fn is_dangerous(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "shell_exec" | "terminal_exec" | "batch_exec" | "file_write" | "edit_file" | "send_keys"
+        "shell_exec"
+            | "terminal_exec"
+            | "batch_exec"
+            | "file_write"
+            | "edit_file"
+            | "send_keys"
+            | "tmux_run_command"
     )
 }
 

@@ -26,11 +26,11 @@ pub use provider::{
 };
 pub use shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
 pub use skills::{Skill, SkillRegistry};
-pub use tmux::{TmuxCapture, TmuxPaneInfo, TmuxSnapshot};
+pub use tmux::{TmuxCapture, TmuxExecLocation, TmuxExecResult, TmuxPaneInfo, TmuxSnapshot};
 pub use tools::{
     BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
     ListPanesTool, PaneInfo, PaneQuery, PaneRequest, PaneResponse, ProbeShellContextTool,
     ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest,
     TerminalExecResponse, TerminalExecTool, TmuxCaptureTool, TmuxInspectTool, TmuxListTool,
-    TmuxSendKeysTool, WaitForTool,
+    TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
 };

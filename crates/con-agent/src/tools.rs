@@ -13,7 +13,7 @@ use crate::control::{
     PaneVisibleTarget, TmuxControlState,
 };
 use crate::shell_probe::ShellProbeResult;
-use crate::tmux::{TmuxCapture, TmuxSnapshot};
+use crate::tmux::{TmuxCapture, TmuxExecLocation, TmuxExecResult, TmuxSnapshot};
 
 /// Error type for agent tool execution
 #[derive(Debug, thiserror::Error)]
@@ -793,6 +793,16 @@ pub enum PaneQuery {
         key_names: Vec<String>,
         append_enter: bool,
     },
+    /// Run a command through tmux itself by creating a new tmux target.
+    TmuxRunCommand {
+        pane_index: usize,
+        target: Option<String>,
+        location: TmuxExecLocation,
+        command: String,
+        window_name: Option<String>,
+        cwd: Option<String>,
+        detached: bool,
+    },
     /// Run a read-only shell-scoped probe in a pane with a proven fresh shell prompt.
     ProbeShellContext { pane_index: usize },
     /// Lightweight busy check for a single pane (used by wait_for polling).
@@ -817,6 +827,7 @@ pub enum PaneResponse {
     TmuxInfo(TmuxControlState),
     TmuxList(TmuxSnapshot),
     TmuxCapture(TmuxCapture),
+    TmuxExec(TmuxExecResult),
     ShellProbe(ShellProbeResult),
     /// Search results: Vec of (pane_index, line_number, line_text).
     SearchResults(Vec<(usize, usize, String)>),
@@ -861,7 +872,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, current verified front-state, current runtime_stack, last_verified_runtime_stack, backend-support flags, typed shell context, recent con actions, current visible-screen observation hints, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata. If a pane exposes query_tmux or send_tmux_keys, prefer tmux-native tools over outer-pane send_keys.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, current verified front-state, current runtime_stack, last_verified_runtime_stack, backend-support flags, typed shell context, recent con actions, current visible-screen observation hints, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata. If a pane exposes query_tmux, exec_tmux_command, or send_tmux_keys, prefer tmux-native tools over outer-pane send_keys.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -1204,6 +1215,115 @@ impl Tool for TmuxSendKeysTool {
 
         match response {
             PaneResponse::Content(content) => Ok(content),
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+// ── tmux_run_command tool ─────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TmuxRunCommandArgs {
+    pub pane_index: usize,
+    pub location: TmuxExecLocation,
+    pub command: String,
+    pub target: Option<String>,
+    pub window_name: Option<String>,
+    pub cwd: Option<String>,
+    #[serde(default = "default_true")]
+    pub detached: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub struct TmuxRunCommandTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl TmuxRunCommandTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for TmuxRunCommandTool {
+    const NAME: &'static str = "tmux_run_command";
+    type Error = ToolError;
+    type Args = TmuxRunCommandArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Run a command through tmux itself by creating a new tmux window or split pane from a proven same-session tmux control anchor. This is the preferred way to launch a fresh shell, Codex CLI, Claude Code, OpenCode, or any long-running command inside tmux without typing through the currently visible app.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                    },
+                    "location": {
+                        "type": "string",
+                        "enum": ["new_window", "split_horizontal", "split_vertical"],
+                        "description": "Where to create the tmux target."
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Command to run inside the new tmux target."
+                    },
+                    "target": {
+                        "type": ["string", "null"],
+                        "description": "Optional tmux target for placement, such as a session for new_window or an existing pane/window for split operations."
+                    },
+                    "window_name": {
+                        "type": ["string", "null"],
+                        "description": "Optional tmux window name. Only used for new_window."
+                    },
+                    "cwd": {
+                        "type": ["string", "null"],
+                        "description": "Optional working directory for the new tmux target."
+                    },
+                    "detached": {
+                        "type": "boolean",
+                        "description": "Whether the new tmux target should start detached. Defaults to true."
+                    }
+                },
+                "required": ["pane_index", "location", "command"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::TmuxRunCommand {
+                    pane_index: args.pane_index,
+                    target: args.target,
+                    location: args.location,
+                    command: args.command,
+                    window_name: args.window_name,
+                    cwd: args.cwd,
+                    detached: args.detached,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(12))
+                .map_err(|_| ToolError::CommandFailed("tmux run-command timed out".into()))
+        })?;
+
+        match response {
+            PaneResponse::TmuxExec(exec) => {
+                serde_json::to_value(&exec).map_err(|e| ToolError::CommandFailed(e.to_string()))
+            }
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }

@@ -23,10 +23,11 @@ Do not assume you know what is on screen — always read first.
 pub const TMUX_PLAYBOOK: &str = "\
 ## tmux interaction
 
-Preferred path: if list_panes shows `query_tmux` or `send_tmux_keys`, use tmux-native tools first.
+Preferred path: if list_panes shows `query_tmux`, `exec_tmux_command`, or `send_tmux_keys`, use tmux-native tools first.
 1. tmux_list_targets to discover exact tmux windows and panes
 2. tmux_capture_pane to inspect the chosen tmux pane without confusing it with the outer con pane
-3. tmux_send_keys to a specific tmux pane target
+3. tmux_run_command when you need a fresh shell, a dedicated work window, or a new agent CLI target
+4. tmux_send_keys to a specific tmux pane target
 
 Use outer-pane send_keys for tmux only as a fallback when tmux native control is unavailable.
 tmux intercepts its prefix key from the PTY stream. Sending \\x02 (Ctrl-B) via send_keys \
@@ -44,6 +45,7 @@ Parse the status bar to know which window you are on and what other windows exis
 ### Native tmux workflow
 - Discover targets: tmux_list_targets(pane_index=...)
 - Inspect a target: tmux_capture_pane(pane_index=..., target=\"%17\")
+- Launch a fresh target: tmux_run_command(pane_index=..., location=\"new_window\", command=\"bash\", window_name=\"scratch\")
 - Act on a target: tmux_send_keys(pane_index=..., target=\"%17\", literal_text=\"htop\", append_enter=true)
 
 ### Fallback navigation (only when tmux native control is unavailable)
@@ -59,7 +61,7 @@ Parse the status bar to know which window you are on and what other windows exis
 ### Writing a file on a remote host via tmux
 When you need to create or write a file on the remote machine:
 1. read_pane to see current tmux state
-2. Prefer tmux_list_targets to find a shell pane by pane_current_command/path. If native control is unavailable, navigate to a shell pane by status bar or create one with send_keys \"\\x02c\"
+2. Prefer tmux_list_targets to find a shell pane by pane_current_command/path. If native control is available and no good shell pane exists, create one with tmux_run_command. If native control is unavailable, navigate to a shell pane by status bar or create one with send_keys \"\\x02c\"
 3. read_pane to verify you have a shell prompt (look for $, %, #, or similar)
 4. If native control is available, send the heredoc through tmux_send_keys to the target shell pane. Otherwise use send_keys in the outer pane. Write the file using heredoc:
    send_keys \"cat > path/to/file << 'CONEOF'\\n\"
@@ -68,74 +70,16 @@ When you need to create or write a file on the remote machine:
 5. read_pane to verify the file was written (check for shell prompt return)
 6. Optionally verify: send_keys \"cat path/to/file\\n\" then read_pane
 
-### Running commands when a TUI (nvim, htop, etc.) is currently visible
-1. read_pane to confirm current state (e.g., nvim is showing)
+### Running commands when a TUI is currently visible
+1. read_pane to confirm current state
 2. Prefer tmux_list_targets to identify a shell pane/window and tmux_capture_pane to confirm it. \
+If native control is available and no shell pane is ready, create one with tmux_run_command. \
 If native control is unavailable, switch to another tmux window with a shell prompt, \
 or create a new window with send_keys \"\\x02c\"
 3. read_pane to verify you reached a shell prompt
 4. Prefer tmux_send_keys to the specific shell pane target. Use outer-pane send_keys only when native control is unavailable
 5. read_pane to see the output
 6. Optionally switch back to the original window when done
-";
-
-/// vim/nvim editing via send_keys.
-pub const VIM_PLAYBOOK: &str = "\
-## vim/nvim interaction via send_keys
-
-### Prefer heredoc over vim insert mode for writing new files
-If you need to CREATE a new file or REPLACE an entire file's contents, \
-navigate to a shell (or create one via tmux) and use heredoc:
-  send_keys \"cat > path/to/file << 'CONEOF'\\n\"
-  send_keys \"line 1\\nline 2\\nline 3\\n\"
-  send_keys \"CONEOF\\n\"
-This is faster and more reliable than typing into vim insert mode. \
-Use vim editing (below) when you need to MODIFY an existing file that is already open.
-
-### Step 0: Always read_pane FIRST
-Before any vim operation, read_pane to understand:
-- Is vim actually visible right now? (if not, navigate to it first)
-- What mode is vim in? (check the bottom status line)
-- What file is open? (shown in the title bar or status line)
-
-### Detecting mode
-- If the bottom shows \"-- INSERT --\": vim is in insert mode
-- If the bottom shows \":\" followed by text: vim is in command-line mode
-- If no mode indicator: vim is in normal mode
-
-### Always start from normal mode
-Send \\x1b (Escape) first to ensure you are in normal mode before any operation.
-
-### Writing content to the current buffer
-To replace entire file content:
-1. send_keys \"\\x1b\" (ensure normal mode) — read_pane to verify
-2. send_keys \"ggdG\" (go to top, delete everything) — read_pane to verify empty
-3. send_keys \"i\" (enter insert mode) then immediately send content in the SAME call:
-   send_keys \"iline1\\nline2\\nline3\\n...content...\"
-   You can send up to ~50 lines in one send_keys call.
-4. read_pane to verify content was entered correctly
-5. send_keys \"\\x1b\" then send_keys \":w\\n\" (escape, then save)
-6. read_pane to verify save succeeded (look for \"written\" message at bottom)
-
-To append content at the end:
-1. send_keys \"\\x1b\" then send_keys \"Go\" (normal mode, go to last line, open new line in insert)
-2. send_keys the content
-3. send_keys \"\\x1b\" then send_keys \":w\\n\"
-
-### Saving and quitting
-- Save: send_keys \"\\x1b\" then send_keys \":w\\n\"
-- Save and quit: send_keys \"\\x1b\" then send_keys \":wq\\n\"
-- Quit without saving: send_keys \"\\x1b\" then send_keys \":q!\\n\"
-- Open a different file: send_keys \"\\x1b\" then send_keys \":e path/to/file\\n\"
-
-### Large content (more than 10 lines)
-Prefer heredoc through a shell. If you must use vim, send content in chunks of 5-10 lines. \
-After each chunk, read_pane to verify. If corruption, undo with send_keys \"\\x1bu\" and retry.
-
-### When vim is inside tmux
-If you need to navigate away from vim to a tmux shell, use the tmux prefix (\\x02) — \
-vim will ignore Ctrl-B in normal mode, and tmux will intercept it.
-To return to the vim window, use tmux window switching (\\x02 then window number).
 ";
 
 /// Fallback guidance for unknown TUI applications.

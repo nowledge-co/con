@@ -50,6 +50,7 @@ pub enum PaneControlChannel {
     VisibleShellExec,
     TmuxQuery,
     TmuxSendKeys,
+    TmuxExec,
 }
 
 impl PaneControlChannel {
@@ -62,6 +63,7 @@ impl PaneControlChannel {
             Self::VisibleShellExec => "visible_shell_exec",
             Self::TmuxQuery => "tmux_query",
             Self::TmuxSendKeys => "tmux_send_keys",
+            Self::TmuxExec => "tmux_exec",
         }
     }
 }
@@ -76,6 +78,7 @@ pub enum PaneControlCapability {
     ExecVisibleShell,
     QueryTmux,
     SendTmuxKeys,
+    ExecTmuxCommand,
 }
 
 impl PaneControlCapability {
@@ -88,6 +91,7 @@ impl PaneControlCapability {
             Self::ExecVisibleShell => "exec_visible_shell",
             Self::QueryTmux => "query_tmux",
             Self::SendTmuxKeys => "send_tmux_keys",
+            Self::ExecTmuxCommand => "exec_tmux_command",
         }
     }
 }
@@ -268,8 +272,10 @@ impl PaneControlState {
             {
                 channels.push(PaneControlChannel::TmuxQuery);
                 channels.push(PaneControlChannel::TmuxSendKeys);
+                channels.push(PaneControlChannel::TmuxExec);
                 capabilities.push(PaneControlCapability::QueryTmux);
                 capabilities.push(PaneControlCapability::SendTmuxKeys);
+                capabilities.push(PaneControlCapability::ExecTmuxCommand);
             }
         }
 
@@ -304,7 +310,7 @@ impl PaneControlState {
                     "Fresh shell probe confirmed that the visible shell prompt is inside tmux session `{session}` pane `{pane}`."
                 ));
                 notes.push(
-                    "This pane now has a same-session tmux control anchor. Prefer tmux-native query/capture/send tools over raw outer-pane input when operating inside tmux."
+                    "This pane now has a same-session tmux control anchor. Prefer tmux-native query/capture/run/send tools over raw outer-pane input when operating inside tmux."
                         .to_string(),
                 );
             }
@@ -460,9 +466,10 @@ fn attachments_from_runtime(
                     capabilities: vec![
                         PaneControlCapability::QueryTmux,
                         PaneControlCapability::SendTmuxKeys,
+                        PaneControlCapability::ExecTmuxCommand,
                     ],
                     note: Some(
-                        "A fresh shell probe confirmed a same-session tmux shell anchor. con can query tmux state and send tmux-native keys through that shell."
+                        "A fresh shell probe confirmed a same-session tmux shell anchor. con can query tmux state, create tmux targets, and send tmux-native keys through that shell."
                             .to_string(),
                     ),
                 });
@@ -530,7 +537,7 @@ fn tmux_control_from_runtime(
                 .and_then(|context| context.tmux.as_ref())
                 .is_some()
         {
-            "con has a typed same-session tmux shell anchor for this pane. Native tmux query, capture, and send-keys are available through that anchor.".to_string()
+            "con has a typed same-session tmux shell anchor for this pane. Native tmux query, capture, run-command, and send-keys are available through that anchor.".to_string()
         } else if has_current_tmux {
             "con can identify a current tmux layer in this pane, but it does not yet have a same-session tmux control channel. Native tmux pane/window targeting and tmux command execution are unavailable.".to_string()
         } else {
