@@ -131,9 +131,11 @@ GPUI gives us Zed-level text rendering quality (critical for a terminal) and a p
 con now runs one terminal runtime: full Ghostty embedded via its C API.
 
 - Ghostty owns PTY lifecycle, VT parsing, scrollback, and rendering
-- con embeds Ghostty surfaces inside GPUI windows and split layouts
+- con embeds one shared Ghostty app per window and one Ghostty surface per split inside GPUI layouts
 - `con-ghostty` stays thin: app lifecycle, surface lifecycle, callbacks, and safe Rust accessors
 - `con-terminal` now only owns theme and palette data used to drive Ghostty config
+
+Native Ghostty splits do not imply a single monolithic surface. Ghostty's own macOS architecture also uses a host-managed surface tree with one surface per split. The right migration path for con is therefore a Ghostty-driven surface-tree controller, not collapsing the whole window into one terminal surface.
 
 `TerminalPane` still exists, but it is now a product abstraction around one kind of pane, not a multi-backend compatibility layer.
 

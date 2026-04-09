@@ -226,6 +226,45 @@ pub struct ghostty_target_s {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::upper_case_acronyms)]
+pub enum ghostty_action_split_direction_e {
+    GHOSTTY_SPLIT_DIRECTION_RIGHT = 0,
+    GHOSTTY_SPLIT_DIRECTION_DOWN,
+    GHOSTTY_SPLIT_DIRECTION_LEFT,
+    GHOSTTY_SPLIT_DIRECTION_UP,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum ghostty_action_goto_split_e {
+    GHOSTTY_GOTO_SPLIT_PREVIOUS = 0,
+    GHOSTTY_GOTO_SPLIT_NEXT,
+    GHOSTTY_GOTO_SPLIT_UP,
+    GHOSTTY_GOTO_SPLIT_LEFT,
+    GHOSTTY_GOTO_SPLIT_DOWN,
+    GHOSTTY_GOTO_SPLIT_RIGHT,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum ghostty_action_resize_split_direction_e {
+    GHOSTTY_RESIZE_SPLIT_UP = 0,
+    GHOSTTY_RESIZE_SPLIT_DOWN,
+    GHOSTTY_RESIZE_SPLIT_LEFT,
+    GHOSTTY_RESIZE_SPLIT_RIGHT,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_resize_split_s {
+    pub amount: u16,
+    pub direction: ghostty_action_resize_split_direction_e,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum ghostty_action_tag_e {
     GHOSTTY_ACTION_QUIT = 0,
     GHOSTTY_ACTION_NEW_WINDOW,
@@ -321,6 +360,9 @@ pub struct ghostty_action_command_finished_s {
 /// Action union — only relevant fields are accessed based on tag.
 #[repr(C)]
 pub union ghostty_action_u {
+    pub new_split: ghostty_action_split_direction_e,
+    pub goto_split: ghostty_action_goto_split_e,
+    pub resize_split: ghostty_action_resize_split_s,
     pub set_title: ghostty_action_set_title_s,
     pub pwd: ghostty_action_pwd_s,
     pub command_finished: ghostty_action_command_finished_s,
@@ -495,6 +537,20 @@ unsafe extern "C" {
         mods: ghostty_input_scroll_mods_t,
     );
     pub fn ghostty_surface_request_close(surface: ghostty_surface_t);
+    pub fn ghostty_surface_split(
+        surface: ghostty_surface_t,
+        direction: ghostty_action_split_direction_e,
+    );
+    pub fn ghostty_surface_split_focus(
+        surface: ghostty_surface_t,
+        direction: ghostty_action_goto_split_e,
+    );
+    pub fn ghostty_surface_split_resize(
+        surface: ghostty_surface_t,
+        direction: ghostty_action_resize_split_direction_e,
+        amount: u16,
+    );
+    pub fn ghostty_surface_split_equalize(surface: ghostty_surface_t);
 
     // Surface text/selection
     pub fn ghostty_surface_has_selection(surface: ghostty_surface_t) -> bool;

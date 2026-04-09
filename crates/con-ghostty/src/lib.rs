@@ -5,6 +5,6 @@ pub mod ffi;
 pub mod terminal;
 
 pub use terminal::{
-    CommandFinishedSignal, CommandRecord, GhosttyApp, GhosttyTerminal, MouseButton, SurfaceSize,
-    TerminalColors, TerminalState,
+    CommandFinishedSignal, CommandRecord, GhosttyApp, GhosttySplitDirection, GhosttySurfaceEvent,
+    GhosttyTerminal, MouseButton, SurfaceSize, TerminalColors, TerminalState,
 };

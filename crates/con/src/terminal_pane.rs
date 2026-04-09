@@ -1,7 +1,7 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
 use con_agent::context::{PaneObservationFrame, PaneObservationSupport, derive_screen_hints};
-use con_ghostty::TerminalColors;
+use con_ghostty::{GhosttySplitDirection, TerminalColors};
 use con_terminal::TerminalTheme;
 use gpui::*;
 
@@ -92,6 +92,12 @@ impl TerminalPane {
             if let Err(err) = terminal.clear_screen_and_scrollback() {
                 log::error!("Failed to clear Ghostty scrollback: {}", err);
             }
+        }
+    }
+
+    pub fn request_split(&self, direction: GhosttySplitDirection, cx: &App) {
+        if let Some(terminal) = self.entity.read(cx).terminal() {
+            terminal.request_split(direction);
         }
     }
 
@@ -246,6 +252,12 @@ pub fn subscribe_terminal_pane(
         &pane.entity,
         window,
         ConWorkspace::on_terminal_title_changed,
+    )
+    .detach();
+    cx.subscribe_in(
+        &pane.entity,
+        window,
+        ConWorkspace::on_terminal_split_requested,
     )
     .detach();
 }

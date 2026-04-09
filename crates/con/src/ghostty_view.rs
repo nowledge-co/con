@@ -16,7 +16,9 @@ use std::os::raw::c_void;
 use std::sync::Arc;
 
 use con_ghostty::ffi;
-use con_ghostty::{GhosttyApp, GhosttyTerminal, MouseButton};
+use con_ghostty::{
+    GhosttyApp, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton,
+};
 use gpui::*;
 
 // Actions to intercept Tab/Shift-Tab before Root's focus-cycling handler.
@@ -40,10 +42,13 @@ pub struct GhosttyProcessExited;
 
 /// Emitted when the terminal gains focus.
 pub struct GhosttyFocusChanged;
+/// Emitted when Ghostty requests a new split from this surface.
+pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
+impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 
 /// GPUI view wrapping a ghostty terminal surface.
 pub struct GhosttyView {
@@ -94,6 +99,13 @@ impl GhosttyView {
                         view.app.tick();
 
                         if let Some(ref terminal) = view.terminal {
+                            for event in terminal.take_pending_events() {
+                                match event {
+                                    GhosttySurfaceEvent::SplitRequest(direction) => {
+                                        cx.emit(GhosttySplitRequested(direction));
+                                    }
+                                }
+                            }
                             if terminal.take_needs_render() {
                                 cx.notify();
                             }

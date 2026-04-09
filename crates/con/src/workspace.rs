@@ -18,14 +18,15 @@ use crate::input_bar::{
     EscapeInput, InputBar, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
 };
 use crate::model_registry::ModelRegistry;
-use crate::pane_tree::{PaneTree, SplitDirection};
+use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
 
 use crate::ghostty_view::{
-    GhosttyFocusChanged, GhosttyProcessExited, GhosttyTitleChanged, GhosttyView,
+    GhosttyFocusChanged, GhosttyProcessExited, GhosttySplitRequested, GhosttyTitleChanged,
+    GhosttyView,
 };
 use crate::{CloseTab, FocusInput, NewTab, Quit, SplitDown, SplitRight, ToggleAgentPanel};
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
@@ -856,10 +857,15 @@ impl ConWorkspace {
                 self.close_tab(&CloseTab, window, cx);
             }
             "split-right" => {
-                self.split_pane(SplitDirection::Horizontal, window, cx);
+                self.split_pane(
+                    SplitDirection::Horizontal,
+                    SplitPlacement::After,
+                    window,
+                    cx,
+                );
             }
             "split-down" => {
-                self.split_pane(SplitDirection::Vertical, window, cx);
+                self.split_pane(SplitDirection::Vertical, SplitPlacement::After, window, cx);
             }
             "clear-terminal" => {
                 self.active_terminal().clear_scrollback(cx);
@@ -2386,23 +2392,31 @@ impl ConWorkspace {
     fn split_pane(
         &mut self,
         direction: SplitDirection,
+        placement: SplitPlacement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let terminal = self.create_terminal(None, window, cx);
-        self.tabs[self.active_tab]
-            .pane_tree
-            .split(direction, terminal.clone());
+        let cwd = self.active_terminal().current_dir(cx);
+        let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+        self.tabs[self.active_tab].pane_tree.split_with_placement(
+            direction,
+            placement,
+            terminal.clone(),
+        );
         terminal.focus(window, cx);
         cx.notify();
     }
 
     fn split_right(&mut self, _: &SplitRight, window: &mut Window, cx: &mut Context<Self>) {
-        self.split_pane(SplitDirection::Horizontal, window, cx);
+        let _ = window;
+        self.active_terminal()
+            .request_split(con_ghostty::GhosttySplitDirection::Right, cx);
     }
 
     fn split_down(&mut self, _: &SplitDown, window: &mut Window, cx: &mut Context<Self>) {
-        self.split_pane(SplitDirection::Vertical, window, cx);
+        let _ = window;
+        self.active_terminal()
+            .request_split(con_ghostty::GhosttySplitDirection::Down, cx);
     }
 
     fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -2547,6 +2561,71 @@ impl ConWorkspace {
     ) {
         // Title changed — sync sidebar and tab bar
         self.sync_sidebar(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn on_terminal_split_requested(
+        &mut self,
+        entity: &Entity<GhosttyView>,
+        event: &GhosttySplitRequested,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entity_id = entity.entity_id();
+        let Some(tab_idx) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.pane_tree.pane_id_for_entity(entity_id).is_some())
+        else {
+            return;
+        };
+        let Some(origin_pane_id) = self.tabs[tab_idx].pane_tree.pane_id_for_entity(entity_id)
+        else {
+            return;
+        };
+
+        let (direction, placement) = match event.0 {
+            con_ghostty::GhosttySplitDirection::Right => {
+                (SplitDirection::Horizontal, SplitPlacement::After)
+            }
+            con_ghostty::GhosttySplitDirection::Down => {
+                (SplitDirection::Vertical, SplitPlacement::After)
+            }
+            con_ghostty::GhosttySplitDirection::Left => {
+                (SplitDirection::Horizontal, SplitPlacement::Before)
+            }
+            con_ghostty::GhosttySplitDirection::Up => {
+                (SplitDirection::Vertical, SplitPlacement::Before)
+            }
+        };
+
+        let origin_terminal = self.tabs[tab_idx]
+            .pane_tree
+            .all_terminals()
+            .into_iter()
+            .find(|terminal| terminal.entity_id() == entity_id)
+            .cloned();
+        let cwd = origin_terminal
+            .as_ref()
+            .and_then(|terminal| terminal.current_dir(cx));
+
+        let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+        self.tabs[tab_idx].pane_tree.split_pane_with_placement(
+            origin_pane_id,
+            direction,
+            placement,
+            terminal.clone(),
+        );
+        terminal.focus(window, cx);
+        self.active_tab = tab_idx;
+        self.record_runtime_event_for_terminal(
+            tab_idx,
+            &terminal,
+            con_agent::context::PaneRuntimeEvent::PaneCreated {
+                startup_command: None,
+            },
+        );
+        self.save_session(cx);
         cx.notify();
     }
 }

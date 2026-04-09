@@ -10,6 +10,12 @@ pub enum SplitDirection {
     Vertical,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SplitPlacement {
+    Before,
+    After,
+}
+
 /// Unique identifier for a leaf pane
 type PaneId = usize;
 
@@ -78,6 +84,15 @@ impl PaneTree {
 
     /// Split the focused pane
     pub fn split(&mut self, direction: SplitDirection, new_terminal: TerminalPane) {
+        self.split_with_placement(direction, SplitPlacement::After, new_terminal);
+    }
+
+    pub fn split_with_placement(
+        &mut self,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+        new_terminal: TerminalPane,
+    ) {
         let new_id = self.next_id;
         self.next_id += 1;
         let new_split_id = self.next_split_id;
@@ -86,11 +101,36 @@ impl PaneTree {
             &mut self.root,
             self.focused_pane_id,
             direction,
+            placement,
             new_id,
             new_terminal,
             new_split_id,
         );
         self.focused_pane_id = new_id;
+    }
+
+    pub fn split_pane_with_placement(
+        &mut self,
+        target_pane_id: PaneId,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+        new_terminal: TerminalPane,
+    ) {
+        let new_id = self.next_id;
+        self.next_id += 1;
+        let new_split_id = self.next_split_id;
+        self.next_split_id += 1;
+        if Self::split_node(
+            &mut self.root,
+            target_pane_id,
+            direction,
+            placement,
+            new_id,
+            new_terminal,
+            new_split_id,
+        ) {
+            self.focused_pane_id = new_id;
+        }
     }
 
     /// Close the focused pane, returning true if the tree still has panes
@@ -311,6 +351,7 @@ impl PaneTree {
         node: &mut PaneNode,
         target_id: PaneId,
         direction: SplitDirection,
+        placement: SplitPlacement,
         new_id: PaneId,
         new_terminal: TerminalPane,
         new_split_id: SplitId,
@@ -328,11 +369,15 @@ impl PaneTree {
                     id: new_id,
                     terminal: new_terminal,
                 };
+                let (first, second) = match placement {
+                    SplitPlacement::Before => (Box::new(new_leaf), Box::new(old_node)),
+                    SplitPlacement::After => (Box::new(old_node), Box::new(new_leaf)),
+                };
                 *node = PaneNode::Split {
                     split_id: new_split_id,
                     direction,
-                    first: Box::new(old_node),
-                    second: Box::new(new_leaf),
+                    first,
+                    second,
                     ratio: 0.5,
                 };
                 true
@@ -342,6 +387,7 @@ impl PaneTree {
                     first,
                     target_id,
                     direction,
+                    placement,
                     new_id,
                     new_terminal.clone(),
                     new_split_id,
@@ -349,6 +395,7 @@ impl PaneTree {
                     second,
                     target_id,
                     direction,
+                    placement,
                     new_id,
                     new_terminal,
                     new_split_id,

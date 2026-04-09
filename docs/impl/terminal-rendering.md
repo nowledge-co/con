@@ -12,6 +12,13 @@ Ghostty owns terminal execution end to end. con owns:
 - pane metadata, context extraction, and product UI
 - theme translation into Ghostty config
 
+Important clarification:
+
+- one `GhosttyApp` is shared across the whole con window
+- each split is still its own Ghostty surface
+
+That is not a temporary compromise. It matches Ghostty's own host-side architecture on macOS: native splits are modeled as a surface tree, not as one giant surface that renders every pane internally.
+
 That split is intentional. Terminal correctness stays in Ghostty. Product intelligence stays in con.
 
 ## Runtime stack
@@ -21,7 +28,7 @@ GPUI window
   └── GhosttyView
         ├── native NSView child
         ├── GhosttyApp          one per con window
-        └── GhosttyTerminal     one per pane
+        └── GhosttyTerminal     one per split surface
               ├── PTY + child process
               ├── VT parser + screen + scrollback
               ├── Metal renderer
@@ -40,6 +47,19 @@ We currently configure each surface with:
 - `context = TAB`
 
 Those values are part of `ghostty_surface_config_s` in libghostty's public C API.
+
+## Split model
+
+The correct long-term model is a host-managed Ghostty surface tree.
+
+That means:
+
+- Con should keep one shared `GhosttyApp` per window
+- split creation should flow through Ghostty split actions
+- the host still creates and owns each new surface view for each split
+
+This is why "make the whole window one Ghostty instance" is the wrong mental model.
+At the app level, con already does that. The remaining migration work is about replacing con-specific split semantics with Ghostty-driven surface-tree semantics.
 
 ## Data flow
 

@@ -46,6 +46,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.
+- Split requests now flow through Ghostty's native split action path before con creates the new surface, so pane insertion follows Ghostty split direction semantics instead of treating every split as a purely external GPUI command.
 - Font size changes now apply to existing Ghostty panes immediately, so terminal text updates in place when you save Settings.
 - Terminal theme changes now apply to live Ghostty panes immediately instead of only updating the surrounding con interface.
 - Terminal settings are simpler and more honest. con no longer exposes backend switching or fake scrollback tuning for features that are owned by Ghostty itself.

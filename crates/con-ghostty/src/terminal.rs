@@ -10,6 +10,7 @@
 //! - Clipboard callbacks are always set (ghostty dereferences them without null checks)
 //! - The GhosttyApp must be ticked from the main thread (Metal rendering)
 
+use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::os::raw::c_void;
@@ -135,10 +136,16 @@ impl GhosttyConfigPatch {
                 ));
             }
             if let Some(background_image_fit) = &self.background_image_fit {
-                s.push_str(&format!("background-image-fit = {}\n", background_image_fit));
+                s.push_str(&format!(
+                    "background-image-fit = {}\n",
+                    background_image_fit
+                ));
             }
             if let Some(background_image_repeat) = self.background_image_repeat {
-                s.push_str(&format!("background-image-repeat = {}\n", background_image_repeat));
+                s.push_str(&format!(
+                    "background-image-repeat = {}\n",
+                    background_image_repeat
+                ));
             }
         }
         s
@@ -188,6 +195,19 @@ pub struct CommandRecord {
     pub duration: std::time::Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttySplitDirection {
+    Right,
+    Down,
+    Left,
+    Up,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GhosttySurfaceEvent {
+    SplitRequest(GhosttySplitDirection),
+}
+
 /// Terminal state received via ghostty action callbacks.
 /// Each GhosttyTerminal has its own instance, stored as surface userdata.
 pub struct TerminalState {
@@ -213,6 +233,8 @@ pub struct TerminalState {
     pub last_command_finished_input_generation: u64,
     /// Surface handle — stored so clipboard callbacks can complete requests.
     pub surface: ffi::ghostty_surface_t,
+    /// Pending host-side events emitted by Ghostty actions for this surface.
+    pub pending_events: VecDeque<GhosttySurfaceEvent>,
 }
 
 const MAX_COMMAND_HISTORY: usize = 20;
@@ -232,6 +254,7 @@ impl Default for TerminalState {
             input_generation: 0,
             last_command_finished_input_generation: 0,
             surface: std::ptr::null_mut(),
+            pending_events: VecDeque::new(),
         }
     }
 }
@@ -555,6 +578,24 @@ impl GhosttyTerminal {
         } else {
             Err("Ghostty rejected clear_screen binding action".to_string())
         }
+    }
+
+    pub fn request_split(&self, direction: GhosttySplitDirection) {
+        let direction = match direction {
+            GhosttySplitDirection::Right => {
+                ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_RIGHT
+            }
+            GhosttySplitDirection::Down => {
+                ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_DOWN
+            }
+            GhosttySplitDirection::Left => {
+                ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_LEFT
+            }
+            GhosttySplitDirection::Up => {
+                ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_UP
+            }
+        };
+        unsafe { ffi::ghostty_surface_split(self.surface, direction) }
     }
 
     pub fn update_config(&self, patch: &GhosttyConfigPatch) -> Result<(), String> {
@@ -931,6 +972,11 @@ impl GhosttyTerminal {
     pub fn raw_surface(&self) -> ffi::ghostty_surface_t {
         self.surface
     }
+
+    pub fn take_pending_events(&self) -> Vec<GhosttySurfaceEvent> {
+        let mut state = self.state.lock();
+        state.pending_events.drain(..).collect()
+    }
 }
 
 impl Drop for GhosttyTerminal {
@@ -1057,6 +1103,27 @@ unsafe extern "C" fn action_callback(
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_RENDER => {
                 state.lock().needs_render = true;
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_NEW_SPLIT => {
+                let direction = match action.action.new_split {
+                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_RIGHT => {
+                        GhosttySplitDirection::Right
+                    }
+                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_DOWN => {
+                        GhosttySplitDirection::Down
+                    }
+                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_LEFT => {
+                        GhosttySplitDirection::Left
+                    }
+                    ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_UP => {
+                        GhosttySplitDirection::Up
+                    }
+                };
+                state
+                    .lock()
+                    .pending_events
+                    .push_back(GhosttySurfaceEvent::SplitRequest(direction));
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_COMMAND_FINISHED => {
