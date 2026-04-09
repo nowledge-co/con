@@ -169,11 +169,18 @@ This avoids cloning — `mem::replace` moves ownership. The AgentPanel always di
 | `probe_shell_context` | Safe | Executes immediately |
 | `read_pane` | Safe | Executes immediately |
 | `search_panes` | Safe | Executes immediately |
+| `tmux_inspect` | Safe | Executes immediately |
+| `tmux_list_targets` | Safe | Executes immediately |
+| `tmux_find_targets` | Safe | Executes immediately |
+| `tmux_capture_pane` | Safe | Executes immediately |
 | `terminal_exec` | Dangerous | Requires approval (or auto_approve) |
 | `shell_exec` | Dangerous | Requires approval (or auto_approve) |
 | `file_write` | Dangerous | Requires approval (or auto_approve) |
 | `edit_file` | Dangerous | Requires approval (or auto_approve) |
 | `send_keys` | Dangerous | Requires approval (or auto_approve) |
+| `tmux_send_keys` | Dangerous | Requires approval (or auto_approve) |
+| `tmux_run_command` | Dangerous | Requires approval (or auto_approve) |
+| `tmux_ensure_shell_target` | Dangerous | Requires approval (or auto_approve) |
 
 Classification happens in two places:
 1. `ConHook::on_tool_call` — blocks on approval for dangerous tools

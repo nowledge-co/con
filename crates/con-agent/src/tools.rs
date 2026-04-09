@@ -848,6 +848,121 @@ pub enum PaneResponse {
     Error(String),
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TmuxTargetKindFilter {
+    Any,
+    Shell,
+    AgentCli,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TmuxFindTargetsResult {
+    pub kind: TmuxTargetKindFilter,
+    pub best_match: Option<crate::tmux::TmuxPaneInfo>,
+    pub matches: Vec<crate::tmux::TmuxPaneInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TmuxEnsureShellTargetResult {
+    pub created: bool,
+    pub pane: crate::tmux::TmuxPaneInfo,
+    pub creation: Option<TmuxExecResult>,
+}
+
+fn recv_pane_response(
+    response_rx: crossbeam_channel::Receiver<PaneResponse>,
+    timeout_secs: u64,
+    timeout_label: &'static str,
+) -> Result<PaneResponse, ToolError> {
+    tokio::task::block_in_place(|| {
+        response_rx
+            .recv_timeout(std::time::Duration::from_secs(timeout_secs))
+            .map_err(|_| ToolError::CommandFailed(format!("{timeout_label} timed out")))
+    })
+}
+
+fn pane_query_tmux_list(
+    pane_tx: &Sender<PaneRequest>,
+    pane_index: usize,
+) -> Result<TmuxSnapshot, ToolError> {
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    pane_tx
+        .send(PaneRequest {
+            query: PaneQuery::TmuxList { pane_index },
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+    match recv_pane_response(response_rx, 12, "tmux list")? {
+        PaneResponse::TmuxList(snapshot) => Ok(snapshot),
+        PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+        _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+    }
+}
+
+fn pane_query_tmux_run_command(
+    pane_tx: &Sender<PaneRequest>,
+    pane_index: usize,
+    target: Option<String>,
+    location: TmuxExecLocation,
+    command: String,
+    window_name: Option<String>,
+    cwd: Option<String>,
+    detached: bool,
+) -> Result<TmuxExecResult, ToolError> {
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    pane_tx
+        .send(PaneRequest {
+            query: PaneQuery::TmuxRunCommand {
+                pane_index,
+                target,
+                location,
+                command,
+                window_name,
+                cwd,
+                detached,
+            },
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+    match recv_pane_response(response_rx, 12, "tmux run-command")? {
+        PaneResponse::TmuxExec(exec) => Ok(exec),
+        PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+        _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+    }
+}
+
+fn tmux_command_basename(command: &str) -> &str {
+    command.rsplit('/').next().unwrap_or(command)
+}
+
+fn is_tmux_shell_command(command: &str) -> bool {
+    matches!(
+        tmux_command_basename(command).to_ascii_lowercase().as_str(),
+        "bash" | "zsh" | "sh" | "fish" | "dash" | "ksh" | "tcsh" | "csh" | "nu"
+    )
+}
+
+fn is_tmux_agent_cli_command(command: &str) -> bool {
+    matches!(
+        tmux_command_basename(command).to_ascii_lowercase().as_str(),
+        "codex" | "claude" | "claude-code" | "opencode" | "open-code"
+    )
+}
+
+fn sort_tmux_matches(matches: &mut [crate::tmux::TmuxPaneInfo]) {
+    matches.sort_by(|a, b| {
+        b.pane_active
+            .cmp(&a.pane_active)
+            .then_with(|| b.window_active.cmp(&a.window_active))
+            .then_with(|| a.session_name.cmp(&b.session_name))
+            .then_with(|| a.window_index.cmp(&b.window_index))
+            .then_with(|| a.pane_index.cmp(&b.pane_index))
+    });
+}
+
 // ── list_panes tool ────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -1327,6 +1442,279 @@ impl Tool for TmuxRunCommandTool {
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }
+    }
+}
+
+// ── tmux_find_targets tool ────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TmuxFindTargetsArgs {
+    pub pane_index: usize,
+    #[serde(default)]
+    pub kind: Option<TmuxTargetKindFilter>,
+    pub command_contains: Option<String>,
+    pub path_contains: Option<String>,
+    #[serde(default = "default_tmux_find_limit")]
+    pub limit: usize,
+}
+
+fn default_tmux_find_limit() -> usize {
+    8
+}
+
+pub struct TmuxFindTargetsTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl TmuxFindTargetsTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for TmuxFindTargetsTool {
+    const NAME: &'static str = "tmux_find_targets";
+    type Error = ToolError;
+    type Args = TmuxFindTargetsArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Find useful tmux pane targets through a proven same-session tmux control anchor. Use this helper instead of hand-filtering tmux_list_targets when you need a shell pane, an agent CLI pane, or a command/path match inside tmux.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                    },
+                    "kind": {
+                        "type": ["string", "null"],
+                        "enum": ["any", "shell", "agent_cli", null],
+                        "description": "Optional target class filter."
+                    },
+                    "command_contains": {
+                        "type": ["string", "null"],
+                        "description": "Optional case-insensitive substring match against tmux pane_current_command."
+                    },
+                    "path_contains": {
+                        "type": ["string", "null"],
+                        "description": "Optional case-insensitive substring match against tmux pane_current_path."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of matches to return. Defaults to 8."
+                    }
+                },
+                "required": ["pane_index"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let kind = args.kind.unwrap_or(TmuxTargetKindFilter::Any);
+        let command_contains = args
+            .command_contains
+            .as_ref()
+            .map(|v| v.to_ascii_lowercase());
+        let path_contains = args.path_contains.as_ref().map(|v| v.to_ascii_lowercase());
+
+        let mut matches = snapshot
+            .panes
+            .into_iter()
+            .filter(|pane| {
+                let command = pane
+                    .pane_current_command
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let path = pane
+                    .pane_current_path
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+
+                let kind_match = match kind {
+                    TmuxTargetKindFilter::Any => true,
+                    TmuxTargetKindFilter::Shell => pane
+                        .pane_current_command
+                        .as_deref()
+                        .is_some_and(is_tmux_shell_command),
+                    TmuxTargetKindFilter::AgentCli => pane
+                        .pane_current_command
+                        .as_deref()
+                        .is_some_and(is_tmux_agent_cli_command),
+                };
+
+                let command_match = command_contains
+                    .as_ref()
+                    .is_none_or(|needle| command.contains(needle));
+                let path_match = path_contains
+                    .as_ref()
+                    .is_none_or(|needle| path.contains(needle));
+
+                kind_match && command_match && path_match
+            })
+            .collect::<Vec<_>>();
+
+        sort_tmux_matches(&mut matches);
+        matches.truncate(args.limit.max(1));
+
+        let result = TmuxFindTargetsResult {
+            kind,
+            best_match: matches.first().cloned(),
+            matches,
+        };
+        serde_json::to_value(&result).map_err(|e| ToolError::CommandFailed(e.to_string()))
+    }
+}
+
+// ── tmux_ensure_shell_target tool ─────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TmuxEnsureShellTargetArgs {
+    pub pane_index: usize,
+    pub cwd: Option<String>,
+    pub window_name: Option<String>,
+    pub shell_command: Option<String>,
+    #[serde(default = "default_tmux_shell_location")]
+    pub location: TmuxExecLocation,
+    #[serde(default = "default_true")]
+    pub detached: bool,
+}
+
+fn default_tmux_shell_location() -> TmuxExecLocation {
+    TmuxExecLocation::NewWindow
+}
+
+pub struct TmuxEnsureShellTargetTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl TmuxEnsureShellTargetTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for TmuxEnsureShellTargetTool {
+    const NAME: &'static str = "tmux_ensure_shell_target";
+    type Error = ToolError;
+    type Args = TmuxEnsureShellTargetArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Return a tmux pane that is suitable for shell work. Reuses an existing shell pane when one already matches, otherwise creates a fresh tmux shell target through the native tmux control channel. Use this before writing files remotely, launching commands away from a visible TUI, or preparing a clean shell workspace in tmux.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                    },
+                    "cwd": {
+                        "type": ["string", "null"],
+                        "description": "Optional path hint. Existing tmux shell panes whose pane_current_path contains this value are preferred, and new shell targets inherit it when created."
+                    },
+                    "window_name": {
+                        "type": ["string", "null"],
+                        "description": "Optional name for a newly created tmux window."
+                    },
+                    "shell_command": {
+                        "type": ["string", "null"],
+                        "description": "Optional command for a newly created shell target. Defaults to an interactive login shell based on $SHELL."
+                    },
+                    "location": {
+                        "type": "string",
+                        "enum": ["new_window", "split_horizontal", "split_vertical"],
+                        "description": "Where to create a new shell target if none already exists."
+                    },
+                    "detached": {
+                        "type": "boolean",
+                        "description": "Whether a newly created target should start detached. Defaults to true."
+                    }
+                },
+                "required": ["pane_index"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let cwd_contains = args.cwd.as_ref().map(|v| v.to_ascii_lowercase());
+
+        let mut shell_matches = snapshot
+            .panes
+            .into_iter()
+            .filter(|pane| {
+                pane.pane_current_command
+                    .as_deref()
+                    .is_some_and(is_tmux_shell_command)
+                    && cwd_contains.as_ref().is_none_or(|needle| {
+                        pane.pane_current_path
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase()
+                            .contains(needle)
+                    })
+            })
+            .collect::<Vec<_>>();
+        sort_tmux_matches(&mut shell_matches);
+
+        if let Some(pane) = shell_matches.into_iter().next() {
+            let result = TmuxEnsureShellTargetResult {
+                created: false,
+                pane,
+                creation: None,
+            };
+            return serde_json::to_value(&result)
+                .map_err(|e| ToolError::CommandFailed(e.to_string()));
+        }
+
+        let shell_command = args
+            .shell_command
+            .unwrap_or_else(|| "exec \"${SHELL:-/bin/sh}\" -il".to_string());
+        let creation = pane_query_tmux_run_command(
+            &self.pane_tx,
+            args.pane_index,
+            None,
+            args.location,
+            shell_command,
+            args.window_name,
+            args.cwd.clone(),
+            args.detached,
+        )?;
+
+        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let pane = snapshot
+            .panes
+            .into_iter()
+            .find(|pane| pane.target == creation.target || pane.pane_id == creation.pane_id)
+            .unwrap_or_else(|| crate::tmux::TmuxPaneInfo {
+                session_name: creation.session_name.clone(),
+                window_id: creation.window_id.clone(),
+                window_index: creation.window_index.clone(),
+                window_name: creation.window_name.clone(),
+                window_target: creation.window_target.clone(),
+                pane_id: creation.pane_id.clone(),
+                pane_index: creation.pane_index.clone(),
+                target: creation.target.clone(),
+                pane_active: !creation.detached,
+                window_active: !creation.detached,
+                pane_current_command: None,
+                pane_current_path: args.cwd,
+            });
+
+        let result = TmuxEnsureShellTargetResult {
+            created: true,
+            pane,
+            creation: Some(creation),
+        };
+        serde_json::to_value(&result).map_err(|e| ToolError::CommandFailed(e.to_string()))
     }
 }
 
@@ -2323,7 +2711,10 @@ impl Tool for CreatePaneTool {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_key_escapes, split_at_standalone_esc};
+    use super::{
+        TmuxTargetKindFilter, decode_key_escapes, is_tmux_agent_cli_command, is_tmux_shell_command,
+        split_at_standalone_esc,
+    };
 
     #[test]
     fn decode_standard_escapes() {
@@ -2393,6 +2784,27 @@ mod tests {
 
         // Normal text with no escapes
         assert_eq!(decode_key_escapes("ls -la"), "ls -la");
+    }
+
+    #[test]
+    fn tmux_shell_command_detection_uses_basename() {
+        assert!(is_tmux_shell_command("zsh"));
+        assert!(is_tmux_shell_command("/bin/bash"));
+        assert!(!is_tmux_shell_command("codex"));
+    }
+
+    #[test]
+    fn tmux_agent_cli_detection_handles_known_names() {
+        assert!(is_tmux_agent_cli_command("codex"));
+        assert!(is_tmux_agent_cli_command("/usr/local/bin/opencode"));
+        assert!(is_tmux_agent_cli_command("claude-code"));
+        assert!(!is_tmux_agent_cli_command("zsh"));
+    }
+
+    #[test]
+    fn tmux_target_kind_filter_serializes_snake_case() {
+        let json = serde_json::to_string(&TmuxTargetKindFilter::AgentCli).expect("serialize");
+        assert_eq!(json, "\"agent_cli\"");
     }
 
     // ── split_at_standalone_esc tests ────────────────────────────────

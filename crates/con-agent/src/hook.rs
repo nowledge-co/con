@@ -71,6 +71,7 @@ pub fn is_dangerous(tool_name: &str) -> bool {
             | "edit_file"
             | "send_keys"
             | "tmux_run_command"
+            | "tmux_ensure_shell_target"
     )
 }
 

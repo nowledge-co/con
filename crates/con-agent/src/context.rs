@@ -1322,7 +1322,8 @@ impl TerminalContext {
              - READ-ONLY SHELL INTROSPECTION on a pane with `probe_shell_context` → probe_shell_context.\n\
              - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context` or `tmux_snapshot`. Only call list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
-             - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_list_targets, then tmux_capture_pane.\n\
+             - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_find_targets or tmux_list_targets, then tmux_capture_pane.\n\
+             - TMUX SHELL PREPARATION on a pane with tmux native control → tmux_ensure_shell_target to reuse or create a safe shell pane before remote file work or shell execution inside tmux.\n\
              - TMUX NATIVE COMMAND LAUNCH on a pane with tmux native control → tmux_run_command to create a new tmux window or split for a shell, Codex CLI, Claude Code, OpenCode, or a long-running command.\n\
              - TMUX NATIVE INTERACTION on a pane with tmux native control → tmux_send_keys to a specific tmux pane target.\n\
              - TMUX WITHOUT native control → read_pane first, then outer-pane send_keys only as a fallback.\n\
@@ -1365,7 +1366,9 @@ impl TerminalContext {
                read_pane to check progress and call wait_for again.\n\n\
              - tmux_inspect: Inspect tmux adapter state for a pane containing a tmux session.\n\
              - tmux_list_targets: List tmux windows/panes through a proven same-session tmux shell anchor.\n\
+             - tmux_find_targets: Find likely tmux shell panes, agent CLI panes, or other matching targets without hand-filtering tmux_list_targets.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
+             - tmux_ensure_shell_target: Reuse or create a tmux shell target through a proven same-session tmux shell anchor.\n\
              - tmux_run_command: Create a new tmux window or split pane and run a command there through a proven same-session tmux shell anchor.\n\
              - tmux_send_keys: Send text or tmux key names to a specific tmux pane target through a proven same-session tmux shell anchor.\n\
              - search_panes: Search scrollback across panes by regex.\n\n\

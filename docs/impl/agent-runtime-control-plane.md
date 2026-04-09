@@ -69,7 +69,9 @@ then con can expose a native tmux control attachment for that pane.
 That attachment currently supports:
 
 - tmux target discovery
+- tmux target discovery helpers for likely shell and agent-cli panes
 - tmux pane capture
+- tmux shell-target preparation
 - tmux-native command launch into a new window or split pane
 - tmux-native send-keys to a chosen tmux target
 
@@ -474,7 +476,9 @@ Rules:
 - `tmux_list_sessions`
 - `tmux_list_windows`
 - `tmux_list_panes`
+- `tmux_find_targets`
 - `tmux_capture_pane`
+- `tmux_ensure_shell_target`
 - `tmux_send_keys`
 - `tmux_exec_in_pane`
 - `tmux_new_window`
@@ -483,6 +487,7 @@ Rules:
 Rules:
 
 - all tmux tools address tmux targets, not con panes
+- helper tools such as `tmux_find_targets` and `tmux_ensure_shell_target` may start from a con pane, but they must resolve down to explicit tmux targets before any mutation happens
 - `tmux_exec_in_pane` requires a tmux control channel plus a shell-capable tmux pane target
 - `tmux_send_keys` is explicit TUI input, not a generic exec fallback
 

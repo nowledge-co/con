@@ -31,6 +31,7 @@ pub use tools::{
     BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
     ListPanesTool, PaneInfo, PaneQuery, PaneRequest, PaneResponse, ProbeShellContextTool,
     ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest,
-    TerminalExecResponse, TerminalExecTool, TmuxCaptureTool, TmuxInspectTool, TmuxListTool,
-    TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
+    TerminalExecResponse, TerminalExecTool, TmuxCaptureTool, TmuxEnsureShellTargetTool,
+    TmuxFindTargetsTool, TmuxInspectTool, TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool,
+    WaitForTool,
 };
