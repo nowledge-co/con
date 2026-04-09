@@ -50,6 +50,8 @@ pub struct ConWorkspace {
     font_size: f32,
     terminal_opacity: f32,
     ui_opacity: f32,
+    background_image: Option<String>,
+    background_image_opacity: f32,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -125,6 +127,10 @@ impl ConWorkspace {
         value.clamp(0.35, 1.0)
     }
 
+    fn clamp_background_image_opacity(value: f32) -> f32 {
+        value.clamp(0.0, 1.0)
+    }
+
     fn ui_surface_opacity(&self) -> f32 {
         Self::clamp_ui_opacity(self.ui_opacity)
     }
@@ -138,13 +144,21 @@ impl ConWorkspace {
         let font_size = config.terminal.font_size;
         let terminal_opacity = Self::clamp_terminal_opacity(config.appearance.terminal_opacity);
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
+        let background_image = config.appearance.background_image.clone();
+        let background_image_opacity =
+            Self::clamp_background_image_opacity(config.appearance.background_image_opacity);
         let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
         let session = Session::load().unwrap_or_default();
         let colors = theme_to_ghostty_colors(&terminal_theme);
-        let ghostty_app =
-            con_ghostty::GhosttyApp::new(Some(&colors), Some(font_size), Some(terminal_opacity))
-                .map(std::sync::Arc::new)
-                .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
+        let ghostty_app = con_ghostty::GhosttyApp::new(
+            Some(&colors),
+            Some(font_size),
+            Some(terminal_opacity),
+            background_image.as_deref(),
+            Some(background_image_opacity),
+        )
+        .map(std::sync::Arc::new)
+        .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
         let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
             log::error!(
                 "Failed to create agent harness: {}. Agent features disabled.",
@@ -353,6 +367,8 @@ impl ConWorkspace {
             font_size,
             terminal_opacity,
             ui_opacity,
+            background_image,
+            background_image_opacity,
             agent_panel,
             input_bar,
             settings_panel,
@@ -884,6 +900,10 @@ impl ConWorkspace {
         self.font_size = term_config.font_size;
         self.terminal_opacity = Self::clamp_terminal_opacity(appearance_config.terminal_opacity);
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
+        self.background_image = appearance_config.background_image.clone();
+        self.background_image_opacity = Self::clamp_background_image_opacity(
+            appearance_config.background_image_opacity,
+        );
         self.agent_panel
             .update(cx, |panel, _cx| panel.set_ui_opacity(self.ui_opacity));
         self.input_bar
@@ -950,12 +970,24 @@ impl ConWorkspace {
         // Update all terminal panes (legacy gets full theme, ghostty gets color scheme)
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_terminals() {
-                terminal.set_theme(&theme, &colors, self.font_size, self.terminal_opacity, cx);
+                terminal.set_theme(
+                    &theme,
+                    &colors,
+                    self.font_size,
+                    self.terminal_opacity,
+                    self.background_image.as_deref(),
+                    self.background_image_opacity,
+                    cx,
+                );
             }
         }
-        if let Err(e) =
-            self.ghostty_app
-                .update_appearance(&colors, self.font_size, self.terminal_opacity)
+        if let Err(e) = self.ghostty_app.update_appearance(
+            &colors,
+            self.font_size,
+            self.terminal_opacity,
+            self.background_image.as_deref(),
+            self.background_image_opacity,
+        )
         {
             log::error!("Failed to update Ghostty appearance: {}", e);
         }

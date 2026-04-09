@@ -62,11 +62,19 @@ impl TerminalPane {
         colors: &TerminalColors,
         font_size: f32,
         background_opacity: f32,
+        background_image: Option<&str>,
+        background_image_opacity: f32,
         cx: &mut App,
     ) {
         let is_dark = theme.name.to_lowercase().contains("dark");
         if let Some(terminal) = self.entity.read(cx).terminal() {
-            if let Err(err) = terminal.update_appearance(colors, font_size, background_opacity) {
+            if let Err(err) = terminal.update_appearance(
+                colors,
+                font_size,
+                background_opacity,
+                background_image,
+                background_image_opacity,
+            ) {
                 log::error!("Failed to update Ghostty surface appearance: {}", err);
             }
             terminal.set_color_scheme(is_dark);

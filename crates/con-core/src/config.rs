@@ -21,6 +21,9 @@ fn default_terminal_opacity() -> f32 {
 fn default_ui_opacity() -> f32 {
     0.90
 }
+fn default_background_image_opacity() -> f32 {
+    0.55
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -47,6 +50,8 @@ impl Default for TerminalConfig {
 pub struct AppearanceConfig {
     pub terminal_opacity: f32,
     pub ui_opacity: f32,
+    pub background_image: Option<String>,
+    pub background_image_opacity: f32,
 }
 
 impl Default for AppearanceConfig {
@@ -54,6 +59,8 @@ impl Default for AppearanceConfig {
         Self {
             terminal_opacity: default_terminal_opacity(),
             ui_opacity: default_ui_opacity(),
+            background_image: None,
+            background_image_opacity: default_background_image_opacity(),
         }
     }
 }
