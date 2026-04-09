@@ -102,7 +102,7 @@ Read the component's source in `3pp/gpui-component/crates/ui/src/` to understand
 
 ### Density and wording
 
-- Prefer compact, terse UI labels. "Browse Themes" not "Open Ghostty Style". "Load from Clipboard" not "Load Clipboard Theme".
+- Prefer compact, terse UI labels. "Browse Themes" not "Open Theme Catalog". "Load from Clipboard" not "Load Clipboard Theme".
 - Remove anything the user can derive from context (e.g., don't show CWD when it's visible in the terminal).
 - Placeholders should be action-oriented and short: "Run a command…", "Ask anything…".
 - Avoid numbered step wizards for simple 2-3 step flows — inline everything flat.

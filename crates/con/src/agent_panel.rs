@@ -1802,7 +1802,7 @@ impl Render for AgentPanel {
                 }
             }
 
-            // ── Steps (flat inline rows, Cursor-inspired) ──
+            // ── Steps (flat inline rows with compact disclosure) ──
             if !msg.steps.is_empty() {
                 let step_count = msg.steps.len();
                 let collapsed = msg.steps_collapsed;

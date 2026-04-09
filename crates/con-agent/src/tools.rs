@@ -131,7 +131,7 @@ impl Tool for TerminalExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute a command visibly in a con terminal pane only when that pane's control_capabilities include exec_visible_shell. pane_index refers to a con pane from list_panes, not a tmux pane/window/editor target. For tmux, vim, nvim, Codex CLI, Claude Code, and other TUIs, inspect first and use send_keys only when intentional.".to_string(),
+            description: "Execute a command visibly in a con terminal pane only when that pane's control_capabilities include exec_visible_shell. pane_index refers to a con pane from list_panes, not a tmux pane/window/editor target. For tmux, vim, nvim, agent CLIs, and other TUIs, inspect first and use send_keys only when intentional.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

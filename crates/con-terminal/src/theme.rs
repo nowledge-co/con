@@ -391,9 +391,9 @@ impl TerminalTheme {
         }
     }
 
-    pub fn claude_code_light() -> Self {
+    pub fn paper_light() -> Self {
         Self {
-            name: "claude-code-light".into(),
+            name: "paper-light".into(),
             foreground: Color::rgb(0x14, 0x14, 0x13),
             background: Color::rgb(0xFA, 0xF9, 0xF5),
             ansi: [
@@ -433,7 +433,7 @@ impl TerminalTheme {
             "kanagawa-wave" | "kanagawa" => Some(Self::kanagawa_wave()),
             "everforest-dark" | "everforest" => Some(Self::everforest_dark()),
             "everforest-light" => Some(Self::everforest_light()),
-            "claude-code-light" | "claude-code" => Some(Self::claude_code_light()),
+            "paper-light" => Some(Self::paper_light()),
             _ => Self::load_user_themes()
                 .into_iter()
                 .find(|theme| theme.name == name.to_lowercase()),
@@ -469,7 +469,7 @@ impl TerminalTheme {
             "kanagawa-wave",
             "everforest-dark",
             "everforest-light",
-            "claude-code-light",
+            "paper-light",
         ]
     }
 

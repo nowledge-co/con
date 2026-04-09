@@ -645,9 +645,7 @@ impl SettingsPanel {
             &[
                 ("skills", "con"),
                 (".con/skills", "con local"),
-                (".claude/skills", "Claude Code"),
                 (".agents/skills", "Agents"),
-                (".codex/skills", "Codex"),
             ],
             cx,
         );
@@ -656,9 +654,7 @@ impl SettingsPanel {
             &global_paths,
             &[
                 ("~/.config/con/skills", "con"),
-                ("~/.claude/skills", "Claude Code"),
                 ("~/.agents/skills", "Agents"),
-                ("~/.codex/skills", "Codex"),
             ],
             cx,
         );
@@ -967,7 +963,7 @@ impl SettingsPanel {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.paste_theme_from_clipboard(window, cx);
             }));
-        let open_catalog_btn = Button::new("ghostty-style-link")
+        let open_catalog_btn = Button::new("theme-catalog-link")
             .label("Browse Themes")
             .icon(Icon::default().path("phosphor/arrow-square-out.svg"))
             .small()
@@ -1040,7 +1036,7 @@ impl SettingsPanel {
                     .text_size(px(11.5))
                     .line_height(px(18.0))
                     .text_color(theme.muted_foreground.opacity(0.6))
-                    .child("Paste a Ghostty-format theme from the clipboard. Browse 500+ community themes at ghostty-style.vercel.app."),
+                    .child("Paste a Ghostty-format theme from the clipboard. Browse the community theme catalog for more palettes."),
             )
             // Name input
             .child(
@@ -1118,14 +1114,14 @@ impl SettingsPanel {
                             .child(format!("{total_count} themes")),
                     ),
             )
-            .child(
-                div()
-                    .text_size(px(10.5))
-                    .text_color(theme.muted_foreground.opacity(0.4))
-                    .mb(px(10.0))
-                    .child("Community themes from ghostty-style.vercel.app"),
-            )
-            .child(builtin_grid);
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(theme.muted_foreground.opacity(0.4))
+                            .mb(px(10.0))
+                            .child("Community-compatible terminal themes"),
+                    )
+                    .child(builtin_grid);
 
         // User-installed themes
         if let Some(user_grid) = user_grid {
@@ -2145,7 +2141,7 @@ fn display_theme_name(name: &str) -> String {
         "kanagawa-wave" => "Kanagawa Wave".into(),
         "everforest-dark" => "Everforest Dark".into(),
         "everforest-light" => "Everforest Light".into(),
-        "claude-code-light" => "Claude Code Light".into(),
+        "paper-light" => "Paper Light".into(),
         // User themes: convert kebab-case to Title Case
         other => other
             .split('-')

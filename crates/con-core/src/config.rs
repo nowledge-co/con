@@ -123,9 +123,9 @@ pub struct Config {
 /// # Sharing with other agents
 /// ```toml
 /// [skills]
-/// # Scan Claude Code + universal agents paths too
-/// project_paths = [".con/skills", ".claude/skills", ".agents/skills"]
-/// global_paths = ["~/.config/con/skills", "~/.claude/skills"]
+/// # Scan other agent-specific and shared paths too
+/// project_paths = [".con/skills", ".agents/skills"]
+/// global_paths = ["~/.config/con/skills", "~/.agents/skills"]
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
