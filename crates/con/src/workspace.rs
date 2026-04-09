@@ -240,6 +240,9 @@ impl ConWorkspace {
         let registry = model_registry.clone();
         let settings_panel = cx.new(|cx| SettingsPanel::new(&config, registry, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
+        agent_panel.update(cx, |panel, _cx| panel.set_ui_opacity(ui_opacity));
+        input_bar.update(cx, |bar, _cx| bar.set_ui_opacity(ui_opacity));
+        command_palette.update(cx, |palette, _cx| palette.set_ui_opacity(ui_opacity));
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
@@ -881,6 +884,12 @@ impl ConWorkspace {
         self.font_size = term_config.font_size;
         self.terminal_opacity = Self::clamp_terminal_opacity(appearance_config.terminal_opacity);
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
+        self.agent_panel
+            .update(cx, |panel, _cx| panel.set_ui_opacity(self.ui_opacity));
+        self.input_bar
+            .update(cx, |bar, _cx| bar.set_ui_opacity(self.ui_opacity));
+        self.command_palette
+            .update(cx, |palette, _cx| palette.set_ui_opacity(self.ui_opacity));
 
         if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
             self.apply_terminal_theme(new_theme, window, cx);

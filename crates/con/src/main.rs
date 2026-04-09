@@ -164,7 +164,7 @@ fn main() {
                 appears_transparent: true,
                 ..Default::default()
             }),
-            window_background: WindowBackgroundAppearance::Blurred,
+            window_background: WindowBackgroundAppearance::Transparent,
             ..Default::default()
         };
 

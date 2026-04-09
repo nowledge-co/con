@@ -375,6 +375,7 @@ pub struct AgentPanel {
     inline_skill_selection: usize,
     /// Tracks whether shift was held on the last enter keystroke (for inline input)
     inline_shift_enter: bool,
+    ui_opacity: f32,
 }
 
 struct PanelMessage {
@@ -448,6 +449,7 @@ impl AgentPanel {
             skills: Vec::new(),
             inline_skill_selection: 0,
             inline_shift_enter: false,
+            ui_opacity: 0.90,
         }
     }
 
@@ -461,6 +463,10 @@ impl AgentPanel {
 
     pub fn set_auto_approve(&mut self, enabled: bool) {
         self.auto_approve = enabled;
+    }
+
+    pub fn set_ui_opacity(&mut self, opacity: f32) {
+        self.ui_opacity = opacity.clamp(0.35, 1.0);
     }
 
     /// Create with a pre-populated panel state (e.g. restored from session).
@@ -480,6 +486,7 @@ impl AgentPanel {
             skills: Vec::new(),
             inline_skill_selection: 0,
             inline_shift_enter: false,
+            ui_opacity: 0.90,
         }
     }
 
@@ -2315,7 +2322,7 @@ impl Render for AgentPanel {
             .flex_col()
             .size_full()
             .min_h_0()
-            .bg(theme.title_bar)
+            .bg(theme.title_bar.opacity(self.ui_opacity))
             .font_family(".SystemUIFont")
             .child(header);
 

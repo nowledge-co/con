@@ -76,6 +76,7 @@ pub struct InputBar {
     /// Tracks whether shift was held on the last enter keystroke.
     /// Set by observe_keystrokes (fires before PressEnter), consumed by PressEnter handler.
     shift_enter: bool,
+    ui_opacity: f32,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -154,6 +155,7 @@ impl InputBar {
             skills: Vec::new(),
             skill_selection: 0,
             shift_enter: false,
+            ui_opacity: 0.90,
             _subscriptions,
         }
     }
@@ -268,6 +270,10 @@ impl InputBar {
         let placeholder = self.placeholder().to_string();
         self.input_state
             .update(cx, |s, cx| s.set_placeholder(&placeholder, window, cx));
+    }
+
+    pub fn set_ui_opacity(&mut self, opacity: f32) {
+        self.ui_opacity = opacity.clamp(0.35, 1.0);
     }
 
     fn placeholder(&self) -> &str {
@@ -482,7 +488,7 @@ impl Render for InputBar {
         div()
             .flex()
             .flex_col()
-            .bg(theme.title_bar)
+            .bg(theme.title_bar.opacity(self.ui_opacity))
             .font_family(".SystemUIFont")
             .text_size(px(13.0))
             // Intercept Tab

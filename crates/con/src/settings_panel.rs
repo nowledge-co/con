@@ -119,7 +119,7 @@ impl SettingsPanel {
     }
 
     fn card_opacity(&self) -> f32 {
-        (self.ui_opacity_value() + 0.02).min(0.98)
+        0.74
     }
 
     pub fn new(
@@ -203,7 +203,9 @@ impl SettingsPanel {
                 .min(0.25)
                 .max(1.0)
                 .step(0.01)
-                .default_value(Self::clamp_terminal_opacity(config.appearance.terminal_opacity))
+                .default_value(Self::clamp_terminal_opacity(
+                    config.appearance.terminal_opacity,
+                ))
         });
         let ui_opacity_slider = cx.new(|_| {
             SliderState::new()
@@ -563,9 +565,8 @@ impl SettingsPanel {
             },
         };
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
-        self.config.appearance.terminal_opacity = Self::clamp_terminal_opacity(
-            self.terminal_opacity_slider.read(cx).value().end(),
-        );
+        self.config.appearance.terminal_opacity =
+            Self::clamp_terminal_opacity(self.terminal_opacity_slider.read(cx).value().end());
         self.config.appearance.ui_opacity =
             Self::clamp_ui_opacity(self.ui_opacity_slider.read(cx).value().end());
 
@@ -1618,7 +1619,9 @@ impl SettingsPanel {
             .gap(px(6.0))
             .w(px(180.0))
             .flex_shrink_0()
-            .child(card(theme, card_opacity).child(div().px(px(4.0)).py(px(4.0)).child(provider_list)));
+            .child(
+                card(theme, card_opacity).child(div().px(px(4.0)).py(px(4.0)).child(provider_list)),
+            );
 
         let models_layout = div()
             .flex()
@@ -1944,7 +1947,7 @@ impl Render for SettingsPanel {
                     .w(card_width)
                     .h(card_height)
                     .rounded(px(12.0))
-                    .bg(theme.title_bar.opacity(self.card_opacity()))
+                    .bg(theme.title_bar)
                     .overflow_hidden()
                     .flex()
                     .flex_col()

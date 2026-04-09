@@ -92,6 +92,7 @@ pub struct CommandPalette {
     selected_index: usize,
     focus_handle: FocusHandle,
     scroll_handle: ScrollHandle,
+    ui_opacity: f32,
 }
 
 /// Emitted when the user selects an action
@@ -116,6 +117,7 @@ impl CommandPalette {
             selected_index: 0,
             focus_handle: cx.focus_handle(),
             scroll_handle: ScrollHandle::new(),
+            ui_opacity: 0.90,
         }
     }
 
@@ -135,6 +137,10 @@ impl CommandPalette {
 
     pub fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    pub fn set_ui_opacity(&mut self, opacity: f32) {
+        self.ui_opacity = opacity.clamp(0.35, 1.0);
     }
 
     fn filtered_actions(&self) -> Vec<&PaletteAction> {
@@ -313,7 +319,7 @@ impl Render for CommandPalette {
             .mx_auto()
             .w(px(520.0))
             .rounded(px(12.0))
-            .bg(theme.title_bar)
+            .bg(theme.title_bar.opacity(self.ui_opacity))
             .flex()
             .flex_col()
             .overflow_hidden()
