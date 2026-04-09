@@ -19,12 +19,18 @@ Do not assume a keystroke was received — always verify.
 Do not assume you know what is on screen — always read first.
 ";
 
-/// tmux navigation and control via send_keys.
+/// tmux navigation and control.
 pub const TMUX_PLAYBOOK: &str = "\
-## tmux interaction via send_keys
+## tmux interaction
 
+Preferred path: if list_panes shows `query_tmux` or `send_tmux_keys`, use tmux-native tools first.
+1. tmux_list_targets to discover exact tmux windows and panes
+2. tmux_capture_pane to inspect the chosen tmux pane without confusing it with the outer con pane
+3. tmux_send_keys to a specific tmux pane target
+
+Use outer-pane send_keys for tmux only as a fallback when tmux native control is unavailable.
 tmux intercepts its prefix key from the PTY stream. Sending \\x02 (Ctrl-B) via send_keys \
-is a terminal protocol sequence — it reaches tmux, NOT a con application shortcut. This is correct usage.
+reaches tmux, NOT a con application shortcut, but it is still a lower-fidelity path than tmux-native control.
 
 The default tmux prefix key is Ctrl-B (\\x02). Some users remap it to Ctrl-A (\\x01) — \
 if the default does not work, try \\x01 and read_pane to check.
@@ -35,7 +41,12 @@ Before any tmux operation, read_pane to see:
 - The main content area — what application is currently visible
 Parse the status bar to know which window you are on and what other windows exist.
 
-### Navigation (batch prefix + command in one send_keys call)
+### Native tmux workflow
+- Discover targets: tmux_list_targets(pane_index=...)
+- Inspect a target: tmux_capture_pane(pane_index=..., target=\"%17\")
+- Act on a target: tmux_send_keys(pane_index=..., target=\"%17\", literal_text=\"htop\", append_enter=true)
+
+### Fallback navigation (only when tmux native control is unavailable)
 - Switch to window N: send_keys \"\\x020\" (prefix + 0, one call) — NOT two separate calls
 - Next window: send_keys \"\\x02n\"
 - Previous window: send_keys \"\\x02p\"
@@ -48,9 +59,9 @@ Parse the status bar to know which window you are on and what other windows exis
 ### Writing a file on a remote host via tmux
 When you need to create or write a file on the remote machine:
 1. read_pane to see current tmux state
-2. Navigate to a shell pane: look at the tmux status bar for a window with a shell, or create one with send_keys \"\\x02c\"
+2. Prefer tmux_list_targets to find a shell pane by pane_current_command/path. If native control is unavailable, navigate to a shell pane by status bar or create one with send_keys \"\\x02c\"
 3. read_pane to verify you have a shell prompt (look for $, %, #, or similar)
-4. Write the file using heredoc:
+4. If native control is available, send the heredoc through tmux_send_keys to the target shell pane. Otherwise use send_keys in the outer pane. Write the file using heredoc:
    send_keys \"cat > path/to/file << 'CONEOF'\\n\"
    send_keys \"file content line 1\\nline 2\\nline 3\\n\"
    send_keys \"CONEOF\\n\"
@@ -59,10 +70,11 @@ When you need to create or write a file on the remote machine:
 
 ### Running commands when a TUI (nvim, htop, etc.) is currently visible
 1. read_pane to confirm current state (e.g., nvim is showing)
-2. Navigate to a shell: switch to another tmux window with a shell prompt, \
+2. Prefer tmux_list_targets to identify a shell pane/window and tmux_capture_pane to confirm it. \
+If native control is unavailable, switch to another tmux window with a shell prompt, \
 or create a new window with send_keys \"\\x02c\"
 3. read_pane to verify you reached a shell prompt
-4. send_keys \"your_command\\n\" to execute
+4. Prefer tmux_send_keys to the specific shell pane target. Use outer-pane send_keys only when native control is unavailable
 5. read_pane to see the output
 6. Optionally switch back to the original window when done
 ";

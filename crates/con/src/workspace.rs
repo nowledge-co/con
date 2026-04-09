@@ -1141,16 +1141,31 @@ impl ConWorkspace {
             };
             let suggestion = match control.visible_target.kind {
                 con_agent::PaneVisibleTargetKind::TmuxSession => {
-                    format!(
-                        "\n\nSUGGESTED APPROACH: Use send_keys with tmux prefix (\\x02) to navigate to a shell pane, \
-                         then send your command. Steps:\n\
-                         1. send_keys(pane_index={idx}, keys=\"\\x02c\") to create a new tmux window with a shell\n\
-                         2. read_pane(pane_index={idx}) to verify you reached a shell prompt\n\
-                         3. send_keys(pane_index={idx}, keys=\"your_command\\n\") to execute\n\
-                         4. read_pane(pane_index={idx}) to see the output\n\
-                         Or switch to an existing shell window: send_keys(pane_index={idx}, keys=\"\\x02\") then send_keys(pane_index={idx}, keys=\"0\") for window 0.",
-                        idx = target_pane_index
-                    )
+                    if control
+                        .capabilities
+                        .contains(&con_agent::PaneControlCapability::QueryTmux)
+                        && control
+                            .capabilities
+                            .contains(&con_agent::PaneControlCapability::SendTmuxKeys)
+                    {
+                        format!(
+                            "\n\nSUGGESTED APPROACH: This pane exposes native tmux control. Prefer tmux-native tools over outer-pane send_keys.\n\
+                             1. tmux_list_targets(pane_index={idx}) to discover tmux windows/panes\n\
+                             2. tmux_capture_pane(pane_index={idx}, target=\"%<pane>\") to inspect the exact tmux pane\n\
+                             3. tmux_send_keys(pane_index={idx}, target=\"%<pane>\", literal_text=\"your_command\", append_enter=true) to act on that tmux pane",
+                            idx = target_pane_index
+                        )
+                    } else {
+                        format!(
+                            "\n\nSUGGESTED APPROACH: tmux native control is not currently available here. Use outer-pane send_keys only as a fallback.\n\
+                             1. read_pane(pane_index={idx}) to inspect the visible tmux screen\n\
+                             2. send_keys(pane_index={idx}, keys=\"\\x02c\") to create a new tmux window with a shell, or use another tmux prefix sequence to reach a shell pane\n\
+                             3. read_pane(pane_index={idx}) to verify you reached a shell prompt\n\
+                             4. send_keys(pane_index={idx}, keys=\"your_command\\n\") to execute\n\
+                             5. read_pane(pane_index={idx}) to see the output",
+                            idx = target_pane_index
+                        )
+                    }
                 }
                 con_agent::PaneVisibleTargetKind::InteractiveApp => {
                     let label = control.visible_target.label.as_deref().unwrap_or("");

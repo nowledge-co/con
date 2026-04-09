@@ -859,7 +859,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, current verified front-state, current runtime_stack, last_verified_runtime_stack, backend-support flags, typed shell context, recent con actions, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, current verified front-state, current runtime_stack, last_verified_runtime_stack, backend-support flags, typed shell context, recent con actions, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata. If a pane exposes query_tmux or send_tmux_keys, prefer tmux-native tools over outer-pane send_keys.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -991,7 +991,7 @@ impl Tool for TmuxListTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List tmux panes across the current tmux session using a proven same-session tmux control anchor from the given con pane. Use this after probe_shell_context or when list_panes shows tmux native control is available. Returns tmux session/window/pane ids plus pane_current_command and pane_current_path so the agent can target Codex CLI, Claude Code, OpenCode, or shell panes inside tmux explicitly.".to_string(),
+            description: "List tmux panes across the current tmux session using a proven same-session tmux control anchor from the given con pane. This is the preferred first step whenever list_panes shows tmux native control. Returns tmux session/window/pane ids plus pane_current_command and pane_current_path so the agent can target Codex CLI, Claude Code, OpenCode, or shell panes inside tmux explicitly.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1148,7 +1148,7 @@ impl Tool for TmuxSendKeysTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send text or tmux key names to a specific tmux pane through a proven same-session tmux control anchor. Use this instead of raw outer-pane input when operating on Codex CLI, Claude Code, OpenCode, or shell panes inside tmux. Provide literal_text for typed text, key_names for tmux key tokens like Enter, Escape, C-c, Up, Down, or both.".to_string(),
+            description: "Send text or tmux key names to a specific tmux pane through a proven same-session tmux control anchor. This is the preferred interaction path for Codex CLI, Claude Code, OpenCode, or shell panes inside tmux. Use this instead of raw outer-pane input whenever tmux native control is available. Provide literal_text for typed text, key_names for tmux key tokens like Enter, Escape, C-c, Up, Down, or both.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1381,7 +1381,7 @@ impl Tool for SendKeysTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send raw keystrokes to a specific con terminal pane. This is THE primary tool for interacting with tmux, vim/nvim, and other TUIs. IMPORTANT: Always follow send_keys with read_pane to verify the action took effect. Common sequences: \\n (Enter), \\x1b (Escape), \\x03 (Ctrl-C), \\x02 (Ctrl-B, tmux prefix), \\x1b[A/B/C/D (arrow keys). For shell commands, prefer terminal_exec when exec_visible_shell is available.".to_string(),
+            description: "Send raw keystrokes to a specific con terminal pane. Use this for direct TUI interaction, prompt-level shell input when exec_visible_shell is unavailable, and tmux prefix sequences only when tmux native control is unavailable. IMPORTANT: Always follow send_keys with read_pane to verify the action took effect. Common sequences: \\n (Enter), \\x1b (Escape), \\x03 (Ctrl-C), \\x02 (Ctrl-B, tmux prefix), \\x1b[A/B/C/D (arrow keys). For shell commands, prefer terminal_exec when exec_visible_shell is available. For tmux panes with query_tmux/send_tmux_keys, prefer tmux-native tools.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

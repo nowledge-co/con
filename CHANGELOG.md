@@ -36,6 +36,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Pane runtime state is now reducer-backed instead of snapshot-only. con tracks each pane's recent actions, typed shell-context snapshots, and freshness rules, so the agent can reuse truthful causal history without confusing it for the current foreground target.
 - Pane runtime now separates the current verified foreground stack from the last verified shell frame. If con cannot prove what is visible now, it keeps the live target `unknown` and shows the last verified shell context separately instead of pretending history is current state.
 - con now exposes the first native tmux control layer through a proven same-session shell anchor. When a fresh shell probe confirms tmux, the agent can list tmux targets, capture a specific tmux pane, and send tmux-native keys to a chosen tmux pane instead of typing blindly into the outer terminal surface.
+- When native tmux control is available, the agent now treats tmux-native target discovery and tmux-native key delivery as the default path. Raw outer-pane `send_keys` is now fallback-only for tmux instead of the first choice.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

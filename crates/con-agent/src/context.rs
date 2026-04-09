@@ -1166,7 +1166,8 @@ impl TerminalContext {
              1. **con application shortcuts** (Cmd+T, Cmd+W, Cmd+N): These control the con app itself.\n\
                 You CANNOT send these. Use tools instead: create_pane for new terminals.\n\
              2. **Terminal protocol sequences** (\\x02c for tmux prefix+c, \\x1b for Escape, \\x03 for Ctrl-C):\n\
-                These travel through the PTY to the remote program. send_keys is the correct tool for these.\n\
+                These travel through the PTY to the remote program. send_keys is correct for direct TUI interaction, \
+                but when a pane exposes tmux native control you should prefer tmux_list_targets / tmux_capture_pane / tmux_send_keys over outer-pane PTY keystrokes.\n\
              3. **Shell commands** (ls, apt update, git status):\n\
                 Use terminal_exec when `exec_visible_shell` is available. When it is NOT, first observe the pane \
                 and only use send_keys if a shell prompt is visibly present.\n\n\
@@ -1175,11 +1176,12 @@ impl TerminalContext {
              - READ-ONLY SHELL INTROSPECTION on a pane with `probe_shell_context` → probe_shell_context.\n\
              - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_list_targets, then tmux_capture_pane.\n\
              - TMUX NATIVE INTERACTION on a pane with tmux native control → tmux_send_keys to a specific tmux pane target.\n\
+             - TMUX WITHOUT native control → read_pane first, then outer-pane send_keys only as a fallback.\n\
              - PARALLEL WORK across hosts → create_pane for each host (output shows connection state), \
                then terminal_exec (if exec_visible_shell) or send_keys.\n\
              - SHELL COMMANDS on a pane WITHOUT `exec_visible_shell` → use read_pane first, then send_keys \"command\\n\" only if a shell prompt is visibly present.\n\
              - LONG-RUNNING commands → launch, then wait_for (not repeated read_pane).\n\
-             - INTERACTIVE TUI (vim, tmux, htop) → send_keys + read_pane (follow playbooks).\n\
+             - INTERACTIVE TUI (vim, htop, menus) → send_keys + read_pane (follow playbooks).\n\
              - LOCAL FILE operations → file_read, file_write, edit_file, search, list_files.\n\
              - REMOTE FILE operations → send_keys in a remote shell (cat, heredoc, editor commands).\n\n\
              ## Turn efficiency\n\
@@ -1204,8 +1206,9 @@ impl TerminalContext {
                and NVIM_LISTEN_ADDRESS. This is shell-scope truth, not foreground-app truth after control passes to a TUI.\n\n\
              - read_pane: Read last N lines from any pane (includes scrollback).\n\n\
              - send_keys: Send keystrokes to a pane's PTY. Use for:\n\
-               (a) TUI interaction — tmux prefix sequences, vim commands, arrow keys, Escape, Ctrl-C.\n\
-               (b) Shell commands on panes without exec_visible_shell (SSH, tmux shells).\n\
+               (a) direct TUI interaction when there is no stronger native attachment.\n\
+               (b) shell commands on panes without exec_visible_shell when a shell prompt is visibly present.\n\
+               (c) tmux prefix sequences ONLY when tmux native control is unavailable.\n\
                NEVER use to simulate con application shortcuts (Cmd+T, Cmd+W).\n\n\
              - wait_for: Wait for a pane to become idle or for a pattern to appear. Use after launching \
                long-running commands instead of polling with read_pane. Idle mode (no pattern) works universally — \
@@ -1230,6 +1233,7 @@ impl TerminalContext {
              - Prefer typed attachments and probes over inference. If `probe_shell_context` is available, use it before guessing about SSH, tmux, or editor context.\n\
              - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
              - Addressing is layered. A con pane index ≠ tmux pane id ≠ tmux window index ≠ editor buffer.\n\
+             - If list_panes shows `query_tmux` or `send_tmux_keys`, treat tmux as a native attachment. Do NOT navigate tmux by outer-pane send_keys unless the native path is unavailable.\n\
              - When pane mode is not `shell` or shell metadata is stale, do NOT trust cwd/hostname/last_command and do NOT assume a shell prompt.\n\
              - If a command fails (exit_code != 0), diagnose the error before retrying.\n\
              - When editing files: always read first, ensure old_text is unique, verify the edit succeeded.\n\
@@ -2274,6 +2278,12 @@ mod tests {
         assert!(
             prompt.contains("tmux prefix"),
             "Tmux playbook should be included"
+        );
+        assert!(
+            prompt.contains("prefer tmux-native")
+                || prompt.contains("Prefer tmux-native")
+                || prompt.contains("tmux native control"),
+            "Prompt should prefer tmux-native tools when tmux is involved"
         );
         assert!(
             prompt.contains("Verify-after-act"),
