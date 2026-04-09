@@ -439,28 +439,26 @@ impl SettingsPanel {
                     cx,
                 );
             });
-            self.background_image_opacity_slider.update(cx, |slider, cx| {
-                slider.set_value(
-                    Self::clamp_background_image_opacity(
-                        self.config.appearance.background_image_opacity,
-                    ),
-                    window,
-                    cx,
-                );
-            });
-            self.background_image_position_select.update(cx, |select, cx| {
-                select.set_selected_value(
-                    &self.config.appearance.background_image_position,
-                    window,
-                    cx,
-                );
-            });
+            self.background_image_opacity_slider
+                .update(cx, |slider, cx| {
+                    slider.set_value(
+                        Self::clamp_background_image_opacity(
+                            self.config.appearance.background_image_opacity,
+                        ),
+                        window,
+                        cx,
+                    );
+                });
+            self.background_image_position_select
+                .update(cx, |select, cx| {
+                    select.set_selected_value(
+                        &self.config.appearance.background_image_position,
+                        window,
+                        cx,
+                    );
+                });
             self.background_image_fit_select.update(cx, |select, cx| {
-                select.set_selected_value(
-                    &self.config.appearance.background_image_fit,
-                    window,
-                    cx,
-                );
+                select.set_selected_value(&self.config.appearance.background_image_fit, window, cx);
             });
             self.background_image_repeat = self.config.appearance.background_image_repeat;
             self.recording_key = None;
@@ -719,7 +717,12 @@ impl SettingsPanel {
             Self::clamp_terminal_opacity(self.terminal_opacity_slider.read(cx).value().end());
         self.config.appearance.ui_opacity =
             Self::clamp_ui_opacity(self.ui_opacity_slider.read(cx).value().end());
-        let background_image_text = self.background_image_input.read(cx).value().trim().to_string();
+        let background_image_text = self
+            .background_image_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         self.config.appearance.background_image = if background_image_text.is_empty() {
             None
         } else {
@@ -1226,6 +1229,14 @@ impl SettingsPanel {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.paste_theme_from_clipboard(window, cx);
             }));
+        let open_catalog_btn = Button::new("theme-catalog-link")
+            .label("Browse Themes")
+            .icon(Icon::default().path("phosphor/arrow-square-out.svg"))
+            .small()
+            .ghost()
+            .on_click(cx.listener(|_, _, _, cx| {
+                cx.open_url("https://ghostty-style.vercel.app/");
+            }));
         let preview_card = self
             .custom_theme_preview
             .as_ref()
@@ -1290,7 +1301,7 @@ impl SettingsPanel {
                     .text_size(px(11.5))
                     .line_height(px(18.0))
                     .text_color(theme.muted_foreground.opacity(0.6))
-                    .child("Paste a Ghostty-format theme from the clipboard."),
+                    .child("Visit the community-maintained Ghostty styles site, choose a theme, then copy its Ghostty-format contents here."),
             )
             // Name input
             .child(
@@ -1307,7 +1318,14 @@ impl SettingsPanel {
                     .child(Input::new(&custom_theme_name_input)),
             )
             // Action buttons — compact row
-            .child(div().flex().items_center().gap(px(6.0)).child(paste_btn));
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(paste_btn)
+                    .child(open_catalog_btn),
+            );
 
         // Preview card with save/preview actions
         if let Some(preview) = preview_actions {
@@ -1467,6 +1485,13 @@ impl SettingsPanel {
                             .text_color(theme.muted_foreground.opacity(0.5))
                             .child(format!("{total_count} themes")),
                     ),
+            )
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(theme.muted_foreground.opacity(0.4))
+                    .mb(px(10.0))
+                    .child("Built-in themes below. You can also import community-maintained Ghostty styles."),
             )
             .child(builtin_grid);
 
@@ -2495,12 +2520,7 @@ fn select_row(
         )
 }
 
-fn toggle_row(
-    label: &str,
-    hint: &str,
-    toggle: Switch,
-    theme: &gpui_component::Theme,
-) -> Div {
+fn toggle_row(label: &str, hint: &str, toggle: Switch, theme: &gpui_component::Theme) -> Div {
     div()
         .flex()
         .items_start()
