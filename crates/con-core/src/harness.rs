@@ -243,108 +243,6 @@ impl AgentHarness {
     ) -> TerminalContext {
         let cwd = focused_observation.cwd.clone();
 
-        let agents_md = cwd.as_ref().and_then(|dir| {
-            let agents_path = Path::new(dir).join("AGENTS.md");
-            std::fs::read_to_string(&agents_path).ok()
-        });
-
-        let git_branch = cwd.as_ref().and_then(|dir| {
-            std::process::Command::new("git")
-                .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                .current_dir(dir)
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        });
-
-        let git_diff = cwd.as_ref().and_then(|dir| {
-            let stat = std::process::Command::new("git")
-                .args(["diff", "--stat"])
-                .current_dir(dir)
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_default();
-
-            if stat.trim().is_empty() {
-                return None;
-            }
-
-            let diff = std::process::Command::new("git")
-                .args(["diff"])
-                .current_dir(dir)
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_default();
-
-            // Include stat summary (always) + diff content (capped at ~8K chars
-            // to keep the system prompt lean — large diffs drown model attention).
-            const MAX_DIFF_CHARS: usize = 8_000;
-            let mut result = stat;
-            result.push('\n');
-            if diff.len() <= MAX_DIFF_CHARS {
-                result.push_str(&diff);
-            } else {
-                // Truncate at a line boundary near the char limit
-                let truncation_point = diff[..MAX_DIFF_CHARS]
-                    .rfind('\n')
-                    .unwrap_or(MAX_DIFF_CHARS);
-                result.push_str(&diff[..truncation_point]);
-                result.push_str(&format!(
-                    "\n... (diff truncated — {:.0}K of {:.0}K chars shown, see `git diff` for full)",
-                    truncation_point as f64 / 1000.0,
-                    diff.len() as f64 / 1000.0,
-                ));
-            }
-            Some(result)
-        });
-
-        let project_structure = cwd.as_ref().and_then(|dir| {
-            let output = std::process::Command::new("git")
-                .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-                .current_dir(dir)
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
-
-            let listing = output.or_else(|| {
-                std::process::Command::new("find")
-                    .args([
-                        ".",
-                        "-maxdepth",
-                        "3",
-                        "-type",
-                        "f",
-                        "-not",
-                        "-path",
-                        "./.git/*",
-                    ])
-                    .current_dir(dir)
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            })?;
-
-            if listing.trim().is_empty() {
-                return None;
-            }
-
-            let file_lines: Vec<&str> = listing.lines().collect();
-            let total = file_lines.len();
-            if total > 200 {
-                let truncated = file_lines[..200].join("\n");
-                Some(format!("{}\n... ({} more files)", truncated, total - 200))
-            } else {
-                Some(file_lines.join("\n"))
-            }
-        });
-
         let ssh_host = focused_runtime.remote_host.clone();
         let focused_control = con_agent::control::PaneControlState::from_runtime(focused_runtime);
 
@@ -371,15 +269,15 @@ impl AgentHarness {
             last_command: focused_observation.last_command.clone(),
             last_exit_code: focused_observation.last_exit_code,
             last_command_duration_secs: focused_observation.last_command_duration_secs,
-            git_branch,
+            git_branch: None,
             ssh_host,
             tmux_session: focused_runtime.tmux_session.clone(),
-            agents_md,
+            agents_md: None,
             skills: self.skills.summaries(),
             command_history: Vec::new(), // ghostty doesn't track command blocks
             other_panes,
-            git_diff,
-            project_structure,
+            git_diff: None,
+            project_structure: None,
         }
     }
 
@@ -410,6 +308,7 @@ impl AgentHarness {
             let conv_snapshot = conversation.lock().clone();
             let provider = AgentProvider::new(agent_config);
             let request_start = std::time::Instant::now();
+            let enriched_context = enrich_context_with_workspace_snapshot(context).await;
 
             const MAX_RETRIES: u32 = 3;
             let mut attempt = 0u32;
@@ -478,7 +377,7 @@ impl AgentHarness {
                 let result = provider
                     .send(
                         &conv_snapshot,
-                        &context,
+                        &enriched_context,
                         agent_tx,
                         approval_rx.clone(),
                         terminal_exec_tx.clone(),
@@ -852,6 +751,127 @@ fn has_natural_language_signals(input: &str) -> bool {
     }
 
     false
+}
+
+async fn enrich_context_with_workspace_snapshot(mut context: TerminalContext) -> TerminalContext {
+    let Some(cwd) = context.cwd.clone() else {
+        return context;
+    };
+
+    let Ok((agents_md, git_branch, git_diff, project_structure)) =
+        tokio::task::spawn_blocking(move || {
+            let cwd_path = Path::new(&cwd);
+
+            let agents_md = std::fs::read_to_string(cwd_path.join("AGENTS.md")).ok();
+
+            let git_branch = std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(cwd_path)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+            let git_diff = {
+                let stat = std::process::Command::new("git")
+                    .args(["diff", "--stat"])
+                    .current_dir(cwd_path)
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                    .unwrap_or_default();
+
+                if stat.trim().is_empty() {
+                    None
+                } else {
+                    let diff = std::process::Command::new("git")
+                        .args(["diff"])
+                        .current_dir(cwd_path)
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                        .unwrap_or_default();
+
+                    const MAX_DIFF_CHARS: usize = 8_000;
+                    let mut result = stat;
+                    result.push('\n');
+                    if diff.len() <= MAX_DIFF_CHARS {
+                        result.push_str(&diff);
+                    } else {
+                        let truncation_point =
+                            diff[..MAX_DIFF_CHARS].rfind('\n').unwrap_or(MAX_DIFF_CHARS);
+                        result.push_str(&diff[..truncation_point]);
+                        result.push_str(&format!(
+                            "\n... (diff truncated — {:.0}K of {:.0}K chars shown, see `git diff` for full)",
+                            truncation_point as f64 / 1000.0,
+                            diff.len() as f64 / 1000.0,
+                        ));
+                    }
+                    Some(result)
+                }
+            };
+
+            let project_structure = {
+                let output = std::process::Command::new("git")
+                    .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+                    .current_dir(cwd_path)
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+
+                let listing = output.or_else(|| {
+                    std::process::Command::new("find")
+                        .args([
+                            ".",
+                            "-maxdepth",
+                            "3",
+                            "-type",
+                            "f",
+                            "-not",
+                            "-path",
+                            "./.git/*",
+                        ])
+                        .current_dir(cwd_path)
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                });
+
+                listing.and_then(|listing| {
+                    if listing.trim().is_empty() {
+                        return None;
+                    }
+
+                    let file_lines: Vec<&str> = listing.lines().collect();
+                    let total = file_lines.len();
+                    if total > 200 {
+                        Some(format!(
+                            "{}\n... ({} more files)",
+                            file_lines[..200].join("\n"),
+                            total - 200
+                        ))
+                    } else {
+                        Some(file_lines.join("\n"))
+                    }
+                })
+            };
+
+            (agents_md, git_branch, git_diff, project_structure)
+        })
+        .await
+    else {
+        return context;
+    };
+
+    context.agents_md = agents_md;
+    context.git_branch = git_branch;
+    context.git_diff = git_diff;
+    context.project_structure = project_structure;
+    context
 }
 
 /// Classify errors as transient (worth retrying) vs permanent.
