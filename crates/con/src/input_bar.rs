@@ -81,6 +81,14 @@ pub struct InputBar {
 }
 
 impl InputBar {
+    fn truncate_label(text: &str, truncate_at: usize, ellipsis_threshold: usize) -> String {
+        if text.len() > ellipsis_threshold {
+            format!("{}…", &text[..text.floor_char_boundary(truncate_at)])
+        } else {
+            text.to_string()
+        }
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -351,13 +359,9 @@ impl Render for InputBar {
                 };
 
                 let label = if let Some(host) = &pane.hostname {
-                    if host.len() > 10 {
-                        format!("{}…", &host[..8])
-                    } else {
-                        host.clone()
-                    }
+                    Self::truncate_label(host, 8, 10)
                 } else if pane.name.len() > 12 {
-                    format!("{}…", &pane.name[..10])
+                    Self::truncate_label(&pane.name, 10, 12)
                 } else {
                     pane.name.clone()
                 };
