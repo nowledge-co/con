@@ -308,7 +308,8 @@ impl AgentHarness {
             let conv_snapshot = conversation.lock().clone();
             let provider = AgentProvider::new(agent_config);
             let request_start = std::time::Instant::now();
-            let enriched_context = enrich_context_with_workspace_snapshot(context).await;
+            let probed_context = auto_probe_focused_shell_context(pane_tx.clone(), context).await;
+            let enriched_context = enrich_context_with_workspace_snapshot(probed_context).await;
 
             const MAX_RETRIES: u32 = 3;
             let mut attempt = 0u32;
@@ -871,6 +872,117 @@ async fn enrich_context_with_workspace_snapshot(mut context: TerminalContext) ->
     context.git_branch = git_branch;
     context.git_diff = git_diff;
     context.project_structure = project_structure;
+    context
+}
+
+async fn auto_probe_focused_shell_context(
+    pane_tx: Sender<PaneRequest>,
+    context: TerminalContext,
+) -> TerminalContext {
+    if context.focused_shell_context_fresh || !context.focused_control.allows_shell_probe() {
+        return context;
+    }
+
+    let pane_index = context.focused_pane_index;
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    if pane_tx
+        .send(PaneRequest {
+            query: con_agent::PaneQuery::ProbeShellContext { pane_index },
+            response_tx,
+        })
+        .is_err()
+    {
+        return context;
+    }
+
+    let response = match tokio::task::spawn_blocking(move || {
+        response_rx.recv_timeout(std::time::Duration::from_secs(12))
+    })
+    .await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) | Err(_) => return context,
+    };
+
+    match response {
+        con_agent::PaneResponse::ShellProbe(result) => {
+            apply_focused_shell_probe_to_context(context, result)
+        }
+        con_agent::PaneResponse::Error(err) => {
+            log::debug!(
+                "[harness] focused shell auto-probe unavailable for pane {}: {}",
+                pane_index,
+                err
+            );
+            context
+        }
+        other => {
+            log::debug!(
+                "[harness] focused shell auto-probe returned unexpected response for pane {}: {:?}",
+                pane_index,
+                other
+            );
+            context
+        }
+    }
+}
+
+fn apply_focused_shell_probe_to_context(
+    mut context: TerminalContext,
+    result: con_agent::ShellProbeResult,
+) -> TerminalContext {
+    let synthetic_generation = context
+        .focused_shell_context
+        .as_ref()
+        .map(|shell| shell.captured_input_generation.saturating_add(1))
+        .unwrap_or(1);
+
+    let observation = con_agent::context::PaneObservationFrame {
+        title: context.focused_title.clone(),
+        cwd: context.cwd.clone(),
+        recent_output: context.recent_output.clone(),
+        last_command: context.last_command.clone(),
+        last_exit_code: context.last_exit_code,
+        last_command_duration_secs: context.last_command_duration_secs,
+        support: context.focused_observation_support.clone(),
+        has_shell_integration: context.focused_has_shell_integration,
+        is_alt_screen: matches!(
+            context.focused_front_state,
+            con_agent::context::PaneFrontState::InteractiveSurface
+        ),
+        is_busy: false,
+        input_generation: synthetic_generation,
+        last_command_finished_input_generation: synthetic_generation,
+    };
+
+    let mut tracker = con_agent::PaneRuntimeTracker::default();
+    tracker.record_action(con_agent::PaneRuntimeEvent::ShellProbe {
+        result,
+        captured_input_generation: synthetic_generation,
+    });
+    let runtime = tracker.observe(observation);
+
+    context.focused_hostname = runtime.remote_host.clone();
+    context.focused_hostname_confidence = runtime.remote_host_confidence;
+    context.focused_hostname_source = runtime.remote_host_source;
+    context.focused_front_state = runtime.front_state;
+    context.focused_pane_mode = runtime.mode;
+    context.focused_shell_metadata_fresh = runtime.shell_metadata_fresh;
+    context.focused_runtime_stack = runtime.scope_stack.clone();
+    context.focused_last_verified_runtime_stack = runtime.last_verified_scope_stack.clone();
+    context.focused_runtime_warnings = runtime.warnings.clone();
+    context.focused_control = con_agent::PaneControlState::from_runtime(&runtime);
+    context.focused_shell_context = runtime.shell_context.clone();
+    context.focused_shell_context_fresh = runtime.shell_context_fresh;
+    context.ssh_host = runtime.remote_host.clone();
+    context.tmux_session = runtime.tmux_session.clone();
+
+    let mut recent_actions = context.focused_recent_actions.clone();
+    if let Some(shell_probe_action) = runtime.recent_actions.last().cloned() {
+        recent_actions.push(shell_probe_action);
+    }
+    context.focused_recent_actions = recent_actions;
+
     context
 }
 
