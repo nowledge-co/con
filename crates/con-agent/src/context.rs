@@ -1577,6 +1577,7 @@ impl TerminalContext {
              - Never restate stale shell metadata as if it were the current foreground runtime. If shell metadata is not fresh, label it as historical shell metadata or omit it.\n\
              - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_find_targets or tmux_list_targets, then tmux_capture_pane.\n\
              - TMUX SHELL PREPARATION on a pane with tmux native control → tmux_ensure_shell_target to reuse or create a safe shell pane before remote file work or shell execution inside tmux.\n\
+             - TMUX AGENT TARGET PREPARATION on a pane with tmux native control → tmux_ensure_agent_target to reuse or create a Codex CLI, Claude Code, or OpenCode tmux pane before interacting with that agent.\n\
              - TMUX NATIVE COMMAND LAUNCH on a pane with tmux native control → tmux_run_command to create a new tmux window or split for a shell, Codex CLI, Claude Code, OpenCode, or a long-running command.\n\
              - TMUX NATIVE INTERACTION on a pane with tmux native control → tmux_send_keys to a specific tmux pane target.\n\
              - TMUX WITHOUT native control → read_pane first, then outer-pane send_keys only as a fallback.\n\
@@ -1584,7 +1585,7 @@ impl TerminalContext {
                then terminal_exec (if exec_visible_shell) or send_keys.\n\
              - SHELL COMMANDS on a pane WITHOUT `exec_visible_shell` → use read_pane first, then send_keys \"command\\n\" only if a shell prompt is visibly present.\n\
              - LONG-RUNNING commands → launch, then wait_for (not repeated read_pane).\n\
-             - INTERACTIVE TUI (htop, menus, agent CLIs without a stronger attachment) → send_keys + read_pane (follow playbooks).\n\
+             - INTERACTIVE TUI (htop, menus, agent CLIs without a stronger attachment) → tmux_send_keys when a tmux target exists, otherwise send_keys + read_pane (follow playbooks).\n\
              - LOCAL FILE operations → file_read, file_write, edit_file, search, list_files.\n\
              - REMOTE FILE operations → send_keys in a remote shell (cat, heredoc, editor commands).\n\n\
              ## Turn efficiency\n\
@@ -1623,6 +1624,7 @@ impl TerminalContext {
              - resolve_work_target: Choose the best con pane or tmux target for shell work, tmux work, or agent CLI interaction using the typed control plane.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
              - tmux_ensure_shell_target: Reuse or create a tmux shell target through a proven same-session tmux shell anchor.\n\
+             - tmux_ensure_agent_target: Reuse or create a tmux target for Codex CLI, Claude Code, or OpenCode. This stays in tmux control; it does not imply a native Codex/OpenCode attachment unless con explicitly proves one.\n\
              - tmux_run_command: Create a new tmux window or split pane and run a command there through a proven same-session tmux shell anchor.\n\
              - tmux_send_keys: Send text or tmux key names to a specific tmux pane target through a proven same-session tmux shell anchor.\n\
              - search_panes: Search scrollback across panes by regex.\n\n\

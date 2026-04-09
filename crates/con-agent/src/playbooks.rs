@@ -28,8 +28,9 @@ Preferred path: if list_panes shows `query_tmux`, `exec_tmux_command`, or `send_
 2. tmux_find_targets or tmux_list_targets to discover exact tmux windows and panes
 3. tmux_capture_pane to inspect the chosen tmux pane without confusing it with the outer con pane
 4. tmux_ensure_shell_target when you need a safe shell pane for work
-5. tmux_run_command when you need a fresh shell, a dedicated work window, or a new agent CLI target
-6. tmux_send_keys to a specific tmux pane target
+5. tmux_ensure_agent_target when you want to reuse or create a Codex CLI, Claude Code, or OpenCode tmux target
+6. tmux_run_command when you need a fresh shell, a dedicated work window, or another long-running target
+7. tmux_send_keys to a specific tmux pane target
 
 Use outer-pane send_keys for tmux only as a fallback when tmux native control is unavailable.
 tmux intercepts its prefix key from the PTY stream. Sending \\x02 (Ctrl-B) via send_keys \
@@ -50,6 +51,7 @@ Parse the status bar to know which window you are on and what other windows exis
 - Find a likely shell/agent pane: tmux_find_targets(pane_index=..., kind=\"shell\")
 - Inspect a target: tmux_capture_pane(pane_index=..., target=\"%17\")
 - Reuse or create a shell target: tmux_ensure_shell_target(pane_index=..., cwd=\"/repo\")
+- Reuse or create an agent target: tmux_ensure_agent_target(pane_index=..., agent_name=\"codex\", cwd=\"/repo\")
 - Launch a fresh target: tmux_run_command(pane_index=..., location=\"new_window\", command=\"bash\", window_name=\"scratch\")
 - Act on a target: tmux_send_keys(pane_index=..., target=\"%17\", literal_text=\"htop\", append_enter=true)
 

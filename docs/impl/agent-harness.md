@@ -182,6 +182,7 @@ This avoids cloning — `mem::replace` moves ownership. The AgentPanel always di
 | `tmux_send_keys` | Dangerous | Requires approval (or auto_approve) |
 | `tmux_run_command` | Dangerous | Requires approval (or auto_approve) |
 | `tmux_ensure_shell_target` | Dangerous | Requires approval (or auto_approve) |
+| `tmux_ensure_agent_target` | Dangerous | Requires approval (or auto_approve) |
 
 Classification happens in two places:
 1. `ConHook::on_tool_call` — blocks on approval for dangerous tools

@@ -346,6 +346,17 @@ impl PaneControlState {
                 notes.push(format!(
                     "The visible target is `{label}`. Raw input affects that agent UI, not a shell prompt."
                 ));
+                match label.to_ascii_lowercase().as_str() {
+                    "codex" => notes.push(
+                        "Codex has a separate app-server mode, but con only has direct Codex-native control when an explicit app-server attachment is proven. Otherwise treat it as an interactive terminal target."
+                            .to_string(),
+                    ),
+                    "opencode" | "open-code" => notes.push(
+                        "OpenCode has a separate server mode, but con only has direct OpenCode-native control when an explicit server attachment is proven. Otherwise treat it as an interactive terminal target."
+                            .to_string(),
+                    ),
+                    _ => {}
+                }
                 if target_stack
                     .iter()
                     .any(|target| target.kind == PaneVisibleTargetKind::TmuxSession)

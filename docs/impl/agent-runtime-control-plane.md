@@ -76,6 +76,7 @@ That attachment currently supports:
 - tmux target discovery helpers for likely shell and agent-cli panes
 - tmux pane capture
 - tmux shell-target preparation
+- tmux agent-target preparation for Codex CLI, Claude Code, and OpenCode
 - tmux-native command launch into a new window or split pane
 - tmux-native send-keys to a chosen tmux target
 
@@ -86,6 +87,13 @@ This is the right abstraction because it scales across:
 - tmux panes running Codex CLI / Claude Code / OpenCode
 
 without needing app-specific screen scraping.
+
+For external agent CLIs, the control rule is now explicit:
+
+- a normal Codex / Claude Code / OpenCode session inside tmux is a tmux target first
+- con may reuse or create those targets through tmux-native helpers
+- con must not pretend it has app-native Codex/OpenCode control unless a separate explicit attachment is proven
+- Codex app-server mode and OpenCode server mode are future attachment surfaces, not assumptions
 
 What it does not solve yet:
 

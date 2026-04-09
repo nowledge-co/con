@@ -872,6 +872,24 @@ pub struct TmuxEnsureShellTargetResult {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum AgentCliNativeAttachmentState {
+    Unavailable,
+    LaunchIntegratedOnly,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TmuxEnsureAgentTargetResult {
+    pub agent_name: String,
+    pub created: bool,
+    pub pane: crate::tmux::TmuxPaneInfo,
+    pub creation: Option<TmuxExecResult>,
+    pub launch_command: Option<String>,
+    pub native_attachment_state: AgentCliNativeAttachmentState,
+    pub native_attachment_note: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum WorkTargetIntent {
     VisibleShell,
     RemoteShell,
@@ -995,6 +1013,25 @@ fn tmux_command_basename(command: &str) -> &str {
     command.rsplit('/').next().unwrap_or(command)
 }
 
+fn canonical_agent_cli_name(name: &str) -> Option<&'static str> {
+    match name
+        .trim()
+        .to_ascii_lowercase()
+        .replace('_', "-")
+        .replace(' ', "-")
+        .as_str()
+    {
+        "codex" => Some("codex"),
+        "claude" | "claude-code" | "claudecode" => Some("claude"),
+        "opencode" | "open-code" | "open-code-cli" => Some("opencode"),
+        _ => None,
+    }
+}
+
+fn classify_agent_cli_command(command: &str) -> Option<&'static str> {
+    canonical_agent_cli_name(tmux_command_basename(command))
+}
+
 fn is_tmux_shell_command(command: &str) -> bool {
     matches!(
         tmux_command_basename(command).to_ascii_lowercase().as_str(),
@@ -1003,10 +1040,51 @@ fn is_tmux_shell_command(command: &str) -> bool {
 }
 
 fn is_tmux_agent_cli_command(command: &str) -> bool {
-    matches!(
-        tmux_command_basename(command).to_ascii_lowercase().as_str(),
-        "codex" | "claude" | "claude-code" | "opencode" | "open-code"
-    )
+    classify_agent_cli_command(command).is_some()
+}
+
+fn agent_cli_matches_selector(command: &str, agent_name: Option<&String>) -> bool {
+    let Some(actual) = classify_agent_cli_command(command) else {
+        return false;
+    };
+    agent_name
+        .as_ref()
+        .and_then(|name| canonical_agent_cli_name(name))
+        .is_none_or(|expected| expected == actual)
+}
+
+fn default_tmux_agent_launch_command(agent_name: &str) -> Option<&'static str> {
+    match canonical_agent_cli_name(agent_name)? {
+        "codex" => Some("codex"),
+        "claude" => Some("claude"),
+        "opencode" => Some("opencode"),
+        _ => None,
+    }
+}
+
+fn agent_cli_native_attachment(agent_name: &str) -> (AgentCliNativeAttachmentState, String) {
+    match canonical_agent_cli_name(agent_name) {
+        Some("codex") => (
+            AgentCliNativeAttachmentState::LaunchIntegratedOnly,
+            "Codex has a separate app-server protocol, but con can only use it when Codex is intentionally launched with app-server transport. A normal tmux Codex session is still controlled through tmux."
+                .to_string(),
+        ),
+        Some("opencode") => (
+            AgentCliNativeAttachmentState::LaunchIntegratedOnly,
+            "OpenCode has a separate server mode, but con can only use it when OpenCode is intentionally launched with an explicit server/port. A normal tmux OpenCode session is still controlled through tmux."
+                .to_string(),
+        ),
+        Some("claude") => (
+            AgentCliNativeAttachmentState::Unavailable,
+            "Claude Code does not expose a separate con-native control attachment here. Inside tmux it remains an interactive tmux target."
+                .to_string(),
+        ),
+        _ => (
+            AgentCliNativeAttachmentState::Unavailable,
+            "This agent CLI does not have a proven con-native attachment. Treat it as an interactive tmux target."
+                .to_string(),
+        ),
+    }
 }
 
 fn sort_tmux_matches(matches: &mut [crate::tmux::TmuxPaneInfo]) {
@@ -1067,10 +1145,13 @@ fn pane_has_remote_shell_context(pane: &PaneInfo) -> bool {
 }
 
 fn pane_is_visible_agent_cli(pane: &PaneInfo, agent_name: Option<&String>) -> bool {
-    let matches_name =
-        |value: &str| agent_name.is_none_or(|needle| value.to_ascii_lowercase().contains(needle));
     pane.visible_target.kind == PaneVisibleTargetKind::AgentCli
-        || pane.agent_cli.as_deref().is_some_and(matches_name)
+        || pane.agent_cli.as_deref().is_some_and(|value| {
+            agent_name
+                .as_ref()
+                .and_then(|name| canonical_agent_cli_name(name))
+                .is_none_or(|expected| canonical_agent_cli_name(value) == Some(expected))
+        })
 }
 
 fn sort_work_target_candidates(candidates: &mut [(i32, WorkTargetCandidate)]) {
@@ -1321,10 +1402,7 @@ fn resolve_work_target_candidates(
                                 .pane_current_command
                                 .as_deref()
                                 .is_some_and(|command| {
-                                    is_tmux_agent_cli_command(command)
-                                        && agent_name.as_ref().is_none_or(|needle| {
-                                            command.to_ascii_lowercase().contains(needle)
-                                        })
+                                    agent_cli_matches_selector(command, agent_name.as_ref())
                                 })
                         })
                         .collect::<Vec<_>>();
@@ -1339,6 +1417,24 @@ fn resolve_work_target_candidates(
                                 false,
                                 "tmux_send_keys",
                                 "This pane has native tmux control and already contains a matching agent CLI target.".to_string(),
+                            ),
+                        ));
+                    } else {
+                        let label = agent_name
+                            .as_deref()
+                            .and_then(canonical_agent_cli_name)
+                            .unwrap_or("agent CLI");
+                        candidates.push((
+                            155 + if pane.is_focused { 1 } else { 0 },
+                            make_tmux_target_candidate(
+                                &pane,
+                                None,
+                                WorkTargetControlPath::TmuxAgentTarget,
+                                true,
+                                "tmux_ensure_agent_target",
+                                format!(
+                                    "This pane has native tmux control, but no matching {label} target is currently known. Use tmux_ensure_agent_target first."
+                                ),
                             ),
                         ));
                     }
@@ -2111,6 +2207,178 @@ impl Tool for TmuxEnsureShellTargetTool {
             created: true,
             pane,
             creation: Some(creation),
+        };
+        serde_json::to_value(&result).map_err(|e| ToolError::CommandFailed(e.to_string()))
+    }
+}
+
+// ── resolve_work_target tool ─────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TmuxEnsureAgentTargetArgs {
+    pub pane_index: usize,
+    pub agent_name: String,
+    pub cwd: Option<String>,
+    pub window_name: Option<String>,
+    pub launch_command: Option<String>,
+    #[serde(default = "default_tmux_shell_location")]
+    pub location: TmuxExecLocation,
+    #[serde(default = "default_true")]
+    pub detached: bool,
+}
+
+pub struct TmuxEnsureAgentTargetTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl TmuxEnsureAgentTargetTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for TmuxEnsureAgentTargetTool {
+    const NAME: &'static str = "tmux_ensure_agent_target";
+    type Error = ToolError;
+    type Args = TmuxEnsureAgentTargetArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Return a tmux pane that is suitable for interacting with a specific agent CLI. Reuses an existing tmux pane already running Codex, Claude Code, or OpenCode when one matches, otherwise creates a fresh tmux target with the requested agent launch command. This stays in the tmux control plane; it does not claim app-native Codex or OpenCode control unless a separate explicit attachment exists.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                    },
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Agent CLI family to reuse or launch, such as codex, claude, or opencode."
+                    },
+                    "cwd": {
+                        "type": ["string", "null"],
+                        "description": "Optional path hint. Existing tmux agent panes whose pane_current_path contains this value are preferred, and new targets inherit it when created."
+                    },
+                    "window_name": {
+                        "type": ["string", "null"],
+                        "description": "Optional name for a newly created tmux window."
+                    },
+                    "launch_command": {
+                        "type": ["string", "null"],
+                        "description": "Optional explicit command to launch when no matching agent pane exists. Defaults to the canonical CLI name for the requested agent."
+                    },
+                    "location": {
+                        "type": "string",
+                        "enum": ["new_window", "split_horizontal", "split_vertical"],
+                        "description": "Where to create a new agent target if none already exists."
+                    },
+                    "detached": {
+                        "type": "boolean",
+                        "description": "Whether a newly created target should start detached. Defaults to true."
+                    }
+                },
+                "required": ["pane_index", "agent_name"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let Some(agent_name) = canonical_agent_cli_name(&args.agent_name) else {
+            return Err(ToolError::CommandFailed(format!(
+                "Unsupported agent_name `{}`. Expected codex, claude, or opencode.",
+                args.agent_name
+            )));
+        };
+        let cwd_contains = args.cwd.as_ref().map(|v| v.to_ascii_lowercase());
+        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let mut matches = snapshot
+            .panes
+            .into_iter()
+            .filter(|pane| {
+                pane.pane_current_command
+                    .as_deref()
+                    .is_some_and(|command| classify_agent_cli_command(command) == Some(agent_name))
+                    && cwd_contains.as_ref().is_none_or(|needle| {
+                        pane.pane_current_path
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase()
+                            .contains(needle)
+                    })
+            })
+            .collect::<Vec<_>>();
+        sort_tmux_matches(&mut matches);
+
+        let (native_attachment_state, native_attachment_note) =
+            agent_cli_native_attachment(agent_name);
+
+        if let Some(pane) = matches.into_iter().next() {
+            let result = TmuxEnsureAgentTargetResult {
+                agent_name: agent_name.to_string(),
+                created: false,
+                pane,
+                creation: None,
+                launch_command: None,
+                native_attachment_state,
+                native_attachment_note,
+            };
+            return serde_json::to_value(&result)
+                .map_err(|e| ToolError::CommandFailed(e.to_string()));
+        }
+
+        let launch_command = match args.launch_command {
+            Some(command) => command,
+            None => default_tmux_agent_launch_command(agent_name)
+                .ok_or_else(|| {
+                    ToolError::CommandFailed(format!(
+                        "No default launch command is defined for agent `{agent_name}`."
+                    ))
+                })?
+                .to_string(),
+        };
+        let creation = pane_query_tmux_run_command(
+            &self.pane_tx,
+            args.pane_index,
+            None,
+            args.location,
+            launch_command.clone(),
+            args.window_name
+                .clone()
+                .or_else(|| Some(agent_name.to_string())),
+            args.cwd.clone(),
+            args.detached,
+        )?;
+        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let pane = snapshot
+            .panes
+            .into_iter()
+            .find(|pane| pane.target == creation.target || pane.pane_id == creation.pane_id)
+            .unwrap_or_else(|| crate::tmux::TmuxPaneInfo {
+                session_name: creation.session_name.clone(),
+                window_id: creation.window_id.clone(),
+                window_index: creation.window_index.clone(),
+                window_name: creation.window_name.clone(),
+                window_target: creation.window_target.clone(),
+                pane_id: creation.pane_id.clone(),
+                pane_index: creation.pane_index.clone(),
+                target: creation.target.clone(),
+                pane_active: !creation.detached,
+                window_active: !creation.detached,
+                pane_current_command: Some(agent_name.to_string()),
+                pane_current_path: args.cwd,
+            });
+
+        let result = TmuxEnsureAgentTargetResult {
+            agent_name: agent_name.to_string(),
+            created: true,
+            pane,
+            creation: Some(creation),
+            launch_command: Some(launch_command),
+            native_attachment_state,
+            native_attachment_note,
         };
         serde_json::to_value(&result).map_err(|e| ToolError::CommandFailed(e.to_string()))
     }
@@ -3193,9 +3461,10 @@ impl Tool for CreatePaneTool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ResolveWorkTargetResult, TmuxTargetKindFilter, WorkTargetControlPath, WorkTargetIntent,
-        decode_key_escapes, is_tmux_agent_cli_command, is_tmux_shell_command,
-        resolve_work_target_candidates, split_at_standalone_esc,
+        AgentCliNativeAttachmentState, ResolveWorkTargetResult, TmuxTargetKindFilter,
+        WorkTargetControlPath, WorkTargetIntent, agent_cli_native_attachment,
+        canonical_agent_cli_name, decode_key_escapes, is_tmux_agent_cli_command,
+        is_tmux_shell_command, resolve_work_target_candidates, split_at_standalone_esc,
     };
     use crate::context::{
         PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneObservationSupport,
@@ -3251,6 +3520,30 @@ mod tests {
         assert_eq!(decode_key_escapes("hexdump"), "hexdump"); // 'x' + 'd' + 'u' — 0xdu invalid
         assert_eq!(decode_key_escapes("x41"), "x41"); // 0x41 = 'A', not control
         assert_eq!(decode_key_escapes("maximum"), "maximum");
+    }
+
+    #[test]
+    fn canonical_agent_cli_names_normalize_aliases() {
+        assert_eq!(canonical_agent_cli_name("codex"), Some("codex"));
+        assert_eq!(canonical_agent_cli_name("claude-code"), Some("claude"));
+        assert_eq!(canonical_agent_cli_name("Claude Code"), Some("claude"));
+        assert_eq!(canonical_agent_cli_name("open-code"), Some("opencode"));
+        assert_eq!(canonical_agent_cli_name("opencode"), Some("opencode"));
+        assert_eq!(canonical_agent_cli_name("unknown"), None);
+    }
+
+    #[test]
+    fn agent_cli_native_attachment_notes_match_supported_clients() {
+        let (state, note) = agent_cli_native_attachment("codex");
+        assert_eq!(state, AgentCliNativeAttachmentState::LaunchIntegratedOnly);
+        assert!(note.contains("app-server"));
+
+        let (state, note) = agent_cli_native_attachment("opencode");
+        assert_eq!(state, AgentCliNativeAttachmentState::LaunchIntegratedOnly);
+        assert!(note.contains("server"));
+
+        let (state, _note) = agent_cli_native_attachment("claude");
+        assert_eq!(state, AgentCliNativeAttachmentState::Unavailable);
     }
 
     #[test]
