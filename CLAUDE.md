@@ -11,7 +11,7 @@ con is an open-source, macOS-native, GPU-accelerated terminal emulator with a bu
 - **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API (surface lifecycle, action callbacks, clipboard, key/mouse input)
 - **Terminal support crate**: con-terminal — theme and palette helpers only
 - **AI agent**: Rig v0.34.0 (from crates.io, 13 providers, Tool trait)
-- **Socket API**: planned — Unix domain sockets, JSON-RPC (cmux-inspired)
+- **Socket API**: planned — Unix domain sockets, JSON-RPC
 
 ## Repository Layout
 

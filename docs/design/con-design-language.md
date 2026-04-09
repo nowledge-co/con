@@ -36,7 +36,7 @@ This design language is based on four inputs:
    - `crates/con/src/input_bar.rs`
    - `crates/con/src/agent_panel.rs`
    - `crates/con/src/settings_panel.rs`
-2. **Warp's public product patterns**
+2. **Terminal-native interaction patterns**
    - terminal structure and discoverability
    - command composition and action affordances
    - keyboard-forward UX patterns

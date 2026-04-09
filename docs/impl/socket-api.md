@@ -2,7 +2,7 @@
 
 ## Overview
 
-con exposes a Unix domain socket for external agents and plugins to control the terminal. Inspired by cmux's V2 JSON-RPC protocol.
+con exposes a Unix domain socket for external agents and plugins to control the terminal using a small JSON-RPC protocol.
 
 ## Socket Path
 

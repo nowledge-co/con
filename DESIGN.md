@@ -2,11 +2,10 @@
 
 ## Vision
 
-An open-source, macOS-native, GPU-accelerated terminal emulator that treats AI agents as first-class citizens. Think Warp's UX ambition meets Ghostty's terminal correctness meets a native agent harness — all in Rust.
+An open-source, macOS-native, GPU-accelerated terminal emulator that treats AI agents as first-class citizens. It aims for high terminal correctness, native performance, and a deeply integrated agent harness — all in Rust.
 
 **Why con exists:**
 
-- Warp is closed-source and macOS-first
 - Existing terminals bolt AI on as an afterthought
 - Agent workflows (Claude Code, Codex, ssh, tmux) deserve deep terminal integration, not wrapper hacks
 - The terminal is the last IDE-free surface that hasn't been reinvented for the AI era
@@ -471,7 +470,7 @@ new-tab = "cmd+t"
 3. **Rig's agent abstractions** — swap providers, define tools in Rust, stream tokens
 4. **Rust's performance** — sub-millisecond input latency, <100MB RAM
 5. **One runtime, one behavior model** — every pane uses Ghostty, which keeps terminal behavior and agent integration consistent
-6. **Open source** — fill the gap Warp left
+6. **Open source** — keep the product auditable, hackable, and durable
 
 ---
 
@@ -511,7 +510,7 @@ If we ever need headless testing, we add a test-only software rasterizer. Not a 
 
 ### 4. Plugin System: Node.js + Python via Sidecar IPC
 
-**Decision:** Plugins run as external processes. con communicates via JSON-RPC over Unix domain sockets (like cmux's socket API).
+**Decision:** Plugins run as external processes. con communicates via JSON-RPC over Unix domain sockets.
 
 **Why Node.js + Python:**
 
@@ -526,12 +525,12 @@ If we ever need headless testing, we add a test-only software rasterizer. Not a 
 con (Rust)  ─── Unix socket (JSON-RPC) ───  plugin process (Node/Python/any)
 ```
 
-- con exposes a socket API (inspired by cmux V2): `notification.create`, `terminal.write`, `context.get`, etc.
+- con exposes a socket API: `notification.create`, `terminal.write`, `context.get`, etc.
 - Plugin manifest declares: name, runtime, entry point, requested capabilities
 - con spawns the plugin process, passes socket path via env var
 - Plugin SDK: thin npm package (`@con/sdk`) and pip package (`con-sdk`) wrapping the JSON-RPC protocol
 
-**Phase 4 deliverable.** Socket API comes free from the cmux-inspired external agent support in Phase 2.
+**Phase 4 deliverable.** Socket API comes from the same external automation work introduced earlier in the product plan.
 
 ### 5. Licensing: MIT
 
@@ -544,13 +543,13 @@ All clear. No copyleft, no GPL contamination.
 
 ---
 
-## Key Insight from cmux
+## Key Insight
 
-cmux doesn't embed an LLM. It provides a **socket control API** that external agents (Claude Code, Codex) use to interact with the terminal. This is the right pattern.
+The product should not depend on a built-in model to be useful. A socket control API for external agents keeps the system composable and lets built-in automation remain only one client of the platform.
 
 **con should have both:**
 
 1. **Built-in agent** (via Rig) — for users who want native AI without installing anything else
-2. **Socket API** (cmux-inspired) — for external agents and plugins to control con
+2. **Socket API** — for external agents and plugins to control con
 
 The socket API is the foundation. The built-in agent is just the first client of that API.

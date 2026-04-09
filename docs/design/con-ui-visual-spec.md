@@ -51,7 +51,7 @@ From the Nowledge Labs reference system, con should inherit:
 - calm settings and navigation patterns
 - progressive disclosure
 
-From Warp-like terminal UX, con should inherit:
+From strong terminal-native UX patterns, con should inherit:
 
 - structured discoverability
 - thoughtful command/action composition

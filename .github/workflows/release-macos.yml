@@ -64,15 +64,11 @@ jobs:
       - name: Build, sign, notarize, and package
         shell: bash
         env:
-          CON_APP_NAME: ${{ vars.MACOS_APP_NAME }}
           CON_CHANNEL: ${{ steps.meta.outputs.channel }}
           CON_APP_VERSION: ${{ steps.meta.outputs.version }}
           CON_BUILD_NUMBER: ${{ github.run_number }}
           CON_ARCH: ${{ matrix.arch }}
           CON_RUST_TARGET: ${{ matrix.rust_target }}
-          CON_BUNDLE_ID_BASE: ${{ vars.MACOS_BUNDLE_ID_BASE }}
-          CON_ICON_SOURCE: ${{ vars.MACOS_ICON_SOURCE }}
-          CON_MINIMUM_SYSTEM_VERSION: ${{ vars.MACOS_MINIMUM_SYSTEM_VERSION }}
           CON_REQUIRE_NOTARIZATION: "1"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}

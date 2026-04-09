@@ -28,7 +28,6 @@ This brief is grounded in:
 - `docs/study/*`
 - `crates/con/src/*`
 - the current MVP screenshots in `.context/attachments/`
-- Warp's public product and documentation
 - the Nowledge Labs reference screenshots and design guide provided in this workspace
 
 Those references inform the brief, but this document defines the design direction for **con**, not for the reference products.
@@ -120,7 +119,7 @@ The prototype should build on the MVP's architecture without inheriting its roug
 The best version of con should combine:
 
 - the **clarity and operational trust** of a serious terminal
-- the **discoverability and compositional UX ambition** seen in Warp
+- strong discoverability and compositional command UX
 - the **restraint, spacing, and typography discipline** seen in the Nowledge Labs reference UI
 
 The result should be dark-first (with an equally polished light mode), quieter, and more terminal-native than either reference.

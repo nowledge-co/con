@@ -27,4 +27,4 @@ This folder collects research notes, implementation notes, and design handoff do
 - `study/gpui.md` — GPUI study notes
 - `study/ghostty-vt.md` — Ghostty / VT notes
 - `study/rig.md` — Rig integration notes
-- `study/cmux.md` — cmux-inspired architecture notes
+- `study/socket-control-patterns.md` — external automation architecture notes

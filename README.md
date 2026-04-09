@@ -29,10 +29,6 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 Think of it like a beloved old beast with modern Bluetooth done right — or a truck lover who still wants an electric future.
 
-If you want more than Con, go for [Warp](https://www.warp.dev/).
-
-If you want less than Con, you probably already have more ideas than us ;).
-
 ## What it does
 
 - a terminal emulator
