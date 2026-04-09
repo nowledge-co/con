@@ -61,6 +61,12 @@ cargo test --workspace
 cargo build --release -p con
 ```
 
+For signed macOS release artifacts, use:
+
+```bash
+./scripts/macos/release.sh
+```
+
 ## Useful Paths
 
 - `crates/con/src` — app shell and GPUI surfaces

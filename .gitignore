@@ -23,3 +23,5 @@ target
 3pp
 .context
 .DS_Store
+dist
+.env
