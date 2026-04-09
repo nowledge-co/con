@@ -24,6 +24,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 
 **AI Agent**
 - The agent system prompt has been restructured for sharper tool usage. Questions are answered with minimal side effects; tasks are executed carefully with verification. Each tool now has explicit guidelines so the agent picks the right one the first time.
+- con now depends directly on upstream Rig main for agent runtime behavior. The temporary fork used to carry the streaming multi-turn tool-call history fix has been removed now that the fix is merged upstream.
 - Busy/idle detection works on Ghostty panes — the agent waits for a running command to finish before sending another.
 - Pane-aware context is stricter and more honest. con no longer guesses SSH hosts, tmux sessions, or agent CLIs from pane titles or status-line patterns. When the foreground runtime is not proven, it stays `unknown`.
 - Visible shell execution now depends on real Ghostty command boundaries instead of stale cwd or title clues. After any unconfirmed input, con stops trusting shell metadata until shell integration proves a fresh prompt again.
