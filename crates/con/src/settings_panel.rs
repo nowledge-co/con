@@ -71,6 +71,8 @@ pub struct SettingsPanel {
 
     suggestion_model_input: Entity<InputState>,
 
+    terminal_font_select: Entity<SelectState<SearchableVec<String>>>,
+    ui_font_select: Entity<SelectState<SearchableVec<String>>>,
     font_size_input: Entity<InputState>,
     terminal_opacity_slider: Entity<SliderState>,
     ui_opacity_slider: Entity<SliderState>,
@@ -159,6 +161,44 @@ impl SettingsPanel {
         cx.new(|cx| SelectState::new(items, selected_index, window, cx))
     }
 
+    fn prepare_font_families(config: &Config, mut font_families: Vec<String>) -> Vec<String> {
+        font_families.sort_by_key(|name| name.to_lowercase());
+        font_families.dedup();
+
+        let mut preferred = Vec::new();
+        for family in [
+            ".SystemUIFont",
+            "Ioskeley Mono",
+            config.terminal.font_family.as_str(),
+            config.appearance.ui_font_family.as_str(),
+        ] {
+            if !family.is_empty() && !preferred.iter().any(|existing| existing == family) {
+                preferred.push(family.to_string());
+            }
+        }
+
+        for family in font_families {
+            if !preferred.iter().any(|existing| existing == &family) {
+                preferred.push(family);
+            }
+        }
+        preferred
+    }
+
+    fn make_searchable_string_select(
+        options: &[String],
+        current_value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<SearchableVec<String>>> {
+        let items = SearchableVec::new(options.to_vec());
+        let selected_index = options
+            .iter()
+            .position(|item| item == current_value)
+            .map(IndexPath::new);
+        cx.new(|cx| SelectState::new(items, selected_index, window, cx).searchable(true))
+    }
+
     fn card_opacity(&self) -> f32 {
         0.74
     }
@@ -233,6 +273,19 @@ impl SettingsPanel {
             );
             s
         });
+        let font_families = Self::prepare_font_families(config, cx.text_system().all_font_names());
+        let terminal_font_select = Self::make_searchable_string_select(
+            &font_families,
+            &config.terminal.font_family,
+            window,
+            cx,
+        );
+        let ui_font_select = Self::make_searchable_string_select(
+            &font_families,
+            &config.appearance.ui_font_family,
+            window,
+            cx,
+        );
         let font_size_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("14.0", window, cx);
@@ -329,6 +382,28 @@ impl SettingsPanel {
         )
         .detach();
         cx.subscribe_in(
+            &terminal_font_select,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.config.terminal.font_family = value.clone();
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &ui_font_select,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.config.appearance.ui_font_family = value.clone();
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
             &background_image_position_select,
             window,
             |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
@@ -367,6 +442,8 @@ impl SettingsPanel {
             temperature_input,
             auto_approve: config.agent.auto_approve_tools,
             suggestion_model_input,
+            terminal_font_select,
+            ui_font_select,
             font_size_input,
             terminal_opacity_slider,
             ui_opacity_slider,
@@ -410,6 +487,12 @@ impl SettingsPanel {
             self.auto_approve = agent.auto_approve_tools;
             self.model_select =
                 Self::make_model_select(&agent.provider, &pc.model, &self.registry, window, cx);
+            self.terminal_font_select.update(cx, |select, cx| {
+                select.set_selected_value(&self.config.terminal.font_family, window, cx);
+            });
+            self.ui_font_select.update(cx, |select, cx| {
+                select.set_selected_value(&self.config.appearance.ui_font_family, window, cx);
+            });
             self.font_size_input.update(cx, |s, cx| {
                 s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
             });
@@ -893,6 +976,8 @@ impl SettingsPanel {
     // ── Section content ──────────────────────────────────────────
 
     fn render_general(&mut self, cx: &mut Context<Self>) -> Div {
+        let terminal_font_select = self.terminal_font_select.clone();
+        let ui_font_select = self.ui_font_select.clone();
         let font_size_input = self.font_size_input.clone();
         let card_opacity = self.card_opacity();
 
@@ -934,9 +1019,27 @@ impl SettingsPanel {
         );
 
         let theme = cx.theme();
-        section_content("General", "Terminal and agent behavior.", theme)
+        section_content(
+            "General",
+            "Fonts, terminal defaults, and agent behavior.",
+            theme,
+        )
             .child(
                 card(theme, card_opacity)
+                    .child(searchable_select_row(
+                        "Terminal Font",
+                        "Used for terminal text and terminal-style chrome across Con.",
+                        &terminal_font_select,
+                        theme,
+                    ))
+                    .child(row_separator(theme))
+                    .child(searchable_select_row(
+                        "UI Font",
+                        "Used for settings, agent prose, and the rest of the non-terminal interface.",
+                        &ui_font_select,
+                        theme,
+                    ))
+                    .child(row_separator(theme))
                     .child(row_field("Font Size", &font_size_input))
                     .child(row_separator(theme))
                     .child(
@@ -1642,7 +1745,7 @@ impl SettingsPanel {
             .pt(px(6.0))
             .pb(px(6.0))
             .gap(px(1.0))
-            .font_family("Ioskeley Mono")
+            .font_family(theme.mono_font_family.clone())
             .text_size(px(8.0))
             .line_height(px(12.0))
             .child(
@@ -2419,7 +2522,7 @@ impl Render for SettingsPanel {
             .id("settings-overlay")
             .absolute()
             .size_full()
-            .font_family(".SystemUIFont")
+            .font_family(theme.font_family.clone())
             .child(backdrop)
             .child(card)
     }
@@ -2545,6 +2648,52 @@ fn slider_row(
                 .items_center()
                 .w_full()
                 .child(Slider::new(slider).w_full()),
+        )
+}
+
+fn searchable_select_row(
+    label: &str,
+    hint: &str,
+    select: &Entity<SelectState<SearchableVec<String>>>,
+    theme: &gpui_component::Theme,
+) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .justify_between()
+        .gap(px(16.0))
+        .px(px(16.0))
+        .py(px(12.0))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .flex_1()
+                .max_w(px(320.0))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label.to_string()),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .line_height(px(16.0))
+                        .text_color(theme.muted_foreground.opacity(0.65))
+                        .child(hint.to_string()),
+                ),
+        )
+        .child(
+            div()
+                .w(px(220.0))
+                .flex_shrink_0()
+                .child(
+                    Select::new(select)
+                        .placeholder("Search fonts…")
+                        .small(),
+                ),
         )
 }
 

@@ -1236,7 +1236,7 @@ fn render_result_block(
             .ml(px(22.0))
             .py(px(1.0))
             .text_size(px(10.5))
-            .font_family("Ioskeley Mono")
+            .font_family(theme.mono_font_family.clone())
             .text_color(theme.muted_foreground.opacity(0.5))
             .overflow_x_hidden()
             .whitespace_nowrap()
@@ -1262,7 +1262,7 @@ fn render_result_block(
             .rounded(px(6.0))
             .bg(theme.muted.opacity(0.04))
             .overflow_x_hidden()
-            .font_family("Ioskeley Mono")
+            .font_family(theme.mono_font_family.clone())
             .text_size(px(10.5))
             .line_height(px(15.0))
             .text_color(theme.muted_foreground.opacity(0.6))
@@ -1456,7 +1456,7 @@ impl Render for AgentPanel {
                                         .py(px(6.0))
                                         .rounded(px(12.0))
                                         .bg(theme.primary.opacity(0.07))
-                                        .font_family("Ioskeley Mono")
+                                        .font_family(theme.mono_font_family.clone())
                                         .on_key_down(cx.listener(
                                             |this, event: &KeyDownEvent, _window, cx| {
                                                 if event.keystroke.key == "escape" {
@@ -1934,7 +1934,7 @@ impl Render for AgentPanel {
                                     .ml(px(18.0)) // align with text after icon
                                     .text_size(px(11.0))
                                     .text_color(theme.muted_foreground.opacity(0.45))
-                                    .font_family("Ioskeley Mono")
+                                    .font_family(theme.mono_font_family.clone())
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
                                     .child(truncate_str(detail_text, 60)),
@@ -2075,7 +2075,7 @@ impl Render for AgentPanel {
                             .ml(px(18.0))
                             .text_size(px(11.0))
                             .text_color(theme.muted_foreground.opacity(0.45))
-                            .font_family("Ioskeley Mono")
+                            .font_family(theme.mono_font_family.clone())
                             .overflow_x_hidden()
                             .whitespace_nowrap()
                             .child(truncate_str(&args_display, 60)),
@@ -2145,7 +2145,7 @@ impl Render for AgentPanel {
                 .child(
                     div()
                         .text_size(px(11.0))
-                        .font_family("Ioskeley Mono")
+                        .font_family(theme.mono_font_family.clone())
                         .text_color(theme.muted_foreground.opacity(0.55))
                         .overflow_x_hidden()
                         .whitespace_nowrap()
@@ -2323,7 +2323,7 @@ impl Render for AgentPanel {
             .size_full()
             .min_h_0()
             .bg(theme.title_bar.opacity(self.ui_opacity))
-            .font_family(".SystemUIFont")
+            .font_family(theme.font_family.clone())
             .child(header);
 
         if self.showing_history {
@@ -2569,7 +2569,7 @@ impl Render for AgentPanel {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .font_family(".SystemUIFont")
+                                    .font_family(theme.font_family.clone())
                                     .text_size(px(13.0))
                                     .child(
                                         Input::new(&inline_input)
