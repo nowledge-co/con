@@ -39,6 +39,7 @@ con now ships the first typed control-plane layer:
 - every pane now keeps a reducer-backed runtime tracker instead of recomputing state from one frame
 - `list_panes` exposes address space, visible target, nested target stack, explicit control attachments, control channels, capabilities, and notes
 - the system prompt embeds the same control state for the focused pane and peer panes
+- the system prompt now also embeds a deterministic whole-tab pane layout summary so session-state answers can distinguish materially different peer panes without treating every question as focused-pane-only
 - visible execution is gated by `exec_visible_shell`, not by ad hoc prompt wording
 - panes with a proven fresh shell prompt now expose a read-only `probe_shell_context` capability for typed shell-scoped facts
 - before each agent turn, the harness now gathers the strongest safe read-only facts available on the focused pane: shell probe first, then tmux inventory if a real tmux query attachment exists

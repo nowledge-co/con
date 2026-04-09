@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::control::{
     PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneControlState,
-    PaneVisibleTarget, PaneVisibleTargetKind, format_control_attachments, format_target_stack,
+    PaneVisibleTarget, PaneVisibleTargetKind, TmuxControlMode, format_control_attachments,
+    format_target_stack,
 };
 use crate::shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
 use crate::tmux::TmuxSnapshot;
@@ -1204,6 +1205,135 @@ fn focused_screen_assessment(
     Some(format!("{summary} {next_step}"))
 }
 
+fn has_tmux_scope(scopes: &[PaneRuntimeScope]) -> bool {
+    scopes
+        .iter()
+        .any(|scope| scope.kind == PaneScopeKind::Multiplexer)
+}
+
+fn pane_screen_assessment_label(
+    front_state: PaneFrontState,
+    hints: &[PaneObservationHint],
+) -> &'static str {
+    match front_state {
+        PaneFrontState::ShellPrompt => "visible shell prompt proven",
+        PaneFrontState::InteractiveSurface => "proven interactive surface in front",
+        PaneFrontState::Unknown => {
+            let prompt_like = hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::PromptLikeInput);
+            let htop_like = hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::HtopLikeScreen);
+            match (prompt_like, htop_like) {
+                (true, true) => {
+                    "mixed current screen: prompt-like bottom with htop-like content above"
+                }
+                (true, false) => "screen currently looks prompt-like",
+                (false, true) => "screen currently looks htop-like",
+                (false, false) => "foreground target unproven",
+            }
+        }
+    }
+}
+
+fn summarize_focused_pane_layout(ctx: &TerminalContext) -> String {
+    let mut parts = vec![format!("pane {} is focused", ctx.focused_pane_index)];
+    if let Some(host) = &ctx.focused_hostname {
+        parts.push(format!("host `{host}` is proven"));
+    }
+
+    if let Some(tmux) = &ctx.focused_control.tmux {
+        let session = tmux
+            .session_name
+            .clone()
+            .unwrap_or_else(|| "tmux".to_string());
+        match tmux.mode {
+            TmuxControlMode::Native => {
+                parts.push(format!(
+                    "inside tmux session `{session}` with native control"
+                ));
+            }
+            TmuxControlMode::InspectOnly => {
+                parts.push(format!("tmux layer present via session `{session}`, but native control is not established"));
+            }
+            TmuxControlMode::Unavailable => {
+                parts.push(format!(
+                    "tmux session `{session}` is known historically, but no current tmux control channel is available"
+                ));
+            }
+        }
+    } else if has_tmux_scope(&ctx.focused_runtime_stack)
+        || has_tmux_scope(&ctx.focused_last_verified_runtime_stack)
+    {
+        parts.push(
+            "tmux appears in the runtime stack, but no tmux control anchor is established"
+                .to_string(),
+        );
+    }
+
+    parts.push(
+        pane_screen_assessment_label(ctx.focused_front_state, &ctx.focused_screen_hints)
+            .to_string(),
+    );
+
+    if !ctx.focused_shell_metadata_fresh && !ctx.focused_last_verified_runtime_stack.is_empty() {
+        parts.push(format!(
+            "historical shell frame only: {}",
+            format_runtime_stack(&ctx.focused_last_verified_runtime_stack)
+        ));
+    }
+
+    parts.join("; ")
+}
+
+fn summarize_peer_pane_layout(pane: &PaneSummary) -> String {
+    let mut parts = vec![format!("pane {}", pane.pane_index)];
+    if let Some(host) = &pane.hostname {
+        parts.push(format!("host `{host}` is proven"));
+    }
+
+    if let Some(tmux) = &pane.control.tmux {
+        let session = tmux
+            .session_name
+            .clone()
+            .unwrap_or_else(|| "tmux".to_string());
+        match tmux.mode {
+            TmuxControlMode::Native => {
+                parts.push(format!(
+                    "inside tmux session `{session}` with native control"
+                ));
+            }
+            TmuxControlMode::InspectOnly => {
+                parts.push(format!("tmux layer present via session `{session}`, but native control is not established"));
+            }
+            TmuxControlMode::Unavailable => {
+                parts.push(format!(
+                    "tmux session `{session}` is known historically, but no current tmux control channel is available"
+                ));
+            }
+        }
+    } else if has_tmux_scope(&pane.runtime_stack)
+        || has_tmux_scope(&pane.last_verified_runtime_stack)
+    {
+        parts.push(
+            "tmux appears in the runtime stack, but no tmux control anchor is established"
+                .to_string(),
+        );
+    }
+
+    parts.push(pane_screen_assessment_label(pane.front_state, &pane.screen_hints).to_string());
+
+    if !pane.shell_metadata_fresh && !pane.last_verified_runtime_stack.is_empty() {
+        parts.push(format!(
+            "historical shell frame only: {}",
+            format_runtime_stack(&pane.last_verified_runtime_stack)
+        ));
+    }
+
+    parts.join("; ")
+}
+
 fn format_control_channels(channels: &[PaneControlChannel]) -> String {
     channels
         .iter()
@@ -1322,6 +1452,8 @@ impl TerminalContext {
              - READ-ONLY SHELL INTROSPECTION on a pane with `probe_shell_context` → probe_shell_context.\n\
              - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context` or `tmux_snapshot`. Only call list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
+             - When multiple panes are visible and the user asks about the terminal/session state, mention the pane count and summarize materially different peer panes. Do not collapse the whole tab into only the focused pane unless the user explicitly asks about that pane alone.\n\
+             - Never restate stale shell metadata as if it were the current foreground runtime. If shell metadata is not fresh, label it as historical shell metadata or omit it.\n\
              - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_find_targets or tmux_list_targets, then tmux_capture_pane.\n\
              - TMUX SHELL PREPARATION on a pane with tmux native control → tmux_ensure_shell_target to reuse or create a safe shell pane before remote file work or shell execution inside tmux.\n\
              - TMUX NATIVE COMMAND LAUNCH on a pane with tmux native control → tmux_run_command to create a new tmux window or split for a shell, Codex CLI, Claude Code, OpenCode, or a long-running command.\n\
@@ -1736,6 +1868,14 @@ impl TerminalContext {
                 }
             }
             prompt.push_str("</panes>\n");
+            prompt.push_str("<pane_layout_summary>\n");
+            prompt.push_str(&xml_escape(&summarize_focused_pane_layout(self)));
+            prompt.push('\n');
+            for pane in &self.other_panes {
+                prompt.push_str(&xml_escape(&summarize_peer_pane_layout(pane)));
+                prompt.push('\n');
+            }
+            prompt.push_str("</pane_layout_summary>\n");
         } else if let Some(cwd) = &self.cwd {
             prompt.push_str(&format!("<cwd>{}</cwd>\n", xml_escape(cwd)));
         }
@@ -1942,10 +2082,10 @@ mod tests {
 
     use super::{
         PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneMode, PaneObservationFrame,
-        PaneObservationHintKind, PaneObservationSupport, PaneRuntimeEvent, PaneRuntimeScope,
-        PaneRuntimeState, PaneRuntimeTracker, PaneScopeKind, TerminalContext, derive_screen_hints,
-        detect_tmux_session, direct_terminal_exec_is_safe, infer_pane_mode,
-        shell_metadata_is_fresh,
+        PaneObservationHint, PaneObservationHintKind, PaneObservationSupport, PaneRuntimeEvent,
+        PaneRuntimeScope, PaneRuntimeState, PaneRuntimeTracker, PaneScopeKind, PaneSummary,
+        TerminalContext, derive_screen_hints, detect_tmux_session, direct_terminal_exec_is_safe,
+        infer_pane_mode, shell_metadata_is_fresh,
     };
 
     #[test]
@@ -2532,5 +2672,94 @@ mod tests {
         assert!(prompt.contains("<tmux_snapshot>"));
         assert!(prompt.contains("pane_id=\"%17\""));
         assert!(prompt.contains("current_command=\"zsh\""));
+    }
+
+    #[test]
+    fn prompt_emits_multi_pane_layout_summary() {
+        let mut ctx = make_shell_context();
+        ctx.focused_screen_hints = vec![PaneObservationHint {
+            kind: PaneObservationHintKind::PromptLikeInput,
+            confidence: PaneConfidence::Advisory,
+            detail: "Prompt-like input is visible near the bottom.".to_string(),
+        }];
+        ctx.other_panes.push(PaneSummary {
+            pane_index: 2,
+            hostname: Some("haswell".to_string()),
+            hostname_confidence: Some(PaneConfidence::Strong),
+            hostname_source: Some(PaneEvidenceSource::ShellProbe),
+            title: Some("ssh haswell".to_string()),
+            front_state: PaneFrontState::Unknown,
+            mode: PaneMode::Unknown,
+            has_shell_integration: false,
+            shell_metadata_fresh: false,
+            observation_support: PaneObservationSupport::default(),
+            control: PaneControlState::from_runtime(&PaneRuntimeState {
+                front_state: PaneFrontState::Unknown,
+                mode: PaneMode::Unknown,
+                shell_metadata_fresh: false,
+                remote_host: Some("haswell".to_string()),
+                remote_host_confidence: Some(PaneConfidence::Strong),
+                remote_host_source: Some(PaneEvidenceSource::ShellProbe),
+                agent_cli: None,
+                tmux_session: Some("work".to_string()),
+                last_verified_scope_stack: vec![
+                    PaneRuntimeScope {
+                        kind: PaneScopeKind::RemoteShell,
+                        label: Some("haswell".to_string()),
+                        host: Some("haswell".to_string()),
+                        confidence: PaneConfidence::Strong,
+                        evidence_source: PaneEvidenceSource::ShellProbe,
+                    },
+                    PaneRuntimeScope {
+                        kind: PaneScopeKind::Multiplexer,
+                        label: Some("work".to_string()),
+                        host: Some("haswell".to_string()),
+                        confidence: PaneConfidence::Strong,
+                        evidence_source: PaneEvidenceSource::ShellProbe,
+                    },
+                ],
+                last_verified_tmux_session: Some("work".to_string()),
+                shell_context: None,
+                shell_context_fresh: false,
+                active_scope: None,
+                evidence: Vec::new(),
+                scope_stack: Vec::new(),
+                recent_actions: Vec::new(),
+                warnings: Vec::new(),
+            }),
+            agent_cli: None,
+            active_scope: None,
+            evidence: Vec::new(),
+            runtime_stack: Vec::new(),
+            last_verified_runtime_stack: vec![
+                PaneRuntimeScope {
+                    kind: PaneScopeKind::RemoteShell,
+                    label: Some("haswell".to_string()),
+                    host: Some("haswell".to_string()),
+                    confidence: PaneConfidence::Strong,
+                    evidence_source: PaneEvidenceSource::ShellProbe,
+                },
+                PaneRuntimeScope {
+                    kind: PaneScopeKind::Multiplexer,
+                    label: Some("work".to_string()),
+                    host: Some("haswell".to_string()),
+                    confidence: PaneConfidence::Strong,
+                    evidence_source: PaneEvidenceSource::ShellProbe,
+                },
+            ],
+            runtime_warnings: Vec::new(),
+            tmux_session: Some("work".to_string()),
+            cwd: None,
+            screen_hints: Vec::new(),
+            last_command: None,
+            last_exit_code: None,
+            is_busy: false,
+            recent_output: Vec::new(),
+        });
+        let prompt = ctx.to_system_prompt();
+        assert!(prompt.contains("<pane_layout_summary>"));
+        assert!(prompt.contains("pane 1 is focused"));
+        assert!(prompt.contains("pane 2"));
+        assert!(prompt.contains("historical shell frame only"));
     }
 }
