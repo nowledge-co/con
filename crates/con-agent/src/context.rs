@@ -7,6 +7,7 @@ use crate::control::{
     PaneVisibleTarget, PaneVisibleTargetKind, format_control_attachments, format_target_stack,
 };
 use crate::shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
+use crate::tmux::TmuxSnapshot;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1005,6 +1006,8 @@ pub struct TerminalContext {
     pub recent_output: Vec<String>,
     /// Weak observation hints derived from the current visible screen snapshot.
     pub focused_screen_hints: Vec<PaneObservationHint>,
+    /// Structured tmux target inventory from a proven same-session tmux control anchor.
+    pub focused_tmux_snapshot: Option<TmuxSnapshot>,
     /// Most recent command text when the backend can prove it.
     pub last_command: Option<String>,
     /// Last exit code
@@ -1159,6 +1162,7 @@ fn is_prompt_like_line(line: &str) -> bool {
 fn focused_screen_assessment(
     hints: &[PaneObservationHint],
     control: &PaneControlState,
+    tmux_snapshot: Option<&TmuxSnapshot>,
 ) -> Option<String> {
     if hints.is_empty() {
         return None;
@@ -1184,10 +1188,17 @@ fn focused_screen_assessment(
         (false, false) => return None,
     };
 
-    let next_step = if control.allows_shell_probe() {
+    let next_step = if tmux_snapshot.is_some() {
+        "A stronger tmux-native fact source is already attached for this pane."
+    } else if control
+        .capabilities
+        .contains(&PaneControlCapability::QueryTmux)
+    {
+        "A stronger next step is available: query tmux targets through the existing tmux control anchor."
+    } else if control.allows_shell_probe() {
         "A stronger next step is available: run a shell probe to collect shell-scoped facts."
     } else {
-        "A stronger shell probe is not currently available because a proven fresh shell prompt is not established."
+        "No stronger read-only fact source is currently available because a proven fresh shell prompt or tmux control anchor is not established."
     };
 
     Some(format!("{summary} {next_step}"))
@@ -1269,6 +1280,7 @@ impl TerminalContext {
             cwd: None,
             recent_output: Vec::new(),
             focused_screen_hints: Vec::new(),
+            focused_tmux_snapshot: None,
             last_command: None,
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -1308,7 +1320,7 @@ impl TerminalContext {
              ### Choose the right tool\n\
              - SHELL COMMANDS on a pane with `exec_visible_shell` → terminal_exec / batch_exec.\n\
              - READ-ONLY SHELL INTROSPECTION on a pane with `probe_shell_context` → probe_shell_context.\n\
-             - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → list_panes, then probe_shell_context when available before answering.\n\
+             - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context` or `tmux_snapshot`. Only call list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
              - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_list_targets, then tmux_capture_pane.\n\
              - TMUX NATIVE INTERACTION on a pane with tmux native control → tmux_send_keys to a specific tmux pane target.\n\
@@ -1369,7 +1381,7 @@ impl TerminalContext {
              - Prefer typed attachments and probes over inference. If `probe_shell_context` is available, use it before guessing about SSH, tmux, or editor context.\n\
              - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
              - `screen_hints` are weak observations derived from the current visible screen snapshot. They can describe what appears to be on screen now, but they are not backend facts and must not unlock control.\n\
-             - Do not end a session-state answer with a vague offer to \"inspect more closely\" when `terminal_output` or `screen_hints` are already present. Instead, give the best bounded assessment from current-screen evidence and only propose a next step if it would use a stronger fact source.\n\
+             - Do not end a session-state answer with a vague offer to \"inspect more closely\". Only propose a next step when a stronger fact source is concretely available, such as `probe_shell_context`, `tmux_snapshot`, or tmux native tools already present on the pane.\n\
              - Addressing is layered. A con pane index ≠ tmux pane id ≠ tmux window index ≠ editor buffer.\n\
              - If list_panes shows `query_tmux` or `send_tmux_keys`, treat tmux as a native attachment. Do NOT navigate tmux by outer-pane send_keys unless the native path is unavailable.\n\
              - When pane mode is not `shell` or shell metadata is stale, do NOT trust cwd/hostname/last_command and do NOT assume a shell prompt.\n\
@@ -1487,6 +1499,28 @@ impl TerminalContext {
                 prompt.push_str(&format!(" nvim_socket=\"{}\"", xml_escape(nvim)));
             }
             prompt.push_str("/>\n");
+        }
+        if let Some(snapshot) = &self.focused_tmux_snapshot {
+            prompt.push_str("<tmux_snapshot>\n");
+            for pane in &snapshot.panes {
+                prompt.push_str(&format!(
+                    "  <tmux_pane session=\"{}\" window_id=\"{}\" window_name=\"{}\" pane_id=\"{}\" pane_index=\"{}\" active=\"{}\"",
+                    xml_escape(&pane.session_name),
+                    xml_escape(&pane.window_id),
+                    xml_escape(&pane.window_name),
+                    xml_escape(&pane.pane_id),
+                    xml_escape(&pane.pane_index),
+                    pane.pane_active,
+                ));
+                if let Some(command) = &pane.pane_current_command {
+                    prompt.push_str(&format!(" current_command=\"{}\"", xml_escape(command)));
+                }
+                if let Some(path) = &pane.pane_current_path {
+                    prompt.push_str(&format!(" current_path=\"{}\"", xml_escape(path)));
+                }
+                prompt.push_str("/>\n");
+            }
+            prompt.push_str("</tmux_snapshot>\n");
         }
         if !self.focused_recent_actions.is_empty() {
             prompt.push_str("<recent_actions>\n");
@@ -1769,9 +1803,11 @@ impl TerminalContext {
             }
             prompt.push_str("</screen_hints>\n");
         }
-        if let Some(assessment) =
-            focused_screen_assessment(&self.focused_screen_hints, &self.focused_control)
-        {
+        if let Some(assessment) = focused_screen_assessment(
+            &self.focused_screen_hints,
+            &self.focused_control,
+            self.focused_tmux_snapshot.as_ref(),
+        ) {
             prompt.push_str("<current_screen_assessment>");
             prompt.push_str(&xml_escape(&assessment));
             prompt.push_str("</current_screen_assessment>\n");
@@ -1917,6 +1953,7 @@ fn is_vim_target(target: &crate::control::PaneVisibleTarget) -> bool {
 mod tests {
     use crate::control::PaneControlState;
     use crate::shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
+    use crate::tmux::{TmuxPaneInfo, TmuxSnapshot};
 
     use super::{
         PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneMode, PaneObservationFrame,
@@ -2254,6 +2291,7 @@ mod tests {
             cwd: Some("/tmp".to_string()),
             recent_output: Vec::new(),
             focused_screen_hints: Vec::new(),
+            focused_tmux_snapshot: None,
             last_command: None,
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -2364,6 +2402,7 @@ mod tests {
             cwd: Some("/home/user".to_string()),
             recent_output: Vec::new(),
             focused_screen_hints: Vec::new(),
+            focused_tmux_snapshot: None,
             last_command: None,
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -2494,5 +2533,26 @@ mod tests {
                 .iter()
                 .all(|hint| hint.confidence == PaneConfidence::Advisory)
         );
+    }
+
+    #[test]
+    fn prompt_emits_tmux_snapshot_when_attached() {
+        let mut ctx = make_shell_context();
+        ctx.focused_tmux_snapshot = Some(TmuxSnapshot {
+            panes: vec![TmuxPaneInfo {
+                session_name: "work".to_string(),
+                window_id: "@4".to_string(),
+                window_name: "shell".to_string(),
+                pane_id: "%17".to_string(),
+                pane_index: "0".to_string(),
+                pane_active: true,
+                pane_current_command: Some("zsh".to_string()),
+                pane_current_path: Some("/home/w/repo".to_string()),
+            }],
+        });
+        let prompt = ctx.to_system_prompt();
+        assert!(prompt.contains("<tmux_snapshot>"));
+        assert!(prompt.contains("pane_id=\"%17\""));
+        assert!(prompt.contains("current_command=\"zsh\""));
     }
 }

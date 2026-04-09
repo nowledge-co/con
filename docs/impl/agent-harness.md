@@ -270,6 +270,13 @@ On top of that tracker, con now derives a typed `PaneControlState` for each pane
 
 When `probe_shell_context` is present in `control_capabilities`, the agent has a read-only shell-scoped introspection path on that pane. It can ask the live shell for hostname, SSH env, tmux env, tmux session/window/pane ids, and Neovim socket hints without pretending those facts came from Ghostty itself. The result is also fed back into the pane tracker, so future turns can reuse that shell context until newer input makes it stale.
 
+Before each agent turn, the harness now runs a deterministic read-only fact pass on the focused pane:
+
+- if a fresh shell prompt is proven and shell probing is available, it auto-runs `probe_shell_context`
+- if that refreshed pane now exposes tmux-native query, it auto-fetches tmux pane inventory too
+
+This is intentional. The preflight is driven by typed control capabilities, not by the wording of the user's message. con gathers the strongest safe facts first, then lets the model reason over them.
+
 con also now exposes a tmux-specific inspect surface. `tmux_inspect` returns tmux adapter state when tmux has been authoritatively detected, including the explicit reason native tmux pane/window control is not yet available.
 
 What is still missing is stronger backend truth for foreground runtime identity. The next layer is not more local heuristics; it is an upstream Ghostty observability contract for explicit foreground process and semantic prompt state. See `docs/impl/pane-runtime-observer.md`.

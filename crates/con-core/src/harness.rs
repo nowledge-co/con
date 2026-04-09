@@ -267,6 +267,7 @@ impl AgentHarness {
             cwd,
             recent_output: focused_observation.recent_output.clone(),
             focused_screen_hints: focused_observation.screen_hints.clone(),
+            focused_tmux_snapshot: None,
             last_command: focused_observation.last_command.clone(),
             last_exit_code: focused_observation.last_exit_code,
             last_command_duration_secs: focused_observation.last_command_duration_secs,
@@ -309,8 +310,8 @@ impl AgentHarness {
             let conv_snapshot = conversation.lock().clone();
             let provider = AgentProvider::new(agent_config);
             let request_start = std::time::Instant::now();
-            let probed_context = auto_probe_focused_shell_context(pane_tx.clone(), context).await;
-            let enriched_context = enrich_context_with_workspace_snapshot(probed_context).await;
+            let prepared_context = gather_focused_read_only_facts(pane_tx.clone(), context).await;
+            let enriched_context = enrich_context_with_workspace_snapshot(prepared_context).await;
 
             const MAX_RETRIES: u32 = 3;
             let mut attempt = 0u32;
@@ -920,6 +921,80 @@ async fn auto_probe_focused_shell_context(
         other => {
             log::debug!(
                 "[harness] focused shell auto-probe returned unexpected response for pane {}: {:?}",
+                pane_index,
+                other
+            );
+            context
+        }
+    }
+}
+
+async fn gather_focused_read_only_facts(
+    pane_tx: Sender<PaneRequest>,
+    context: TerminalContext,
+) -> TerminalContext {
+    let context = auto_probe_focused_shell_context(pane_tx.clone(), context).await;
+    auto_query_focused_tmux_snapshot(pane_tx, context).await
+}
+
+async fn auto_query_focused_tmux_snapshot(
+    pane_tx: Sender<PaneRequest>,
+    mut context: TerminalContext,
+) -> TerminalContext {
+    if context.focused_tmux_snapshot.is_some()
+        || !context
+            .focused_control
+            .capabilities
+            .contains(&con_agent::PaneControlCapability::QueryTmux)
+    {
+        return context;
+    }
+
+    let pane_index = context.focused_pane_index;
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    if pane_tx
+        .send(PaneRequest {
+            query: con_agent::PaneQuery::TmuxList { pane_index },
+            response_tx,
+        })
+        .is_err()
+    {
+        return context;
+    }
+
+    let response = match tokio::task::spawn_blocking(move || {
+        response_rx.recv_timeout(std::time::Duration::from_secs(12))
+    })
+    .await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) | Err(_) => return context,
+    };
+
+    match response {
+        con_agent::PaneResponse::TmuxList(snapshot) => {
+            if context.tmux_session.is_none() {
+                context.tmux_session = snapshot
+                    .panes
+                    .iter()
+                    .find(|pane| pane.pane_active)
+                    .or_else(|| snapshot.panes.first())
+                    .map(|pane| pane.session_name.clone());
+            }
+            context.focused_tmux_snapshot = Some(snapshot);
+            context
+        }
+        con_agent::PaneResponse::Error(err) => {
+            log::debug!(
+                "[harness] focused tmux auto-query unavailable for pane {}: {}",
+                pane_index,
+                err
+            );
+            context
+        }
+        other => {
+            log::debug!(
+                "[harness] focused tmux auto-query returned unexpected response for pane {}: {:?}",
                 pane_index,
                 other
             );

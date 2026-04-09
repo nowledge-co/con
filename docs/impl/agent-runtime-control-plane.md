@@ -41,6 +41,7 @@ con now ships the first typed control-plane layer:
 - the system prompt embeds the same control state for the focused pane and peer panes
 - visible execution is gated by `exec_visible_shell`, not by ad hoc prompt wording
 - panes with a proven fresh shell prompt now expose a read-only `probe_shell_context` capability for typed shell-scoped facts
+- before each agent turn, the harness now gathers the strongest safe read-only facts available on the focused pane: shell probe first, then tmux inventory if a real tmux query attachment exists
 - typed shell probes and con-originated actions are preserved as causal history on the pane, with freshness and invalidation rules
 - current verified foreground state is now modeled separately from the last verified shell frame, so stale shell history cannot masquerade as the live visible target
 
