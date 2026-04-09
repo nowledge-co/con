@@ -963,15 +963,6 @@ impl SettingsPanel {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.paste_theme_from_clipboard(window, cx);
             }));
-        let open_catalog_btn = Button::new("theme-catalog-link")
-            .label("Browse Themes")
-            .icon(Icon::default().path("phosphor/arrow-square-out.svg"))
-            .small()
-            .ghost()
-            .on_click(cx.listener(|_, _, _, cx| {
-                cx.open_url("https://ghostty-style.vercel.app/");
-            }));
-
         let preview_card = self
             .custom_theme_preview
             .as_ref()
@@ -1036,7 +1027,7 @@ impl SettingsPanel {
                     .text_size(px(11.5))
                     .line_height(px(18.0))
                     .text_color(theme.muted_foreground.opacity(0.6))
-                    .child("Paste a Ghostty-format theme from the clipboard. Browse the community theme catalog for more palettes."),
+                    .child("Paste a Ghostty-format theme from the clipboard."),
             )
             // Name input
             .child(
@@ -1058,8 +1049,7 @@ impl SettingsPanel {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .child(paste_btn)
-                    .child(open_catalog_btn),
+                    .child(paste_btn),
             );
 
         // Preview card with save/preview actions
@@ -1114,14 +1104,7 @@ impl SettingsPanel {
                             .child(format!("{total_count} themes")),
                     ),
             )
-                    .child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(theme.muted_foreground.opacity(0.4))
-                            .mb(px(10.0))
-                            .child("Community-compatible terminal themes"),
-                    )
-                    .child(builtin_grid);
+            .child(builtin_grid);
 
         // User-installed themes
         if let Some(user_grid) = user_grid {
