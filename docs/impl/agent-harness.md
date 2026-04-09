@@ -173,6 +173,7 @@ This avoids cloning — `mem::replace` moves ownership. The AgentPanel always di
 | `tmux_list_targets` | Safe | Executes immediately |
 | `tmux_find_targets` | Safe | Executes immediately |
 | `tmux_capture_pane` | Safe | Executes immediately |
+| `resolve_work_target` | Safe | Executes immediately |
 | `terminal_exec` | Dangerous | Requires approval (or auto_approve) |
 | `shell_exec` | Dangerous | Requires approval (or auto_approve) |
 | `file_write` | Dangerous | Requires approval (or auto_approve) |

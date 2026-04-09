@@ -30,8 +30,8 @@ pub use tmux::{TmuxCapture, TmuxExecLocation, TmuxExecResult, TmuxPaneInfo, Tmux
 pub use tools::{
     BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
     ListPanesTool, PaneInfo, PaneQuery, PaneRequest, PaneResponse, ProbeShellContextTool,
-    ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest,
-    TerminalExecResponse, TerminalExecTool, TmuxCaptureTool, TmuxEnsureShellTargetTool,
-    TmuxFindTargetsTool, TmuxInspectTool, TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool,
-    WaitForTool,
+    ReadPaneTool, ResolveWorkTargetTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool,
+    TerminalExecRequest, TerminalExecResponse, TerminalExecTool, TmuxCaptureTool,
+    TmuxEnsureShellTargetTool, TmuxFindTargetsTool, TmuxInspectTool, TmuxListTool,
+    TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
 };

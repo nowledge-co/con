@@ -24,11 +24,12 @@ pub const TMUX_PLAYBOOK: &str = "\
 ## tmux interaction
 
 Preferred path: if list_panes shows `query_tmux`, `exec_tmux_command`, or `send_tmux_keys`, use tmux-native tools first.
-1. tmux_find_targets or tmux_list_targets to discover exact tmux windows and panes
-2. tmux_capture_pane to inspect the chosen tmux pane without confusing it with the outer con pane
-3. tmux_ensure_shell_target when you need a safe shell pane for work
-4. tmux_run_command when you need a fresh shell, a dedicated work window, or a new agent CLI target
-5. tmux_send_keys to a specific tmux pane target
+1. resolve_work_target when you need con to choose the best pane or tmux workspace first
+2. tmux_find_targets or tmux_list_targets to discover exact tmux windows and panes
+3. tmux_capture_pane to inspect the chosen tmux pane without confusing it with the outer con pane
+4. tmux_ensure_shell_target when you need a safe shell pane for work
+5. tmux_run_command when you need a fresh shell, a dedicated work window, or a new agent CLI target
+6. tmux_send_keys to a specific tmux pane target
 
 Use outer-pane send_keys for tmux only as a fallback when tmux native control is unavailable.
 tmux intercepts its prefix key from the PTY stream. Sending \\x02 (Ctrl-B) via send_keys \
@@ -44,6 +45,7 @@ Before any tmux operation, read_pane to see:
 Parse the status bar to know which window you are on and what other windows exist.
 
 ### Native tmux workflow
+- Resolve best pane first: resolve_work_target(intent=\"tmux_shell\") or resolve_work_target(intent=\"agent_cli\", agent_name=\"codex\")
 - Discover targets: tmux_list_targets(pane_index=...)
 - Find a likely shell/agent pane: tmux_find_targets(pane_index=..., kind=\"shell\")
 - Inspect a target: tmux_capture_pane(pane_index=..., target=\"%17\")
@@ -64,7 +66,7 @@ Parse the status bar to know which window you are on and what other windows exis
 ### Writing a file on a remote host via tmux
 When you need to create or write a file on the remote machine:
 1. read_pane to see current tmux state
-2. Prefer tmux_ensure_shell_target to reuse or create a shell pane. If native control is unavailable, navigate to a shell pane by status bar or create one with send_keys \"\\x02c\"
+2. Prefer resolve_work_target(intent=\"tmux_shell\") to choose the right tmux workspace first, then tmux_ensure_shell_target to reuse or create a shell pane. If native control is unavailable, navigate to a shell pane by status bar or create one with send_keys \"\\x02c\"
 3. read_pane to verify you have a shell prompt (look for $, %, #, or similar)
 4. If native control is available, send the heredoc through tmux_send_keys to the target shell pane. Otherwise use send_keys in the outer pane. Write the file using heredoc:
    send_keys \"cat > path/to/file << 'CONEOF'\\n\"
@@ -75,7 +77,7 @@ When you need to create or write a file on the remote machine:
 
 ### Running commands when a TUI is currently visible
 1. read_pane to confirm current state
-2. Prefer tmux_ensure_shell_target to identify or create a shell pane/window, then tmux_capture_pane to confirm it. \
+2. Prefer resolve_work_target(intent=\"tmux_shell\") to choose the right tmux workspace, then tmux_ensure_shell_target to identify or create a shell pane/window, then tmux_capture_pane to confirm it. \
 If native control is unavailable, switch to another tmux window with a shell prompt, \
 or create a new window with send_keys \"\\x02c\"
 3. read_pane to verify you reached a shell prompt

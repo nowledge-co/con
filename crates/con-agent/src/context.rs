@@ -1451,6 +1451,7 @@ impl TerminalContext {
              - SHELL COMMANDS on a pane with `exec_visible_shell` → terminal_exec / batch_exec.\n\
              - READ-ONLY SHELL INTROSPECTION on a pane with `probe_shell_context` → probe_shell_context.\n\
              - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context` or `tmux_snapshot`. Only call list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
+             - MULTI-PANE TARGET SELECTION (\"which pane should you use?\", \"which pane is safer?\", \"where should you run this?\") → resolve_work_target.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
              - When multiple panes are visible and the user asks about the terminal/session state, mention the pane count and summarize materially different peer panes. Do not collapse the whole tab into only the focused pane unless the user explicitly asks about that pane alone.\n\
              - Never restate stale shell metadata as if it were the current foreground runtime. If shell metadata is not fresh, label it as historical shell metadata or omit it.\n\
@@ -1499,6 +1500,7 @@ impl TerminalContext {
              - tmux_inspect: Inspect tmux adapter state for a pane containing a tmux session.\n\
              - tmux_list_targets: List tmux windows/panes through a proven same-session tmux shell anchor.\n\
              - tmux_find_targets: Find likely tmux shell panes, agent CLI panes, or other matching targets without hand-filtering tmux_list_targets.\n\
+             - resolve_work_target: Choose the best con pane or tmux target for shell work, tmux work, or agent CLI interaction using the typed control plane.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
              - tmux_ensure_shell_target: Reuse or create a tmux shell target through a proven same-session tmux shell anchor.\n\
              - tmux_run_command: Create a new tmux window or split pane and run a command there through a proven same-session tmux shell anchor.\n\

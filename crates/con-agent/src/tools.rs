@@ -10,7 +10,7 @@ use crate::context::PaneMode;
 use crate::context::{PaneActionRecord, PaneShellContext};
 use crate::control::{
     PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneProtocolAttachment,
-    PaneVisibleTarget, TmuxControlState,
+    PaneVisibleTarget, PaneVisibleTargetKind, TmuxControlMode, TmuxControlState,
 };
 use crate::shell_probe::ShellProbeResult;
 use crate::tmux::{TmuxCapture, TmuxExecLocation, TmuxExecResult, TmuxSnapshot};
@@ -870,6 +870,47 @@ pub struct TmuxEnsureShellTargetResult {
     pub creation: Option<TmuxExecResult>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkTargetIntent {
+    VisibleShell,
+    RemoteShell,
+    TmuxWorkspace,
+    TmuxShell,
+    AgentCli,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkTargetControlPath {
+    VisibleShellExec,
+    TmuxQuery,
+    TmuxShellTarget,
+    TmuxAgentTarget,
+    VisibleAgentUi,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkTargetCandidate {
+    pub pane_index: usize,
+    pub pane_title: String,
+    pub host: Option<String>,
+    pub control_path: WorkTargetControlPath,
+    pub visible_target: PaneVisibleTarget,
+    pub tmux_mode: Option<TmuxControlMode>,
+    pub tmux_target: Option<crate::tmux::TmuxPaneInfo>,
+    pub requires_preparation: bool,
+    pub suggested_tool: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolveWorkTargetResult {
+    pub intent: WorkTargetIntent,
+    pub best_match: Option<WorkTargetCandidate>,
+    pub candidates: Vec<WorkTargetCandidate>,
+}
+
 fn recv_pane_response(
     response_rx: crossbeam_channel::Receiver<PaneResponse>,
     timeout_secs: u64,
@@ -934,6 +975,22 @@ fn pane_query_tmux_run_command(
     }
 }
 
+fn pane_query_list(pane_tx: &Sender<PaneRequest>) -> Result<Vec<PaneInfo>, ToolError> {
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    pane_tx
+        .send(PaneRequest {
+            query: PaneQuery::List,
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+    match recv_pane_response(response_rx, 5, "pane list")? {
+        PaneResponse::PaneList(panes) => Ok(panes),
+        PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+        _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+    }
+}
+
 fn tmux_command_basename(command: &str) -> &str {
     command.rsplit('/').next().unwrap_or(command)
 }
@@ -961,6 +1018,347 @@ fn sort_tmux_matches(matches: &mut [crate::tmux::TmuxPaneInfo]) {
             .then_with(|| a.window_index.cmp(&b.window_index))
             .then_with(|| a.pane_index.cmp(&b.pane_index))
     });
+}
+
+fn normalize_lower(value: &Option<String>) -> Option<String> {
+    value.as_ref().map(|v| v.to_ascii_lowercase())
+}
+
+fn pane_matches_host(pane: &PaneInfo, host_contains: Option<&String>) -> bool {
+    host_contains.is_none_or(|needle| {
+        pane.hostname
+            .as_ref()
+            .is_some_and(|host| host.to_ascii_lowercase().contains(needle))
+    })
+}
+
+fn pane_matches_cwd(pane: &PaneInfo, cwd_contains: Option<&String>) -> bool {
+    cwd_contains.is_none_or(|needle| {
+        pane.cwd
+            .as_ref()
+            .is_some_and(|cwd| cwd.to_ascii_lowercase().contains(needle))
+    })
+}
+
+fn pane_has_capability(pane: &PaneInfo, capability: PaneControlCapability) -> bool {
+    pane.control_capabilities.contains(&capability)
+}
+
+fn pane_has_tmux_native(pane: &PaneInfo) -> bool {
+    pane.tmux_control
+        .as_ref()
+        .is_some_and(|tmux| tmux.mode == TmuxControlMode::Native)
+}
+
+fn pane_has_tmux_layer(pane: &PaneInfo) -> bool {
+    pane.tmux_control.is_some() || pane.tmux_session.is_some()
+}
+
+fn pane_has_remote_shell_context(pane: &PaneInfo) -> bool {
+    pane.hostname.is_some()
+        || pane
+            .runtime_stack
+            .iter()
+            .any(|scope| scope.kind == crate::context::PaneScopeKind::RemoteShell)
+        || pane
+            .last_verified_runtime_stack
+            .iter()
+            .any(|scope| scope.kind == crate::context::PaneScopeKind::RemoteShell)
+}
+
+fn pane_is_visible_agent_cli(pane: &PaneInfo, agent_name: Option<&String>) -> bool {
+    let matches_name =
+        |value: &str| agent_name.is_none_or(|needle| value.to_ascii_lowercase().contains(needle));
+    pane.visible_target.kind == PaneVisibleTargetKind::AgentCli
+        || pane.agent_cli.as_deref().is_some_and(matches_name)
+}
+
+fn sort_work_target_candidates(candidates: &mut [(i32, WorkTargetCandidate)]) {
+    candidates.sort_by(|(score_a, cand_a), (score_b, cand_b)| {
+        score_b
+            .cmp(score_a)
+            .then_with(|| cand_a.pane_index.cmp(&cand_b.pane_index))
+            .then_with(|| cand_a.pane_title.cmp(&cand_b.pane_title))
+    });
+}
+
+fn make_visible_shell_candidate(pane: &PaneInfo, reason: String) -> WorkTargetCandidate {
+    WorkTargetCandidate {
+        pane_index: pane.index,
+        pane_title: pane.title.clone(),
+        host: pane.hostname.clone(),
+        control_path: WorkTargetControlPath::VisibleShellExec,
+        visible_target: pane.visible_target.clone(),
+        tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
+        tmux_target: None,
+        requires_preparation: false,
+        suggested_tool: "terminal_exec".to_string(),
+        reason,
+    }
+}
+
+fn make_tmux_workspace_candidate(
+    pane: &PaneInfo,
+    reason: String,
+    suggested_tool: &str,
+) -> WorkTargetCandidate {
+    WorkTargetCandidate {
+        pane_index: pane.index,
+        pane_title: pane.title.clone(),
+        host: pane.hostname.clone(),
+        control_path: WorkTargetControlPath::TmuxQuery,
+        visible_target: pane.visible_target.clone(),
+        tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
+        tmux_target: None,
+        requires_preparation: false,
+        suggested_tool: suggested_tool.to_string(),
+        reason,
+    }
+}
+
+fn make_tmux_target_candidate(
+    pane: &PaneInfo,
+    tmux_target: Option<crate::tmux::TmuxPaneInfo>,
+    control_path: WorkTargetControlPath,
+    requires_preparation: bool,
+    suggested_tool: &str,
+    reason: String,
+) -> WorkTargetCandidate {
+    WorkTargetCandidate {
+        pane_index: pane.index,
+        pane_title: pane.title.clone(),
+        host: pane.hostname.clone(),
+        control_path,
+        visible_target: pane.visible_target.clone(),
+        tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
+        tmux_target,
+        requires_preparation,
+        suggested_tool: suggested_tool.to_string(),
+        reason,
+    }
+}
+
+fn resolve_work_target_candidates(
+    pane_tx: &Sender<PaneRequest>,
+    panes: Vec<PaneInfo>,
+    intent: WorkTargetIntent,
+    preferred_pane_index: Option<usize>,
+    host_contains: Option<String>,
+    cwd_contains: Option<String>,
+    agent_name: Option<String>,
+    limit: usize,
+) -> Result<ResolveWorkTargetResult, ToolError> {
+    let host_contains = normalize_lower(&host_contains);
+    let cwd_contains = normalize_lower(&cwd_contains);
+    let agent_name = normalize_lower(&agent_name);
+    let mut candidates = Vec::new();
+
+    for pane in panes {
+        if let Some(preferred_index) = preferred_pane_index {
+            if pane.index != preferred_index {
+                continue;
+            }
+        }
+        if !pane_matches_host(&pane, host_contains.as_ref()) {
+            continue;
+        }
+
+        match intent {
+            WorkTargetIntent::VisibleShell => {
+                if !pane_has_capability(&pane, PaneControlCapability::ExecVisibleShell)
+                    || !pane_matches_cwd(&pane, cwd_contains.as_ref())
+                {
+                    continue;
+                }
+                let mut score = 100;
+                if pane.is_focused {
+                    score += 5;
+                }
+                if pane_has_remote_shell_context(&pane) {
+                    score += 10;
+                }
+                let reason = if pane_has_remote_shell_context(&pane) {
+                    "This pane exposes visible shell execution and has proven remote shell context."
+                        .to_string()
+                } else {
+                    "This pane exposes visible shell execution on the current shell prompt."
+                        .to_string()
+                };
+                candidates.push((score, make_visible_shell_candidate(&pane, reason)));
+            }
+            WorkTargetIntent::RemoteShell => {
+                if !pane_has_capability(&pane, PaneControlCapability::ExecVisibleShell)
+                    || !pane_has_remote_shell_context(&pane)
+                    || !pane_matches_cwd(&pane, cwd_contains.as_ref())
+                {
+                    continue;
+                }
+                let mut score = 120;
+                if pane.is_focused {
+                    score += 5;
+                }
+                if pane.hostname.is_some() {
+                    score += 10;
+                }
+                candidates.push((
+                    score,
+                    make_visible_shell_candidate(
+                        &pane,
+                        "This pane is a proven remote shell target with visible shell execution."
+                            .to_string(),
+                    ),
+                ));
+            }
+            WorkTargetIntent::TmuxWorkspace => {
+                if !pane_has_tmux_layer(&pane) {
+                    continue;
+                }
+                let (score, suggested_tool, reason) = if pane_has_tmux_native(&pane) {
+                    (
+                        140 + if pane.is_focused { 1 } else { 0 },
+                        "tmux_list_targets",
+                        "This pane has a native tmux control anchor, so tmux targets can be queried directly.",
+                    )
+                } else {
+                    (
+                        80 + if pane.is_focused { 1 } else { 0 },
+                        "probe_shell_context",
+                        "This pane has a tmux layer, but native tmux control is not established yet.",
+                    )
+                };
+                candidates.push((
+                    score,
+                    make_tmux_workspace_candidate(&pane, reason.to_string(), suggested_tool),
+                ));
+            }
+            WorkTargetIntent::TmuxShell => {
+                if !pane_has_tmux_layer(&pane) {
+                    continue;
+                }
+                if pane_has_tmux_native(&pane) {
+                    let snapshot = pane_query_tmux_list(pane_tx, pane.index)?;
+                    let mut matches = snapshot
+                        .panes
+                        .into_iter()
+                        .filter(|tmux_pane| {
+                            tmux_pane
+                                .pane_current_command
+                                .as_deref()
+                                .is_some_and(is_tmux_shell_command)
+                                && cwd_contains.as_ref().is_none_or(|needle| {
+                                    tmux_pane
+                                        .pane_current_path
+                                        .as_deref()
+                                        .unwrap_or_default()
+                                        .to_ascii_lowercase()
+                                        .contains(needle)
+                                })
+                        })
+                        .collect::<Vec<_>>();
+                    sort_tmux_matches(&mut matches);
+                    if let Some(target) = matches.into_iter().next() {
+                        candidates.push((
+                            160 + if pane.is_focused { 1 } else { 0 },
+                            make_tmux_target_candidate(
+                                &pane,
+                                Some(target),
+                                WorkTargetControlPath::TmuxShellTarget,
+                                false,
+                                "tmux_send_keys",
+                                "This pane has native tmux control and an existing tmux shell target that matches the request.".to_string(),
+                            ),
+                        ));
+                    } else {
+                        candidates.push((
+                            150 + if pane.is_focused { 1 } else { 0 },
+                            make_tmux_target_candidate(
+                                &pane,
+                                None,
+                                WorkTargetControlPath::TmuxShellTarget,
+                                true,
+                                "tmux_ensure_shell_target",
+                                "This pane has native tmux control, but no matching shell target is currently known. Use tmux_ensure_shell_target first.".to_string(),
+                            ),
+                        ));
+                    }
+                } else {
+                    candidates.push((
+                        70 + if pane.is_focused { 1 } else { 0 },
+                        make_tmux_workspace_candidate(
+                            &pane,
+                            "This pane appears to be a tmux workspace, but a native tmux control anchor is not established yet.".to_string(),
+                            "probe_shell_context",
+                        ),
+                    ));
+                }
+            }
+            WorkTargetIntent::AgentCli => {
+                if pane_is_visible_agent_cli(&pane, agent_name.as_ref()) {
+                    candidates.push((
+                        170 + if pane.is_focused { 1 } else { 0 },
+                        WorkTargetCandidate {
+                            pane_index: pane.index,
+                            pane_title: pane.title.clone(),
+                            host: pane.hostname.clone(),
+                            control_path: WorkTargetControlPath::VisibleAgentUi,
+                            visible_target: pane.visible_target.clone(),
+                            tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
+                            tmux_target: None,
+                            requires_preparation: false,
+                            suggested_tool: "send_keys".to_string(),
+                            reason: "The visible foreground target already appears to be the requested agent CLI.".to_string(),
+                        },
+                    ));
+                    continue;
+                }
+                if pane_has_tmux_native(&pane) {
+                    let snapshot = pane_query_tmux_list(pane_tx, pane.index)?;
+                    let mut matches = snapshot
+                        .panes
+                        .into_iter()
+                        .filter(|tmux_pane| {
+                            tmux_pane
+                                .pane_current_command
+                                .as_deref()
+                                .is_some_and(|command| {
+                                    is_tmux_agent_cli_command(command)
+                                        && agent_name.as_ref().is_none_or(|needle| {
+                                            command.to_ascii_lowercase().contains(needle)
+                                        })
+                                })
+                        })
+                        .collect::<Vec<_>>();
+                    sort_tmux_matches(&mut matches);
+                    if let Some(target) = matches.into_iter().next() {
+                        candidates.push((
+                            165 + if pane.is_focused { 1 } else { 0 },
+                            make_tmux_target_candidate(
+                                &pane,
+                                Some(target),
+                                WorkTargetControlPath::TmuxAgentTarget,
+                                false,
+                                "tmux_send_keys",
+                                "This pane has native tmux control and already contains a matching agent CLI target.".to_string(),
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    sort_work_target_candidates(&mut candidates);
+    let mut candidates = candidates
+        .into_iter()
+        .map(|(_, candidate)| candidate)
+        .collect::<Vec<_>>();
+    candidates.truncate(limit.max(1));
+
+    Ok(ResolveWorkTargetResult {
+        intent,
+        best_match: candidates.first().cloned(),
+        candidates,
+    })
 }
 
 // ── list_panes tool ────────────────────────────────────────────────
@@ -1714,6 +2112,89 @@ impl Tool for TmuxEnsureShellTargetTool {
             pane,
             creation: Some(creation),
         };
+        serde_json::to_value(&result).map_err(|e| ToolError::CommandFailed(e.to_string()))
+    }
+}
+
+// ── resolve_work_target tool ─────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ResolveWorkTargetArgs {
+    pub intent: WorkTargetIntent,
+    pub pane_index: Option<usize>,
+    pub host_contains: Option<String>,
+    pub cwd_contains: Option<String>,
+    pub agent_name: Option<String>,
+    #[serde(default = "default_tmux_find_limit")]
+    pub limit: usize,
+}
+
+pub struct ResolveWorkTargetTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl ResolveWorkTargetTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for ResolveWorkTargetTool {
+    const NAME: &'static str = "resolve_work_target";
+    type Error = ToolError;
+    type Args = ResolveWorkTargetArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Resolve the best pane or tmux target for a specific kind of work using con's typed control plane. Use this when multiple panes are open and you need to choose the right shell, the right tmux workspace, the best tmux shell pane, or a matching agent CLI target without re-deriving that logic from list_panes manually.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": ["visible_shell", "remote_shell", "tmux_workspace", "tmux_shell", "agent_cli"],
+                        "description": "What kind of work target you need."
+                    },
+                    "pane_index": {
+                        "type": ["integer", "null"],
+                        "description": "Optional con pane index to constrain resolution to a single pane."
+                    },
+                    "host_contains": {
+                        "type": ["string", "null"],
+                        "description": "Optional case-insensitive filter for the effective host name."
+                    },
+                    "cwd_contains": {
+                        "type": ["string", "null"],
+                        "description": "Optional case-insensitive filter for working directory or tmux pane path."
+                    },
+                    "agent_name": {
+                        "type": ["string", "null"],
+                        "description": "Optional case-insensitive filter for an agent CLI name such as codex, claude, or opencode."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of candidates to return. Defaults to 8."
+                    }
+                },
+                "required": ["intent"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let panes = pane_query_list(&self.pane_tx)?;
+        let result = resolve_work_target_candidates(
+            &self.pane_tx,
+            panes,
+            args.intent,
+            args.pane_index,
+            args.host_contains,
+            args.cwd_contains,
+            args.agent_name,
+            args.limit,
+        )?;
         serde_json::to_value(&result).map_err(|e| ToolError::CommandFailed(e.to_string()))
     }
 }
@@ -2712,9 +3193,19 @@ impl Tool for CreatePaneTool {
 #[cfg(test)]
 mod tests {
     use super::{
-        TmuxTargetKindFilter, decode_key_escapes, is_tmux_agent_cli_command, is_tmux_shell_command,
-        split_at_standalone_esc,
+        ResolveWorkTargetResult, TmuxTargetKindFilter, WorkTargetControlPath, WorkTargetIntent,
+        decode_key_escapes, is_tmux_agent_cli_command, is_tmux_shell_command,
+        resolve_work_target_candidates, split_at_standalone_esc,
     };
+    use crate::context::{
+        PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneObservationSupport,
+        PaneRuntimeScope, PaneScopeKind,
+    };
+    use crate::control::{
+        PaneAddressSpace, PaneControlCapability, PaneVisibleTarget, PaneVisibleTargetKind,
+        TmuxControlMode, TmuxControlState,
+    };
+    use crossbeam_channel::unbounded;
 
     #[test]
     fn decode_standard_escapes() {
@@ -2805,6 +3296,161 @@ mod tests {
     fn tmux_target_kind_filter_serializes_snake_case() {
         let json = serde_json::to_string(&TmuxTargetKindFilter::AgentCli).expect("serialize");
         assert_eq!(json, "\"agent_cli\"");
+    }
+
+    fn test_pane(index: usize, title: &str) -> super::PaneInfo {
+        super::PaneInfo {
+            index,
+            title: title.to_string(),
+            cwd: None,
+            is_focused: false,
+            rows: 24,
+            cols: 80,
+            is_alive: true,
+            hostname: None,
+            hostname_confidence: None,
+            hostname_source: None,
+            front_state: PaneFrontState::Unknown,
+            mode: super::PaneMode::Unknown,
+            shell_metadata_fresh: false,
+            shell_context_fresh: false,
+            observation_support: PaneObservationSupport::default(),
+            address_space: PaneAddressSpace::ConPane,
+            visible_target: PaneVisibleTarget {
+                kind: PaneVisibleTargetKind::Unknown,
+                label: None,
+                host: None,
+            },
+            target_stack: Vec::new(),
+            tmux_control: None,
+            control_attachments: Vec::new(),
+            control_channels: Vec::new(),
+            control_capabilities: Vec::new(),
+            control_notes: Vec::new(),
+            active_scope: None,
+            agent_cli: None,
+            evidence: Vec::new(),
+            runtime_stack: Vec::new(),
+            last_verified_runtime_stack: Vec::new(),
+            runtime_warnings: Vec::new(),
+            shell_context: None,
+            recent_actions: Vec::new(),
+            screen_hints: Vec::new(),
+            tmux_session: None,
+            has_shell_integration: false,
+            last_command: None,
+            last_exit_code: None,
+            is_busy: false,
+        }
+    }
+
+    #[test]
+    fn resolve_work_target_prefers_remote_visible_shell() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut local = test_pane(1, "local");
+        local.control_capabilities = vec![PaneControlCapability::ExecVisibleShell];
+        local.visible_target.kind = PaneVisibleTargetKind::ShellPrompt;
+        local.front_state = PaneFrontState::ShellPrompt;
+        local.mode = super::PaneMode::Shell;
+        local.shell_metadata_fresh = true;
+
+        let mut remote = test_pane(2, "remote");
+        remote.control_capabilities = vec![PaneControlCapability::ExecVisibleShell];
+        remote.visible_target.kind = PaneVisibleTargetKind::ShellPrompt;
+        remote.front_state = PaneFrontState::ShellPrompt;
+        remote.mode = super::PaneMode::Shell;
+        remote.shell_metadata_fresh = true;
+        remote.hostname = Some("haswell".to_string());
+        remote.hostname_confidence = Some(PaneConfidence::Strong);
+        remote.hostname_source = Some(PaneEvidenceSource::ShellProbe);
+        remote.runtime_stack = vec![PaneRuntimeScope {
+            kind: PaneScopeKind::RemoteShell,
+            label: Some("haswell".to_string()),
+            host: Some("haswell".to_string()),
+            confidence: PaneConfidence::Strong,
+            evidence_source: PaneEvidenceSource::ShellProbe,
+        }];
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![local, remote],
+            WorkTargetIntent::RemoteShell,
+            None,
+            None,
+            None,
+            None,
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.pane_index, 2);
+        assert_eq!(best.control_path, WorkTargetControlPath::VisibleShellExec);
+    }
+
+    #[test]
+    fn resolve_work_target_prefers_native_tmux_workspace() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut inspect_only = test_pane(1, "inspect-only tmux");
+        inspect_only.tmux_control = Some(TmuxControlState {
+            session_name: Some("work".to_string()),
+            mode: TmuxControlMode::InspectOnly,
+            front_target: None,
+            reason: "inspect only".to_string(),
+        });
+        inspect_only.tmux_session = Some("work".to_string());
+
+        let mut native = test_pane(2, "native tmux");
+        native.tmux_control = Some(TmuxControlState {
+            session_name: Some("ops".to_string()),
+            mode: TmuxControlMode::Native,
+            front_target: None,
+            reason: "native".to_string(),
+        });
+        native.tmux_session = Some("ops".to_string());
+        native.control_capabilities = vec![PaneControlCapability::QueryTmux];
+
+        let result: ResolveWorkTargetResult = resolve_work_target_candidates(
+            &pane_tx,
+            vec![inspect_only, native],
+            WorkTargetIntent::TmuxWorkspace,
+            None,
+            None,
+            None,
+            None,
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.pane_index, 2);
+        assert_eq!(best.control_path, WorkTargetControlPath::TmuxQuery);
+        assert_eq!(best.suggested_tool, "tmux_list_targets");
+    }
+
+    #[test]
+    fn resolve_work_target_detects_visible_agent_cli() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut agent = test_pane(3, "codex");
+        agent.visible_target.kind = PaneVisibleTargetKind::AgentCli;
+        agent.agent_cli = Some("codex".to_string());
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![agent],
+            WorkTargetIntent::AgentCli,
+            None,
+            None,
+            None,
+            Some("codex".to_string()),
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.pane_index, 3);
+        assert_eq!(best.control_path, WorkTargetControlPath::VisibleAgentUi);
+        assert_eq!(best.suggested_tool, "send_keys");
     }
 
     // ── split_at_standalone_esc tests ────────────────────────────────
