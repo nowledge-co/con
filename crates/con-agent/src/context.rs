@@ -1156,6 +1156,43 @@ fn is_prompt_like_line(line: &str) -> bool {
     starts_like_prompt || ends_like_prompt
 }
 
+fn focused_screen_assessment(
+    hints: &[PaneObservationHint],
+    control: &PaneControlState,
+) -> Option<String> {
+    if hints.is_empty() {
+        return None;
+    }
+
+    let has_prompt = hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::PromptLikeInput);
+    let has_htop = hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::HtopLikeScreen);
+
+    let summary = match (has_prompt, has_htop) {
+        (true, true) => {
+            "The current visible screen shows prompt-like input near the bottom while htop-like content is also visible above. Treat this as mixed current-screen evidence, not proof of the true foreground app."
+        }
+        (true, false) => {
+            "The current visible screen appears to be at a prompt-like input state, but backend facts still do not prove that the foreground target is truly a shell."
+        }
+        (false, true) => {
+            "The current visible screen appears to resemble htop output, but that remains a screen observation rather than authoritative foreground-process proof."
+        }
+        (false, false) => return None,
+    };
+
+    let next_step = if control.allows_shell_probe() {
+        "A stronger next step is available: run a shell probe to collect shell-scoped facts."
+    } else {
+        "A stronger shell probe is not currently available because a proven fresh shell prompt is not established."
+    };
+
+    Some(format!("{summary} {next_step}"))
+}
+
 fn format_control_channels(channels: &[PaneControlChannel]) -> String {
     channels
         .iter()
@@ -1272,6 +1309,7 @@ impl TerminalContext {
              - SHELL COMMANDS on a pane with `exec_visible_shell` → terminal_exec / batch_exec.\n\
              - READ-ONLY SHELL INTROSPECTION on a pane with `probe_shell_context` → probe_shell_context.\n\
              - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → list_panes, then probe_shell_context when available before answering.\n\
+             - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
              - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_list_targets, then tmux_capture_pane.\n\
              - TMUX NATIVE INTERACTION on a pane with tmux native control → tmux_send_keys to a specific tmux pane target.\n\
              - TMUX WITHOUT native control → read_pane first, then outer-pane send_keys only as a fallback.\n\
@@ -1331,6 +1369,7 @@ impl TerminalContext {
              - Prefer typed attachments and probes over inference. If `probe_shell_context` is available, use it before guessing about SSH, tmux, or editor context.\n\
              - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
              - `screen_hints` are weak observations derived from the current visible screen snapshot. They can describe what appears to be on screen now, but they are not backend facts and must not unlock control.\n\
+             - Do not end a session-state answer with a vague offer to \"inspect more closely\" when `terminal_output` or `screen_hints` are already present. Instead, give the best bounded assessment from current-screen evidence and only propose a next step if it would use a stronger fact source.\n\
              - Addressing is layered. A con pane index ≠ tmux pane id ≠ tmux window index ≠ editor buffer.\n\
              - If list_panes shows `query_tmux` or `send_tmux_keys`, treat tmux as a native attachment. Do NOT navigate tmux by outer-pane send_keys unless the native path is unavailable.\n\
              - When pane mode is not `shell` or shell metadata is stale, do NOT trust cwd/hostname/last_command and do NOT assume a shell prompt.\n\
@@ -1730,6 +1769,13 @@ impl TerminalContext {
             }
             prompt.push_str("</screen_hints>\n");
         }
+        if let Some(assessment) =
+            focused_screen_assessment(&self.focused_screen_hints, &self.focused_control)
+        {
+            prompt.push_str("<current_screen_assessment>");
+            prompt.push_str(&xml_escape(&assessment));
+            prompt.push_str("</current_screen_assessment>\n");
+        }
 
         if let Some(diff) = &self.git_diff {
             prompt.push_str("<git_diff>\n");
@@ -1875,8 +1921,8 @@ mod tests {
     use super::{
         PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneMode, PaneObservationFrame,
         PaneObservationHintKind, PaneObservationSupport, PaneRuntimeEvent, PaneRuntimeScope,
-        PaneRuntimeState, PaneRuntimeTracker, PaneScopeKind, TerminalContext,
-        derive_screen_hints, detect_tmux_session, direct_terminal_exec_is_safe, infer_pane_mode,
+        PaneRuntimeState, PaneRuntimeTracker, PaneScopeKind, TerminalContext, derive_screen_hints,
+        detect_tmux_session, direct_terminal_exec_is_safe, infer_pane_mode,
         shell_metadata_is_fresh,
     };
 
