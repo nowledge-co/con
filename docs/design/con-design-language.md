@@ -230,7 +230,7 @@ Unlike a knowledge app or dashboard product, con has to solve for:
 - split panes and tabs
 - SSH and tmux awareness
 - command execution and approvals
-- compatibility with Codex, Claude Code, OpenCode, and other agent CLIs
+- compatibility with external agent CLIs and other terminal-native workflows
 
 That means con needs:
 

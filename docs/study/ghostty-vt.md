@@ -104,7 +104,7 @@ What the embedded API does **not** currently give us as a stable product contrac
 
 - the exact foreground program identity
 - PTY foreground process group
-- a nested scope stack such as `ssh -> tmux -> Codex CLI`
+- a nested scope stack such as `ssh -> tmux -> agent CLI`
 - a direct export of Ghostty's richer semantic prompt model for host applications
 
 This matters for con:

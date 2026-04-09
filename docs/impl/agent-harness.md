@@ -260,7 +260,7 @@ On top of that observer, con now derives a typed `PaneControlState` for each pan
 
 - `address_space` says what `pane_index` actually refers to
 - `visible_target` says what app or runtime is currently in front
-- `target_stack` preserves nested layers such as remote shell -> tmux -> Codex CLI
+- `target_stack` preserves nested layers such as remote shell -> tmux -> agent CLI
 - `control_channels` say how con may act
 - `control_capabilities` say what is allowed right now
 - `control_notes` explain important limits such as "this is tmux inside a con pane"

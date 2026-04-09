@@ -11,7 +11,7 @@ For serious workflows, the visible runtime is usually a stack:
 3. remote shell
 4. tmux or zellij
 5. another shell
-6. Codex CLI, Claude Code, OpenCode, vim, htop, less, or a long-running program
+6. an agent CLI, vim, htop, less, or a long-running program
 
 The current agent context model is still mostly a snapshot:
 
@@ -209,9 +209,7 @@ Suggested app kinds:
 
 Suggested agent CLI kinds:
 
-- `Codex`
-- `ClaudeCode`
-- `OpenCode`
+- `KnownAgent`
 - `Unknown`
 
 Example:
@@ -223,7 +221,7 @@ Example:
   RemoteShell(zsh),
   Multiplexer(kind=tmux, session=deploy),
   Shell(bash),
-  AgentCli(kind=Codex)
+  AgentCli(kind=KnownAgent)
 ]
 ```
 
@@ -305,8 +303,8 @@ Titles are helpful but not authoritative.
 
 Examples:
 
-- `.claude/`
-- `.opencode/`
+- agent-specific local metadata
+- agent-specific workspace metadata
 - `AGENTS.md`
 
 These can explain why a tool might be in use, but they do not prove the pane is running it.
@@ -415,7 +413,7 @@ Purpose:
 Examples:
 
 - "prod deploy tmux"
-- "Codex on staging"
+- "agent task on staging"
 - "logs tail pane"
 
 Manual labels should never overwrite facts. They should layer on top of them.
@@ -521,8 +519,8 @@ Shipped in con:
   - local shell -> tmux
   - local shell -> ssh
   - local shell -> ssh -> tmux
-  - local shell -> Codex CLI
-  - local shell -> ssh -> tmux -> Claude Code
+  - local shell -> agent CLI
+  - local shell -> ssh -> tmux -> agent CLI
 
 ## What this avoids
 

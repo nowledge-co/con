@@ -89,23 +89,18 @@ Apple's App Store Connect API key docs are here:
 
 Apple explicitly notes that individual App Store Connect API keys cannot be used with `notaryTool`; use a team key.
 
-## Optional GitHub Variables
+## Repository Variables
 
-The scripts already have sane defaults for this repo, so GitHub Actions does not need any repository variables to build `con`.
+This repo does not need any GitHub repository variables for macOS releases.
 
-Only use repository variables if you want to override those defaults in another app repo:
-
-- `MACOS_APP_NAME`
-- `MACOS_BUNDLE_ID_BASE`
-- `MACOS_ICON_SOURCE`
-- `MACOS_MINIMUM_SYSTEM_VERSION`
-
-The default values baked into the scripts for this repo are:
+The workflow builds correctly from the defaults baked into the scripts:
 
 - `MACOS_APP_NAME=con`
 - `MACOS_BUNDLE_ID_BASE=co.nowledge.con`
 - `MACOS_ICON_SOURCE=assets/Con-macOS-Dark-1024x1024@1x.png`
 - `MACOS_MINIMUM_SYSTEM_VERSION=10.15.7`
+
+If you reuse these scripts in another app repo, override those values there instead of editing the workflow.
 
 ## Release Tags
 

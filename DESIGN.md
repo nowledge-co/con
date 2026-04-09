@@ -7,7 +7,7 @@ An open-source, macOS-native, GPU-accelerated terminal emulator that treats AI a
 **Why con exists:**
 
 - Existing terminals bolt AI on as an afterthought
-- Agent workflows (Claude Code, Codex, ssh, tmux) deserve deep terminal integration, not wrapper hacks
+- Agent-native workflows deserve deep terminal integration, not wrapper hacks
 - The terminal is the last IDE-free surface that hasn't been reinvented for the AI era
 
 ---
@@ -149,7 +149,7 @@ A pane may contain a nested stack:
 - remote shell
 - tmux
 - another shell
-- Codex CLI / Claude Code / OpenCode / vim / htop
+- agent CLI / vim / htop
 
 The architecture must model that explicitly.
 
@@ -391,7 +391,7 @@ This means the user **sees** what the agent does — no hidden subprocess. Full 
 
 ### Compatibility with Existing Agents
 
-For tools like Claude Code, Codex CLI, or OpenCode that run *inside* the terminal:
+For agent CLIs and other tools that run *inside* the terminal:
 
 - con should detect them through the pane runtime observer, using strong evidence first:
   - shell/runtime transitions

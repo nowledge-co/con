@@ -41,7 +41,7 @@ This is still phase one.
 What it solves:
 
 - the model can see that a con pane showing tmux is still only addressable as a con pane
-- the model can see nested situations such as `remote shell -> tmux -> codex` instead of flattening them into one label
+- the model can see nested situations such as `remote shell -> tmux -> agent CLI` instead of flattening them into one label
 - shell execution safety is computed from typed capability data
 - prompt, tools, and runtime guards share one vocabulary
 - tmux now has an explicit inspectable adapter state with session/front-target reporting, rather than being implied only through generic pane metadata

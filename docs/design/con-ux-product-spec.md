@@ -457,7 +457,7 @@ These workflows must feel **enhanced**, not wrapped.
 - SSH state is visible and scoped clearly
 - remote host identity is obvious without being loud
 - tmux is respected instead of abstracted away
-- Codex / Claude Code / OpenCode can run directly in a pane without con hijacking them
+- external agent CLIs can run directly in a pane without con hijacking them
 - built-in assistance remains available, but never competes for terminal ownership
 
 ### Required state model
@@ -547,7 +547,7 @@ The product opens a companion task timeline with context, plan, approvals, and o
 
 ## 4. Work with an external agent CLI
 
-The user launches Codex or Claude Code directly in a pane.
+The user launches an external agent CLI directly in a pane.
 con provides metadata, notifications, and smoother environment support without trying to replace the tool.
 
 ## 5. Work remotely via SSH / tmux
@@ -602,7 +602,7 @@ Prototype:
 
 Prototype:
 
-- Codex / Claude Code / OpenCode in-pane behavior
+- external agent CLI in-pane behavior
 - SSH and tmux affordances
 
 ---

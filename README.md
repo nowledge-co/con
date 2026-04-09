@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  Built for local coding, SSH, tmux, Codex, Claude Code, and agent-native workflows.
+  Built for local coding, SSH, tmux, and agent-native workflows.
 </p>
 
 
@@ -33,7 +33,7 @@ Think of it like a beloved old beast with modern Bluetooth done right — or a t
 
 - a terminal emulator
 - built-in AI harness aware of panes within a tab
-- works well with `ssh`, `tmux`, `opencode`, `codex`, and `claude code`
+- works well with `ssh`, `tmux`, and agent CLIs running directly in the terminal
 
 ## Status
 
