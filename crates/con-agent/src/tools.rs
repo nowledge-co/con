@@ -738,6 +738,8 @@ pub struct PaneInfo {
     pub shell_context: Option<PaneShellContext>,
     /// Recent con-originated actions for this pane.
     pub recent_actions: Vec<PaneActionRecord>,
+    /// Weak observation hints derived from the current visible screen snapshot.
+    pub screen_hints: Vec<crate::context::PaneObservationHint>,
     /// tmux session hint when detected from the pane itself.
     pub tmux_session: Option<String>,
     /// Whether shell integration (OSC 133) is active.
@@ -859,7 +861,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, current verified front-state, current runtime_stack, last_verified_runtime_stack, backend-support flags, typed shell context, recent con actions, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata. If a pane exposes query_tmux or send_tmux_keys, prefer tmux-native tools over outer-pane send_keys.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, current verified front-state, current runtime_stack, last_verified_runtime_stack, backend-support flags, typed shell context, recent con actions, current visible-screen observation hints, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata. If a pane exposes query_tmux or send_tmux_keys, prefer tmux-native tools over outer-pane send_keys.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}

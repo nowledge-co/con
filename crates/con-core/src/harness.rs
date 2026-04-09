@@ -266,6 +266,7 @@ impl AgentHarness {
             focused_recent_actions: focused_runtime.recent_actions.clone(),
             cwd,
             recent_output: focused_observation.recent_output.clone(),
+            focused_screen_hints: focused_observation.screen_hints.clone(),
             last_command: focused_observation.last_command.clone(),
             last_exit_code: focused_observation.last_exit_code,
             last_command_duration_secs: focused_observation.last_command_duration_secs,
@@ -941,6 +942,7 @@ fn apply_focused_shell_probe_to_context(
         title: context.focused_title.clone(),
         cwd: context.cwd.clone(),
         recent_output: context.recent_output.clone(),
+        screen_hints: context.focused_screen_hints.clone(),
         last_command: context.last_command.clone(),
         last_exit_code: context.last_exit_code,
         last_command_duration_secs: context.last_command_duration_secs,
@@ -960,7 +962,7 @@ fn apply_focused_shell_probe_to_context(
         result,
         captured_input_generation: synthetic_generation,
     });
-    let runtime = tracker.observe(observation);
+    let runtime = tracker.observe(observation.clone());
 
     context.focused_hostname = runtime.remote_host.clone();
     context.focused_hostname_confidence = runtime.remote_host_confidence;
@@ -974,6 +976,7 @@ fn apply_focused_shell_probe_to_context(
     context.focused_control = con_agent::PaneControlState::from_runtime(&runtime);
     context.focused_shell_context = runtime.shell_context.clone();
     context.focused_shell_context_fresh = runtime.shell_context_fresh;
+    context.focused_screen_hints = observation.screen_hints.clone();
     context.ssh_host = runtime.remote_host.clone();
     context.tmux_session = runtime.tmux_session.clone();
 

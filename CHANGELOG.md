@@ -39,6 +39,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - When native tmux control is available, the agent now treats tmux-native target discovery and tmux-native key delivery as the default path. Raw outer-pane `send_keys` is now fallback-only for tmux instead of the first choice.
 - Sending the first agent message no longer performs local `git diff`, project listing, and `AGENTS.md` reads on the UI thread. Workspace enrichment now happens on the harness runtime, reducing visible app stalls when a request starts.
 - When the focused pane already exposes a proven fresh shell prompt, con now auto-probes that shell before the model runs. This gives the agent stronger host, SSH, and tmux facts without making the model ask for them first.
+- con now derives explicit weak observation hints from the current visible screen, such as prompt-like input near the bottom or htop-like output. These hints are labeled as observations, not facts, so the agent can describe what appears to be on screen without pretending it has backend proof.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

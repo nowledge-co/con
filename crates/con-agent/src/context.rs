@@ -244,6 +244,7 @@ pub struct PaneObservationFrame {
     pub title: Option<String>,
     pub cwd: Option<String>,
     pub recent_output: Vec<String>,
+    pub screen_hints: Vec<PaneObservationHint>,
     pub last_command: Option<String>,
     pub last_exit_code: Option<i32>,
     pub last_command_duration_secs: Option<f64>,
@@ -274,6 +275,29 @@ pub struct PaneRuntimeState {
     pub scope_stack: Vec<PaneRuntimeScope>,
     pub recent_actions: Vec<PaneActionRecord>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneObservationHintKind {
+    PromptLikeInput,
+    HtopLikeScreen,
+}
+
+impl PaneObservationHintKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PromptLikeInput => "prompt_like_input",
+            Self::HtopLikeScreen => "htop_like_screen",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaneObservationHint {
+    pub kind: PaneObservationHintKind,
+    pub confidence: PaneConfidence,
+    pub detail: String,
 }
 
 impl PaneRuntimeState {
@@ -979,6 +1003,8 @@ pub struct TerminalContext {
     pub cwd: Option<String>,
     /// Last N lines of terminal output
     pub recent_output: Vec<String>,
+    /// Weak observation hints derived from the current visible screen snapshot.
+    pub focused_screen_hints: Vec<PaneObservationHint>,
     /// Most recent command text when the backend can prove it.
     pub last_command: Option<String>,
     /// Last exit code
@@ -1037,6 +1063,7 @@ pub struct PaneSummary {
     pub runtime_warnings: Vec<String>,
     pub tmux_session: Option<String>,
     pub cwd: Option<String>,
+    pub screen_hints: Vec<PaneObservationHint>,
     pub last_command: Option<String>,
     pub last_exit_code: Option<i32>,
     pub is_busy: bool,
@@ -1058,6 +1085,75 @@ fn format_runtime_stack(scopes: &[PaneRuntimeScope]) -> String {
 
 fn format_scope_summary(scope: &PaneRuntimeScope) -> String {
     scope.summary()
+}
+
+pub fn derive_screen_hints(lines: &[String]) -> Vec<PaneObservationHint> {
+    let mut hints = Vec::new();
+
+    let non_empty: Vec<&str> = lines
+        .iter()
+        .map(|line| line.trim_end())
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+
+    if let Some(line) = non_empty
+        .iter()
+        .rev()
+        .take(3)
+        .find(|line| is_prompt_like_line(line))
+    {
+        hints.push(PaneObservationHint {
+            kind: PaneObservationHintKind::PromptLikeInput,
+            confidence: PaneConfidence::Advisory,
+            detail: format!(
+                "A prompt-like input line is visible near the bottom of the current screen: `{}`.",
+                line.trim()
+            ),
+        });
+    }
+
+    let htop_markers = [
+        "Load average:",
+        "Tasks:",
+        "PID USER",
+        "TIME+  Command",
+        "Swp[",
+        "Mem[",
+    ];
+    let marker_count = htop_markers
+        .iter()
+        .filter(|marker| lines.iter().any(|line| line.contains(**marker)))
+        .count();
+    if marker_count >= 2 {
+        hints.push(PaneObservationHint {
+            kind: PaneObservationHintKind::HtopLikeScreen,
+            confidence: PaneConfidence::Advisory,
+            detail: "The current visible screen resembles htop output.".to_string(),
+        });
+    }
+
+    hints
+}
+
+fn is_prompt_like_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.len() > 100 || trimmed.contains("Expected:") {
+        return false;
+    }
+    if trimmed.contains("  ") {
+        return false;
+    }
+
+    let starts_like_prompt = trimmed
+        .chars()
+        .next()
+        .is_some_and(|c| matches!(c, '$' | '#' | '%' | '>' | ')' | '❯'));
+    let ends_like_prompt = trimmed
+        .chars()
+        .last()
+        .is_some_and(|c| matches!(c, '$' | '#' | '%' | '>'));
+
+    starts_like_prompt || ends_like_prompt
 }
 
 fn format_control_channels(channels: &[PaneControlChannel]) -> String {
@@ -1135,6 +1231,7 @@ impl TerminalContext {
             focused_recent_actions: Vec::new(),
             cwd: None,
             recent_output: Vec::new(),
+            focused_screen_hints: Vec::new(),
             last_command: None,
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -1233,6 +1330,7 @@ impl TerminalContext {
              - `runtime_stack` is current-only. `last_verified_shell_stack` describes the most recent shell frame con verified, and may be historical.\n\
              - Prefer typed attachments and probes over inference. If `probe_shell_context` is available, use it before guessing about SSH, tmux, or editor context.\n\
              - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
+             - `screen_hints` are weak observations derived from the current visible screen snapshot. They can describe what appears to be on screen now, but they are not backend facts and must not unlock control.\n\
              - Addressing is layered. A con pane index ≠ tmux pane id ≠ tmux window index ≠ editor buffer.\n\
              - If list_panes shows `query_tmux` or `send_tmux_keys`, treat tmux as a native attachment. Do NOT navigate tmux by outer-pane send_keys unless the native path is unavailable.\n\
              - When pane mode is not `shell` or shell metadata is stale, do NOT trust cwd/hostname/last_command and do NOT assume a shell prompt.\n\
@@ -1613,12 +1711,24 @@ impl TerminalContext {
         }
 
         if !self.recent_output.is_empty() {
-            prompt.push_str("<terminal_output>\n");
+            prompt.push_str("<terminal_output source=\"current_visible_screen\">\n");
             for line in &self.recent_output {
                 prompt.push_str(&xml_escape(line));
                 prompt.push('\n');
             }
             prompt.push_str("</terminal_output>\n");
+        }
+        if !self.focused_screen_hints.is_empty() {
+            prompt.push_str("<screen_hints>\n");
+            for hint in &self.focused_screen_hints {
+                prompt.push_str(&format!(
+                    "  <hint kind=\"{}\" confidence=\"{}\">{}</hint>\n",
+                    hint.kind.as_str(),
+                    hint.confidence.as_str(),
+                    xml_escape(&hint.detail)
+                ));
+            }
+            prompt.push_str("</screen_hints>\n");
         }
 
         if let Some(diff) = &self.git_diff {
@@ -1764,9 +1874,10 @@ mod tests {
 
     use super::{
         PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneMode, PaneObservationFrame,
-        PaneObservationSupport, PaneRuntimeEvent, PaneRuntimeScope, PaneRuntimeState,
-        PaneRuntimeTracker, PaneScopeKind, TerminalContext, detect_tmux_session,
-        direct_terminal_exec_is_safe, infer_pane_mode, shell_metadata_is_fresh,
+        PaneObservationHintKind, PaneObservationSupport, PaneRuntimeEvent, PaneRuntimeScope,
+        PaneRuntimeState, PaneRuntimeTracker, PaneScopeKind, TerminalContext,
+        derive_screen_hints, detect_tmux_session, direct_terminal_exec_is_safe, infer_pane_mode,
+        shell_metadata_is_fresh,
     };
 
     #[test]
@@ -1796,6 +1907,7 @@ mod tests {
             recent_output: vec![
                 "❐ 0  ↑ 63d 6h 21m  <4 nvim      ↗  | 11:31 | 05 Apr  w  haswell".to_string(),
             ],
+            screen_hints: Vec::new(),
             last_command: None,
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -1819,6 +1931,7 @@ mod tests {
             title: Some("tmux".to_string()),
             cwd: Some("/home/w".to_string()),
             recent_output: vec!["".to_string()],
+            screen_hints: Vec::new(),
             last_command: Some("tmux attach -t deploy".to_string()),
             last_exit_code: Some(0),
             last_command_duration_secs: Some(1.2),
@@ -1848,6 +1961,7 @@ mod tests {
             title: Some("tmux".to_string()),
             cwd: Some("/home/w".to_string()),
             recent_output: vec!["".to_string()],
+            screen_hints: Vec::new(),
             last_command: Some("tmux a -t work".to_string()),
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -1865,6 +1979,7 @@ mod tests {
             title: Some("tmux".to_string()),
             cwd: Some("/home/w".to_string()),
             recent_output: vec!["".to_string()],
+            screen_hints: Vec::new(),
             last_command: None,
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -1879,6 +1994,7 @@ mod tests {
             title: Some("bash".to_string()),
             cwd: Some("/Users/weyl/conductor/workspaces/con/kingston".to_string()),
             recent_output: vec!["$".to_string()],
+            screen_hints: Vec::new(),
             last_command: Some("cargo test".to_string()),
             last_exit_code: Some(0),
             last_command_duration_secs: Some(1.0),
@@ -1909,6 +2025,7 @@ mod tests {
             title: Some("Codex".to_string()),
             cwd: Some("/tmp".to_string()),
             recent_output: vec!["".to_string()],
+            screen_hints: Vec::new(),
             last_command: Some("codex".to_string()),
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -1961,6 +2078,7 @@ mod tests {
             title: Some("zsh".to_string()),
             cwd: Some("/home/weyl".to_string()),
             recent_output: vec!["$".to_string()],
+            screen_hints: Vec::new(),
             last_command: Some("ls".to_string()),
             last_exit_code: Some(0),
             last_command_duration_secs: Some(0.1),
@@ -2017,6 +2135,7 @@ mod tests {
             title: Some("nvim test.sh".to_string()),
             cwd: Some("/tmp".to_string()),
             recent_output: vec!["".to_string()],
+            screen_hints: Vec::new(),
             last_command: Some("nvim test.sh".to_string()),
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -2088,6 +2207,7 @@ mod tests {
             focused_recent_actions: Vec::new(),
             cwd: Some("/tmp".to_string()),
             recent_output: Vec::new(),
+            focused_screen_hints: Vec::new(),
             last_command: None,
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -2197,6 +2317,7 @@ mod tests {
             focused_recent_actions: Vec::new(),
             cwd: Some("/home/user".to_string()),
             recent_output: Vec::new(),
+            focused_screen_hints: Vec::new(),
             last_command: None,
             last_exit_code: None,
             last_command_duration_secs: None,
@@ -2300,6 +2421,32 @@ mod tests {
         assert!(
             !prompt.contains("vim/nvim interaction"),
             "Vim playbook should not appear from title-only observations"
+        );
+    }
+
+    #[test]
+    fn derive_screen_hints_marks_visible_prompt_and_htop_as_observations() {
+        let hints = derive_screen_hints(&[
+            "Tasks: 105, 738 thr, 692 kthr; 1 running".to_string(),
+            "Load average: 0.08 0.09 0.06".to_string(),
+            "  PID USER      PRI  NI  VIRT   RES   SHR S CPU% MEM%   TIME+  Command".to_string(),
+            ") htop".to_string(),
+        ]);
+
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::HtopLikeScreen)
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::PromptLikeInput)
+        );
+        assert!(
+            hints
+                .iter()
+                .all(|hint| hint.confidence == PaneConfidence::Advisory)
         );
     }
 }
