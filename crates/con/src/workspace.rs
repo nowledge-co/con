@@ -118,11 +118,11 @@ fn make_ghostty_terminal(
 
 impl ConWorkspace {
     fn clamp_terminal_opacity(value: f32) -> f32 {
-        value.clamp(0.6, 1.0)
+        value.clamp(0.25, 1.0)
     }
 
     fn clamp_ui_opacity(value: f32) -> f32 {
-        value.clamp(0.75, 1.0)
+        value.clamp(0.35, 1.0)
     }
 
     fn ui_surface_opacity(&self) -> f32 {

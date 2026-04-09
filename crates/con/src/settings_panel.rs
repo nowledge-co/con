@@ -103,11 +103,11 @@ const ALL_PROVIDERS: &[ProviderKind] = &[
 
 impl SettingsPanel {
     fn clamp_terminal_opacity(value: f32) -> f32 {
-        value.clamp(0.6, 1.0)
+        value.clamp(0.25, 1.0)
     }
 
     fn clamp_ui_opacity(value: f32) -> f32 {
-        value.clamp(0.75, 1.0)
+        value.clamp(0.35, 1.0)
     }
 
     fn terminal_opacity_value(&self) -> f32 {
@@ -200,14 +200,14 @@ impl SettingsPanel {
         });
         let terminal_opacity_slider = cx.new(|_| {
             SliderState::new()
-                .min(0.6)
+                .min(0.25)
                 .max(1.0)
                 .step(0.01)
                 .default_value(Self::clamp_terminal_opacity(config.appearance.terminal_opacity))
         });
         let ui_opacity_slider = cx.new(|_| {
             SliderState::new()
-                .min(0.75)
+                .min(0.35)
                 .max(1.0)
                 .step(0.01)
                 .default_value(Self::clamp_ui_opacity(config.appearance.ui_opacity))
@@ -1174,7 +1174,7 @@ impl SettingsPanel {
                     card(theme, card_opacity)
                         .child(slider_row(
                             "Terminal Opacity",
-                            "Lower values let the terminal background show through.",
+                            "Lower values let the terminal background show through. Best applied after relaunch on macOS.",
                             &terminal_opacity_slider,
                             terminal_opacity,
                             theme,
@@ -2114,7 +2114,7 @@ fn card(theme: &gpui_component::Theme, opacity: f32) -> Div {
         .flex_col()
         .rounded(px(10.0))
         .overflow_hidden()
-        .bg(theme.background.opacity(opacity.clamp(0.6, 0.98)))
+        .bg(theme.background.opacity(opacity.clamp(0.35, 0.98)))
 }
 
 fn row_separator(_theme: &gpui_component::Theme) -> Div {
