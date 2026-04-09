@@ -164,13 +164,14 @@ fn main() {
                 appears_transparent: true,
                 ..Default::default()
             }),
+            window_background: WindowBackgroundAppearance::Blurred,
             ..Default::default()
         };
 
         cx.spawn(async move |cx| {
             cx.open_window(window_options, |window, cx| {
                 let view = cx.new(|cx| ConWorkspace::new(config.clone(), window, cx));
-                cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().background))
+                cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
             })
             .unwrap_or_else(|e| {
                 eprintln!("Fatal: failed to open window: {}", e);

@@ -48,6 +48,8 @@ pub struct ConWorkspace {
     tabs: Vec<Tab>,
     active_tab: usize,
     font_size: f32,
+    terminal_opacity: f32,
+    ui_opacity: f32,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -115,15 +117,34 @@ fn make_ghostty_terminal(
 }
 
 impl ConWorkspace {
+    fn clamp_terminal_opacity(value: f32) -> f32 {
+        value.clamp(0.6, 1.0)
+    }
+
+    fn clamp_ui_opacity(value: f32) -> f32 {
+        value.clamp(0.75, 1.0)
+    }
+
+    fn ui_surface_opacity(&self) -> f32 {
+        Self::clamp_ui_opacity(self.ui_opacity)
+    }
+
+    fn elevated_ui_surface_opacity(&self) -> f32 {
+        (self.ui_surface_opacity() + 0.03).min(0.98)
+    }
+
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
         let font_size = config.terminal.font_size;
+        let terminal_opacity = Self::clamp_terminal_opacity(config.appearance.terminal_opacity);
+        let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
         let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
         let session = Session::load().unwrap_or_default();
         let colors = theme_to_ghostty_colors(&terminal_theme);
-        let ghostty_app = con_ghostty::GhosttyApp::new(Some(&colors), Some(font_size))
-            .map(std::sync::Arc::new)
-            .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
+        let ghostty_app =
+            con_ghostty::GhosttyApp::new(Some(&colors), Some(font_size), Some(terminal_opacity))
+                .map(std::sync::Arc::new)
+                .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
         let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
             log::error!(
                 "Failed to create agent harness: {}. Agent features disabled.",
@@ -327,6 +348,8 @@ impl ConWorkspace {
             tabs,
             active_tab,
             font_size,
+            terminal_opacity,
+            ui_opacity,
             agent_panel,
             input_bar,
             settings_panel,
@@ -532,6 +555,7 @@ impl ConWorkspace {
                         runtime_warnings: runtime.warnings,
                         tmux_session: runtime.tmux_session,
                         cwd: observation.cwd,
+                        screen_hints: observation.screen_hints,
                         last_command: observation.last_command,
                         last_exit_code: observation.last_exit_code,
                         is_busy: observation.is_busy,
@@ -853,7 +877,10 @@ impl ConWorkspace {
         }
 
         let term_config = settings.read(cx).terminal_config().clone();
+        let appearance_config = settings.read(cx).appearance_config().clone();
         self.font_size = term_config.font_size;
+        self.terminal_opacity = Self::clamp_terminal_opacity(appearance_config.terminal_opacity);
+        self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
 
         if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
             self.apply_terminal_theme(new_theme, window, cx);
@@ -914,10 +941,13 @@ impl ConWorkspace {
         // Update all terminal panes (legacy gets full theme, ghostty gets color scheme)
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_terminals() {
-                terminal.set_theme(&theme, &colors, self.font_size, cx);
+                terminal.set_theme(&theme, &colors, self.font_size, self.terminal_opacity, cx);
             }
         }
-        if let Err(e) = self.ghostty_app.update_appearance(&colors, self.font_size) {
+        if let Err(e) =
+            self.ghostty_app
+                .update_appearance(&colors, self.font_size, self.terminal_opacity)
+        {
             log::error!("Failed to update Ghostty appearance: {}", e);
         }
         // Sync GPUI UI theme colors with terminal theme
@@ -1355,6 +1385,7 @@ impl ConWorkspace {
                             runtime_warnings: runtime.warnings,
                             shell_context: runtime.shell_context.clone(),
                             recent_actions: runtime.recent_actions.clone(),
+                            screen_hints: observation.screen_hints,
                             tmux_session: runtime.tmux_session,
                             has_shell_integration: observation.has_shell_integration,
                             last_command: observation.last_command,
@@ -2543,6 +2574,8 @@ impl Render for ConWorkspace {
         });
 
         let theme = cx.theme();
+        let ui_surface_opacity = self.ui_surface_opacity();
+        let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -2690,7 +2723,7 @@ impl Render for ConWorkspace {
                 // Active tab — lifted surface, connects to content below
                 tab_el = tab_el
                     .rounded_t(px(7.0))
-                    .bg(theme.background)
+                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
                     .text_color(theme.foreground)
                     .font_weight(FontWeight::MEDIUM);
             } else {
@@ -2839,7 +2872,7 @@ impl Render for ConWorkspace {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.title_bar)
+            .bg(theme.title_bar.opacity(ui_surface_opacity))
             .font_family("Ioskeley Mono")
             .key_context("ConWorkspace")
             // Pane drag-to-resize: capture mouse move/up on root so it works
@@ -3008,7 +3041,7 @@ impl Render for ConWorkspace {
                 .flex()
                 .flex_col()
                 .rounded(px(10.0))
-                .bg(theme.background.opacity(0.98))
+                .bg(theme.background.opacity(elevated_ui_surface_opacity))
                 .border_1()
                 .border_color(theme.muted.opacity(0.16))
                 .py(px(6.0))
@@ -3089,7 +3122,7 @@ impl Render for ConWorkspace {
                 .flex()
                 .flex_col()
                 .rounded(px(10.0))
-                .bg(theme.background.opacity(0.98))
+                .bg(theme.background.opacity(elevated_ui_surface_opacity))
                 .border_1()
                 .border_color(theme.muted.opacity(0.16))
                 .py(px(6.0))

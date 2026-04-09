@@ -569,6 +569,9 @@ impl SettingsPanel {
     pub fn terminal_config(&self) -> &con_core::config::TerminalConfig {
         &self.config.terminal
     }
+    pub fn appearance_config(&self) -> &con_core::config::AppearanceConfig {
+        &self.config.appearance
+    }
     pub fn keybinding_config(&self) -> &con_core::config::KeybindingConfig {
         &self.config.keybindings
     }

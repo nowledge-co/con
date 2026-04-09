@@ -1,6 +1,6 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
-use con_agent::context::{PaneObservationFrame, PaneObservationSupport};
+use con_agent::context::{PaneObservationFrame, PaneObservationSupport, derive_screen_hints};
 use con_ghostty::TerminalColors;
 use con_terminal::TerminalTheme;
 use gpui::*;
@@ -61,11 +61,12 @@ impl TerminalPane {
         theme: &TerminalTheme,
         colors: &TerminalColors,
         font_size: f32,
+        background_opacity: f32,
         cx: &mut App,
     ) {
         let is_dark = theme.name.to_lowercase().contains("dark");
         if let Some(terminal) = self.entity.read(cx).terminal() {
-            if let Err(err) = terminal.update_appearance(colors, font_size) {
+            if let Err(err) = terminal.update_appearance(colors, font_size, background_opacity) {
                 log::error!("Failed to update Ghostty surface appearance: {}", err);
             }
             terminal.set_color_scheme(is_dark);
@@ -166,10 +167,12 @@ impl TerminalPane {
     }
 
     pub fn observation_frame(&self, recent_output_lines: usize, cx: &App) -> PaneObservationFrame {
+        let recent_output = self.content_lines(recent_output_lines, cx);
         PaneObservationFrame {
             title: self.title(cx),
             cwd: self.current_dir(cx),
-            recent_output: self.content_lines(recent_output_lines, cx),
+            screen_hints: derive_screen_hints(&recent_output),
+            recent_output,
             last_command: self.last_command(cx),
             last_exit_code: self.last_exit_code(cx),
             last_command_duration_secs: self.last_command_duration(cx).map(|d| d.as_secs_f64()),

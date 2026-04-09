@@ -15,6 +15,12 @@ fn default_theme() -> String {
 fn default_cursor_style() -> String {
     "bar".into()
 }
+fn default_terminal_opacity() -> f32 {
+    0.92
+}
+fn default_ui_opacity() -> f32 {
+    0.94
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -32,6 +38,22 @@ impl Default for TerminalConfig {
             font_size: default_font_size(),
             theme: default_theme(),
             cursor_style: default_cursor_style(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppearanceConfig {
+    pub terminal_opacity: f32,
+    pub ui_opacity: f32,
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        Self {
+            terminal_opacity: default_terminal_opacity(),
+            ui_opacity: default_ui_opacity(),
         }
     }
 }
@@ -103,6 +125,7 @@ impl Default for KeybindingConfig {
 #[serde(default)]
 pub struct Config {
     pub terminal: TerminalConfig,
+    pub appearance: AppearanceConfig,
     pub agent: AgentConfig,
     pub keybindings: KeybindingConfig,
     pub skills: SkillsConfig,

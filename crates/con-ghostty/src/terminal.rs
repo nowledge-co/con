@@ -53,6 +53,7 @@ impl TerminalColors {
 pub struct GhosttyConfigPatch {
     pub colors: Option<TerminalColors>,
     pub font_size: Option<f32>,
+    pub background_opacity: Option<f32>,
 }
 
 impl GhosttyConfigPatch {
@@ -63,6 +64,9 @@ impl GhosttyConfigPatch {
         if let Some(font_size) = patch.font_size {
             self.font_size = Some(font_size);
         }
+        if let Some(background_opacity) = patch.background_opacity {
+            self.background_opacity = Some(background_opacity);
+        }
     }
 
     fn to_config_string(&self) -> String {
@@ -72,6 +76,12 @@ impl GhosttyConfigPatch {
         }
         if let Some(font_size) = self.font_size {
             s.push_str(&format!("font-size = {:.2}\n", font_size));
+        }
+        if let Some(background_opacity) = self.background_opacity {
+            s.push_str(&format!(
+                "background-opacity = {:.2}\n",
+                background_opacity.clamp(0.0, 1.0)
+            ));
         }
         s
     }
@@ -93,7 +103,7 @@ fn build_ghostty_config(patch: &GhosttyConfigPatch) -> Result<ffi::ghostty_confi
         return Err("ghostty_config_new returned null".into());
     }
 
-    if patch.colors.is_some() || patch.font_size.is_some() {
+    if patch.colors.is_some() || patch.font_size.is_some() || patch.background_opacity.is_some() {
         let path = patch.write_config_file()?;
         let path_str = path.to_str().ok_or("non-UTF8 path")?;
         let cpath = CString::new(path_str).map_err(|e| format!("CString: {}", e))?;
@@ -203,12 +213,17 @@ pub struct GhosttyApp {
 
 impl GhosttyApp {
     /// Create a new ghostty app with the given terminal colors.
-    pub fn new(colors: Option<&TerminalColors>, font_size: Option<f32>) -> Result<Self, String> {
+    pub fn new(
+        colors: Option<&TerminalColors>,
+        font_size: Option<f32>,
+        background_opacity: Option<f32>,
+    ) -> Result<Self, String> {
         ensure_ghostty_init()?;
 
         let appearance = GhosttyConfigPatch {
             colors: colors.cloned(),
             font_size,
+            background_opacity,
         };
         let config = build_ghostty_config(&appearance)?;
 
@@ -255,13 +270,20 @@ impl GhosttyApp {
         self.update_config(&GhosttyConfigPatch {
             colors: Some(colors.clone()),
             font_size: None,
+            background_opacity: None,
         })
     }
 
-    pub fn update_appearance(&self, colors: &TerminalColors, font_size: f32) -> Result<(), String> {
+    pub fn update_appearance(
+        &self,
+        colors: &TerminalColors,
+        font_size: f32,
+        background_opacity: f32,
+    ) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {
             colors: Some(colors.clone()),
             font_size: Some(font_size),
+            background_opacity: Some(background_opacity),
         })
     }
 
@@ -456,10 +478,16 @@ impl GhosttyTerminal {
         Ok(())
     }
 
-    pub fn update_appearance(&self, colors: &TerminalColors, font_size: f32) -> Result<(), String> {
+    pub fn update_appearance(
+        &self,
+        colors: &TerminalColors,
+        font_size: f32,
+        background_opacity: f32,
+    ) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {
             colors: Some(colors.clone()),
             font_size: Some(font_size),
+            background_opacity: Some(background_opacity),
         })?;
         self.refresh();
         Ok(())
