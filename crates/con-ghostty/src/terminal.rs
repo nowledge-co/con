@@ -54,6 +54,8 @@ pub struct GhosttyConfigPatch {
     pub colors: Option<TerminalColors>,
     pub font_size: Option<f32>,
     pub background_opacity: Option<f32>,
+    pub background_opacity_cells: Option<bool>,
+    pub background_blur: Option<bool>,
 }
 
 impl GhosttyConfigPatch {
@@ -66,6 +68,12 @@ impl GhosttyConfigPatch {
         }
         if let Some(background_opacity) = patch.background_opacity {
             self.background_opacity = Some(background_opacity);
+        }
+        if let Some(background_opacity_cells) = patch.background_opacity_cells {
+            self.background_opacity_cells = Some(background_opacity_cells);
+        }
+        if let Some(background_blur) = patch.background_blur {
+            self.background_blur = Some(background_blur);
         }
     }
 
@@ -82,6 +90,15 @@ impl GhosttyConfigPatch {
                 "background-opacity = {:.2}\n",
                 background_opacity.clamp(0.0, 1.0)
             ));
+        }
+        if let Some(background_opacity_cells) = self.background_opacity_cells {
+            s.push_str(&format!(
+                "background-opacity-cells = {}\n",
+                background_opacity_cells
+            ));
+        }
+        if let Some(background_blur) = self.background_blur {
+            s.push_str(&format!("background-blur = {}\n", background_blur));
         }
         s
     }
@@ -224,6 +241,8 @@ impl GhosttyApp {
             colors: colors.cloned(),
             font_size,
             background_opacity,
+            background_opacity_cells: background_opacity.map(|opacity| opacity < 0.999),
+            background_blur: background_opacity.map(|opacity| opacity < 0.999),
         };
         let config = build_ghostty_config(&appearance)?;
 
@@ -271,6 +290,8 @@ impl GhosttyApp {
             colors: Some(colors.clone()),
             font_size: None,
             background_opacity: None,
+            background_opacity_cells: None,
+            background_blur: None,
         })
     }
 
@@ -284,6 +305,8 @@ impl GhosttyApp {
             colors: Some(colors.clone()),
             font_size: Some(font_size),
             background_opacity: Some(background_opacity),
+            background_opacity_cells: Some(background_opacity < 0.999),
+            background_blur: Some(background_opacity < 0.999),
         })
     }
 
@@ -488,6 +511,8 @@ impl GhosttyTerminal {
             colors: Some(colors.clone()),
             font_size: Some(font_size),
             background_opacity: Some(background_opacity),
+            background_opacity_cells: Some(background_opacity < 0.999),
+            background_blur: Some(background_opacity < 0.999),
         })?;
         self.refresh();
         Ok(())

@@ -16,10 +16,10 @@ fn default_cursor_style() -> String {
     "bar".into()
 }
 fn default_terminal_opacity() -> f32 {
-    0.92
+    0.80
 }
 fn default_ui_opacity() -> f32 {
-    0.94
+    0.90
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
