@@ -3319,6 +3319,9 @@ impl Render for ConWorkspace {
         if has_inline_skill_popup {
             let theme = cx.theme();
             let popup_bottom = self.agent_panel.read(cx).inline_skill_popup_offset(cx);
+            let panel_left = window.bounds().size.width.as_f32() - self.agent_panel_width;
+            let popup_left = px((panel_left + 8.0).max(24.0));
+            let popup_width = px((self.agent_panel_width - 24.0).clamp(180.0, 320.0));
             let skills = self
                 .agent_panel
                 .read(cx)
@@ -3332,8 +3335,8 @@ impl Render for ConWorkspace {
             let mut popup = div()
                 .absolute()
                 .bottom(popup_bottom)
-                .left(px(24.0))
-                .w(px(260.0))
+                .left(popup_left)
+                .w(popup_width)
                 .max_h(px(280.0))
                 .flex()
                 .flex_col()
