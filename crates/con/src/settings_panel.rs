@@ -74,6 +74,8 @@ pub struct SettingsPanel {
     font_size_input: Entity<InputState>,
     terminal_opacity_slider: Entity<SliderState>,
     ui_opacity_slider: Entity<SliderState>,
+    background_image_input: Entity<InputState>,
+    background_image_opacity_slider: Entity<SliderState>,
     save_error: Option<String>,
 
     // Theme import
@@ -116,6 +118,14 @@ impl SettingsPanel {
 
     fn ui_opacity_value(&self) -> f32 {
         Self::clamp_ui_opacity(self.config.appearance.ui_opacity)
+    }
+
+    fn clamp_background_image_opacity(value: f32) -> f32 {
+        value.clamp(0.0, 1.0)
+    }
+
+    fn background_image_opacity_value(&self) -> f32 {
+        Self::clamp_background_image_opacity(self.config.appearance.background_image_opacity)
     }
 
     fn card_opacity(&self) -> f32 {
@@ -214,6 +224,29 @@ impl SettingsPanel {
                 .step(0.01)
                 .default_value(Self::clamp_ui_opacity(config.appearance.ui_opacity))
         });
+        let background_image_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("~/Pictures/wallpaper.jpg", window, cx);
+            s.set_value(
+                &config
+                    .appearance
+                    .background_image
+                    .clone()
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+            s
+        });
+        let background_image_opacity_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(1.0)
+                .step(0.01)
+                .default_value(Self::clamp_background_image_opacity(
+                    config.appearance.background_image_opacity,
+                ))
+        });
         let custom_theme_name_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Save as, e.g. flexoki-amber", window, cx);
@@ -241,6 +274,17 @@ impl SettingsPanel {
             },
         )
         .detach();
+        cx.subscribe(
+            &background_image_opacity_slider,
+            |this, _, event: &SliderEvent, cx| match event {
+                SliderEvent::Change(value) => {
+                    this.config.appearance.background_image_opacity =
+                        Self::clamp_background_image_opacity(value.end());
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
 
         Self {
             visible: false,
@@ -261,6 +305,8 @@ impl SettingsPanel {
             font_size_input,
             terminal_opacity_slider,
             ui_opacity_slider,
+            background_image_input,
+            background_image_opacity_slider,
             save_error: None,
             custom_theme_name_input,
             custom_theme_preview: None,
@@ -309,6 +355,27 @@ impl SettingsPanel {
             self.ui_opacity_slider.update(cx, |slider, cx| {
                 slider.set_value(
                     Self::clamp_ui_opacity(self.config.appearance.ui_opacity),
+                    window,
+                    cx,
+                );
+            });
+            self.background_image_input.update(cx, |s, cx| {
+                s.set_value(
+                    &self
+                        .config
+                        .appearance
+                        .background_image
+                        .clone()
+                        .unwrap_or_default(),
+                    window,
+                    cx,
+                );
+            });
+            self.background_image_opacity_slider.update(cx, |slider, cx| {
+                slider.set_value(
+                    Self::clamp_background_image_opacity(
+                        self.config.appearance.background_image_opacity,
+                    ),
                     window,
                     cx,
                 );
@@ -569,6 +636,15 @@ impl SettingsPanel {
             Self::clamp_terminal_opacity(self.terminal_opacity_slider.read(cx).value().end());
         self.config.appearance.ui_opacity =
             Self::clamp_ui_opacity(self.ui_opacity_slider.read(cx).value().end());
+        let background_image_text = self.background_image_input.read(cx).value().trim().to_string();
+        self.config.appearance.background_image = if background_image_text.is_empty() {
+            None
+        } else {
+            Some(background_image_text)
+        };
+        self.config.appearance.background_image_opacity = Self::clamp_background_image_opacity(
+            self.background_image_opacity_slider.read(cx).value().end(),
+        );
 
         // Keybindings are updated directly via record_keystroke — no reading needed
 
@@ -1016,8 +1092,11 @@ impl SettingsPanel {
         let current_theme = self.config.terminal.theme.clone();
         let terminal_opacity_slider = self.terminal_opacity_slider.clone();
         let ui_opacity_slider = self.ui_opacity_slider.clone();
+        let background_image_input = self.background_image_input.clone();
+        let background_image_opacity_slider = self.background_image_opacity_slider.clone();
         let terminal_opacity = self.terminal_opacity_value();
         let ui_opacity = self.ui_opacity_value();
+        let background_image_opacity = self.background_image_opacity_value();
         let card_opacity = self.card_opacity();
         let all_themes = con_terminal::TerminalTheme::all_available();
 
@@ -1192,6 +1271,48 @@ impl SettingsPanel {
                             ui_opacity,
                             theme,
                         )),
+                ),
+        );
+
+        content = content.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Background Image", &theme))
+                .child(
+                    card(theme, card_opacity)
+                        .child(
+                            div()
+                                .px(px(16.0))
+                                .pt(px(12.0))
+                                .child(stacked_input_field(
+                                    "Image Path",
+                                    "PNG and JPEG are supported. The image is applied per terminal, so splits will repeat it.",
+                                    &background_image_input,
+                                    theme,
+                                )),
+                        )
+                        .child(row_separator(theme))
+                        .child(slider_row(
+                            "Image Strength",
+                            "Blend the image more softly or let it come forward behind the terminal.",
+                            &background_image_opacity_slider,
+                            background_image_opacity,
+                            theme,
+                        ))
+                        .child(row_separator(theme))
+                        .child(
+                            div()
+                                .px(px(16.0))
+                                .pb(px(12.0))
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(theme.muted_foreground.opacity(0.65))
+                                .child(
+                                    "For fit, position, or repeat behavior, edit config.toml with Ghostty's background-image settings.",
+                                ),
+                        ),
                 ),
         );
 
