@@ -6,6 +6,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::InputState;
 use gpui_component::kbd::Kbd;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
+use gpui_component::slider::{Slider, SliderEvent, SliderState};
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _, input::Input};
 
@@ -71,6 +72,8 @@ pub struct SettingsPanel {
     suggestion_model_input: Entity<InputState>,
 
     font_size_input: Entity<InputState>,
+    terminal_opacity_slider: Entity<SliderState>,
+    ui_opacity_slider: Entity<SliderState>,
     save_error: Option<String>,
 
     // Theme import
@@ -99,6 +102,26 @@ const ALL_PROVIDERS: &[ProviderKind] = &[
 ];
 
 impl SettingsPanel {
+    fn clamp_terminal_opacity(value: f32) -> f32 {
+        value.clamp(0.6, 1.0)
+    }
+
+    fn clamp_ui_opacity(value: f32) -> f32 {
+        value.clamp(0.75, 1.0)
+    }
+
+    fn terminal_opacity_value(&self) -> f32 {
+        Self::clamp_terminal_opacity(self.config.appearance.terminal_opacity)
+    }
+
+    fn ui_opacity_value(&self) -> f32 {
+        Self::clamp_ui_opacity(self.config.appearance.ui_opacity)
+    }
+
+    fn card_opacity(&self) -> f32 {
+        (self.ui_opacity_value() + 0.02).min(0.98)
+    }
+
     pub fn new(
         config: &Config,
         registry: ModelRegistry,
@@ -175,11 +198,47 @@ impl SettingsPanel {
             s.set_value(&config.terminal.font_size.to_string(), window, cx);
             s
         });
+        let terminal_opacity_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.6)
+                .max(1.0)
+                .step(0.01)
+                .default_value(Self::clamp_terminal_opacity(config.appearance.terminal_opacity))
+        });
+        let ui_opacity_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.75)
+                .max(1.0)
+                .step(0.01)
+                .default_value(Self::clamp_ui_opacity(config.appearance.ui_opacity))
+        });
         let custom_theme_name_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Save as, e.g. flexoki-amber", window, cx);
             s
         });
+
+        cx.subscribe(
+            &terminal_opacity_slider,
+            |this, _, event: &SliderEvent, cx| match event {
+                SliderEvent::Change(value) => {
+                    this.config.appearance.terminal_opacity =
+                        Self::clamp_terminal_opacity(value.end());
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe(
+            &ui_opacity_slider,
+            |this, _, event: &SliderEvent, cx| match event {
+                SliderEvent::Change(value) => {
+                    this.config.appearance.ui_opacity = Self::clamp_ui_opacity(value.end());
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
 
         Self {
             visible: false,
@@ -198,6 +257,8 @@ impl SettingsPanel {
             auto_approve: config.agent.auto_approve_tools,
             suggestion_model_input,
             font_size_input,
+            terminal_opacity_slider,
+            ui_opacity_slider,
             save_error: None,
             custom_theme_name_input,
             custom_theme_preview: None,
@@ -235,6 +296,20 @@ impl SettingsPanel {
                 Self::make_model_select(&agent.provider, &pc.model, &self.registry, window, cx);
             self.font_size_input.update(cx, |s, cx| {
                 s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
+            });
+            self.terminal_opacity_slider.update(cx, |slider, cx| {
+                slider.set_value(
+                    Self::clamp_terminal_opacity(self.config.appearance.terminal_opacity),
+                    window,
+                    cx,
+                );
+            });
+            self.ui_opacity_slider.update(cx, |slider, cx| {
+                slider.set_value(
+                    Self::clamp_ui_opacity(self.config.appearance.ui_opacity),
+                    window,
+                    cx,
+                );
             });
             self.recording_key = None;
             self.focus_handle.focus(window, cx);
@@ -488,6 +563,11 @@ impl SettingsPanel {
             },
         };
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
+        self.config.appearance.terminal_opacity = Self::clamp_terminal_opacity(
+            self.terminal_opacity_slider.read(cx).value().end(),
+        );
+        self.config.appearance.ui_opacity =
+            Self::clamp_ui_opacity(self.ui_opacity_slider.read(cx).value().end());
 
         // Keybindings are updated directly via record_keystroke — no reading needed
 
@@ -624,6 +704,7 @@ impl SettingsPanel {
 
     fn render_general(&mut self, cx: &mut Context<Self>) -> Div {
         let font_size_input = self.font_size_input.clone();
+        let card_opacity = self.card_opacity();
 
         // Auto-approve toggle
         let is_on = self.auto_approve;
@@ -665,7 +746,7 @@ impl SettingsPanel {
         let theme = cx.theme();
         section_content("General", "Terminal and agent behavior.", theme)
             .child(
-                card(theme)
+                card(theme, card_opacity)
                     .child(row_field("Font Size", &font_size_input))
                     .child(row_separator(theme))
                     .child(
@@ -691,7 +772,7 @@ impl SettingsPanel {
                     .gap(px(8.0))
                     .child(group_label("Agent", &theme))
                     .child(
-                        card(theme).child(
+                        card(theme, card_opacity).child(
                             div()
                                 .flex()
                                 .items_center()
@@ -725,7 +806,7 @@ impl SettingsPanel {
                     .gap(px(8.0))
                     .child(group_label("Skills", &theme))
                     .child(
-                        card(theme)
+                        card(theme, card_opacity)
                             // Project paths row
                             .child(
                                 div()
@@ -932,6 +1013,11 @@ impl SettingsPanel {
 
     fn render_appearance(&self, cx: &mut Context<Self>) -> Div {
         let current_theme = self.config.terminal.theme.clone();
+        let terminal_opacity_slider = self.terminal_opacity_slider.clone();
+        let ui_opacity_slider = self.ui_opacity_slider.clone();
+        let terminal_opacity = self.terminal_opacity_value();
+        let ui_opacity = self.ui_opacity_value();
+        let card_opacity = self.card_opacity();
         let all_themes = con_terminal::TerminalTheme::all_available();
 
         // Split into built-in and user themes
@@ -1078,6 +1164,32 @@ impl SettingsPanel {
 
         let mut content = section_content("Appearance", "Customize the look and feel.", theme);
 
+        content = content.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Window", &theme))
+                .child(
+                    card(theme, card_opacity)
+                        .child(slider_row(
+                            "Terminal Opacity",
+                            "Lower values let the terminal background show through.",
+                            &terminal_opacity_slider,
+                            terminal_opacity,
+                            theme,
+                        ))
+                        .child(row_separator(theme))
+                        .child(slider_row(
+                            "UI Opacity",
+                            "Controls the tab chrome, popups, and settings surfaces.",
+                            &ui_opacity_slider,
+                            ui_opacity,
+                            theme,
+                        )),
+                ),
+        );
+
         // ── Built-in themes ──
         let mut theme_card_inner = div()
             .px(px(16.0))
@@ -1130,8 +1242,8 @@ impl SettingsPanel {
                     .child(user_grid),
             );
         }
-        content = content.child(card(theme).child(theme_card_inner));
-        content = content.child(card(theme).child(import_section));
+        content = content.child(card(theme, card_opacity).child(theme_card_inner));
+        content = content.child(card(theme, card_opacity).child(import_section));
 
         content
     }
@@ -1298,6 +1410,7 @@ impl SettingsPanel {
 
     fn render_ai(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
+        let card_opacity = self.card_opacity();
         let model_input = self.model_input.clone();
         let api_key_input = self.api_key_input.clone();
         let base_url_input = self.base_url_input.clone();
@@ -1375,7 +1488,7 @@ impl SettingsPanel {
         let has_key = !self.api_key_input.read(cx).value().is_empty();
 
         // ── Model card — Select dropdown for known providers, text input for custom ──
-        let model_card_content = card(theme).child(
+        let model_card_content = card(theme, card_opacity).child(
             div()
                 .px(px(14.0))
                 .py(px(12.0))
@@ -1431,7 +1544,7 @@ impl SettingsPanel {
             .gap(px(12.0))
             .child(model_card_content)
             .child(
-                card(theme).child(
+                card(theme, card_opacity).child(
                     div()
                         .px(px(14.0))
                         .py(px(12.0))
@@ -1459,7 +1572,7 @@ impl SettingsPanel {
                 ),
             )
             .child(
-                card(theme).child(
+                card(theme, card_opacity).child(
                     div()
                         .px(px(14.0))
                         .py(px(12.0))
@@ -1505,7 +1618,7 @@ impl SettingsPanel {
             .gap(px(6.0))
             .w(px(180.0))
             .flex_shrink_0()
-            .child(card(theme).child(div().px(px(4.0)).py(px(4.0)).child(provider_list)));
+            .child(card(theme, card_opacity).child(div().px(px(4.0)).py(px(4.0)).child(provider_list)));
 
         let models_layout = div()
             .flex()
@@ -1524,6 +1637,7 @@ impl SettingsPanel {
 
     fn render_keys(&mut self, cx: &mut Context<Self>) -> Div {
         let recording = self.recording_key.clone();
+        let card_opacity = self.card_opacity();
 
         // Editable keybinding definitions: (label, field_name)
         let general_keys: &[(&str, &str)] = &[
@@ -1546,7 +1660,7 @@ impl SettingsPanel {
                           cx: &mut Context<Self>|
          -> Div {
             let theme = cx.theme();
-            let mut c = card(theme);
+            let mut c = card(theme, card_opacity);
             for (i, (label, field)) in keys.iter().enumerate() {
                 if i > 0 {
                     c = c.child(row_separator(theme));
@@ -1638,7 +1752,7 @@ impl SettingsPanel {
                 .gap(px(8.0))
                 .child(group_label("Panes", &theme))
                 .child(pane_card)
-                .child(card(theme).child(key_row("Close Pane", "ctrl-d", theme))),
+                .child(card(theme, card_opacity).child(key_row("Close Pane", "ctrl-d", theme))),
         )
         .child(
             div()
@@ -1647,7 +1761,7 @@ impl SettingsPanel {
                 .gap(px(8.0))
                 .child(group_label("Terminal", &theme))
                 .child(
-                    card(theme)
+                    card(theme, card_opacity)
                         .child(key_row("Copy", "cmd-c", theme))
                         .child(row_separator(theme))
                         .child(key_row("Paste", "cmd-v", theme))
@@ -1830,7 +1944,7 @@ impl Render for SettingsPanel {
                     .w(card_width)
                     .h(card_height)
                     .rounded(px(12.0))
-                    .bg(theme.title_bar)
+                    .bg(theme.title_bar.opacity(self.card_opacity()))
                     .overflow_hidden()
                     .flex()
                     .flex_col()
@@ -1994,13 +2108,13 @@ fn group_label(text: &str, theme: &gpui_component::Theme) -> Div {
         .child(text.to_string())
 }
 
-fn card(theme: &gpui_component::Theme) -> Div {
+fn card(theme: &gpui_component::Theme, opacity: f32) -> Div {
     div()
         .flex()
         .flex_col()
         .rounded(px(10.0))
         .overflow_hidden()
-        .bg(theme.background.opacity(0.74))
+        .bg(theme.background.opacity(opacity.clamp(0.6, 0.98)))
 }
 
 fn row_separator(_theme: &gpui_component::Theme) -> Div {
@@ -2017,6 +2131,53 @@ fn row_field(label: &str, input: &Entity<InputState>) -> Div {
         .h(px(44.0))
         .child(div().text_sm().flex_shrink_0().child(label.to_string()))
         .child(div().flex_1().min_w(px(160.0)).child(Input::new(input)))
+}
+
+fn slider_row(
+    label: &str,
+    hint: &str,
+    slider: &Entity<SliderState>,
+    value: f32,
+    theme: &gpui_component::Theme,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(16.0))
+        .px(px(16.0))
+        .py(px(12.0))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .min_w(px(180.0))
+                .child(div().text_sm().child(label.to_string()))
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .line_height(px(16.0))
+                        .text_color(theme.muted_foreground.opacity(0.65))
+                        .child(hint.to_string()),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .flex_1()
+                .child(Slider::new(slider).flex_1())
+                .child(
+                    div()
+                        .w(px(42.0))
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_align(TextAlign::Right)
+                        .text_color(theme.muted_foreground)
+                        .child(format!("{:.0}%", value * 100.0)),
+                ),
+        )
 }
 
 fn stacked_input_field(
