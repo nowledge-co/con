@@ -410,6 +410,69 @@ impl ConWorkspace {
         tracker.record_action(event);
     }
 
+    fn spawn_shell_anchor_command<F>(
+        &self,
+        _tab_idx: usize,
+        pane: TerminalPane,
+        pane_index: usize,
+        command: String,
+        timeout_secs: u64,
+        parse_response: F,
+        response_tx: crossbeam_channel::Sender<con_agent::PaneResponse>,
+        cx: &mut Context<Self>,
+    ) where
+        F: Fn(Vec<String>) -> Result<con_agent::PaneResponse, String> + Send + 'static,
+    {
+        let _ = pane.take_command_finished(cx);
+        pane.write(format!("{command}\n").as_bytes(), cx);
+
+        cx.spawn(async move |this, cx| {
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+
+                if std::time::Instant::now() >= deadline {
+                    let _ = response_tx.send(con_agent::PaneResponse::Error(format!(
+                        "Shell-anchor command timed out in pane {} after {}s.",
+                        pane_index, timeout_secs
+                    )));
+                    return;
+                }
+
+                let finished = this
+                    .update(cx, |_, cx| pane.take_command_finished(cx).is_some() || !pane.is_busy(cx))
+                    .unwrap_or(false);
+                if !finished {
+                    continue;
+                }
+
+                let lines = this
+                    .update(cx, |_, cx| pane.recent_lines(400, cx))
+                    .unwrap_or_default();
+                match parse_response(lines) {
+                    Ok(response) => {
+                        let _ = response_tx.send(response);
+                    }
+                    Err(err) => {
+                        let excerpt = this
+                            .update(cx, |_, cx| pane.recent_lines(120, cx).join("\n"))
+                            .unwrap_or_default();
+                        let _ = response_tx.send(con_agent::PaneResponse::Error(format!(
+                            "Shell-anchor command in pane {} could not be parsed: {}\nRecent output:\n{}",
+                            pane_index, err, excerpt
+                        )));
+                    }
+                }
+                return;
+            }
+        })
+        .detach();
+    }
+
     fn effective_remote_host_for_tab(
         &self,
         tab_idx: usize,
@@ -455,6 +518,7 @@ impl ConWorkspace {
                         hostname_confidence: runtime.remote_host_confidence,
                         hostname_source: runtime.remote_host_source,
                         title: observation.title.clone(),
+                        front_state: runtime.front_state,
                         mode: runtime.mode,
                         has_shell_integration: observation.has_shell_integration,
                         shell_metadata_fresh: runtime.shell_metadata_fresh,
@@ -464,6 +528,7 @@ impl ConWorkspace {
                         active_scope: runtime.active_scope.clone(),
                         evidence: runtime.evidence.clone(),
                         runtime_stack: runtime.scope_stack,
+                        last_verified_runtime_stack: runtime.last_verified_scope_stack,
                         runtime_warnings: runtime.warnings,
                         tmux_session: runtime.tmux_session,
                         cwd: observation.cwd,
@@ -1254,6 +1319,7 @@ impl ConWorkspace {
                             hostname: runtime.remote_host.clone(),
                             hostname_confidence: runtime.remote_host_confidence,
                             hostname_source: runtime.remote_host_source,
+                            front_state: runtime.front_state,
                             mode: runtime.mode,
                             shell_metadata_fresh: runtime.shell_metadata_fresh,
                             shell_context_fresh: runtime.shell_context_fresh,
@@ -1270,6 +1336,7 @@ impl ConWorkspace {
                             agent_cli: runtime.agent_cli.clone(),
                             evidence: runtime.evidence.clone(),
                             runtime_stack: runtime.scope_stack,
+                            last_verified_runtime_stack: runtime.last_verified_scope_stack,
                             runtime_warnings: runtime.warnings,
                             shell_context: runtime.shell_context.clone(),
                             recent_actions: runtime.recent_actions.clone(),
@@ -1374,6 +1441,210 @@ impl ConWorkspace {
                             "Pane {} is not currently in a tmux scope.",
                             pane_index
                         ))
+                    }
+                }
+            }
+            PaneQuery::TmuxList { pane_index } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let pane = all_terminals[pane_index - 1].clone();
+                    let (_, runtime) =
+                        self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+                    let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+                    let tmux_mode = control.tmux.as_ref().map(|tmux| tmux.mode);
+                    if !control
+                        .capabilities
+                        .contains(&con_agent::PaneControlCapability::QueryTmux)
+                    {
+                        PaneResponse::Error(format!(
+                            "Pane {} does not currently expose tmux native query capability.\nvisible_target: {}\ntmux_mode: {}\ncontrol_attachments: {}\ncontrol_capabilities: {}",
+                            pane_index,
+                            control.visible_target.summary(),
+                            tmux_mode.map(|mode| mode.as_str()).unwrap_or("none"),
+                            con_agent::control::format_control_attachments(&control.attachments),
+                            control
+                                .capabilities
+                                .iter()
+                                .map(|capability| capability.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ))
+                    } else if pane.is_busy(cx) {
+                        PaneResponse::Error(format!(
+                            "Pane {} is busy. Wait for the current command to finish before running tmux-native queries from its shell anchor.",
+                            pane_index
+                        ))
+                    } else {
+                        let response_tx = req.response_tx;
+                        let nonce = format!(
+                            "tmux-list-{}-{}",
+                            pane_index,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|duration| duration.as_nanos())
+                                .unwrap_or_default()
+                        );
+                        let command = con_agent::tmux::build_tmux_list_command(&nonce);
+                        self.spawn_shell_anchor_command(
+                            tab_idx,
+                            pane,
+                            pane_index,
+                            command,
+                            10,
+                            move |lines| {
+                                con_agent::tmux::parse_tmux_list_lines(&lines, &nonce)
+                                    .map(con_agent::PaneResponse::TmuxList)
+                            },
+                            response_tx,
+                            cx,
+                        );
+                        return;
+                    }
+                }
+            }
+            PaneQuery::TmuxCapture {
+                pane_index,
+                target,
+                lines,
+            } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let pane = all_terminals[pane_index - 1].clone();
+                    let (_, runtime) =
+                        self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+                    let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+                    if !control
+                        .capabilities
+                        .contains(&con_agent::PaneControlCapability::QueryTmux)
+                    {
+                        PaneResponse::Error(format!(
+                            "Pane {} does not currently expose tmux native query capability for capture.\nvisible_target: {}\ncontrol_capabilities: {}",
+                            pane_index,
+                            control.visible_target.summary(),
+                            control
+                                .capabilities
+                                .iter()
+                                .map(|capability| capability.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ))
+                    } else if pane.is_busy(cx) {
+                        PaneResponse::Error(format!(
+                            "Pane {} is busy. Wait for the current command to finish before running tmux capture from its shell anchor.",
+                            pane_index
+                        ))
+                    } else {
+                        let response_tx = req.response_tx;
+                        let nonce = format!(
+                            "tmux-capture-{}-{}",
+                            pane_index,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|duration| duration.as_nanos())
+                                .unwrap_or_default()
+                        );
+                        let command = con_agent::tmux::build_tmux_capture_command(
+                            &nonce,
+                            target.as_deref(),
+                            lines,
+                        );
+                        self.spawn_shell_anchor_command(
+                            tab_idx,
+                            pane,
+                            pane_index,
+                            command,
+                            10,
+                            move |lines| {
+                                con_agent::tmux::parse_tmux_capture_lines(
+                                    &lines,
+                                    &nonce,
+                                    target.as_deref(),
+                                )
+                                .map(con_agent::PaneResponse::TmuxCapture)
+                            },
+                            response_tx,
+                            cx,
+                        );
+                        return;
+                    }
+                }
+            }
+            PaneQuery::TmuxSendKeys {
+                pane_index,
+                target,
+                literal_text,
+                key_names,
+                append_enter,
+            } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let pane = all_terminals[pane_index - 1].clone();
+                    let (_, runtime) =
+                        self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+                    let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+                    if !control
+                        .capabilities
+                        .contains(&con_agent::PaneControlCapability::SendTmuxKeys)
+                    {
+                        PaneResponse::Error(format!(
+                            "Pane {} does not currently expose tmux native send-keys capability.\nvisible_target: {}\ncontrol_capabilities: {}",
+                            pane_index,
+                            control.visible_target.summary(),
+                            control
+                                .capabilities
+                                .iter()
+                                .map(|capability| capability.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ))
+                    } else if pane.is_busy(cx) {
+                        PaneResponse::Error(format!(
+                            "Pane {} is busy. Wait for the current command to finish before sending tmux-native keys from its shell anchor.",
+                            pane_index
+                        ))
+                    } else {
+                        match con_agent::tmux::build_tmux_send_keys_command(
+                            &target,
+                            literal_text.as_deref(),
+                            &key_names,
+                            append_enter,
+                        ) {
+                            Ok(command) => {
+                                let response_tx = req.response_tx;
+                                self.spawn_shell_anchor_command(
+                                    tab_idx,
+                                    pane,
+                                    pane_index,
+                                    command,
+                                    10,
+                                    move |_lines| {
+                                        Ok(con_agent::PaneResponse::Content(format!(
+                                            "tmux send-keys delivered to target {}",
+                                            target
+                                        )))
+                                    },
+                                    response_tx,
+                                    cx,
+                                );
+                                return;
+                            }
+                            Err(err) => PaneResponse::Error(err),
+                        }
                     }
                 }
             }

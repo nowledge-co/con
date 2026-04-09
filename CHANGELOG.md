@@ -33,6 +33,8 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The control plane can represent nested targets explicitly, and it now uses `unknown` for unproven foreground targets instead of pretending every ambiguous pane is a TUI.
 - con now exposes a read-only `probe_shell_context` tool on panes with a proven fresh shell prompt. This gives the agent a typed way to ask the live shell for hostname, SSH env, tmux env, tmux session/window/pane ids, and Neovim socket hints instead of guessing from screen text.
 - Pane runtime state is now reducer-backed instead of snapshot-only. con tracks each pane's recent actions, typed shell-context snapshots, and freshness rules, so the agent can reuse truthful causal history without confusing it for the current foreground target.
+- Pane runtime now separates the current verified foreground stack from the last verified shell frame. If con cannot prove what is visible now, it keeps the live target `unknown` and shows the last verified shell context separately instead of pretending history is current state.
+- con now exposes the first native tmux control layer through a proven same-session shell anchor. When a fresh shell probe confirms tmux, the agent can list tmux targets, capture a specific tmux pane, and send tmux-native keys to a chosen tmux pane instead of typing blindly into the outer terminal surface.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

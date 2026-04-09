@@ -13,6 +13,7 @@ use crate::control::{
     PaneVisibleTarget, TmuxControlState,
 };
 use crate::shell_probe::ShellProbeResult;
+use crate::tmux::{TmuxCapture, TmuxSnapshot};
 
 /// Error type for agent tool execution
 #[derive(Debug, thiserror::Error)]
@@ -695,6 +696,8 @@ pub struct PaneInfo {
     pub hostname_confidence: Option<crate::context::PaneConfidence>,
     /// Evidence source for the effective hostname, when detected.
     pub hostname_source: Option<crate::context::PaneEvidenceSource>,
+    /// Current verified front-state for the pane.
+    pub front_state: crate::context::PaneFrontState,
     /// Current pane mode: shell, tmux-like multiplexer, or another TUI.
     pub mode: PaneMode,
     /// Whether shell metadata like cwd and last_command is likely fresh for the visible app.
@@ -727,6 +730,8 @@ pub struct PaneInfo {
     pub evidence: Vec<crate::context::PaneEvidence>,
     /// Structured runtime scopes inferred from pane-local evidence.
     pub runtime_stack: Vec<crate::context::PaneRuntimeScope>,
+    /// Last verified shell-frame stack captured for this pane.
+    pub last_verified_runtime_stack: Vec<crate::context::PaneRuntimeScope>,
     /// Warnings about stale or advisory runtime metadata.
     pub runtime_warnings: Vec<String>,
     /// Last typed shell-context snapshot captured for this pane.
@@ -770,6 +775,22 @@ pub enum PaneQuery {
     },
     /// Return tmux adapter state for a pane whose target stack contains tmux.
     InspectTmux { pane_index: usize },
+    /// Query tmux windows/panes through a same-session tmux control anchor.
+    TmuxList { pane_index: usize },
+    /// Capture pane content from a tmux pane target through a same-session tmux control anchor.
+    TmuxCapture {
+        pane_index: usize,
+        target: Option<String>,
+        lines: usize,
+    },
+    /// Send literal text or tmux key names to a tmux pane target through a same-session tmux control anchor.
+    TmuxSendKeys {
+        pane_index: usize,
+        target: String,
+        literal_text: Option<String>,
+        key_names: Vec<String>,
+        append_enter: bool,
+    },
     /// Run a read-only shell-scoped probe in a pane with a proven fresh shell prompt.
     ProbeShellContext { pane_index: usize },
     /// Lightweight busy check for a single pane (used by wait_for polling).
@@ -792,6 +813,8 @@ pub enum PaneResponse {
     Content(String),
     KeysSent,
     TmuxInfo(TmuxControlState),
+    TmuxList(TmuxSnapshot),
+    TmuxCapture(TmuxCapture),
     ShellProbe(ShellProbeResult),
     /// Search results: Vec of (pane_index, line_number, line_text).
     SearchResults(Vec<(usize, usize, String)>),
@@ -836,7 +859,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, runtime state, backend-support flags, typed shell context, recent con actions, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, current verified front-state, current runtime_stack, last_verified_runtime_stack, backend-support flags, typed shell context, recent con actions, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -936,6 +959,249 @@ impl Tool for TmuxInspectTool {
             PaneResponse::TmuxInfo(info) => {
                 serde_json::to_value(&info).map_err(|e| ToolError::CommandFailed(e.to_string()))
             }
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+// ── tmux_list tool ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TmuxListArgs {
+    pub pane_index: usize,
+}
+
+pub struct TmuxListTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl TmuxListTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for TmuxListTool {
+    const NAME: &'static str = "tmux_list_targets";
+    type Error = ToolError;
+    type Args = TmuxListArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "List tmux panes across the current tmux session using a proven same-session tmux control anchor from the given con pane. Use this after probe_shell_context or when list_panes shows tmux native control is available. Returns tmux session/window/pane ids plus pane_current_command and pane_current_path so the agent can target Codex CLI, Claude Code, OpenCode, or shell panes inside tmux explicitly.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                    }
+                },
+                "required": ["pane_index"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::TmuxList {
+                    pane_index: args.pane_index,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(12))
+                .map_err(|_| ToolError::CommandFailed("tmux list timed out".into()))
+        })?;
+
+        match response {
+            PaneResponse::TmuxList(snapshot) => {
+                serde_json::to_value(&snapshot).map_err(|e| ToolError::CommandFailed(e.to_string()))
+            }
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+// ── tmux_capture_pane tool ────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TmuxCaptureArgs {
+    pub pane_index: usize,
+    pub target: Option<String>,
+    #[serde(default = "default_tmux_capture_lines")]
+    pub lines: usize,
+}
+
+fn default_tmux_capture_lines() -> usize {
+    120
+}
+
+pub struct TmuxCaptureTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl TmuxCaptureTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for TmuxCaptureTool {
+    const NAME: &'static str = "tmux_capture_pane";
+    type Error = ToolError;
+    type Args = TmuxCaptureArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Capture scrollback from a tmux pane through a proven same-session tmux control anchor. This is the correct way to inspect a tmux pane's content without confusing it with the outer con pane. If target is omitted, captures the current tmux pane of the anchor shell.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                    },
+                    "target": {
+                        "type": ["string", "null"],
+                        "description": "Optional tmux target such as %17, @3, or session:window.pane. When omitted, captures the current tmux pane of the anchor shell."
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "description": "Number of recent lines to capture from the tmux pane (default: 120)."
+                    }
+                },
+                "required": ["pane_index"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::TmuxCapture {
+                    pane_index: args.pane_index,
+                    target: args.target,
+                    lines: args.lines,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(12))
+                .map_err(|_| ToolError::CommandFailed("tmux capture timed out".into()))
+        })?;
+
+        match response {
+            PaneResponse::TmuxCapture(capture) => {
+                serde_json::to_value(&capture).map_err(|e| ToolError::CommandFailed(e.to_string()))
+            }
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+// ── tmux_send_keys tool ───────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TmuxSendKeysArgs {
+    pub pane_index: usize,
+    pub target: String,
+    pub literal_text: Option<String>,
+    #[serde(default)]
+    pub key_names: Vec<String>,
+    #[serde(default)]
+    pub append_enter: bool,
+}
+
+pub struct TmuxSendKeysTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl TmuxSendKeysTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for TmuxSendKeysTool {
+    const NAME: &'static str = "tmux_send_keys";
+    type Error = ToolError;
+    type Args = TmuxSendKeysArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Send text or tmux key names to a specific tmux pane through a proven same-session tmux control anchor. Use this instead of raw outer-pane input when operating on Codex CLI, Claude Code, OpenCode, or shell panes inside tmux. Provide literal_text for typed text, key_names for tmux key tokens like Enter, Escape, C-c, Up, Down, or both.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "tmux target such as %17, @3, or session:window.pane."
+                    },
+                    "literal_text": {
+                        "type": ["string", "null"],
+                        "description": "Optional literal text to send into the tmux target."
+                    },
+                    "key_names": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional tmux key names such as Enter, Escape, C-c, Up, Down."
+                    },
+                    "append_enter": {
+                        "type": "boolean",
+                        "description": "Whether to send Enter after literal_text and key_names. Defaults to false."
+                    }
+                },
+                "required": ["pane_index", "target"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::TmuxSendKeys {
+                    pane_index: args.pane_index,
+                    target: args.target,
+                    literal_text: args.literal_text,
+                    key_names: args.key_names,
+                    append_enter: args.append_enter,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(12))
+                .map_err(|_| ToolError::CommandFailed("tmux send-keys timed out".into()))
+        })?;
+
+        match response {
+            PaneResponse::Content(content) => Ok(content),
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }

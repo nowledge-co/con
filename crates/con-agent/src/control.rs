@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::context::{PaneMode, PaneRuntimeState, PaneScopeKind};
+use crate::context::{PaneFrontState, PaneMode, PaneRuntimeState, PaneScopeKind};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -48,6 +48,8 @@ pub enum PaneControlChannel {
     RawInput,
     ShellProbe,
     VisibleShellExec,
+    TmuxQuery,
+    TmuxSendKeys,
 }
 
 impl PaneControlChannel {
@@ -58,6 +60,8 @@ impl PaneControlChannel {
             Self::RawInput => "raw_input",
             Self::ShellProbe => "shell_probe",
             Self::VisibleShellExec => "visible_shell_exec",
+            Self::TmuxQuery => "tmux_query",
+            Self::TmuxSendKeys => "tmux_send_keys",
         }
     }
 }
@@ -70,6 +74,8 @@ pub enum PaneControlCapability {
     SendRawInput,
     ProbeShellContext,
     ExecVisibleShell,
+    QueryTmux,
+    SendTmuxKeys,
 }
 
 impl PaneControlCapability {
@@ -80,6 +86,8 @@ impl PaneControlCapability {
             Self::SendRawInput => "send_raw_input",
             Self::ProbeShellContext => "probe_shell_context",
             Self::ExecVisibleShell => "exec_visible_shell",
+            Self::QueryTmux => "query_tmux",
+            Self::SendTmuxKeys => "send_tmux_keys",
         }
     }
 }
@@ -246,11 +254,23 @@ impl PaneControlState {
             PaneControlCapability::SearchScrollback,
             PaneControlCapability::SendRawInput,
         ];
-        if runtime.mode == PaneMode::Shell && runtime.shell_metadata_fresh {
+        if runtime.front_state == PaneFrontState::ShellPrompt && runtime.shell_metadata_fresh {
             channels.push(PaneControlChannel::ShellProbe);
             channels.push(PaneControlChannel::VisibleShellExec);
             capabilities.push(PaneControlCapability::ProbeShellContext);
             capabilities.push(PaneControlCapability::ExecVisibleShell);
+            if runtime.shell_context_fresh
+                && runtime
+                    .shell_context
+                    .as_ref()
+                    .and_then(|context| context.tmux.as_ref())
+                    .is_some()
+            {
+                channels.push(PaneControlChannel::TmuxQuery);
+                channels.push(PaneControlChannel::TmuxSendKeys);
+                capabilities.push(PaneControlCapability::QueryTmux);
+                capabilities.push(PaneControlCapability::SendTmuxKeys);
+            }
         }
 
         let mut notes = Vec::new();
@@ -283,12 +303,27 @@ impl PaneControlState {
                 notes.push(format!(
                     "Fresh shell probe confirmed that the visible shell prompt is inside tmux session `{session}` pane `{pane}`."
                 ));
+                notes.push(
+                    "This pane now has a same-session tmux control anchor. Prefer tmux-native query/capture/send tools over raw outer-pane input when operating inside tmux."
+                        .to_string(),
+                );
             }
         }
         if target_stack.len() > 1 {
             notes.push(format!(
                 "Nested visible target stack: {}.",
                 format_target_stack(&target_stack)
+            ));
+        }
+        if !runtime.last_verified_scope_stack.is_empty() {
+            notes.push(format!(
+                "Last verified shell frame: {}.",
+                runtime
+                    .last_verified_scope_stack
+                    .iter()
+                    .map(|scope| scope.summary())
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
             ));
         }
         if let Some(action) = runtime.recent_actions.last() {
@@ -394,7 +429,7 @@ fn attachments_from_runtime(
         ),
     }];
 
-    if runtime.mode == PaneMode::Shell && runtime.shell_metadata_fresh {
+    if runtime.front_state == PaneFrontState::ShellPrompt && runtime.shell_metadata_fresh {
         attachments.push(PaneProtocolAttachment {
             id: "shell_prompt".to_string(),
             kind: PaneAttachmentKind::ShellPrompt,
@@ -410,6 +445,29 @@ fn attachments_from_runtime(
                     .to_string(),
             ),
         });
+        if runtime.shell_context_fresh {
+            if let Some(tmux) = runtime
+                .shell_context
+                .as_ref()
+                .and_then(|context| context.tmux.as_ref())
+            {
+                attachments.push(PaneProtocolAttachment {
+                    id: "tmux_control".to_string(),
+                    kind: PaneAttachmentKind::TmuxControl,
+                    authority: PaneAttachmentAuthority::ShellProbe,
+                    transport: PaneAttachmentTransport::TmuxProtocol,
+                    label: tmux.session_name.clone().or_else(|| Some("tmux".to_string())),
+                    capabilities: vec![
+                        PaneControlCapability::QueryTmux,
+                        PaneControlCapability::SendTmuxKeys,
+                    ],
+                    note: Some(
+                        "A fresh shell probe confirmed a same-session tmux shell anchor. con can query tmux state and send tmux-native keys through that shell."
+                            .to_string(),
+                    ),
+                });
+            }
+        }
     }
 
     attachments
@@ -419,35 +477,64 @@ fn tmux_control_from_runtime(
     runtime: &PaneRuntimeState,
     target_stack: &[PaneVisibleTarget],
 ) -> Option<TmuxControlState> {
-    if !target_stack
+    let has_current_tmux = target_stack
         .iter()
-        .any(|target| target.kind == PaneVisibleTargetKind::TmuxSession)
-    {
+        .any(|target| target.kind == PaneVisibleTargetKind::TmuxSession);
+    let last_verified_stack = last_verified_target_stack(runtime);
+    let has_historical_tmux = last_verified_stack
+        .iter()
+        .any(|target| target.kind == PaneVisibleTargetKind::TmuxSession);
+
+    if !has_current_tmux && !has_historical_tmux {
         return None;
     }
 
-    let tmux_index = target_stack
+    let tmux_stack = if has_current_tmux {
+        target_stack
+    } else {
+        &last_verified_stack
+    };
+
+    let tmux_index = tmux_stack
         .iter()
         .position(|target| target.kind == PaneVisibleTargetKind::TmuxSession)?;
 
     Some(TmuxControlState {
-        session_name: runtime.tmux_session.clone().or_else(|| {
-            target_stack
-                .get(tmux_index)
-                .and_then(|target| target.label.clone())
-        }),
-        mode: TmuxControlMode::InspectOnly,
-        front_target: target_stack.get(tmux_index + 1).cloned(),
-        reason: if runtime.shell_context_fresh
+        session_name: runtime
+            .tmux_session
+            .clone()
+            .or_else(|| runtime.last_verified_tmux_session.clone())
+            .or_else(|| {
+                tmux_stack
+                    .get(tmux_index)
+                    .and_then(|target| target.label.clone())
+            }),
+        mode: if runtime.front_state == PaneFrontState::ShellPrompt
+            && runtime.shell_context_fresh
             && runtime
                 .shell_context
                 .as_ref()
                 .and_then(|context| context.tmux.as_ref())
                 .is_some()
         {
-            "con has typed same-shell tmux context for this pane, but it does not yet have a dedicated tmux control channel. Native tmux pane/window targeting and tmux command execution are still unavailable.".to_string()
+            TmuxControlMode::Native
         } else {
-            "con can identify the tmux scope in this pane, but it does not yet have a same-session tmux control channel. Native tmux pane/window targeting and tmux command execution are unavailable.".to_string()
+            TmuxControlMode::InspectOnly
+        },
+        front_target: tmux_stack.get(tmux_index + 1).cloned(),
+        reason: if has_current_tmux
+            && runtime.shell_context_fresh
+            && runtime
+                .shell_context
+                .as_ref()
+                .and_then(|context| context.tmux.as_ref())
+                .is_some()
+        {
+            "con has a typed same-session tmux shell anchor for this pane. Native tmux query, capture, and send-keys are available through that anchor.".to_string()
+        } else if has_current_tmux {
+            "con can identify a current tmux layer in this pane, but it does not yet have a same-session tmux control channel. Native tmux pane/window targeting and tmux command execution are unavailable.".to_string()
+        } else {
+            "The last verified shell frame for this pane was inside tmux, but the current foreground target is not proven. Native tmux pane/window targeting and tmux command execution remain unavailable.".to_string()
         },
     })
 }
@@ -495,6 +582,50 @@ fn target_stack_from_runtime(runtime: &PaneRuntimeState) -> Vec<PaneVisibleTarge
 
     if stack.is_empty() {
         stack.push(fallback_visible_target(runtime));
+    }
+
+    stack
+}
+
+fn last_verified_target_stack(runtime: &PaneRuntimeState) -> Vec<PaneVisibleTarget> {
+    let mut stack = Vec::new();
+
+    for scope in &runtime.last_verified_scope_stack {
+        let target = match scope.kind {
+            PaneScopeKind::Shell => PaneVisibleTarget {
+                kind: PaneVisibleTargetKind::ShellPrompt,
+                label: scope.label.clone(),
+                host: scope.host.clone(),
+            },
+            PaneScopeKind::RemoteShell => PaneVisibleTarget {
+                kind: PaneVisibleTargetKind::RemoteShell,
+                label: scope.label.clone(),
+                host: scope.host.clone(),
+            },
+            PaneScopeKind::Multiplexer => PaneVisibleTarget {
+                kind: PaneVisibleTargetKind::TmuxSession,
+                label: scope
+                    .label
+                    .clone()
+                    .or_else(|| runtime.last_verified_tmux_session.clone())
+                    .or_else(|| Some("tmux".to_string())),
+                host: scope.host.clone(),
+            },
+            PaneScopeKind::AgentCli => PaneVisibleTarget {
+                kind: PaneVisibleTargetKind::AgentCli,
+                label: scope.label.clone(),
+                host: scope.host.clone(),
+            },
+            PaneScopeKind::InteractiveApp => PaneVisibleTarget {
+                kind: PaneVisibleTargetKind::InteractiveApp,
+                label: scope.label.clone(),
+                host: scope.host.clone(),
+            },
+        };
+
+        if stack.last() != Some(&target) {
+            stack.push(target);
+        }
     }
 
     stack
@@ -570,45 +701,40 @@ mod tests {
         TmuxControlMode, fallback_visible_target, format_control_attachments, format_target_stack,
     };
     use crate::context::{
-        PaneEvidenceSource, PaneMode, PaneRuntimeScope, PaneRuntimeState, PaneScopeKind,
+        PaneEvidenceSource, PaneFrontState, PaneMode, PaneRuntimeScope, PaneRuntimeState,
+        PaneScopeKind,
     };
 
     #[test]
     fn control_state_marks_tmux_as_raw_input_only() {
         let runtime = PaneRuntimeState {
-            mode: PaneMode::Multiplexer,
+            front_state: PaneFrontState::Unknown,
+            mode: PaneMode::Unknown,
             shell_metadata_fresh: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
             agent_cli: None,
-            tmux_session: Some("work".to_string()),
+            tmux_session: None,
+            last_verified_scope_stack: vec![PaneRuntimeScope {
+                kind: PaneScopeKind::Multiplexer,
+                label: Some("work".to_string()),
+                host: None,
+                confidence: crate::context::PaneConfidence::Advisory,
+                evidence_source: PaneEvidenceSource::ShellProbe,
+            }],
+            last_verified_tmux_session: Some("work".to_string()),
             shell_context: None,
             shell_context_fresh: false,
-            active_scope: Some(PaneRuntimeScope {
-                kind: PaneScopeKind::Multiplexer,
-                label: Some("work".to_string()),
-                host: None,
-                confidence: crate::context::PaneConfidence::Strong,
-                evidence_source: PaneEvidenceSource::CommandLine,
-            }),
+            active_scope: None,
             evidence: Vec::new(),
-            scope_stack: vec![PaneRuntimeScope {
-                kind: PaneScopeKind::Multiplexer,
-                label: Some("work".to_string()),
-                host: None,
-                confidence: crate::context::PaneConfidence::Strong,
-                evidence_source: PaneEvidenceSource::CommandLine,
-            }],
+            scope_stack: Vec::new(),
             recent_actions: Vec::new(),
             warnings: Vec::new(),
         };
 
         let control = PaneControlState::from_runtime(&runtime);
-        assert_eq!(
-            control.visible_target.kind,
-            PaneVisibleTargetKind::TmuxSession
-        );
+        assert_eq!(control.visible_target.kind, PaneVisibleTargetKind::Unknown);
         assert!(!control.allows_visible_shell_exec());
         assert!(
             !control
@@ -620,6 +746,7 @@ mod tests {
     #[test]
     fn control_state_marks_fresh_shell_as_visible_exec_capable() {
         let runtime = PaneRuntimeState {
+            front_state: PaneFrontState::ShellPrompt,
             mode: PaneMode::Shell,
             shell_metadata_fresh: true,
             remote_host: None,
@@ -627,6 +754,8 @@ mod tests {
             remote_host_source: None,
             agent_cli: None,
             tmux_session: None,
+            last_verified_scope_stack: Vec::new(),
+            last_verified_tmux_session: None,
             shell_context: None,
             shell_context_fresh: false,
             active_scope: Some(PaneRuntimeScope {
@@ -671,52 +800,43 @@ mod tests {
     #[test]
     fn control_state_preserves_nested_tmux_and_agent_cli_stack() {
         let runtime = PaneRuntimeState {
-            mode: PaneMode::Multiplexer,
+            front_state: PaneFrontState::Unknown,
+            mode: PaneMode::Unknown,
             shell_metadata_fresh: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
             agent_cli: None,
-            tmux_session: Some("work".to_string()),
-            shell_context: None,
-            shell_context_fresh: false,
-            active_scope: Some(PaneRuntimeScope {
-                kind: PaneScopeKind::Multiplexer,
-                label: Some("work".to_string()),
-                host: None,
-                confidence: crate::context::PaneConfidence::Strong,
-                evidence_source: PaneEvidenceSource::CommandLine,
-            }),
-            evidence: Vec::new(),
-            scope_stack: vec![
-                PaneRuntimeScope {
-                    kind: PaneScopeKind::Shell,
-                    label: None,
-                    host: None,
-                    confidence: crate::context::PaneConfidence::Strong,
-                    evidence_source: PaneEvidenceSource::ShellIntegration,
-                },
+            tmux_session: None,
+            last_verified_scope_stack: vec![
                 PaneRuntimeScope {
                     kind: PaneScopeKind::Multiplexer,
                     label: Some("work".to_string()),
                     host: None,
-                    confidence: crate::context::PaneConfidence::Strong,
-                    evidence_source: PaneEvidenceSource::CommandLine,
+                    confidence: crate::context::PaneConfidence::Advisory,
+                    evidence_source: PaneEvidenceSource::ShellProbe,
+                },
+                PaneRuntimeScope {
+                    kind: PaneScopeKind::Shell,
+                    label: None,
+                    host: None,
+                    confidence: crate::context::PaneConfidence::Advisory,
+                    evidence_source: PaneEvidenceSource::ShellProbe,
                 },
             ],
+            last_verified_tmux_session: Some("work".to_string()),
+            shell_context: None,
+            shell_context_fresh: false,
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: Vec::new(),
             recent_actions: Vec::new(),
             warnings: Vec::new(),
         };
 
         let control = PaneControlState::from_runtime(&runtime);
-        assert_eq!(
-            control.visible_target.kind,
-            PaneVisibleTargetKind::TmuxSession
-        );
-        assert_eq!(
-            format_target_stack(&control.target_stack),
-            "shell_prompt -> tmux_session(work)"
-        );
+        assert_eq!(control.visible_target.kind, PaneVisibleTargetKind::Unknown);
+        assert_eq!(format_target_stack(&control.target_stack), "unknown");
         assert_eq!(
             control.tmux.as_ref().map(|tmux| tmux.mode),
             Some(TmuxControlMode::InspectOnly)
@@ -731,19 +851,20 @@ mod tests {
                 .as_ref()
                 .and_then(|tmux| tmux.front_target.as_ref())
                 .map(|target| target.summary()),
-            None
+            Some("shell_prompt".to_string())
         );
         assert!(
             control
                 .notes
                 .iter()
-                .any(|note| note.contains("outer con pane"))
+                .any(|note| note.contains("Last verified shell frame"))
         );
     }
 
     #[test]
     fn unknown_runtime_stays_unknown() {
         let runtime = PaneRuntimeState {
+            front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
             shell_metadata_fresh: false,
             remote_host: None,
@@ -751,6 +872,8 @@ mod tests {
             remote_host_source: None,
             agent_cli: None,
             tmux_session: None,
+            last_verified_scope_stack: Vec::new(),
+            last_verified_tmux_session: None,
             shell_context: None,
             shell_context_fresh: false,
             active_scope: None,

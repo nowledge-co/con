@@ -42,6 +42,7 @@ con now ships the first typed control-plane layer:
 - visible execution is gated by `exec_visible_shell`, not by ad hoc prompt wording
 - panes with a proven fresh shell prompt now expose a read-only `probe_shell_context` capability for typed shell-scoped facts
 - typed shell probes and con-originated actions are preserved as causal history on the pane, with freshness and invalidation rules
+- current verified foreground state is now modeled separately from the last verified shell frame, so stale shell history cannot masquerade as the live visible target
 
 This is still phase one.
 
@@ -55,6 +56,28 @@ What it solves:
 - prompt, tools, and runtime guards share one vocabulary
 - tmux now has an explicit inspectable adapter slot, rather than being implied only through generic pane metadata
 - recent con actions stay available as causal evidence so the agent can understand how a pane was reached without treating history as present-tense truth
+- when the current foreground target is unproven, control falls back to `unknown` while `last_verified_shell_stack` remains available as historical orientation
+
+con now also ships the first true protocol attachment beyond raw pane observation:
+
+- if a pane has a fresh shell prompt
+- and a typed shell probe confirms same-session tmux
+
+then con can expose a native tmux control attachment for that pane.
+
+That attachment currently supports:
+
+- tmux target discovery
+- tmux pane capture
+- tmux-native send-keys to a chosen tmux target
+
+This is the right abstraction because it scales across:
+
+- local tmux
+- ssh -> tmux
+- tmux panes running Codex CLI / Claude Code / OpenCode
+
+without needing app-specific screen scraping.
 
 What it does not solve yet:
 
@@ -151,6 +174,23 @@ The correct product rule is:
 - current backend facts and fresh typed probes define active runtime truth
 - con action history explains how the pane got here
 - historical action history must never unlock control by itself
+
+### 8. Current state and historical shell state are different products
+
+The current foreground target answers:
+
+`what can con safely act on right now?`
+
+The last verified shell frame answers:
+
+`what shell context did con last verify in this pane?`
+
+Those are both valuable, but they are not interchangeable.
+
+Examples:
+
+- If con verified `remote_shell -> tmux -> shell` and the user then opened `nvim`, the current target must become `unknown` until the backend or a fresh probe proves more.
+- If con still has the old shell frame, it should keep it as historical orientation for the model and the user, not as the live control target.
 
 ## Core model
 

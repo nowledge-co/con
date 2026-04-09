@@ -20,8 +20,8 @@ use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{
     BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
     ListPanesTool, PaneRequest, ProbeShellContextTool, ReadPaneTool, SearchPanesTool, SearchTool,
-    SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecTool, TmuxInspectTool,
-    WaitForTool,
+    SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecTool, TmuxCaptureTool,
+    TmuxInspectTool, TmuxListTool, TmuxSendKeysTool, WaitForTool,
 };
 
 // ── Provider enum ───────────────────────────────────────────────────
@@ -422,6 +422,9 @@ macro_rules! build_and_stream {
             .tool(SearchTool::new(root))
             .tool(ListPanesTool::new($pane_tx.clone()))
             .tool(TmuxInspectTool::new($pane_tx.clone()))
+            .tool(TmuxListTool::new($pane_tx.clone()))
+            .tool(TmuxCaptureTool::new($pane_tx.clone()))
+            .tool(TmuxSendKeysTool::new($pane_tx.clone()))
             .tool(ProbeShellContextTool::new($pane_tx.clone()))
             .tool(ReadPaneTool::new($pane_tx.clone()))
             .tool(SendKeysTool::new($pane_tx.clone()))

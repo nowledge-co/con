@@ -177,11 +177,14 @@ The durable observer output for one pane.
 
 Current implementation in con:
 
+- `front_state`
 - `mode`
 - `shell_metadata_fresh`
 - `remote_host`
 - `agent_cli`
 - `tmux_session`
+- `last_verified_scope_stack`
+- `last_verified_tmux_session`
 - `shell_context`
 - `shell_context_fresh`
 - `active_scope`
@@ -193,6 +196,35 @@ Current implementation in con:
 ### `ScopeStack`
 
 A pane should expose nested scopes instead of a single label.
+
+In the shipped reducer, there are now two scope stacks with different meaning:
+
+- `scope_stack`: current verified foreground stack only
+- `last_verified_scope_stack`: last shell frame con verified through a typed shell probe
+
+This is intentional.
+
+`last_verified_scope_stack` is historical orientation, not live foreground truth.
+
+## Shipped tmux attachment
+
+con now uses that distinction to unlock the first native tmux control path safely.
+
+When all of these are true:
+
+- the current front state is a proven shell prompt
+- the shell context is fresh
+- the shell probe confirms tmux in that shell frame
+
+con can treat tmux as a native protocol attachment instead of a raw visible TUI.
+
+That allows:
+
+- listing tmux panes and windows
+- capturing a chosen tmux pane by target id
+- sending tmux-native keys to a chosen tmux pane
+
+This is materially different from outer-pane `send_keys`.
 
 Suggested scope kinds:
 

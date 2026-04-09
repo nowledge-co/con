@@ -6,6 +6,7 @@ pub mod playbooks;
 pub mod provider;
 pub mod shell_probe;
 pub mod skills;
+pub mod tmux;
 pub mod tools;
 
 pub use context::{
@@ -25,9 +26,11 @@ pub use provider::{
 };
 pub use shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
 pub use skills::{Skill, SkillRegistry};
+pub use tmux::{TmuxCapture, TmuxPaneInfo, TmuxSnapshot};
 pub use tools::{
     BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
     ListPanesTool, PaneInfo, PaneQuery, PaneRequest, PaneResponse, ProbeShellContextTool,
     ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest,
-    TerminalExecResponse, TerminalExecTool, TmuxInspectTool, WaitForTool,
+    TerminalExecResponse, TerminalExecTool, TmuxCaptureTool, TmuxInspectTool, TmuxListTool,
+    TmuxSendKeysTool, WaitForTool,
 };
