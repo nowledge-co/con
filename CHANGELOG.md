@@ -46,6 +46,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - con now derives explicit weak observation hints from the current visible screen, such as prompt-like input near the bottom or htop-like output. These hints are labeled as observations, not facts, so the agent can describe what appears to be on screen without pretending it has backend proof.
 - Session-state answers now explicitly synthesize proven facts, current-screen assessment, and unknowns/limits. When con already has visible-screen observations, the agent is guided to give the best bounded assessment instead of ending with a vague “inspect more closely” fallback.
 - Multi-pane session-state answers now carry a deterministic pane-layout summary. When a tab has split panes, the agent is guided to mention the pane count and the materially different peer panes instead of collapsing the whole terminal state into only the focused pane.
+- When multiple panes are open, the prompt now carries typed work-target hints too. The agent can see which pane is the best visible shell target and which pane is the best tmux workspace before it decides whether to call a resolver tool.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

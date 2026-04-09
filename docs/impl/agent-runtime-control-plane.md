@@ -41,6 +41,7 @@ con now ships the first typed control-plane layer:
 - the system prompt embeds the same control state for the focused pane and peer panes
 - the system prompt now also embeds a deterministic whole-tab pane layout summary so session-state answers can distinguish materially different peer panes without treating every question as focused-pane-only
 - the tool surface now includes a typed work-target resolver so the model can ask con which pane or tmux target is best for a given task instead of rebuilding that judgment from raw pane metadata
+- the prompt now also carries typed work-target hints for the current tab, so the model sees the best visible shell target and best tmux workspace target before it makes a selection
 - visible execution is gated by `exec_visible_shell`, not by ad hoc prompt wording
 - panes with a proven fresh shell prompt now expose a read-only `probe_shell_context` capability for typed shell-scoped facts
 - before each agent turn, the harness now gathers the strongest safe read-only facts available on the focused pane: shell probe first, then tmux inventory if a real tmux query attachment exists

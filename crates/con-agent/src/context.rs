@@ -1334,6 +1334,125 @@ fn summarize_peer_pane_layout(pane: &PaneSummary) -> String {
     parts.join("; ")
 }
 
+fn focused_supports_visible_shell(ctx: &TerminalContext) -> bool {
+    ctx.focused_control
+        .capabilities
+        .contains(&PaneControlCapability::ExecVisibleShell)
+}
+
+fn pane_supports_visible_shell(pane: &PaneSummary) -> bool {
+    pane.control
+        .capabilities
+        .contains(&PaneControlCapability::ExecVisibleShell)
+}
+
+fn focused_has_native_tmux(ctx: &TerminalContext) -> bool {
+    ctx.focused_control
+        .tmux
+        .as_ref()
+        .is_some_and(|tmux| tmux.mode == TmuxControlMode::Native)
+}
+
+fn pane_has_native_tmux(pane: &PaneSummary) -> bool {
+    pane.control
+        .tmux
+        .as_ref()
+        .is_some_and(|tmux| tmux.mode == TmuxControlMode::Native)
+}
+
+fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
+    let mut hints = Vec::new();
+
+    let mut best_remote_shell: Option<(usize, Option<&str>, bool)> = None;
+    if focused_supports_visible_shell(ctx) {
+        best_remote_shell = Some((
+            ctx.focused_pane_index,
+            ctx.focused_hostname.as_deref(),
+            ctx.focused_hostname.is_some(),
+        ));
+    }
+    for pane in &ctx.other_panes {
+        if !pane_supports_visible_shell(pane) {
+            continue;
+        }
+        let candidate = (
+            pane.pane_index,
+            pane.hostname.as_deref(),
+            pane.hostname.is_some(),
+        );
+        match best_remote_shell {
+            None => best_remote_shell = Some(candidate),
+            Some((current_index, _current_host, current_remote)) => {
+                if candidate.2 && !current_remote
+                    || (candidate.2 == current_remote && candidate.0 < current_index)
+                {
+                    best_remote_shell = Some(candidate);
+                }
+            }
+        }
+    }
+    if let Some((pane_index, host, _)) = best_remote_shell {
+        hints.push(match host {
+            Some(host) => format!(
+                "Best visible remote shell target right now: pane {pane_index} on host `{host}`."
+            ),
+            None => format!(
+                "Best visible shell target right now: pane {pane_index}. Remote identity is not proven."
+            ),
+        });
+    }
+
+    let mut best_tmux: Option<(usize, Option<&str>, bool)> = None;
+    if ctx.focused_control.tmux.is_some() {
+        best_tmux = Some((
+            ctx.focused_pane_index,
+            ctx.focused_control
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.as_deref()),
+            focused_has_native_tmux(ctx),
+        ));
+    }
+    for pane in &ctx.other_panes {
+        let Some(tmux) = &pane.control.tmux else {
+            continue;
+        };
+        let candidate = (
+            pane.pane_index,
+            tmux.session_name.as_deref(),
+            pane_has_native_tmux(pane),
+        );
+        match best_tmux {
+            None => best_tmux = Some(candidate),
+            Some((current_index, _, current_native)) => {
+                if candidate.2 && !current_native
+                    || (candidate.2 == current_native && candidate.0 < current_index)
+                {
+                    best_tmux = Some(candidate);
+                }
+            }
+        }
+    }
+    if let Some((pane_index, session, native)) = best_tmux {
+        hints.push(match (session, native) {
+            (Some(session), true) => format!(
+                "Best tmux workspace target right now: pane {pane_index}, tmux session `{session}`, with native tmux control."
+            ),
+            (Some(session), false) => format!(
+                "tmux appears in pane {pane_index} via session `{session}`, but native tmux control is not established there yet."
+            ),
+            (None, true) => format!(
+                "Best tmux workspace target right now: pane {pane_index} with native tmux control."
+            ),
+            (None, false) => format!(
+                "tmux appears in pane {pane_index}, but native tmux control is not established there yet."
+            ),
+        });
+    }
+
+    hints
+}
+
 fn format_control_channels(channels: &[PaneControlChannel]) -> String {
     channels
         .iter()
@@ -1452,6 +1571,7 @@ impl TerminalContext {
              - READ-ONLY SHELL INTROSPECTION on a pane with `probe_shell_context` → probe_shell_context.\n\
              - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context` or `tmux_snapshot`. Only call list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
              - MULTI-PANE TARGET SELECTION (\"which pane should you use?\", \"which pane is safer?\", \"where should you run this?\") → resolve_work_target.\n\
+             - When `<work_target_hints>` is present, use those typed hints before improvising pane choice from raw metadata.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
              - When multiple panes are visible and the user asks about the terminal/session state, mention the pane count and summarize materially different peer panes. Do not collapse the whole tab into only the focused pane unless the user explicitly asks about that pane alone.\n\
              - Never restate stale shell metadata as if it were the current foreground runtime. If shell metadata is not fresh, label it as historical shell metadata or omit it.\n\
@@ -1878,6 +1998,15 @@ impl TerminalContext {
                 prompt.push('\n');
             }
             prompt.push_str("</pane_layout_summary>\n");
+            let work_target_hints = preferred_work_target_hints(self);
+            if !work_target_hints.is_empty() {
+                prompt.push_str("<work_target_hints>\n");
+                for hint in work_target_hints {
+                    prompt.push_str(&xml_escape(&hint));
+                    prompt.push('\n');
+                }
+                prompt.push_str("</work_target_hints>\n");
+            }
         } else if let Some(cwd) = &self.cwd {
             prompt.push_str(&format!("<cwd>{}</cwd>\n", xml_escape(cwd)));
         }
@@ -2763,5 +2892,74 @@ mod tests {
         assert!(prompt.contains("pane 1 is focused"));
         assert!(prompt.contains("pane 2"));
         assert!(prompt.contains("historical shell frame only"));
+    }
+
+    #[test]
+    fn prompt_emits_work_target_hints_for_multi_pane_tabs() {
+        let mut ctx = make_shell_context();
+        ctx.focused_hostname = Some("cinnamon".to_string());
+        ctx.other_panes.push(PaneSummary {
+            pane_index: 2,
+            hostname: Some("haswell".to_string()),
+            hostname_confidence: Some(PaneConfidence::Strong),
+            hostname_source: Some(PaneEvidenceSource::ShellProbe),
+            title: Some("ops".to_string()),
+            front_state: PaneFrontState::Unknown,
+            mode: PaneMode::Unknown,
+            has_shell_integration: false,
+            shell_metadata_fresh: false,
+            observation_support: PaneObservationSupport::default(),
+            control: PaneControlState::from_runtime(&PaneRuntimeState {
+                front_state: PaneFrontState::Unknown,
+                mode: PaneMode::Unknown,
+                shell_metadata_fresh: false,
+                remote_host: Some("haswell".to_string()),
+                remote_host_confidence: Some(PaneConfidence::Strong),
+                remote_host_source: Some(PaneEvidenceSource::ShellProbe),
+                agent_cli: None,
+                tmux_session: Some("work".to_string()),
+                last_verified_scope_stack: Vec::new(),
+                last_verified_tmux_session: Some("work".to_string()),
+                shell_context: None,
+                shell_context_fresh: false,
+                active_scope: None,
+                evidence: Vec::new(),
+                scope_stack: vec![PaneRuntimeScope {
+                    kind: PaneScopeKind::Multiplexer,
+                    label: Some("work".to_string()),
+                    host: Some("haswell".to_string()),
+                    confidence: PaneConfidence::Strong,
+                    evidence_source: PaneEvidenceSource::ShellProbe,
+                }],
+                recent_actions: Vec::new(),
+                warnings: Vec::new(),
+            }),
+            agent_cli: None,
+            active_scope: None,
+            evidence: Vec::new(),
+            runtime_stack: vec![PaneRuntimeScope {
+                kind: PaneScopeKind::Multiplexer,
+                label: Some("work".to_string()),
+                host: Some("haswell".to_string()),
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::ShellProbe,
+            }],
+            last_verified_runtime_stack: Vec::new(),
+            runtime_warnings: Vec::new(),
+            tmux_session: Some("work".to_string()),
+            cwd: None,
+            screen_hints: Vec::new(),
+            last_command: None,
+            last_exit_code: None,
+            is_busy: false,
+            recent_output: Vec::new(),
+        });
+        let prompt = ctx.to_system_prompt();
+        assert!(prompt.contains("<work_target_hints>"));
+        assert!(prompt.contains("Best visible remote shell target"));
+        assert!(
+            prompt.contains("Best tmux workspace target")
+                || prompt.contains("tmux appears in pane 2")
+        );
     }
 }
