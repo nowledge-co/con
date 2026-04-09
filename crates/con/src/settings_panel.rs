@@ -1163,27 +1163,31 @@ impl SettingsPanel {
             );
         }
 
-        let mut content = section_content("Appearance", "Customize the look and feel.", theme);
+        let mut content = section_content(
+            "Appearance",
+            "Shape the terminal theme and how much of the desktop shows through.",
+            theme,
+        );
 
         content = content.child(
             div()
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Window", &theme))
+                .child(group_label("Transparency", &theme))
                 .child(
                     card(theme, card_opacity)
                         .child(slider_row(
-                            "Terminal Opacity",
-                            "Lower values let the terminal background show through. Best applied after relaunch on macOS.",
+                            "Terminal Glass",
+                            "Controls the terminal surface. On macOS, a relaunch gives the cleanest result.",
                             &terminal_opacity_slider,
                             terminal_opacity,
                             theme,
                         ))
                         .child(row_separator(theme))
                         .child(slider_row(
-                            "UI Opacity",
-                            "Controls the tab chrome, popups, and settings surfaces.",
+                            "Window Chrome",
+                            "Controls tabs, the agent panel, the input bar, and command surfaces.",
                             &ui_opacity_slider,
                             ui_opacity,
                             theme,
@@ -2145,41 +2149,58 @@ fn slider_row(
 ) -> Div {
     div()
         .flex()
-        .items_center()
-        .gap(px(16.0))
+        .flex_col()
+        .gap(px(10.0))
         .px(px(16.0))
         .py(px(12.0))
         .child(
             div()
                 .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .min_w(px(180.0))
-                .child(div().text_sm().child(label.to_string()))
+                .items_start()
+                .justify_between()
+                .gap(px(16.0))
                 .child(
                     div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .flex_1()
+                        .max_w(px(360.0))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(label.to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(theme.muted_foreground.opacity(0.65))
+                                .child(hint.to_string()),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .min_w(px(52.0))
+                        .px(px(8.0))
+                        .py(px(4.0))
+                        .rounded(px(999.0))
+                        .bg(theme.muted.opacity(0.10))
                         .text_size(px(11.0))
-                        .line_height(px(16.0))
-                        .text_color(theme.muted_foreground.opacity(0.65))
-                        .child(hint.to_string()),
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_align(TextAlign::Center)
+                        .text_color(theme.foreground)
+                        .child(format!("{:.0}%", value * 100.0)),
                 ),
         )
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(10.0))
-                .flex_1()
-                .child(Slider::new(slider).flex_1())
-                .child(
-                    div()
-                        .w(px(42.0))
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_align(TextAlign::Right)
-                        .text_color(theme.muted_foreground)
-                        .child(format!("{:.0}%", value * 100.0)),
-                ),
+                .w_full()
+                .child(Slider::new(slider).w_full()),
         )
 }
 
