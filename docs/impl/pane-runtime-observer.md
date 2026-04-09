@@ -1,5 +1,7 @@
 # Pane Runtime Observer
 
+This document keeps the original name, but the current implementation direction in con is a reducer-backed pane runtime tracker.
+
 ## Why this exists
 
 A terminal pane is not a single process.
@@ -76,13 +78,14 @@ It does not answer:
 
 `what app is definitely running?`
 
-### Layer 2: Pane runtime observer
+### Layer 2: Pane runtime tracker
 
-This is a stateful observer that consumes facts over time and produces a runtime model.
+This is a stateful reducer that consumes facts and actions over time and produces a runtime model.
 
 It is responsible for:
 
 - evidence aggregation
+- action-history aggregation
 - freshness tracking
 - scope detection
 - conflict resolution
@@ -179,9 +182,12 @@ Current implementation in con:
 - `remote_host`
 - `agent_cli`
 - `tmux_session`
+- `shell_context`
+- `shell_context_fresh`
 - `active_scope`
 - `evidence`
 - `scope_stack`
+- `recent_actions`
 - `warnings`
 
 ### `ScopeStack`

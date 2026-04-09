@@ -39,7 +39,7 @@ struct Tab {
     needs_attention: bool,
     session: AgentSession,
     panel_state: PanelState,
-    runtime_observers: RefCell<HashMap<usize, con_agent::context::PaneRuntimeObserver>>,
+    runtime_trackers: RefCell<HashMap<usize, con_agent::context::PaneRuntimeTracker>>,
 }
 
 /// The main workspace: tabs + agent panel + input bar + settings overlay
@@ -187,7 +187,7 @@ impl ConWorkspace {
                     needs_attention: false,
                     session: agent_session,
                     panel_state,
-                    runtime_observers: RefCell::new(HashMap::new()),
+                    runtime_trackers: RefCell::new(HashMap::new()),
                 }
             })
             .collect();
@@ -199,7 +199,7 @@ impl ConWorkspace {
                 needs_attention: false,
                 session: AgentSession::new(),
                 panel_state: PanelState::new(),
-                runtime_observers: RefCell::new(HashMap::new()),
+                runtime_trackers: RefCell::new(HashMap::new()),
             });
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
@@ -359,7 +359,7 @@ impl ConWorkspace {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
     }
 
-    fn reconcile_runtime_observers_for_tab(&self, tab_idx: usize) {
+    fn reconcile_runtime_trackers_for_tab(&self, tab_idx: usize) {
         let pane_ids: HashSet<usize> = self.tabs[tab_idx]
             .pane_tree
             .pane_terminals()
@@ -367,7 +367,7 @@ impl ConWorkspace {
             .map(|(pane_id, _)| pane_id)
             .collect();
         self.tabs[tab_idx]
-            .runtime_observers
+            .runtime_trackers
             .borrow_mut()
             .retain(|pane_id, _| pane_ids.contains(pane_id));
     }
@@ -388,11 +388,26 @@ impl ConWorkspace {
             .unwrap_or(usize::MAX);
         let observation = terminal.observation_frame(recent_output_lines, cx);
         let runtime = {
-            let mut observers = self.tabs[tab_idx].runtime_observers.borrow_mut();
-            let observer = observers.entry(pane_id).or_default();
-            observer.observe(observation.clone())
+            let mut trackers = self.tabs[tab_idx].runtime_trackers.borrow_mut();
+            let tracker = trackers.entry(pane_id).or_default();
+            tracker.observe(observation.clone())
         };
         (observation, runtime)
+    }
+
+    fn record_runtime_event_for_terminal(
+        &self,
+        tab_idx: usize,
+        terminal: &TerminalPane,
+        event: con_agent::context::PaneRuntimeEvent,
+    ) {
+        let pane_tree = &self.tabs[tab_idx].pane_tree;
+        let pane_id = pane_tree
+            .pane_id_for_terminal(terminal)
+            .unwrap_or(usize::MAX);
+        let mut trackers = self.tabs[tab_idx].runtime_trackers.borrow_mut();
+        let tracker = trackers.entry(pane_id).or_default();
+        tracker.record_action(event);
     }
 
     fn effective_remote_host_for_tab(
@@ -408,7 +423,7 @@ impl ConWorkspace {
 
     /// Build agent context from the focused pane, including summaries of other panes.
     fn build_agent_context(&self, cx: &App) -> con_agent::TerminalContext {
-        self.reconcile_runtime_observers_for_tab(self.active_tab);
+        self.reconcile_runtime_trackers_for_tab(self.active_tab);
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
         let focused = self.active_terminal();
 
@@ -1148,6 +1163,14 @@ impl ConWorkspace {
         // Write the command to the PTY — user sees it execute in real time
         let cmd_with_newline = format!("{}\n", req.command);
         pane.write(cmd_with_newline.as_bytes(), cx);
+        self.record_runtime_event_for_terminal(
+            tab_idx,
+            &pane,
+            con_agent::context::PaneRuntimeEvent::VisibleShellExec {
+                command: req.command.clone(),
+                input_generation: pane.input_generation(cx),
+            },
+        );
 
         let fallback_response_tx = req.response_tx;
         let pane_for_fallback = pane.clone();
@@ -1206,7 +1229,7 @@ impl ConWorkspace {
 
         let response = match req.query {
             PaneQuery::List => {
-                self.reconcile_runtime_observers_for_tab(tab_idx);
+                self.reconcile_runtime_trackers_for_tab(tab_idx);
                 let panes: Vec<PaneInfo> = all_terminals
                     .iter()
                     .enumerate()
@@ -1233,11 +1256,13 @@ impl ConWorkspace {
                             hostname_source: runtime.remote_host_source,
                             mode: runtime.mode,
                             shell_metadata_fresh: runtime.shell_metadata_fresh,
+                            shell_context_fresh: runtime.shell_context_fresh,
                             observation_support: observation.support.clone(),
                             address_space: control.address_space,
                             visible_target: control.visible_target.clone(),
                             target_stack: control.target_stack.clone(),
                             tmux_control: control.tmux.clone(),
+                            control_attachments: control.attachments.clone(),
                             control_channels: control.channels.clone(),
                             control_capabilities: control.capabilities.clone(),
                             control_notes: control.notes.clone(),
@@ -1246,6 +1271,8 @@ impl ConWorkspace {
                             evidence: runtime.evidence.clone(),
                             runtime_stack: runtime.scope_stack,
                             runtime_warnings: runtime.warnings,
+                            shell_context: runtime.shell_context.clone(),
+                            recent_actions: runtime.recent_actions.clone(),
                             tmux_session: runtime.tmux_session,
                             has_shell_integration: observation.has_shell_integration,
                             last_command: observation.last_command,
@@ -1279,6 +1306,14 @@ impl ConWorkspace {
                 } else {
                     let terminal = &all_terminals[pane_index - 1];
                     terminal.write(keys.as_bytes(), cx);
+                    self.record_runtime_event_for_terminal(
+                        tab_idx,
+                        terminal,
+                        con_agent::context::PaneRuntimeEvent::RawInput {
+                            keys: keys.clone(),
+                            input_generation: terminal.input_generation(cx),
+                        },
+                    );
                     PaneResponse::KeysSent
                 }
             }
@@ -1342,6 +1377,113 @@ impl ConWorkspace {
                     }
                 }
             }
+            PaneQuery::ProbeShellContext { pane_index } => {
+                if pane_index == 0 || pane_index > all_terminals.len() {
+                    PaneResponse::Error(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        pane_index,
+                        all_terminals.len()
+                    ))
+                } else {
+                    let pane = all_terminals[pane_index - 1].clone();
+                    let (_, runtime) =
+                        self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+                    let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+                    if !control.allows_shell_probe() {
+                        PaneResponse::Error(format!(
+                            "Pane {} does not currently expose the probe_shell_context capability. \
+                             It must be a proven fresh shell prompt before shell-scoped probing is allowed.\n\
+                             visible_target: {}\ncontrol_attachments: {}\ncontrol_capabilities: {}",
+                            pane_index,
+                            control.visible_target.summary(),
+                            con_agent::control::format_control_attachments(&control.attachments),
+                            control
+                                .capabilities
+                                .iter()
+                                .map(|capability| capability.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ))
+                    } else if pane.is_busy(cx) {
+                        PaneResponse::Error(format!(
+                            "Pane {} is busy. Wait for the current command to finish before running a shell probe.",
+                            pane_index
+                        ))
+                    } else {
+                        let response_tx = req.response_tx;
+                        let nonce = format!(
+                            "{}-{}",
+                            pane_index,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|duration| duration.as_nanos())
+                                .unwrap_or_default()
+                        );
+                        let command = con_agent::shell_probe::build_shell_probe_command(&nonce);
+                        let _ = pane.take_command_finished(cx);
+                        pane.write(format!("{command}\n").as_bytes(), cx);
+
+                        cx.spawn(async move |this, cx| {
+                            let deadline = std::time::Instant::now()
+                                + std::time::Duration::from_secs(10);
+
+                            loop {
+                                cx.background_executor()
+                                    .timer(std::time::Duration::from_millis(250))
+                                    .await;
+
+                                if std::time::Instant::now() >= deadline {
+                                    let _ = response_tx.send(PaneResponse::Error(format!(
+                                        "Shell probe timed out in pane {} after 10s.",
+                                        pane_index
+                                    )));
+                                    return;
+                                }
+
+                                let finished = this
+                                    .update(cx, |_, cx| {
+                                        pane.take_command_finished(cx).is_some() || !pane.is_busy(cx)
+                                    })
+                                    .unwrap_or(false);
+                                if !finished {
+                                    continue;
+                                }
+
+                                let lines = this
+                                    .update(cx, |_, cx| pane.recent_lines(200, cx))
+                                    .unwrap_or_default();
+                                match con_agent::shell_probe::parse_shell_probe_lines(&lines, &nonce)
+                                {
+                                    Ok(result) => {
+                                        let recorded_result = result.clone();
+                                        let _ = this.update(cx, |workspace, cx| {
+                                            workspace.record_runtime_event_for_terminal(
+                                                tab_idx,
+                                                &pane,
+                                                con_agent::context::PaneRuntimeEvent::ShellProbe {
+                                                    result: recorded_result,
+                                                    captured_input_generation: pane.input_generation(cx),
+                                                },
+                                            );
+                                        });
+                                        let _ = response_tx.send(PaneResponse::ShellProbe(result));
+                                    }
+                                    Err(err) => {
+                                        let excerpt = lines.join("\n");
+                                        let _ = response_tx.send(PaneResponse::Error(format!(
+                                            "Shell probe finished in pane {} but the probe output could not be parsed: {}\nRecent output:\n{}",
+                                            pane_index, err, excerpt
+                                        )));
+                                    }
+                                }
+                                return;
+                            }
+                        })
+                        .detach();
+                        return;
+                    }
+                }
+            }
             PaneQuery::CheckBusy { pane_index } => {
                 if pane_index == 0 || pane_index > all_terminals.len() {
                     PaneResponse::Error(format!(
@@ -1368,7 +1510,9 @@ impl ConWorkspace {
 
                 log::info!(
                     "[wait_for] pane={} timeout={:?} pattern={:?}",
-                    pane_index, timeout_secs, pattern,
+                    pane_index,
+                    timeout_secs,
+                    pattern,
                 );
 
                 if pane_index == 0 || pane_index > all_terminals.len() {
@@ -1383,10 +1527,7 @@ impl ConWorkspace {
                     let timeout = timeout_secs.unwrap_or(30).min(120);
                     let response_tx = req.response_tx;
 
-                    log::info!(
-                        "[wait_for] has_si={} is_busy={}",
-                        has_si, pane.is_busy(cx),
-                    );
+                    log::info!("[wait_for] has_si={} is_busy={}", has_si, pane.is_busy(cx),);
 
                     // Check if already in target state before spawning async task
                     if pattern.is_none() && has_si && !pane.is_busy(cx) {
@@ -1682,7 +1823,7 @@ impl ConWorkspace {
             needs_attention: false,
             session: AgentSession::new(),
             panel_state: PanelState::new(),
-            runtime_observers: RefCell::new(HashMap::new()),
+            runtime_trackers: RefCell::new(HashMap::new()),
         });
         self.active_tab = self.tabs.len() - 1;
 
@@ -1927,6 +2068,18 @@ impl ConWorkspace {
             .iter()
             .position(|tab| tab.pane_tree.pane_id_for_entity(entity_id).is_some());
         let Some(tab_idx) = tab_idx else { return };
+        if let Some(terminal) = self.tabs[tab_idx]
+            .pane_tree
+            .all_terminals()
+            .into_iter()
+            .find(|terminal| terminal.entity_id() == entity_id)
+        {
+            self.record_runtime_event_for_terminal(
+                tab_idx,
+                &terminal,
+                con_agent::context::PaneRuntimeEvent::ProcessExited,
+            );
+        }
 
         let pane_tree = &mut self.tabs[tab_idx].pane_tree;
         if pane_tree.pane_count() > 1 {
@@ -1978,10 +2131,19 @@ impl Render for ConWorkspace {
                 let cmd_with_newline = format!("{}\n", cmd);
                 terminal.write(cmd_with_newline.as_bytes(), cx);
             }
+            self.record_runtime_event_for_terminal(
+                self.active_tab,
+                &terminal,
+                con_agent::context::PaneRuntimeEvent::PaneCreated {
+                    startup_command: req.command.clone(),
+                },
+            );
 
             // Return the 1-indexed position of the new pane in the flat pane list
             let pane_index = self.tabs[self.active_tab].pane_tree.pane_count();
-            let _ = req.response_tx.send(con_agent::PaneResponse::PaneCreated { pane_index });
+            let _ = req
+                .response_tx
+                .send(con_agent::PaneResponse::PaneCreated { pane_index });
 
             cx.notify();
         }
@@ -2015,7 +2177,7 @@ impl Render for ConWorkspace {
 
         // Keep pane focus in sync with which terminal has window focus
         self.tabs[self.active_tab].pane_tree.sync_focus(window, cx);
-        self.reconcile_runtime_observers_for_tab(self.active_tab);
+        self.reconcile_runtime_trackers_for_tab(self.active_tab);
 
         // Sync pane info and CWD to input bar
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
@@ -2254,12 +2416,7 @@ impl Render for ConWorkspace {
                     .hover(|s| s.bg(theme.muted.opacity(0.06)));
             }
 
-            let mut tab_content = div()
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .w_full()
-                .min_w_0();
+            let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
 
             // Attention dot for tabs with pending agent activity
             if needs_attention {
@@ -2330,7 +2487,12 @@ impl Render for ConWorkspace {
         tab_bar = tab_bar.child(tabs_container);
 
         // Right-side controls — compact row
-        let mut tab_controls = div().flex().items_center().gap(px(2.0)).mb(px(4.0)).flex_shrink_0();
+        let mut tab_controls = div()
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .mb(px(4.0))
+            .flex_shrink_0();
 
         // Input bar toggle
         tab_controls = tab_controls.child(

@@ -157,6 +157,14 @@ impl TerminalPane {
             .and_then(|terminal| terminal.last_command_duration())
     }
 
+    pub fn input_generation(&self, cx: &App) -> u64 {
+        self.entity
+            .read(cx)
+            .terminal()
+            .map(|terminal| terminal.input_generation())
+            .unwrap_or(0)
+    }
+
     pub fn observation_frame(&self, recent_output_lines: usize, cx: &App) -> PaneObservationFrame {
         PaneObservationFrame {
             title: self.title(cx),
@@ -169,12 +177,7 @@ impl TerminalPane {
             has_shell_integration: self.has_shell_integration(cx),
             is_alt_screen: self.is_alt_screen(cx),
             is_busy: self.is_busy(cx),
-            input_generation: self
-                .entity
-                .read(cx)
-                .terminal()
-                .map(|terminal| terminal.input_generation())
-                .unwrap_or(0),
+            input_generation: self.input_generation(cx),
             last_command_finished_input_generation: self
                 .entity
                 .read(cx)

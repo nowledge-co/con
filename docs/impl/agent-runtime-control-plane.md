@@ -2,7 +2,7 @@
 
 ## Why this exists
 
-con now has a usable pane runtime observer.
+con now has a usable pane runtime tracker.
 
 That solves only half of the problem.
 
@@ -27,14 +27,21 @@ The fix is not more prompt text.
 
 The fix is a first-class control plane.
 
+See also:
+
+- `docs/study/terminal-control-plane.md`
+
 ## Current foundation
 
 con now ships the first typed control-plane layer:
 
 - every observed pane can be reduced to a `PaneControlState`
-- `list_panes` exposes address space, visible target, nested target stack, control channels, capabilities, and notes
+- every pane now keeps a reducer-backed runtime tracker instead of recomputing state from one frame
+- `list_panes` exposes address space, visible target, nested target stack, explicit control attachments, control channels, capabilities, and notes
 - the system prompt embeds the same control state for the focused pane and peer panes
 - visible execution is gated by `exec_visible_shell`, not by ad hoc prompt wording
+- panes with a proven fresh shell prompt now expose a read-only `probe_shell_context` capability for typed shell-scoped facts
+- typed shell probes and con-originated actions are preserved as causal history on the pane, with freshness and invalidation rules
 
 This is still phase one.
 
@@ -42,9 +49,12 @@ What it solves:
 
 - the model can see that a con pane showing tmux is still only addressable as a con pane
 - the model can represent nested situations such as `remote shell -> tmux -> agent CLI` instead of flattening them into one label
+- a fresh shell prompt inside tmux can now be modeled as `remote shell -> tmux -> shell`, which keeps visible shell execution safe without pretending con has tmux-native control
 - shell execution safety is computed from typed capability data
+- shell-scoped probing is explicit instead of being hidden behind generic terminal execution
 - prompt, tools, and runtime guards share one vocabulary
 - tmux now has an explicit inspectable adapter slot, rather than being implied only through generic pane metadata
+- recent con actions stay available as causal evidence so the agent can understand how a pane was reached without treating history as present-tense truth
 
 What it does not solve yet:
 
@@ -60,7 +70,7 @@ What it does not solve yet:
 
 Seeing `ssh -> tmux -> nvim` is not the same as being able to operate on it.
 
-The runtime observer says what con believes is visible.
+The runtime tracker says what con currently believes is visible.
 The control plane says what con can safely do.
 
 ### 2. Addressing is not identity
@@ -106,6 +116,41 @@ If the capability is absent, the tool must refuse.
 If con cannot prove a target or control channel, it must say `unknown` and stop.
 
 False confidence is the worst product failure here.
+
+### 6. Attachments are first-class
+
+The terminal world does not have one universal protocol like CDP.
+
+So con needs explicit protocol attachments.
+
+Examples:
+
+- Ghostty surface attachment
+- shell prompt attachment
+- tmux control attachment
+- Neovim RPC attachment
+
+An attachment is the real unit of authority.
+
+Observation says what may be visible.
+An attachment says what con can actually talk to.
+
+### 7. Causality matters, but it is not truth
+
+con often knows how it entered a pane:
+
+- it created the pane with `ssh haswell`
+- it executed `tmux attach -t work`
+- it sent raw input to a TUI
+- it ran a typed shell probe
+
+That causality is extremely useful. But it must stay source-tagged and freshness-tagged.
+
+The correct product rule is:
+
+- current backend facts and fresh typed probes define active runtime truth
+- con action history explains how the pane got here
+- historical action history must never unlock control by itself
 
 ## Core model
 
@@ -167,6 +212,32 @@ Every channel should carry:
 - `capabilities`
 - `last_verified_at`
 
+### Attachment graph
+
+This graph answers:
+
+`what protocol session is attached to what target?`
+
+Suggested attachment kinds:
+
+- `GhosttySurfaceAttachment`
+- `GhosttyVtAttachment`
+- `ShellPromptAttachment`
+- `TmuxControlAttachment`
+- `NeovimRpcAttachment`
+- `OsPtyAttachment`
+
+Every attachment should carry:
+
+- `attachment_id`
+- `target_id`
+- `transport`
+- `authority_level`
+- `visibility_policy`
+- `capabilities`
+- `last_verified_at`
+- `invalidates_on`
+
 ## Target kinds
 
 These should be explicit product-level types, not just strings in prompt XML.
@@ -224,6 +295,25 @@ Rules:
 ## Control adapters
 
 The control plane needs explicit adapters.
+
+### 0. `ShellProbeAdapter`
+
+Purpose:
+
+- collect read-only shell-scope truth when a fresh prompt is proven
+
+Examples:
+
+- `$TMUX`
+- `$SSH_CONNECTION`
+- hostname
+- tmux socket discovery
+- `NVIM_LISTEN_ADDRESS`
+
+Constraint:
+
+- only valid at a proven shell prompt
+- must not be promoted into visible-target truth once the pane leaves shell ownership
 
 ### 1. `PaneShellAdapter`
 
@@ -425,7 +515,7 @@ The app should wire this in one direction:
 
 ```text
 Ghostty facts
-  -> PaneRuntimeObserver
+  -> PaneRuntimeTracker
   -> RuntimeGraphBuilder
   -> CapabilityResolver
   -> Tool/Prompt/UI consumers
@@ -445,7 +535,7 @@ That means:
 ### Phase 1: Target graph
 
 - add `RuntimeTarget`, `ControlChannel`, `CapabilitySet`, and `TargetId`
-- keep current pane observer as the source for top-level runtime facts
+- keep current pane tracker as the source for top-level runtime facts and causal history
 
 ### Phase 2: Tool split
 

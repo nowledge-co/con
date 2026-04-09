@@ -19,8 +19,9 @@ use crate::conversation::{AgentStep, Conversation, Message};
 use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{
     BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
-    ListPanesTool, PaneRequest, ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool,
-    ShellExecTool, TerminalExecRequest, TerminalExecTool, TmuxInspectTool, WaitForTool,
+    ListPanesTool, PaneRequest, ProbeShellContextTool, ReadPaneTool, SearchPanesTool, SearchTool,
+    SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecTool, TmuxInspectTool,
+    WaitForTool,
 };
 
 // ── Provider enum ───────────────────────────────────────────────────
@@ -421,6 +422,7 @@ macro_rules! build_and_stream {
             .tool(SearchTool::new(root))
             .tool(ListPanesTool::new($pane_tx.clone()))
             .tool(TmuxInspectTool::new($pane_tx.clone()))
+            .tool(ProbeShellContextTool::new($pane_tx.clone()))
             .tool(ReadPaneTool::new($pane_tx.clone()))
             .tool(SendKeysTool::new($pane_tx.clone()))
             .tool(SearchPanesTool::new($pane_tx.clone()))
@@ -533,8 +535,7 @@ impl AgentProvider {
         );
         let _ = event_tx.send(AgentEvent::Step(AgentStep::Thinking(format!(
             "{}:{}",
-            kind,
-            model,
+            kind, model,
         ))));
 
         log::info!(
@@ -637,7 +638,10 @@ impl AgentProvider {
     fn build_openai_compatible_client(&self) -> Result<openai::CompletionsClient> {
         let api_key = self.resolve_api_key(&ProviderKind::OpenAICompatible)?;
         let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
-        if let Some(url) = self.config.effective_base_url(&ProviderKind::OpenAICompatible) {
+        if let Some(url) = self
+            .config
+            .effective_base_url(&ProviderKind::OpenAICompatible)
+        {
             builder = builder.base_url(url);
         }
         builder

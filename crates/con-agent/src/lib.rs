@@ -4,12 +4,17 @@ pub mod conversation;
 pub mod hook;
 pub mod playbooks;
 pub mod provider;
+pub mod shell_probe;
 pub mod skills;
 pub mod tools;
 
-pub use context::TerminalContext;
+pub use context::{
+    PaneActionKind, PaneActionRecord, PaneRuntimeEvent, PaneRuntimeTracker, PaneShellContext,
+    TerminalContext,
+};
 pub use control::{
-    PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneControlState,
+    PaneAddressSpace, PaneAttachmentAuthority, PaneAttachmentKind, PaneAttachmentTransport,
+    PaneControlCapability, PaneControlChannel, PaneControlState, PaneProtocolAttachment,
     PaneVisibleTarget, PaneVisibleTargetKind, TmuxControlMode, TmuxControlState,
 };
 pub use conversation::{Conversation, ConversationSummary, Message, MessageRole};
@@ -18,10 +23,11 @@ pub use provider::{
     AgentConfig, AgentEvent, AgentProvider, ProviderConfig, ProviderKind, ProviderMap,
     SuggestionModelConfig,
 };
+pub use shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
 pub use skills::{Skill, SkillRegistry};
 pub use tools::{
     BatchExecTool, CreatePaneTool, EditFileTool, FileReadTool, FileWriteTool, ListFilesTool,
-    ListPanesTool, PaneInfo, PaneQuery, PaneRequest, PaneResponse, ReadPaneTool, SearchPanesTool,
-    SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecResponse,
-    TerminalExecTool, TmuxInspectTool, WaitForTool,
+    ListPanesTool, PaneInfo, PaneQuery, PaneRequest, PaneResponse, ProbeShellContextTool,
+    ReadPaneTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest,
+    TerminalExecResponse, TerminalExecTool, TmuxInspectTool, WaitForTool,
 };

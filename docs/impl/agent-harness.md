@@ -166,6 +166,7 @@ This avoids cloning — `mem::replace` moves ownership. The AgentPanel always di
 | `file_read` | Safe | Executes immediately |
 | `search` | Safe | Executes immediately |
 | `list_panes` | Safe | Executes immediately |
+| `probe_shell_context` | Safe | Executes immediately |
 | `read_pane` | Safe | Executes immediately |
 | `search_panes` | Safe | Executes immediately |
 | `terminal_exec` | Dangerous | Requires approval (or auto_approve) |
@@ -255,16 +256,19 @@ This matters for SSH, tmux, and full-screen TUIs:
 - Current embedded Ghostty panes explicitly report what the backend cannot prove yet. Today that includes authoritative foreground command text, alternate-screen state, and remote-host identity, so manual tmux/editor/SSH flows may remain `unknown` until Ghostty exports stronger facts.
 - When the pane mode is not `shell`, or shell metadata is stale, the prompt explicitly tells the model to inspect the live pane with `list_panes`, `read_pane`, and `send_keys` before making claims about cwd, hostname, or the running app.
 
-con now keeps a per-pane runtime observer for each tab. The observer persists authoritative pane-local facts across sparse frames, invalidates them when a fresh shell returns, and exposes merged runtime state to the prompt, `list_panes`, the sidebar, and smart-input classification.
+con now keeps a per-pane runtime tracker for each tab. The tracker is reducer-based: it merges Ghostty observations, typed shell-probe results, and con-originated actions such as pane creation, visible shell exec, raw input, and process exit. It invalidates active tmux/app state when a fresh shell prompt returns without a fresh typed probe, and it exposes both current runtime truth and recent causal history to the prompt, `list_panes`, the sidebar, and smart-input classification.
 
-On top of that observer, con now derives a typed `PaneControlState` for each pane. This is the shared contract for prompt writing, `list_panes`, and visible-exec guards:
+On top of that tracker, con now derives a typed `PaneControlState` for each pane. This is the shared contract for prompt writing, `list_panes`, and visible-exec guards:
 
 - `address_space` says what `pane_index` actually refers to
 - `visible_target` says what app or runtime is currently in front
 - `target_stack` preserves nested layers when con can actually prove them
+- `control_attachments` say what protocol/session surfaces are actually attached right now
 - `control_channels` say how con may act
 - `control_capabilities` say what is allowed right now
 - `control_notes` explain important limits such as "this is tmux inside a con pane"
+
+When `probe_shell_context` is present in `control_capabilities`, the agent has a read-only shell-scoped introspection path on that pane. It can ask the live shell for hostname, SSH env, tmux env, tmux session/window/pane ids, and Neovim socket hints without pretending those facts came from Ghostty itself. The result is also fed back into the pane tracker, so future turns can reuse that shell context until newer input makes it stale.
 
 con also now exposes a tmux-specific inspect surface. `tmux_inspect` returns tmux adapter state when tmux has been authoritatively detected, including the explicit reason native tmux pane/window control is not yet available.
 

@@ -156,12 +156,20 @@ The architecture must model that explicitly.
 **Three-layer design:**
 
 1. **Backend facts** — Ghostty action callbacks, process-exited state, titles, PWD, command-finished events, PTY input generations, visible text
-2. **Pane runtime observer** — authoritative evidence merge, command-boundary freshness, scope-stack inference, confidence
+2. **Pane runtime tracker** — reducer over backend observations, typed shell probes, and con-originated actions; command-boundary freshness; scope-stack inference; confidence
 3. **Consumers** — agent prompt, `list_panes`, approvals, sidebar, notifications, resume surfaces
 
 **Important constraint:** shell metadata and visible-app identity are not the same thing. If con cannot prove the foreground runtime, it must say `unknown` instead of promoting title or screen-pattern guesses into product state.
 
-**Current foundation:** Ghostty already gives con strong terminal facts, but the embedded C API does not yet expose foreground-process identity, authoritative command text, alternate-screen state, remote-host identity, or Ghostty's richer internal semantic prompt/runtime state. con therefore needs its own pane runtime observer instead of pushing more product logic into prompt heuristics.
+**Current foundation:** Ghostty already gives con strong terminal facts, but the embedded C API does not yet expose foreground-process identity, authoritative command text, alternate-screen state, remote-host identity, or Ghostty's richer internal semantic prompt/runtime state. con therefore needs its own pane runtime tracker instead of pushing more product logic into prompt heuristics.
+
+**Reducer model:** every pane now has a stateful tracker that merges three classes of input:
+
+- backend observations from Ghostty
+- typed shell-scope probes such as `probe_shell_context`
+- con-originated action history such as pane creation, visible shell exec, raw input, and process exit
+
+This lets con preserve causal history without confusing it for current foreground truth. A fresh shell prompt clears active tmux/app identity unless a fresh typed probe re-establishes it. Historical actions remain visible as evidence for how the pane was reached.
 
 **Long-term direction:** if con needs process-group identity or richer semantic prompt exports, the right move is to extend libghostty's C API upstream rather than reintroducing a second terminal runtime locally.
 
@@ -184,6 +192,19 @@ This is the architectural boundary that prevents failures like:
 - typing shell commands into `nvim`
 
 The long-term tool model should therefore be split by control layer, not just by "pane plus command." See `docs/impl/agent-runtime-control-plane.md`.
+
+There is no single terminal-wide protocol comparable to Chrome DevTools Protocol.
+con therefore needs a layered control plane with explicit protocol attachments:
+
+- Ghostty surface and VT facts
+- shell prompt attachments
+- tmux control attachments
+- app-native RPC attachments
+- OS and PTY process facts
+
+The first concrete attachment after the Ghostty surface is a proven shell-prompt attachment. That is where con can safely expose read-only shell probes such as `$TMUX`, `$SSH_CONNECTION`, tmux session/window/pane ids, and editor socket hints.
+
+See `docs/study/terminal-control-plane.md`.
 
 ### 4. AI Agent Harness: Rig
 
@@ -394,8 +415,9 @@ This means the user **sees** what the agent does — no hidden subprocess. Full 
 
 For agent CLIs and other tools that run *inside* the terminal:
 
-- con should detect them through the pane runtime observer, using strong evidence first:
+- con should detect them through the pane runtime tracker, using strong evidence first:
   - shell/runtime transitions
+  - typed shell probes and reducer-backed action history
   - backend facts such as command lifecycle and future alternate-screen exports
 - con must not promote pane-title or screen-structure heuristics into typed runtime state
 - Provides enhanced UX: notification rings, focus management

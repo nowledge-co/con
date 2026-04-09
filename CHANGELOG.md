@@ -28,9 +28,11 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Pane-aware context is stricter and more honest. con no longer guesses SSH hosts, tmux sessions, or agent CLIs from pane titles or status-line patterns. When the foreground runtime is not proven, it stays `unknown`.
 - Visible shell execution now depends on real Ghostty command boundaries instead of stale cwd or title clues. After any unconfirmed input, con stops trusting shell metadata until shell integration proves a fresh prompt again.
 - con now refuses `terminal_exec` and `batch_exec` on panes that are not proven plain-shell targets. This prevents the built-in agent from typing shell commands into tmux+nvim or other visible TUIs.
-- Pane control state is now typed and shared across the prompt, `list_panes`, and execution guards. The agent now sees each pane's address space, visible target, control channels, capabilities, and control notes instead of relying on flat pane heuristics.
+- Pane control state is now typed and shared across the prompt, `list_panes`, and execution guards. The agent now sees each pane's address space, visible target, explicit control attachments, control channels, capabilities, and control notes instead of relying on flat pane heuristics.
 - Pane metadata now also exposes backend observability limits directly. If embedded Ghostty cannot prove foreground command text, alternate-screen state, or remote-host identity for a pane, con says so instead of guessing.
 - The control plane can represent nested targets explicitly, and it now uses `unknown` for unproven foreground targets instead of pretending every ambiguous pane is a TUI.
+- con now exposes a read-only `probe_shell_context` tool on panes with a proven fresh shell prompt. This gives the agent a typed way to ask the live shell for hostname, SSH env, tmux env, tmux session/window/pane ids, and Neovim socket hints instead of guessing from screen text.
+- Pane runtime state is now reducer-backed instead of snapshot-only. con tracks each pane's recent actions, typed shell-context snapshots, and freshness rules, so the agent can reuse truthful causal history without confusing it for the current foreground target.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

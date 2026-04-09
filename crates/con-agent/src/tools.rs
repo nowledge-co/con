@@ -7,10 +7,12 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::context::PaneMode;
+use crate::context::{PaneActionRecord, PaneShellContext};
 use crate::control::{
-    PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneVisibleTarget,
-    TmuxControlState,
+    PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneProtocolAttachment,
+    PaneVisibleTarget, TmuxControlState,
 };
+use crate::shell_probe::ShellProbeResult;
 
 /// Error type for agent tool execution
 #[derive(Debug, thiserror::Error)]
@@ -697,6 +699,8 @@ pub struct PaneInfo {
     pub mode: PaneMode,
     /// Whether shell metadata like cwd and last_command is likely fresh for the visible app.
     pub shell_metadata_fresh: bool,
+    /// Whether the most recent typed shell-context snapshot still matches the current shell frame.
+    pub shell_context_fresh: bool,
     /// What the backend can authoritatively observe for this pane today.
     pub observation_support: crate::context::PaneObservationSupport,
     /// The only address space valid for pane_index today.
@@ -707,6 +711,8 @@ pub struct PaneInfo {
     pub target_stack: Vec<PaneVisibleTarget>,
     /// tmux adapter state when a tmux layer is present in this pane.
     pub tmux_control: Option<TmuxControlState>,
+    /// Explicit protocol attachments currently available on this pane.
+    pub control_attachments: Vec<PaneProtocolAttachment>,
     /// Control channels con can use on this pane.
     pub control_channels: Vec<PaneControlChannel>,
     /// Capabilities currently available on this pane.
@@ -723,6 +729,10 @@ pub struct PaneInfo {
     pub runtime_stack: Vec<crate::context::PaneRuntimeScope>,
     /// Warnings about stale or advisory runtime metadata.
     pub runtime_warnings: Vec<String>,
+    /// Last typed shell-context snapshot captured for this pane.
+    pub shell_context: Option<PaneShellContext>,
+    /// Recent con-originated actions for this pane.
+    pub recent_actions: Vec<PaneActionRecord>,
     /// tmux session hint when detected from the pane itself.
     pub tmux_session: Option<String>,
     /// Whether shell integration (OSC 133) is active.
@@ -760,6 +770,8 @@ pub enum PaneQuery {
     },
     /// Return tmux adapter state for a pane whose target stack contains tmux.
     InspectTmux { pane_index: usize },
+    /// Run a read-only shell-scoped probe in a pane with a proven fresh shell prompt.
+    ProbeShellContext { pane_index: usize },
     /// Lightweight busy check for a single pane (used by wait_for polling).
     /// Returns only is_busy + has_shell_integration, avoiding full List forensics.
     CheckBusy { pane_index: usize },
@@ -780,6 +792,7 @@ pub enum PaneResponse {
     Content(String),
     KeysSent,
     TmuxInfo(TmuxControlState),
+    ShellProbe(ShellProbeResult),
     /// Search results: Vec of (pane_index, line_number, line_text).
     SearchResults(Vec<(usize, usize, String)>),
     /// Lightweight busy-check response.
@@ -823,7 +836,7 @@ impl Tool for ListPanesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, runtime state, backend-support flags, and control state: address space, visible target, nested target_stack, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
+            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, runtime state, backend-support flags, typed shell context, recent con actions, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -921,6 +934,73 @@ impl Tool for TmuxInspectTool {
 
         match response {
             PaneResponse::TmuxInfo(info) => {
+                serde_json::to_value(&info).map_err(|e| ToolError::CommandFailed(e.to_string()))
+            }
+            PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+            _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+        }
+    }
+}
+
+// ── probe_shell_context tool ───────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ProbeShellContextArgs {
+    pub pane_index: usize,
+}
+
+pub struct ProbeShellContextTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl ProbeShellContextTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for ProbeShellContextTool {
+    const NAME: &'static str = "probe_shell_context";
+    type Error = ToolError;
+    type Args = ProbeShellContextArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Run a read-only shell-scoped probe in a pane that has the probe_shell_context capability. Use this only when list_panes reports a proven fresh shell prompt. Returns authoritative shell facts from that shell frame such as hostname, pwd, SSH env, TMUX env, tmux session/window/pane ids, pane_current_command, pane_current_path, and NVIM_LISTEN_ADDRESS when available. This is shell-scope truth, not proof of the foreground app after control passes to tmux or another TUI.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": "integer",
+                        "description": "Target con pane index (from list_panes). Requires probe_shell_context capability."
+                    }
+                },
+                "required": ["pane_index"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::ProbeShellContext {
+                    pane_index: args.pane_index,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(12))
+                .map_err(|_| ToolError::CommandFailed("Shell probe timed out".into()))
+        })?;
+
+        match response {
+            PaneResponse::ShellProbe(info) => {
                 serde_json::to_value(&info).map_err(|e| ToolError::CommandFailed(e.to_string()))
             }
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),

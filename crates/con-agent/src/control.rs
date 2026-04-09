@@ -46,6 +46,7 @@ pub enum PaneControlChannel {
     ReadScreen,
     SearchScrollback,
     RawInput,
+    ShellProbe,
     VisibleShellExec,
 }
 
@@ -55,6 +56,7 @@ impl PaneControlChannel {
             Self::ReadScreen => "read_screen",
             Self::SearchScrollback => "search_scrollback",
             Self::RawInput => "raw_input",
+            Self::ShellProbe => "shell_probe",
             Self::VisibleShellExec => "visible_shell_exec",
         }
     }
@@ -66,6 +68,7 @@ pub enum PaneControlCapability {
     ReadScreen,
     SearchScrollback,
     SendRawInput,
+    ProbeShellContext,
     ExecVisibleShell,
 }
 
@@ -75,7 +78,90 @@ impl PaneControlCapability {
             Self::ReadScreen => "read_screen",
             Self::SearchScrollback => "search_scrollback",
             Self::SendRawInput => "send_raw_input",
+            Self::ProbeShellContext => "probe_shell_context",
             Self::ExecVisibleShell => "exec_visible_shell",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneAttachmentKind {
+    GhosttySurface,
+    ShellPrompt,
+    TmuxControl,
+    NeovimRpc,
+    OsPty,
+}
+
+impl PaneAttachmentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GhosttySurface => "ghostty_surface",
+            Self::ShellPrompt => "shell_prompt",
+            Self::TmuxControl => "tmux_control",
+            Self::NeovimRpc => "neovim_rpc",
+            Self::OsPty => "os_pty",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneAttachmentAuthority {
+    BackendFact,
+    ProtocolFact,
+    ShellProbe,
+}
+
+impl PaneAttachmentAuthority {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BackendFact => "backend_fact",
+            Self::ProtocolFact => "protocol_fact",
+            Self::ShellProbe => "shell_probe",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneAttachmentTransport {
+    EmbeddedSurface,
+    VisibleShell,
+    TmuxProtocol,
+    MsgpackRpc,
+    ProcessInspection,
+}
+
+impl PaneAttachmentTransport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::EmbeddedSurface => "embedded_surface",
+            Self::VisibleShell => "visible_shell",
+            Self::TmuxProtocol => "tmux_protocol",
+            Self::MsgpackRpc => "msgpack_rpc",
+            Self::ProcessInspection => "process_inspection",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaneProtocolAttachment {
+    pub id: String,
+    pub kind: PaneAttachmentKind,
+    pub authority: PaneAttachmentAuthority,
+    pub transport: PaneAttachmentTransport,
+    pub label: Option<String>,
+    pub capabilities: Vec<PaneControlCapability>,
+    pub note: Option<String>,
+}
+
+impl PaneProtocolAttachment {
+    pub fn summary(&self) -> String {
+        match self.label.as_deref() {
+            Some(label) => format!("{}({label})", self.kind.as_str()),
+            None => self.kind.as_str().to_string(),
         }
     }
 }
@@ -125,6 +211,7 @@ pub struct PaneControlState {
     pub address_space: PaneAddressSpace,
     pub target_stack: Vec<PaneVisibleTarget>,
     pub visible_target: PaneVisibleTarget,
+    pub attachments: Vec<PaneProtocolAttachment>,
     pub tmux: Option<TmuxControlState>,
     pub channels: Vec<PaneControlChannel>,
     pub capabilities: Vec<PaneControlCapability>,
@@ -146,6 +233,7 @@ impl PaneControlState {
             .last()
             .cloned()
             .unwrap_or_else(|| fallback_visible_target(runtime));
+        let attachments = attachments_from_runtime(runtime, &target_stack);
         let tmux = tmux_control_from_runtime(runtime, &target_stack);
 
         let mut channels = vec![
@@ -159,7 +247,9 @@ impl PaneControlState {
             PaneControlCapability::SendRawInput,
         ];
         if runtime.mode == PaneMode::Shell && runtime.shell_metadata_fresh {
+            channels.push(PaneControlChannel::ShellProbe);
             channels.push(PaneControlChannel::VisibleShellExec);
+            capabilities.push(PaneControlCapability::ProbeShellContext);
             capabilities.push(PaneControlCapability::ExecVisibleShell);
         }
 
@@ -176,11 +266,33 @@ impl PaneControlState {
                 ));
             }
         }
+        if runtime.shell_context_fresh {
+            if let Some(tmux) = runtime
+                .shell_context
+                .as_ref()
+                .and_then(|context| context.tmux.as_ref())
+            {
+                let session = tmux
+                    .session_name
+                    .clone()
+                    .unwrap_or_else(|| "tmux".to_string());
+                let pane = tmux
+                    .pane_id
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+                notes.push(format!(
+                    "Fresh shell probe confirmed that the visible shell prompt is inside tmux session `{session}` pane `{pane}`."
+                ));
+            }
+        }
         if target_stack.len() > 1 {
             notes.push(format!(
                 "Nested visible target stack: {}.",
                 format_target_stack(&target_stack)
             ));
+        }
+        if let Some(action) = runtime.recent_actions.last() {
+            notes.push(format!("Recent con action: {}.", action.summary));
         }
 
         match visible_target.kind {
@@ -218,6 +330,7 @@ impl PaneControlState {
             address_space: PaneAddressSpace::ConPane,
             target_stack,
             visible_target,
+            attachments,
             tmux,
             channels,
             capabilities,
@@ -228,6 +341,11 @@ impl PaneControlState {
     pub fn allows_visible_shell_exec(&self) -> bool {
         self.capabilities
             .contains(&PaneControlCapability::ExecVisibleShell)
+    }
+
+    pub fn allows_shell_probe(&self) -> bool {
+        self.capabilities
+            .contains(&PaneControlCapability::ProbeShellContext)
     }
 }
 
@@ -241,6 +359,60 @@ pub fn format_target_stack(targets: &[PaneVisibleTarget]) -> String {
             .collect::<Vec<_>>()
             .join(" -> ")
     }
+}
+
+pub fn format_control_attachments(attachments: &[PaneProtocolAttachment]) -> String {
+    if attachments.is_empty() {
+        "none".to_string()
+    } else {
+        attachments
+            .iter()
+            .map(PaneProtocolAttachment::summary)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+fn attachments_from_runtime(
+    runtime: &PaneRuntimeState,
+    target_stack: &[PaneVisibleTarget],
+) -> Vec<PaneProtocolAttachment> {
+    let mut attachments = vec![PaneProtocolAttachment {
+        id: "ghostty_surface".to_string(),
+        kind: PaneAttachmentKind::GhosttySurface,
+        authority: PaneAttachmentAuthority::BackendFact,
+        transport: PaneAttachmentTransport::EmbeddedSurface,
+        label: None,
+        capabilities: vec![
+            PaneControlCapability::ReadScreen,
+            PaneControlCapability::SearchScrollback,
+            PaneControlCapability::SendRawInput,
+        ],
+        note: Some(
+            "Ghostty surface attachment provides screen reads, scrollback search, and raw visible input."
+                .to_string(),
+        ),
+    }];
+
+    if runtime.mode == PaneMode::Shell && runtime.shell_metadata_fresh {
+        attachments.push(PaneProtocolAttachment {
+            id: "shell_prompt".to_string(),
+            kind: PaneAttachmentKind::ShellPrompt,
+            authority: PaneAttachmentAuthority::BackendFact,
+            transport: PaneAttachmentTransport::VisibleShell,
+            label: target_stack.last().and_then(|target| target.host.clone()),
+            capabilities: vec![
+                PaneControlCapability::ProbeShellContext,
+                PaneControlCapability::ExecVisibleShell,
+            ],
+            note: Some(
+                "Fresh shell prompt is proven in the visible pane. Read-only shell probes and visible shell execution are available."
+                    .to_string(),
+            ),
+        });
+    }
+
+    attachments
 }
 
 fn tmux_control_from_runtime(
@@ -266,7 +438,17 @@ fn tmux_control_from_runtime(
         }),
         mode: TmuxControlMode::InspectOnly,
         front_target: target_stack.get(tmux_index + 1).cloned(),
-        reason: "con can identify the tmux scope in this pane, but it does not yet have a same-session tmux control channel. Native tmux pane/window targeting and tmux command execution are unavailable.".to_string(),
+        reason: if runtime.shell_context_fresh
+            && runtime
+                .shell_context
+                .as_ref()
+                .and_then(|context| context.tmux.as_ref())
+                .is_some()
+        {
+            "con has typed same-shell tmux context for this pane, but it does not yet have a dedicated tmux control channel. Native tmux pane/window targeting and tmux command execution are still unavailable.".to_string()
+        } else {
+            "con can identify the tmux scope in this pane, but it does not yet have a same-session tmux control channel. Native tmux pane/window targeting and tmux command execution are unavailable.".to_string()
+        },
     })
 }
 
@@ -384,8 +566,8 @@ fn fallback_visible_target(runtime: &PaneRuntimeState) -> PaneVisibleTarget {
 #[cfg(test)]
 mod tests {
     use super::{
-        fallback_visible_target, format_target_stack, PaneControlCapability, PaneControlState,
-        PaneVisibleTargetKind, TmuxControlMode,
+        PaneAttachmentKind, PaneControlCapability, PaneControlState, PaneVisibleTargetKind,
+        TmuxControlMode, fallback_visible_target, format_control_attachments, format_target_stack,
     };
     use crate::context::{
         PaneEvidenceSource, PaneMode, PaneRuntimeScope, PaneRuntimeState, PaneScopeKind,
@@ -401,6 +583,8 @@ mod tests {
             remote_host_source: None,
             agent_cli: None,
             tmux_session: Some("work".to_string()),
+            shell_context: None,
+            shell_context_fresh: false,
             active_scope: Some(PaneRuntimeScope {
                 kind: PaneScopeKind::Multiplexer,
                 label: Some("work".to_string()),
@@ -416,6 +600,7 @@ mod tests {
                 confidence: crate::context::PaneConfidence::Strong,
                 evidence_source: PaneEvidenceSource::CommandLine,
             }],
+            recent_actions: Vec::new(),
             warnings: Vec::new(),
         };
 
@@ -425,9 +610,11 @@ mod tests {
             PaneVisibleTargetKind::TmuxSession
         );
         assert!(!control.allows_visible_shell_exec());
-        assert!(!control
-            .capabilities
-            .contains(&PaneControlCapability::ExecVisibleShell));
+        assert!(
+            !control
+                .capabilities
+                .contains(&PaneControlCapability::ExecVisibleShell)
+        );
     }
 
     #[test]
@@ -440,6 +627,8 @@ mod tests {
             remote_host_source: None,
             agent_cli: None,
             tmux_session: None,
+            shell_context: None,
+            shell_context_fresh: false,
             active_scope: Some(PaneRuntimeScope {
                 kind: PaneScopeKind::Shell,
                 label: None,
@@ -455,6 +644,7 @@ mod tests {
                 confidence: crate::context::PaneConfidence::Strong,
                 evidence_source: PaneEvidenceSource::ShellIntegration,
             }],
+            recent_actions: Vec::new(),
             warnings: Vec::new(),
         };
 
@@ -464,6 +654,18 @@ mod tests {
             PaneVisibleTargetKind::ShellPrompt
         );
         assert!(control.allows_visible_shell_exec());
+        assert!(control.allows_shell_probe());
+        assert!(
+            control
+                .capabilities
+                .contains(&PaneControlCapability::ProbeShellContext)
+        );
+        assert!(
+            control
+                .attachments
+                .iter()
+                .any(|attachment| attachment.kind == PaneAttachmentKind::ShellPrompt)
+        );
     }
 
     #[test]
@@ -476,6 +678,8 @@ mod tests {
             remote_host_source: None,
             agent_cli: None,
             tmux_session: Some("work".to_string()),
+            shell_context: None,
+            shell_context_fresh: false,
             active_scope: Some(PaneRuntimeScope {
                 kind: PaneScopeKind::Multiplexer,
                 label: Some("work".to_string()),
@@ -500,6 +704,7 @@ mod tests {
                     evidence_source: PaneEvidenceSource::CommandLine,
                 },
             ],
+            recent_actions: Vec::new(),
             warnings: Vec::new(),
         };
 
@@ -517,6 +722,10 @@ mod tests {
             Some(TmuxControlMode::InspectOnly)
         );
         assert_eq!(
+            format_control_attachments(&control.attachments),
+            "ghostty_surface"
+        );
+        assert_eq!(
             control
                 .tmux
                 .as_ref()
@@ -524,10 +733,12 @@ mod tests {
                 .map(|target| target.summary()),
             None
         );
-        assert!(control
-            .notes
-            .iter()
-            .any(|note| note.contains("outer con pane")));
+        assert!(
+            control
+                .notes
+                .iter()
+                .any(|note| note.contains("outer con pane"))
+        );
     }
 
     #[test]
@@ -540,9 +751,12 @@ mod tests {
             remote_host_source: None,
             agent_cli: None,
             tmux_session: None,
+            shell_context: None,
+            shell_context_fresh: false,
             active_scope: None,
             evidence: Vec::new(),
             scope_stack: Vec::new(),
+            recent_actions: Vec::new(),
             warnings: Vec::new(),
         };
 
