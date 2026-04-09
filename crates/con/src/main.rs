@@ -81,7 +81,12 @@ fn main() {
         gpui_component::init(cx);
 
         // Load and activate con's design theme (synced to terminal theme)
-        theme::init_theme(cx, &config.terminal.theme);
+        theme::init_theme(
+            cx,
+            &config.terminal.theme,
+            &config.terminal.font_family,
+            &config.appearance.ui_font_family,
+        );
 
         // Register ghostty terminal key bindings (Tab interception, etc.)
         #[cfg(target_os = "macos")]

@@ -60,6 +60,7 @@ impl TerminalPane {
         &self,
         theme: &TerminalTheme,
         colors: &TerminalColors,
+        font_family: &str,
         font_size: f32,
         background_opacity: f32,
         background_image: Option<&str>,
@@ -73,6 +74,7 @@ impl TerminalPane {
         if let Some(terminal) = self.entity.read(cx).terminal() {
             if let Err(err) = terminal.update_appearance(
                 colors,
+                font_family,
                 font_size,
                 background_opacity,
                 background_image,

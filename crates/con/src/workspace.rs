@@ -48,6 +48,8 @@ pub struct ConWorkspace {
     sidebar: Entity<SessionSidebar>,
     tabs: Vec<Tab>,
     active_tab: usize,
+    terminal_font_family: String,
+    ui_font_family: String,
     font_size: f32,
     terminal_opacity: f32,
     ui_opacity: f32,
@@ -145,6 +147,8 @@ impl ConWorkspace {
 
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
+        let terminal_font_family = config.terminal.font_family.clone();
+        let ui_font_family = config.appearance.ui_font_family.clone();
         let font_size = config.terminal.font_size;
         let terminal_opacity = Self::clamp_terminal_opacity(config.appearance.terminal_opacity);
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
@@ -159,6 +163,7 @@ impl ConWorkspace {
         let colors = theme_to_ghostty_colors(&terminal_theme);
         let ghostty_app = con_ghostty::GhosttyApp::new(
             Some(&colors),
+            Some(&terminal_font_family),
             Some(font_size),
             Some(terminal_opacity),
             background_image.as_deref(),
@@ -374,6 +379,8 @@ impl ConWorkspace {
             sidebar,
             tabs,
             active_tab,
+            terminal_font_family,
+            ui_font_family,
             font_size,
             terminal_opacity,
             ui_opacity,
@@ -915,6 +922,8 @@ impl ConWorkspace {
 
         let term_config = settings.read(cx).terminal_config().clone();
         let appearance_config = settings.read(cx).appearance_config().clone();
+        self.terminal_font_family = term_config.font_family.clone();
+        self.ui_font_family = appearance_config.ui_font_family.clone();
         self.font_size = term_config.font_size;
         self.terminal_opacity = Self::clamp_terminal_opacity(appearance_config.terminal_opacity);
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
@@ -993,6 +1002,7 @@ impl ConWorkspace {
                 terminal.set_theme(
                     &theme,
                     &colors,
+                    &self.terminal_font_family,
                     self.font_size,
                     self.terminal_opacity,
                     self.background_image.as_deref(),
@@ -1006,6 +1016,7 @@ impl ConWorkspace {
         }
         if let Err(e) = self.ghostty_app.update_appearance(
             &colors,
+            &self.terminal_font_family,
             self.font_size,
             self.terminal_opacity,
             self.background_image.as_deref(),
@@ -1017,7 +1028,13 @@ impl ConWorkspace {
             log::error!("Failed to update Ghostty appearance: {}", e);
         }
         // Sync GPUI UI theme colors with terminal theme
-        crate::theme::sync_gpui_theme(&theme, window, cx);
+        crate::theme::sync_gpui_theme(
+            &theme,
+            &self.terminal_font_family,
+            &self.ui_font_family,
+            window,
+            cx,
+        );
     }
 
     fn on_input_escape(
@@ -3072,7 +3089,7 @@ impl Render for ConWorkspace {
             .flex_col()
             .size_full()
             .bg(theme.title_bar.opacity(ui_surface_opacity))
-            .font_family("Ioskeley Mono")
+            .font_family(theme.mono_font_family.clone())
             .key_context("ConWorkspace")
             // Pane drag-to-resize: capture mouse move/up on root so it works
             // even when cursor is over terminal views (which capture mouse events).
@@ -3245,7 +3262,7 @@ impl Render for ConWorkspace {
                 .border_color(theme.muted.opacity(0.16))
                 .py(px(6.0))
                 .overflow_hidden()
-                .font_family(".SystemUIFont");
+                .font_family(theme.font_family.clone());
 
             for (i, (name, desc)) in skills.iter().enumerate() {
                 let is_sel = i == sel;
@@ -3326,7 +3343,7 @@ impl Render for ConWorkspace {
                 .border_color(theme.muted.opacity(0.16))
                 .py(px(6.0))
                 .overflow_hidden()
-                .font_family(".SystemUIFont");
+                .font_family(theme.font_family.clone());
 
             for (i, (name, desc)) in skills.iter().enumerate() {
                 let is_sel = i == sel;

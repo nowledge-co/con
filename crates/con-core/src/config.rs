@@ -15,6 +15,9 @@ fn default_theme() -> String {
 fn default_cursor_style() -> String {
     "bar".into()
 }
+fn default_ui_font_family() -> String {
+    ".SystemUIFont".into()
+}
 fn default_terminal_opacity() -> f32 {
     0.80
 }
@@ -56,6 +59,7 @@ impl Default for TerminalConfig {
 pub struct AppearanceConfig {
     pub terminal_opacity: f32,
     pub ui_opacity: f32,
+    pub ui_font_family: String,
     pub background_image: Option<String>,
     pub background_image_opacity: f32,
     pub background_image_position: String,
@@ -68,6 +72,7 @@ impl Default for AppearanceConfig {
         Self {
             terminal_opacity: default_terminal_opacity(),
             ui_opacity: default_ui_opacity(),
+            ui_font_family: default_ui_font_family(),
             background_image: None,
             background_image_opacity: default_background_image_opacity(),
             background_image_position: default_background_image_position(),

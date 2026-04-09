@@ -484,8 +484,8 @@ impl Render for InputBar {
 
         // Font: mono for shell/smart, system for agent
         let input_font = match self.mode {
-            InputMode::Agent => ".SystemUIFont",
-            _ => "Ioskeley Mono",
+            InputMode::Agent => theme.font_family.clone(),
+            _ => theme.mono_font_family.clone(),
         };
 
         // ── Main layout — flat bar, no rounded bubble ──
@@ -493,7 +493,7 @@ impl Render for InputBar {
             .flex()
             .flex_col()
             .bg(theme.title_bar.opacity(self.ui_opacity))
-            .font_family(".SystemUIFont")
+            .font_family(theme.font_family.clone())
             .text_size(px(13.0))
             // Intercept Tab
             .on_action(cx.listener(

@@ -163,7 +163,7 @@ impl Render for SessionSidebar {
             .w(px(200.0))
             .h_full()
             .bg(theme.sidebar)
-            .font_family("Ioskeley Mono")
+            .font_family(theme.mono_font_family.clone())
             .flex()
             .flex_col()
             // Header — aligns with tab bar height

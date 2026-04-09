@@ -53,6 +53,7 @@ impl TerminalColors {
 #[derive(Debug, Clone, Default)]
 pub struct GhosttyConfigPatch {
     pub colors: Option<TerminalColors>,
+    pub font_family: Option<String>,
     pub font_size: Option<f32>,
     pub background_opacity: Option<f32>,
     pub background_opacity_cells: Option<bool>,
@@ -68,6 +69,9 @@ impl GhosttyConfigPatch {
     fn merge(&mut self, patch: &GhosttyConfigPatch) {
         if let Some(colors) = &patch.colors {
             self.colors = Some(colors.clone());
+        }
+        if let Some(font_family) = &patch.font_family {
+            self.font_family = Some(font_family.clone());
         }
         if let Some(font_size) = patch.font_size {
             self.font_size = Some(font_size);
@@ -102,6 +106,10 @@ impl GhosttyConfigPatch {
         let mut s = String::with_capacity(512);
         if let Some(colors) = &self.colors {
             colors.append_config(&mut s);
+        }
+        if let Some(font_family) = &self.font_family {
+            s.push_str("font-family = \"\"\n");
+            s.push_str(&format!("font-family = {:?}\n", font_family));
         }
         if let Some(font_size) = self.font_size {
             s.push_str(&format!("font-size = {:.2}\n", font_size));
@@ -168,7 +176,11 @@ fn build_ghostty_config(patch: &GhosttyConfigPatch) -> Result<ffi::ghostty_confi
         return Err("ghostty_config_new returned null".into());
     }
 
-    if patch.colors.is_some() || patch.font_size.is_some() || patch.background_opacity.is_some() {
+    if patch.colors.is_some()
+        || patch.font_family.is_some()
+        || patch.font_size.is_some()
+        || patch.background_opacity.is_some()
+    {
         let path = patch.write_config_file()?;
         let path_str = path.to_str().ok_or("non-UTF8 path")?;
         let cpath = CString::new(path_str).map_err(|e| format!("CString: {}", e))?;
@@ -296,6 +308,7 @@ impl GhosttyApp {
     /// Create a new ghostty app with the given terminal colors.
     pub fn new(
         colors: Option<&TerminalColors>,
+        font_family: Option<&str>,
         font_size: Option<f32>,
         background_opacity: Option<f32>,
         background_image: Option<&str>,
@@ -308,6 +321,7 @@ impl GhosttyApp {
 
         let appearance = GhosttyConfigPatch {
             colors: colors.cloned(),
+            font_family: font_family.map(ToOwned::to_owned),
             font_size,
             background_opacity,
             background_opacity_cells: background_opacity.map(|opacity| opacity < 0.999),
@@ -362,6 +376,7 @@ impl GhosttyApp {
     pub fn update_colors(&self, colors: &TerminalColors) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {
             colors: Some(colors.clone()),
+            font_family: None,
             font_size: None,
             background_opacity: None,
             background_opacity_cells: None,
@@ -377,6 +392,7 @@ impl GhosttyApp {
     pub fn update_appearance(
         &self,
         colors: &TerminalColors,
+        font_family: &str,
         font_size: f32,
         background_opacity: f32,
         background_image: Option<&str>,
@@ -387,6 +403,7 @@ impl GhosttyApp {
     ) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {
             colors: Some(colors.clone()),
+            font_family: Some(font_family.to_string()),
             font_size: Some(font_size),
             background_opacity: Some(background_opacity),
             background_opacity_cells: Some(background_opacity < 0.999),
@@ -611,6 +628,7 @@ impl GhosttyTerminal {
     pub fn update_appearance(
         &self,
         colors: &TerminalColors,
+        font_family: &str,
         font_size: f32,
         background_opacity: f32,
         background_image: Option<&str>,
@@ -621,6 +639,7 @@ impl GhosttyTerminal {
     ) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {
             colors: Some(colors.clone()),
+            font_family: Some(font_family.to_string()),
             font_size: Some(font_size),
             background_opacity: Some(background_opacity),
             background_opacity_cells: Some(background_opacity < 0.999),

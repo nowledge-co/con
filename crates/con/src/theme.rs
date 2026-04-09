@@ -21,7 +21,12 @@ const FONT_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/IoskeleyMono-
 ///
 /// Registers IoskeleyMono fonts, loads built-in themes, and activates the
 /// mode matching the terminal theme.
-pub fn init_theme(cx: &mut App, terminal_theme: &str) {
+pub fn init_theme(
+    cx: &mut App,
+    terminal_theme: &str,
+    terminal_font_family: &str,
+    ui_font_family: &str,
+) {
     cx.text_system()
         .add_fonts(vec![
             Cow::Borrowed(FONT_REGULAR),
@@ -56,6 +61,7 @@ pub fn init_theme(cx: &mut App, terminal_theme: &str) {
         ThemeMode::Dark
     };
     Theme::change(mode, None, cx);
+    apply_font_overrides(terminal_font_family, ui_font_family, cx);
     apply_scrollbar_overrides(cx);
 }
 
@@ -63,6 +69,8 @@ pub fn init_theme(cx: &mut App, terminal_theme: &str) {
 /// Generates a dynamic GPUI theme from the terminal theme's colors.
 pub fn sync_gpui_theme(
     terminal_theme: &TerminalTheme,
+    terminal_font_family: &str,
+    ui_font_family: &str,
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) {
@@ -73,7 +81,13 @@ pub fn sync_gpui_theme(
         ThemeMode::Dark
     };
     Theme::change(mode, Some(window), cx);
+    apply_font_overrides(terminal_font_family, ui_font_family, cx);
     apply_scrollbar_overrides(cx);
+}
+
+fn apply_font_overrides(terminal_font_family: &str, ui_font_family: &str, cx: &mut App) {
+    Theme::global_mut(cx).mono_font_family = terminal_font_family.to_string().into();
+    Theme::global_mut(cx).font_family = ui_font_family.to_string().into();
 }
 
 /// Apply con's scrollbar overrides after any Theme::change call.
