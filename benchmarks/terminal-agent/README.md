@@ -83,6 +83,10 @@ python3 benchmarks/terminal-agent/iterate.py \
 
 `iterate.py` launches a fresh Con app instance for each iteration with its own socket, XDG data home, and XDG config home. Use it when you want a real trend line instead of one hand-run benchmark.
 
+On macOS, `iterate.py` also forces isolated session and conversation storage with `CON_SESSION_PATH` and `CON_CONVERSATIONS_DIR`, so fresh benchmark apps do not inherit your real restored tabs or saved conversations.
+
+If the batch runner reports `blocked` with `ghostty_surface_bootstrap_unavailable`, that is not a scored product regression. It means the benchmark environment could not produce a live Ghostty surface for the launched app process. In that case, prefer running operator suites against an already-live Con session with `--socket`.
+
 Use a tab that is not already serving another in-progress agent request. Operator suites serialize turns on one tab by design, and the runner will fail fast if the tab stays busy too long.
 
 ## Strict suite coverage

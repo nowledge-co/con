@@ -67,7 +67,9 @@ python3 benchmarks/terminal-agent/iterate.py \
   --profile operator-ssh-tmux-devloop
 ```
 
-`iterate.py` launches a fresh Con runtime per iteration with its own socket and XDG homes, which keeps restored pane state from contaminating the next scored run.
+`iterate.py` launches a fresh Con runtime per iteration with its own socket, XDG homes, session file, and conversation directory, which keeps restored pane state from contaminating the next scored run.
+
+If an iteration is marked `blocked` with `ghostty_surface_bootstrap_unavailable`, treat that as environment unavailability, not a scored product result. The correct response is to switch to a live existing Con session or fix the launch environment, not to adjust the product score.
 
 ## Reporting
 

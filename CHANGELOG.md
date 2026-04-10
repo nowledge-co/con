@@ -45,6 +45,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Multi-host SSH work now has a typed reuse-or-create helper too. The agent can ask con to reuse an existing SSH pane for a host, or create one with explicit split placement, instead of spawning duplicate remote panes on follow-up turns.
 - Local coding-agent workflows now have a typed paired-shell helper too. The agent can keep Codex, Claude Code, or OpenCode in one local pane while reusing or creating a separate local shell pane for file edits, test runs, and other shell work.
 - Local coding-agent workflows now have a typed agent-target helper too. con can reuse or launch a local Codex, Claude Code, or OpenCode pane explicitly instead of leaving that choice implicit in model reasoning.
+- Local coding workspaces are now summarized at the tab level too. The agent can see reusable local shell and agent-cli workspaces, including project-path hints and recent local continuity, instead of rebuilding that routing decision from raw panes every turn.
 - con now distinguishes tmux-controlled agent CLIs from true native app attachments. Codex and OpenCode both have richer protocol surfaces, but con only treats them as tmux targets unless an explicit launch-integrated attachment is proven.
 - When native tmux control is available, the agent now treats tmux-native target discovery and tmux-native key delivery as the default path. Raw outer-pane `send_keys` is now fallback-only for tmux instead of the first choice.
 - con no longer teaches editor-specific keystroke playbooks in the main agent prompt. The built-in control surface now stays focused on shells, SSH, tmux, and agent CLIs, with generic TUI input only as a fallback.
@@ -90,6 +91,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Operator benchmark profiles can now start from a fresh conversation and run deterministic visible-shell setup commands before the first prompt, which makes repeated local Codex and SSH/tmux evaluations more stable.
 - Operator benchmark profiles can now also run deterministic local shell setup commands before the first prompt. The built-in operator profiles use that for dependency-free local Python setup and clean tmux-session hygiene on remote hosts.
 - The terminal-agent benchmark now ships an isolated batch runner, so multi-iteration evaluation can launch a fresh Con runtime per run instead of reusing polluted session state.
+- The terminal-agent benchmark now isolates restored session state on macOS too. Fresh iterations use dedicated session and conversation paths, and repeated Ghostty bootstrap launch failures are classified as blocked environment runs instead of misleading scored regressions.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.
@@ -97,6 +99,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Font size changes now apply to existing Ghostty panes immediately, so terminal text updates in place when you save Settings.
 - Terminal theme changes now apply to live Ghostty panes immediately instead of only updating the surrounding con interface.
 - Control-created panes now bootstrap as real Ghostty surfaces immediately instead of staying as uninitialized placeholders until a later render pass. `panes.create` now returns `surface_ready`, `is_alive`, and `has_shell_integration`, which makes CLI- and agent-driven pane setup much more truthful.
+- The control plane can now create and close tabs through `con-cli`, and workspace bootstrap now reasserts new or newly focused terminals until Ghostty either comes up or the environment proves it cannot.
 - Split rails now keep a visible resting presence instead of appearing only on hover, so sparse or newly created panes still read as separate terminal workspaces at a glance.
 - Split panes no longer blank out when they lose focus. Embedded Ghostty surfaces are no longer dimmed with GPUI opacity, which restores correct rendering for unfocused split panes while keeping the layout borderless.
 - Con now reasserts visibility for every active-tab Ghostty pane during normal renders, which hardens split layouts against stale hidden-surface state after split churn or overlay transitions.

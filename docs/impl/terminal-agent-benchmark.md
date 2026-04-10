@@ -100,7 +100,9 @@ This gives the project a repeatable loop:
 4. capture lessons and next focus
 5. generate trend reports across many runs
 
-For broader evaluation, `iterate.py` now launches a fresh Con app instance per iteration with an isolated socket and isolated XDG data/config homes. That keeps one operator run from polluting the next with restored session state.
+For broader evaluation, `iterate.py` now launches a fresh Con app instance per iteration with an isolated socket, isolated XDG data/config homes, an isolated session file, and an isolated conversation directory. That keeps one operator run from polluting the next with restored session state on macOS too.
+
+One honest environment boundary remains: a subprocess-launched Con app can still fail to acquire a live Ghostty surface under some macOS launch contexts. When every retry fails with `ghostty_surface_new returned null`, the batch runner now classifies that iteration as `blocked` with reason `ghostty_surface_bootstrap_unavailable` instead of pretending it is a scored product regression.
 
 That is how the benchmark becomes a product-improvement system instead of only a demo script.
 
