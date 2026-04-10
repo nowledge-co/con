@@ -158,7 +158,7 @@ impl PanelState {
         self.status = AgentStatus::Thinking;
         if let Some(last) = self.messages.last_mut() {
             last.steps.push(StepEntry {
-                icon: "phosphor/brain.svg",
+                icon: "phosphor/brain-duotone.svg",
                 label: step.to_string(),
                 detail: None,
                 status: StepStatus::Complete,
@@ -728,7 +728,7 @@ impl AgentPanel {
             };
             last.steps.push(StepEntry {
                 icon: if allowed {
-                    "phosphor/check.svg"
+                    "phosphor/check-circle-fill.svg"
                 } else {
                     "phosphor/x.svg"
                 },
@@ -772,7 +772,7 @@ impl AgentPanel {
     fn status_text(&self) -> Option<(&'static str, &'static str)> {
         // Priority: approval > running tool > thinking > responding
         if !self.state.pending_approvals.is_empty() {
-            return Some(("phosphor/warning.svg", "Awaiting approval…"));
+            return Some(("phosphor/shield-warning-fill.svg", "Awaiting approval…"));
         }
         if let Some(tc) = self.state.tool_calls.iter().find(|tc| tc.result.is_none()) {
             let label = match tc.tool_name.as_str() {
@@ -791,8 +791,8 @@ impl AgentPanel {
             return Some((tool_icon(&tc.tool_name), label));
         }
         match self.state.status {
-            AgentStatus::Thinking => Some(("phosphor/brain.svg", "Thinking…")),
-            AgentStatus::Responding => Some(("phosphor/pencil-simple.svg", "Writing…")),
+            AgentStatus::Thinking => Some(("phosphor/brain-duotone.svg", "Thinking…")),
+            AgentStatus::Responding => Some(("phosphor/chat-circle-fill.svg", "Writing…")),
             AgentStatus::Idle => None,
         }
     }
@@ -816,8 +816,8 @@ fn chat_markdown_style() -> TextViewStyle {
 
 fn tool_icon(tool_name: &str) -> &'static str {
     match tool_name {
-        "terminal_exec" | "batch_exec" => "phosphor/play.svg",
-        "shell_exec" => "phosphor/terminal.svg",
+        "terminal_exec" | "batch_exec" => "phosphor/play-circle-fill.svg",
+        "shell_exec" => "phosphor/terminal-duotone.svg",
         "probe_shell_context" => "phosphor/magnifying-glass.svg",
         "file_write" => "phosphor/pencil-simple.svg",
         "file_read" => "phosphor/file-code.svg",
@@ -825,18 +825,18 @@ fn tool_icon(tool_name: &str) -> &'static str {
         "list_files" => "phosphor/folder.svg",
         "search" | "search_panes" => "phosphor/magnifying-glass.svg",
         "list_panes" | "list_tab_workspaces" | "tmux_list_targets" | "tmux_find_targets" => {
-            "phosphor/columns.svg"
+            "phosphor/rows-fill.svg"
         }
-        "read_pane" => "phosphor/eye.svg",
-        "tmux_capture_pane" => "phosphor/eye.svg",
-        "send_keys" | "tmux_send_keys" => "phosphor/keyboard.svg",
-        "wait_for" => "phosphor/hourglass.svg",
+        "read_pane" => "phosphor/eye-fill.svg",
+        "tmux_capture_pane" => "phosphor/eye-fill.svg",
+        "send_keys" | "tmux_send_keys" => "phosphor/keyboard-fill.svg",
+        "wait_for" => "phosphor/hourglass-fill.svg",
         "create_pane"
         | "ensure_remote_shell_target"
         | "tmux_ensure_shell_target"
-        | "tmux_ensure_agent_target" => "phosphor/plus.svg",
-        "resolve_work_target" => "phosphor/compass.svg",
-        "remote_exec" | "tmux_run_command" => "phosphor/play.svg",
+        | "tmux_ensure_agent_target" => "phosphor/stack-fill.svg",
+        "resolve_work_target" => "phosphor/compass-fill.svg",
+        "remote_exec" | "tmux_run_command" => "phosphor/target-fill.svg",
         _ => "phosphor/gear.svg",
     }
 }
@@ -1487,6 +1487,15 @@ fn render_inline_state(
         .into_any_element()
 }
 
+fn render_section_kicker(label: &str, theme: &gpui_component::Theme) -> AnyElement {
+    div()
+        .text_size(px(9.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme.muted_foreground.opacity(0.38))
+        .child(label.to_ascii_uppercase())
+        .into_any_element()
+}
+
 fn render_step_status_tag(status: StepStatus, theme: &gpui_component::Theme) -> Option<AnyElement> {
     match status {
         StepStatus::Running => Some(render_inline_state("Live".into(), theme.warning, theme)),
@@ -1873,9 +1882,9 @@ impl Render for AgentPanel {
                     .pb(px(3.0))
                     .child(
                         svg()
-                            .path("phosphor/oven.svg")
+                            .path("phosphor/oven-duotone.svg")
                             .size(px(13.0))
-                            .text_color(theme.primary.opacity(0.55)),
+                            .text_color(theme.primary.opacity(0.65)),
                     )
                     .child(
                         div()
@@ -1940,9 +1949,9 @@ impl Render for AgentPanel {
                                 )
                                 .child(
                                     svg()
-                                        .path("phosphor/brain.svg")
+                                        .path("phosphor/brain-duotone.svg")
                                         .size(px(11.0))
-                                        .text_color(theme.muted_foreground.opacity(0.35)),
+                                        .text_color(theme.primary.opacity(0.42)),
                                 )
                                 .child(
                                     div()
@@ -2098,18 +2107,19 @@ impl Render for AgentPanel {
                                 .flex()
                                 .flex_col()
                                 .gap(px(2.0))
+                                .child(render_section_kicker(run_title, theme))
                                 .child(
                                     div()
                                         .text_size(px(12.25))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(theme.foreground.opacity(0.76))
-                                        .child(run_title),
+                                        .child("Actions, probes, and output"),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(10.5))
                                         .text_color(theme.muted_foreground.opacity(0.48))
-                                        .child("Actions, probes, and tool output"),
+                                        .child("A compact trace of what the agent actually did"),
                                 ),
                         )
                         .child(div().flex_1())
@@ -2377,18 +2387,19 @@ impl Render for AgentPanel {
                                 .flex()
                                 .flex_col()
                                 .gap(px(2.0))
+                                .child(render_section_kicker("Working now", theme))
                                 .child(
                                     div()
                                         .text_size(px(12.25))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(theme.foreground.opacity(0.76))
-                                        .child("Working now"),
+                                        .child("Live tools for this reply"),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(10.5))
                                         .text_color(theme.muted_foreground.opacity(0.48))
-                                        .child("Live tools for this reply"),
+                                        .child("Commands and reads still in progress"),
                                 ),
                         )
                         .child(div().flex_1())
@@ -2540,86 +2551,103 @@ impl Render for AgentPanel {
             let human_tool = humanize_tool_name(&approval.tool_name);
 
             // Approval card — clean, confident layout
-            let approval_el = div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .ml(px(19.0))
-                .mr(px(4.0))
-                .px(px(12.0))
-                .py(px(11.0))
-                .rounded(px(14.0))
-                .bg(theme.warning.opacity(0.035))
-                // Header — tool info
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(
-                            svg()
-                                .path(icon)
-                                .size(px(13.0))
-                                .flex_shrink_0()
-                                .text_color(theme.warning.opacity(0.70)),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.foreground.opacity(0.70))
-                                .flex_shrink_0()
-                                .child(human_tool),
-                        )
-                        .child(render_inline_state("Approval".into(), theme.warning, theme)),
-                )
-                // Args — monospace, full width
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .font_family(theme.mono_font_family.clone())
-                        .text_color(theme.muted_foreground.opacity(0.55))
-                        .overflow_x_hidden()
-                        .whitespace_nowrap()
-                        .child(truncate_str(&args_display, 80)),
-                )
-                .child(Divider::horizontal().color(theme.warning.opacity(0.12)))
-                // Action row — clear hierarchy
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(
-                            Button::new(format!("allow-{i}"))
-                                .label("Allow")
-                                .small()
-                                .primary()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.resolve_approval(allow_idx, true, cx);
-                                })),
-                        )
-                        .child(
-                            Button::new(format!("allow-all-{i}"))
-                                .label("Allow All")
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.auto_approve = true;
-                                    cx.emit(EnableAutoApprove);
-                                    this.resolve_all_approvals(cx);
-                                })),
-                        )
-                        .child(
-                            Button::new(format!("deny-{i}"))
-                                .label("Deny")
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.resolve_approval(deny_idx, false, cx);
-                                })),
-                        ),
-                );
+            let approval_el =
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .ml(px(19.0))
+                    .mr(px(4.0))
+                    .px(px(12.0))
+                    .py(px(11.0))
+                    .rounded(px(14.0))
+                    .bg(theme.warning.opacity(0.035))
+                    // Header — tool info
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .child(render_section_kicker("Approval needed", theme))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .child(
+                                                svg()
+                                                    .path(icon)
+                                                    .size(px(13.0))
+                                                    .flex_shrink_0()
+                                                    .text_color(theme.warning.opacity(0.70)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.5))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(theme.foreground.opacity(0.70))
+                                                    .flex_shrink_0()
+                                                    .child(human_tool),
+                                            ),
+                                    ),
+                            )
+                            .child(div().flex_1())
+                            .child(div().text_size(px(12.5)).flex_shrink_0().child(
+                                render_inline_state("Approval".into(), theme.warning, theme),
+                            )),
+                    )
+                    // Args — monospace, full width
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(theme.muted_foreground.opacity(0.55))
+                            .overflow_x_hidden()
+                            .whitespace_nowrap()
+                            .child(truncate_str(&args_display, 80)),
+                    )
+                    .child(Divider::horizontal().color(theme.warning.opacity(0.12)))
+                    // Action row — clear hierarchy
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                Button::new(format!("allow-{i}"))
+                                    .label("Allow")
+                                    .small()
+                                    .primary()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.resolve_approval(allow_idx, true, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(format!("allow-all-{i}"))
+                                    .label("Allow All")
+                                    .small()
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.auto_approve = true;
+                                        cx.emit(EnableAutoApprove);
+                                        this.resolve_all_approvals(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(format!("deny-{i}"))
+                                    .label("Deny")
+                                    .small()
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.resolve_approval(deny_idx, false, cx);
+                                    })),
+                            ),
+                    );
 
             messages_content = messages_content.child(approval_el);
         }
@@ -2677,13 +2705,13 @@ impl Render for AgentPanel {
             .gap(px(8.0))
             .child(
                 svg()
-                    .path("phosphor/oven.svg")
-                    .size(px(14.0))
+                    .path("phosphor/oven-duotone.svg")
+                    .size(px(15.0))
                     .text_color(theme.primary),
             )
             .child(
                 div()
-                    .text_size(px(12.5))
+                    .text_size(px(12.25))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.foreground.opacity(0.75))
                     .child(model_display),
@@ -2762,9 +2790,10 @@ impl Render for AgentPanel {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(8.0))
+                    .gap(px(7.0))
                     .mx(px(14.0))
                     .mb(px(8.0))
+                    .child(render_section_kicker("Needs approval", theme))
                     .child(
                         div()
                             .flex()
@@ -2796,9 +2825,10 @@ impl Render for AgentPanel {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(8.0))
+                    .gap(px(7.0))
                     .mx(px(14.0))
                     .mb(px(8.0))
+                    .child(render_section_kicker("Current run", theme))
                     .child(
                         div()
                             .flex()
@@ -2831,9 +2861,10 @@ impl Render for AgentPanel {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(8.0))
+                    .gap(px(7.0))
                     .mx(px(14.0))
                     .mb(px(8.0))
+                    .child(render_section_kicker("Live status", theme))
                     .child(
                         div()
                             .flex()

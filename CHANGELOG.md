@@ -61,6 +61,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - tmux-like screens are now captured as observations too. con can describe a pane as looking like tmux and route tmux-oriented questions toward that pane without pretending it already has native tmux control there.
 - SSH workspace reuse is stricter now. A pane that visibly shows a closed SSH connection or a tmux-like screen is no longer silently reused as a plain remote shell target on follow-up turns.
 - The agent panel now uses quieter run cards with calmer state labels, stronger alignment, and cleaner output blocks. Long tool results still expand inline, but the panel no longer relies on a loud “finished” banner to signal that a run is done.
+- The agent panel now uses stronger Phosphor fill and duotone icons, clearer section labels, and more deliberate spacing so tool traces feel like a composed operator timeline instead of a generic debug inspector.
 - The terminal-agent benchmark now includes richer operator playbooks and profiles for local Codex dev loops, dual-host SSH maintenance, and remote tmux edit/run/reuse workflows. It can now execute those operator prompt sequences directly and record the transcript instead of only printing a playbook path.
 
 **Terminal**
