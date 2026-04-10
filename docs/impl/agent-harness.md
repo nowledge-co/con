@@ -198,6 +198,19 @@ The mutex is held briefly for two operations:
 
 Rig manages its own history via `with_history(&mut Vec<rig::message::Message>)`. Our `to_rig_history()` provides User/Assistant text pairs. Rig appends tool call/result messages during its turn loop.
 
+## Focused Pane Fact Preflight
+
+Before each agent turn, the harness prepares focused-pane facts in two tiers:
+
+- non-intrusive preload
+  - tmux inventory is queried automatically only when the pane already exposes a proven native tmux control attachment
+  - this is silent and read-only, so it is safe to do before the model runs
+- explicit visible probe
+  - shell probes are no longer run automatically
+  - `probe_shell_context` remains a typed tool the model can call when it needs stronger shell-scoped facts such as host, SSH env, or tmux ids
+
+This split is intentional. A visible probe changes the user's terminal surface, so it must stay an explicit action. Silent tmux inventory does not.
+
 ## Session Persistence
 
 Each tab saves its own `conversation_id` to `session.json`:

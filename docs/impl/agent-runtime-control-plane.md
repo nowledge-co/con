@@ -44,9 +44,10 @@ con now ships the first typed control-plane layer:
 - the prompt now also carries typed work-target hints for the current tab, so the model sees the best visible shell target and best tmux workspace target before it makes a selection
 - visible execution is gated by `exec_visible_shell`, not by ad hoc prompt wording
 - panes with a proven fresh shell prompt now expose a read-only `probe_shell_context` capability for typed shell-scoped facts
-- before each agent turn, the harness now gathers the strongest safe read-only facts available on the focused pane: shell probe first, then tmux inventory if a real tmux query attachment exists
+- before each agent turn, the harness now gathers the strongest safe non-intrusive facts available on the focused pane: it never types a visible shell probe into the terminal automatically, but it does preload tmux inventory when a real tmux query attachment already exists
 - typed shell probes and con-originated actions are preserved as causal history on the pane, with freshness and invalidation rules
 - current verified foreground state is now modeled separately from the last verified shell frame, so stale shell history cannot masquerade as the live visible target
+- the prompt now carries a typed `remote_workspaces` inventory for the whole tab, so follow-up SSH work can reuse existing host panes from proven host facts or con-managed SSH continuity instead of re-creating them
 
 This is still phase one.
 
@@ -62,6 +63,7 @@ What it solves:
 - pane and tmux target choice can now be delegated back to con through a typed resolver instead of staying implicit in model reasoning
 - recent con actions stay available as causal evidence so the agent can understand how a pane was reached without treating history as present-tense truth
 - when the current foreground target is unproven, control falls back to `unknown` while `last_verified_shell_stack` remains available as historical orientation
+- con-managed SSH continuity is now a first-class middle layer for remote shell work: if con created or recently drove an SSH pane, and the current screen still looks prompt-like without tmux/TUI contradictions, that pane stays reusable for follow-up host work even when fresh shell integration is absent
 
 con now also ships the first true protocol attachment beyond raw pane observation:
 

@@ -577,11 +577,14 @@ impl ConWorkspace {
                     let (observation, runtime) =
                         self.observe_terminal_runtime_for_tab(self.active_tab, terminal, 10, cx);
                     let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+                    let remote_workspace =
+                        con_agent::context::remote_workspace_anchor(&runtime, &observation);
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
                         hostname: runtime.remote_host.clone(),
                         hostname_confidence: runtime.remote_host_confidence,
                         hostname_source: runtime.remote_host_source,
+                        remote_workspace,
                         title: observation.title.clone(),
                         front_state: runtime.front_state,
                         mode: runtime.mode,
@@ -1241,9 +1244,11 @@ impl ConWorkspace {
             return;
         }
 
-        let (_, runtime) = self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+        let (observation, runtime) = self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
         let control = con_agent::control::PaneControlState::from_runtime(&runtime);
-        if !control.allows_visible_shell_exec() {
+        let managed_remote_workspace =
+            con_agent::context::remote_workspace_anchor(&runtime, &observation);
+        if !control.allows_visible_shell_exec() && managed_remote_workspace.is_none() {
             let active_scope = runtime
                 .active_scope
                 .as_ref()
@@ -1416,6 +1421,8 @@ impl ConWorkspace {
                         let (observation, runtime) =
                             self.observe_terminal_runtime_for_tab(tab_idx, terminal, 12, cx);
                         let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+                        let remote_workspace =
+                            con_agent::context::remote_workspace_anchor(&runtime, &observation);
                         let title = observation
                             .title
                             .clone()
@@ -1432,6 +1439,7 @@ impl ConWorkspace {
                             hostname: runtime.remote_host.clone(),
                             hostname_confidence: runtime.remote_host_confidence,
                             hostname_source: runtime.remote_host_source,
+                            remote_workspace,
                             front_state: runtime.front_state,
                             mode: runtime.mode,
                             shell_metadata_fresh: runtime.shell_metadata_fresh,

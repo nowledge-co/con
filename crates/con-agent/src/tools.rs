@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::context::PaneMode;
-use crate::context::{PaneActionRecord, PaneShellContext};
+use crate::context::{
+    PaneActionRecord, PaneShellContext, RemoteWorkspaceAnchor, ssh_target_from_recent_actions,
+};
 use crate::control::{
     PaneAddressSpace, PaneControlCapability, PaneControlChannel, PaneProtocolAttachment,
     PaneVisibleTarget, PaneVisibleTargetKind, TmuxControlMode, TmuxControlState,
@@ -712,6 +714,8 @@ pub struct PaneInfo {
     pub hostname_confidence: Option<crate::context::PaneConfidence>,
     /// Evidence source for the effective hostname, when detected.
     pub hostname_source: Option<crate::context::PaneEvidenceSource>,
+    /// Best current remote SSH workspace anchor for this pane.
+    pub remote_workspace: Option<RemoteWorkspaceAnchor>,
     /// Current verified front-state for the pane.
     pub front_state: crate::context::PaneFrontState,
     /// Current pane mode: shell, tmux-like multiplexer, or another TUI.
@@ -1121,64 +1125,6 @@ fn tmux_command_basename(command: &str) -> &str {
     command.rsplit('/').next().unwrap_or(command)
 }
 
-fn parse_ssh_target(command: &str) -> Option<String> {
-    let mut tokens = command.split_whitespace().peekable();
-    while let Some(token) = tokens.next() {
-        let token = token.trim_matches(&['"', '\''][..]);
-        if token.is_empty() {
-            continue;
-        }
-        if token.contains('=') && !token.starts_with('-') {
-            continue;
-        }
-        let basename = token.rsplit('/').next().unwrap_or(token);
-        if basename != "ssh" {
-            continue;
-        }
-        while let Some(arg) = tokens.next() {
-            let arg = arg.trim_matches(&['"', '\''][..]);
-            if arg.is_empty() {
-                continue;
-            }
-            if arg == "--" {
-                return tokens
-                    .next()
-                    .map(|target| target.trim_matches(&['"', '\''][..]).to_string());
-            }
-            if arg.starts_with('-') {
-                let takes_value = matches!(
-                    arg,
-                    "-b" | "-c"
-                        | "-D"
-                        | "-E"
-                        | "-e"
-                        | "-F"
-                        | "-I"
-                        | "-i"
-                        | "-J"
-                        | "-L"
-                        | "-l"
-                        | "-m"
-                        | "-O"
-                        | "-o"
-                        | "-p"
-                        | "-Q"
-                        | "-R"
-                        | "-S"
-                        | "-W"
-                        | "-w"
-                );
-                if takes_value && !arg.contains('=') {
-                    let _ = tokens.next();
-                }
-                continue;
-            }
-            return Some(arg.to_string());
-        }
-    }
-    None
-}
-
 fn canonical_agent_cli_name(name: &str) -> Option<&'static str> {
     match name
         .trim()
@@ -1273,6 +1219,10 @@ fn pane_matches_host(pane: &PaneInfo, host_contains: Option<&String>) -> bool {
         pane.hostname
             .as_ref()
             .is_some_and(|host| host.to_ascii_lowercase().contains(needle))
+            || pane
+                .remote_workspace
+                .as_ref()
+                .is_some_and(|anchor| anchor.host.to_ascii_lowercase().contains(needle))
     })
 }
 
@@ -1300,6 +1250,7 @@ fn pane_has_tmux_layer(pane: &PaneInfo) -> bool {
 
 fn pane_has_remote_shell_context(pane: &PaneInfo) -> bool {
     pane.hostname.is_some()
+        || pane.remote_workspace.is_some()
         || pane
             .runtime_stack
             .iter()
@@ -1311,11 +1262,7 @@ fn pane_has_remote_shell_context(pane: &PaneInfo) -> bool {
 }
 
 fn pane_recent_ssh_target(pane: &PaneInfo) -> Option<String> {
-    pane.recent_actions
-        .iter()
-        .rev()
-        .filter_map(|action| action.command.as_deref())
-        .find_map(parse_ssh_target)
+    ssh_target_from_recent_actions(&pane.recent_actions)
 }
 
 fn pane_matches_remote_anchor(pane: &PaneInfo, host_contains: Option<&String>) -> bool {
@@ -1324,6 +1271,10 @@ fn pane_matches_remote_anchor(pane: &PaneInfo, host_contains: Option<&String>) -
         pane.hostname
             .as_ref()
             .is_some_and(|host| host.to_ascii_lowercase().contains(needle))
+            || pane
+                .remote_workspace
+                .as_ref()
+                .is_some_and(|anchor| anchor.host.to_ascii_lowercase().contains(needle))
             || ssh_target
                 .as_ref()
                 .is_some_and(|target| target.to_ascii_lowercase().contains(needle))
@@ -1454,9 +1405,7 @@ fn resolve_work_target_candidates(
                 candidates.push((score, make_visible_shell_candidate(&pane, reason)));
             }
             WorkTargetIntent::RemoteShell => {
-                if !pane_has_capability(&pane, PaneControlCapability::ExecVisibleShell)
-                    || !pane_matches_cwd(&pane, cwd_contains.as_ref())
-                {
+                if !pane_matches_cwd(&pane, cwd_contains.as_ref()) {
                     continue;
                 }
                 let has_remote_fact = pane_has_remote_shell_context(&pane);
@@ -1464,7 +1413,19 @@ fn resolve_work_target_candidates(
                 if !has_remote_fact && !has_remote_anchor {
                     continue;
                 }
-                let mut score = if has_remote_fact { 120 } else { 95 };
+                let can_exec = pane_has_capability(&pane, PaneControlCapability::ExecVisibleShell)
+                    || pane.remote_workspace.is_some();
+                if !can_exec {
+                    continue;
+                }
+                let mut score = if pane_has_capability(&pane, PaneControlCapability::ExecVisibleShell)
+                {
+                    if has_remote_fact { 120 } else { 110 }
+                } else if has_remote_fact {
+                    105
+                } else {
+                    95
+                };
                 if pane.is_focused {
                     score += 5;
                 }
@@ -1478,6 +1439,12 @@ fn resolve_work_target_candidates(
                         if has_remote_fact {
                             "This pane is a proven remote shell target with visible shell execution."
                                 .to_string()
+                        } else if let Some(anchor) = &pane.remote_workspace {
+                            format!(
+                                "This pane is a reusable remote SSH workspace for `{}` via {} continuity, even though fresh shell integration is not currently proven.",
+                                anchor.host,
+                                anchor.source.as_str()
+                            )
                         } else {
                             let target = pane_recent_ssh_target(&pane)
                                 .unwrap_or_else(|| "unknown".to_string());
@@ -3518,7 +3485,6 @@ impl Tool for EnsureRemoteShellTargetTool {
         let best_existing = panes
             .into_iter()
             .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
-            .filter(|pane| pane_has_capability(pane, PaneControlCapability::ExecVisibleShell))
             .filter_map(|pane| {
                 if pane
                     .hostname
@@ -3526,12 +3492,31 @@ impl Tool for EnsureRemoteShellTargetTool {
                     .is_some_and(|host| host.to_ascii_lowercase().contains(&host_lower))
                 {
                     Some((
-                        20 + if pane.is_focused { 5 } else { 0 },
+                        30 + if pane.is_focused { 5 } else { 0 },
                         pane.index,
                         RemoteShellMatchSource::ProvenHost,
                         format!(
                             "Pane {} already has visible shell execution on proven host `{}`.",
                             pane.index, args.host
+                        ),
+                    ))
+                } else if pane
+                    .remote_workspace
+                    .as_ref()
+                    .is_some_and(|anchor| anchor.host.to_ascii_lowercase().contains(&host_lower))
+                {
+                    Some((
+                        20 + if pane.is_focused { 5 } else { 0 },
+                        pane.index,
+                        RemoteShellMatchSource::ActionHistory,
+                        format!(
+                            "Pane {} is a reusable remote SSH workspace for `{}` via {} continuity.",
+                            pane.index,
+                            args.host,
+                            pane.remote_workspace
+                                .as_ref()
+                                .map(|anchor| anchor.source.as_str())
+                                .unwrap_or("action_history")
                         ),
                     ))
                 } else if pane_recent_ssh_target(&pane)
@@ -3830,7 +3815,7 @@ mod tests {
     };
     use crate::context::{
         PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneObservationSupport,
-        PaneRuntimeScope, PaneScopeKind,
+        PaneRuntimeScope, PaneScopeKind, RemoteWorkspaceAnchor,
     };
     use crate::control::{
         PaneAddressSpace, PaneControlCapability, PaneVisibleTarget, PaneVisibleTargetKind,
@@ -3965,6 +3950,7 @@ mod tests {
             hostname: None,
             hostname_confidence: None,
             hostname_source: None,
+            remote_workspace: None,
             front_state: PaneFrontState::Unknown,
             mode: super::PaneMode::Unknown,
             shell_metadata_fresh: false,
@@ -4032,6 +4018,39 @@ mod tests {
             WorkTargetIntent::RemoteShell,
             None,
             None,
+            None,
+            None,
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.pane_index, 2);
+        assert_eq!(best.control_path, WorkTargetControlPath::VisibleShellExec);
+    }
+
+    #[test]
+    fn resolve_work_target_reuses_managed_remote_workspace_without_fresh_shell_metadata() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut remote = test_pane(2, "managed remote");
+        remote.remote_workspace = Some(RemoteWorkspaceAnchor {
+            host: "haswell".to_string(),
+            source: PaneEvidenceSource::ActionHistory,
+            confidence: PaneConfidence::Advisory,
+            note: "managed".to_string(),
+        });
+        remote.screen_hints = vec![crate::context::PaneObservationHint {
+            kind: crate::context::PaneObservationHintKind::PromptLikeInput,
+            confidence: PaneConfidence::Advisory,
+            detail: "prompt-like".to_string(),
+        }];
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![remote],
+            WorkTargetIntent::RemoteShell,
+            None,
+            Some("haswell".to_string()),
             None,
             None,
             8,

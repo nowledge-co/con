@@ -173,6 +173,8 @@ The architecture must model that explicitly.
 
 This lets con preserve causal history without confusing it for current foreground truth. A fresh shell prompt clears active tmux/app identity unless a fresh typed probe re-establishes it. Historical actions remain visible as evidence for how the pane was reached.
 
+One important middle layer now exists for remote work: **con-managed SSH continuity**. When con created or recently drove an SSH pane, and the current screen still looks prompt-like without tmux or TUI contradictions, that pane remains a reusable remote workspace even if fresh shell integration is absent. This is not promoted to foreground truth, but it is strong enough to prevent duplicate remote panes across follow-up turns.
+
 **Long-term direction:** if con needs process-group identity or richer semantic prompt exports, the right move is to extend libghostty's C API upstream rather than reintroducing a second terminal runtime locally.
 
 See `docs/impl/pane-runtime-observer.md`.
@@ -205,6 +207,8 @@ con therefore needs a layered control plane with explicit protocol attachments:
 - OS and PTY process facts
 
 The first concrete attachment after the Ghostty surface is a proven shell-prompt attachment. That is where con can safely expose read-only shell probes such as `$TMUX`, `$SSH_CONNECTION`, tmux session/window/pane ids, and editor socket hints.
+
+The harness now only preloads **silent** attachments automatically. Visible shell probes stay explicit tool calls. This keeps the terminal calm on the first turn while still letting con reuse tmux state and remote workspace anchors across follow-up turns.
 
 See `docs/study/terminal-control-plane.md`.
 

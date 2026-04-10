@@ -181,6 +181,14 @@ pub struct PaneShellContext {
     pub tmux: Option<ShellProbeTmuxContext>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteWorkspaceAnchor {
+    pub host: String,
+    pub source: PaneEvidenceSource,
+    pub confidence: PaneConfidence,
+    pub note: String,
+}
+
 impl PaneShellContext {
     fn from_probe(result: &ShellProbeResult, captured_input_generation: u64) -> Self {
         Self {
@@ -1007,6 +1015,8 @@ pub struct TerminalContext {
     pub focused_shell_context_fresh: bool,
     /// Recent con-originated actions on the focused pane.
     pub focused_recent_actions: Vec<PaneActionRecord>,
+    /// Best current remote workspace anchor for the focused pane.
+    pub focused_remote_workspace: Option<RemoteWorkspaceAnchor>,
     /// Current working directory (from OSC 7 or manual detection)
     pub cwd: Option<String>,
     /// Last N lines of terminal output
@@ -1058,6 +1068,7 @@ pub struct PaneSummary {
     pub hostname: Option<String>,
     pub hostname_confidence: Option<PaneConfidence>,
     pub hostname_source: Option<PaneEvidenceSource>,
+    pub remote_workspace: Option<RemoteWorkspaceAnchor>,
     pub title: Option<String>,
     pub front_state: PaneFrontState,
     pub mode: PaneMode,
@@ -1091,6 +1102,113 @@ fn format_runtime_stack(scopes: &[PaneRuntimeScope]) -> String {
             .collect::<Vec<_>>()
             .join(" > ")
     }
+}
+
+pub fn ssh_target_from_recent_actions(actions: &[PaneActionRecord]) -> Option<String> {
+    actions
+        .iter()
+        .rev()
+        .filter_map(|action| action.command.as_deref())
+        .find_map(parse_ssh_target)
+}
+
+pub fn remote_workspace_anchor(
+    runtime: &PaneRuntimeState,
+    observation: &PaneObservationFrame,
+) -> Option<RemoteWorkspaceAnchor> {
+    if let (Some(host), Some(confidence), Some(source)) = (
+        runtime.remote_host.clone(),
+        runtime.remote_host_confidence,
+        runtime.remote_host_source,
+    ) {
+        return Some(RemoteWorkspaceAnchor {
+            host,
+            source,
+            confidence,
+            note: "Remote host is directly anchored by pane-local runtime evidence.".to_string(),
+        });
+    }
+
+    let host = ssh_target_from_recent_actions(&runtime.recent_actions)?;
+    let prompt_like = observation
+        .screen_hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::PromptLikeInput);
+    let has_tmux = runtime.tmux_session.is_some()
+        || has_tmux_scope(&runtime.scope_stack)
+        || has_tmux_scope(&runtime.last_verified_scope_stack);
+    let has_interactive_front = matches!(runtime.front_state, PaneFrontState::InteractiveSurface)
+        || runtime.mode == PaneMode::Tui
+        || runtime.agent_cli.is_some();
+
+    if observation.is_busy || has_tmux || has_interactive_front || !prompt_like {
+        return None;
+    }
+
+    Some(RemoteWorkspaceAnchor {
+        host,
+        source: PaneEvidenceSource::ActionHistory,
+        confidence: PaneConfidence::Advisory,
+        note: "con created or used this pane for SSH recently, and the current screen still looks prompt-like without contradictory tmux/TUI evidence.".to_string(),
+    })
+}
+
+fn parse_ssh_target(command: &str) -> Option<String> {
+    let mut tokens = command.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        let token = token.trim_matches(&['"', '\''][..]);
+        if token.is_empty() {
+            continue;
+        }
+        if token.contains('=') && !token.starts_with('-') {
+            continue;
+        }
+        let basename = token.rsplit('/').next().unwrap_or(token);
+        if basename != "ssh" {
+            continue;
+        }
+        while let Some(arg) = tokens.next() {
+            let arg = arg.trim_matches(&['"', '\''][..]);
+            if arg.is_empty() {
+                continue;
+            }
+            if arg == "--" {
+                return tokens
+                    .next()
+                    .map(|target| target.trim_matches(&['"', '\''][..]).to_string());
+            }
+            if arg.starts_with('-') {
+                let takes_value = matches!(
+                    arg,
+                    "-b" | "-c"
+                        | "-D"
+                        | "-E"
+                        | "-e"
+                        | "-F"
+                        | "-I"
+                        | "-i"
+                        | "-J"
+                        | "-L"
+                        | "-l"
+                        | "-m"
+                        | "-O"
+                        | "-o"
+                        | "-p"
+                        | "-Q"
+                        | "-R"
+                        | "-S"
+                        | "-W"
+                        | "-w"
+                );
+                if takes_value && !arg.contains('=') {
+                    let _ = tokens.next();
+                }
+                continue;
+            }
+            return Some(arg.to_string());
+        }
+    }
+    None
 }
 
 fn format_scope_summary(scope: &PaneRuntimeScope) -> String {
@@ -1267,6 +1385,12 @@ fn summarize_focused_pane_layout(ctx: &TerminalContext) -> String {
     let mut parts = vec![format!("pane {} is focused", ctx.focused_pane_index)];
     if let Some(host) = &ctx.focused_hostname {
         parts.push(format!("host `{host}` is proven"));
+    } else if let Some(anchor) = &ctx.focused_remote_workspace {
+        parts.push(format!(
+            "remote SSH workspace anchored to `{}` via {}",
+            anchor.host,
+            anchor.source.as_str()
+        ));
     }
 
     if let Some(tmux) = &ctx.focused_control.tmux {
@@ -1317,6 +1441,12 @@ fn summarize_peer_pane_layout(pane: &PaneSummary) -> String {
     let mut parts = vec![format!("pane {}", pane.pane_index)];
     if let Some(host) = &pane.hostname {
         parts.push(format!("host `{host}` is proven"));
+    } else if let Some(anchor) = &pane.remote_workspace {
+        parts.push(format!(
+            "remote SSH workspace anchored to `{}` via {}",
+            anchor.host,
+            anchor.source.as_str()
+        ));
     }
 
     if let Some(tmux) = &pane.control.tmux {
@@ -1390,20 +1520,24 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
     let mut hints = Vec::new();
 
     let mut best_remote_shell: Option<(usize, Option<&str>, bool)> = None;
-    if focused_supports_visible_shell(ctx) {
+    if focused_supports_visible_shell(ctx) || ctx.focused_remote_workspace.is_some() {
         best_remote_shell = Some((
             ctx.focused_pane_index,
-            ctx.focused_hostname.as_deref(),
+            ctx.focused_hostname
+                .as_deref()
+                .or_else(|| ctx.focused_remote_workspace.as_ref().map(|anchor| anchor.host.as_str())),
             ctx.focused_hostname.is_some(),
         ));
     }
     for pane in &ctx.other_panes {
-        if !pane_supports_visible_shell(pane) {
+        if !pane_supports_visible_shell(pane) && pane.remote_workspace.is_none() {
             continue;
         }
         let candidate = (
             pane.pane_index,
-            pane.hostname.as_deref(),
+            pane.hostname
+                .as_deref()
+                .or_else(|| pane.remote_workspace.as_ref().map(|anchor| anchor.host.as_str())),
             pane.hostname.is_some(),
         );
         match best_remote_shell {
@@ -1426,6 +1560,38 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
                 "Best visible shell target right now: pane {pane_index}. Remote identity is not proven."
             ),
         });
+    }
+
+    let mut remote_workspaces = Vec::new();
+    if let Some(anchor) = &ctx.focused_remote_workspace {
+        remote_workspaces.push((ctx.focused_pane_index, anchor));
+    }
+    for pane in &ctx.other_panes {
+        if let Some(anchor) = &pane.remote_workspace {
+            remote_workspaces.push((pane.pane_index, anchor));
+        }
+    }
+    remote_workspaces.sort_by(|(pane_a, anchor_a), (pane_b, anchor_b)| {
+        anchor_a
+            .host
+            .cmp(&anchor_b.host)
+            .then_with(|| pane_a.cmp(pane_b))
+    });
+    remote_workspaces.dedup_by(|(_, a), (_, b)| a.host == b.host);
+    if !remote_workspaces.is_empty() {
+        hints.push(format!(
+            "Known remote SSH workspaces in this tab: {}.",
+            remote_workspaces
+                .iter()
+                .map(|(pane_index, anchor)| format!(
+                    "`{}` on pane {} via {}",
+                    anchor.host,
+                    pane_index,
+                    anchor.source.as_str()
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
 
     let mut best_tmux: Option<(usize, Option<&str>, bool)> = None;
@@ -1592,6 +1758,7 @@ impl TerminalContext {
             focused_shell_context: None,
             focused_shell_context_fresh: false,
             focused_recent_actions: Vec::new(),
+            focused_remote_workspace: None,
             cwd: None,
             recent_output: Vec::new(),
             focused_screen_hints: Vec::new(),
@@ -1637,6 +1804,7 @@ impl TerminalContext {
              - READ-ONLY SHELL INTROSPECTION on a pane with `probe_shell_context` → probe_shell_context.\n\
              - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context` or `tmux_snapshot`. Only call list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
              - MULTI-PANE TARGET SELECTION (\"which pane should you use?\", \"which pane is safer?\", \"where should you run this?\") → resolve_work_target.\n\
+             - FOLLOW-UP REMOTE WORK on hosts that already exist in `<remote_workspaces>` → reuse those workspaces by default. Do not create duplicate SSH panes unless the user asks for a new host or the existing pane is no longer reusable.\n\
              - When `<work_target_hints>` is present, use those typed hints before improvising pane choice from raw metadata.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
              - When multiple panes are visible and the user asks about the terminal/session state, mention the pane count and summarize materially different peer panes. Do not collapse the whole tab into only the focused pane unless the user explicitly asks about that pane alone.\n\
@@ -1706,6 +1874,7 @@ impl TerminalContext {
              - Action history is causal evidence, not foreground truth. Use recent con actions to understand how a pane was reached, but rely on current probes and control capabilities before acting.\n\
              - `runtime_stack` is current-only. `last_verified_shell_stack` describes the most recent shell frame con verified, and may be historical.\n\
              - Prefer typed attachments and probes over inference. If `probe_shell_context` is available, use it before guessing about SSH, tmux, or editor context.\n\
+             - `<remote_workspaces>` is not a guess. It is con's current host-workspace inventory for this tab, built from pane-local runtime facts and con-managed SSH continuity.\n\
              - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
              - `screen_hints` are weak observations derived from the current visible screen snapshot. They can describe what appears to be on screen now, but they are not backend facts and must not unlock control.\n\
              - Do not end a session-state answer with a vague offer to \"inspect more closely\". Only propose a next step when a stronger fact source is concretely available, such as `probe_shell_context`, `tmux_snapshot`, or tmux native tools already present on the pane.\n\
@@ -1952,6 +2121,12 @@ impl TerminalContext {
                 if let Some(confidence) = self.focused_hostname_confidence {
                     prompt.push_str(&format!(" host_confidence=\"{}\"", confidence.as_str()));
                 }
+            } else if let Some(anchor) = &self.focused_remote_workspace {
+                prompt.push_str(&format!(
+                    " remote_workspace_host=\"{}\" remote_workspace_source=\"{}\"",
+                    xml_escape(&anchor.host),
+                    anchor.source.as_str()
+                ));
             } else {
                 prompt.push_str(" host=\"unknown\"");
             }
@@ -1981,6 +2156,17 @@ impl TerminalContext {
                     .as_deref()
                     .map(|host| format!(" host=\"{}\"", xml_escape(host)))
                     .unwrap_or_else(|| " host=\"unknown\"".to_string());
+                let remote_workspace = pane
+                    .remote_workspace
+                    .as_ref()
+                    .map(|anchor| {
+                        format!(
+                            " remote_workspace_host=\"{}\" remote_workspace_source=\"{}\"",
+                            xml_escape(&anchor.host),
+                            anchor.source.as_str()
+                        )
+                    })
+                    .unwrap_or_default();
                 let host_confidence = pane
                     .hostname_confidence
                     .map(|confidence| format!(" host_confidence=\"{}\"", confidence.as_str()))
@@ -2028,7 +2214,7 @@ impl TerminalContext {
                     pane.observation_support.remote_host_identity,
                 );
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" cwd=\"{}\" front_state=\"{}\" mode=\"{}\" runtime=\"{}\" last_verified_shell_stack=\"{}\"{}{}{}{}{}{}{}{}{}{}{}{}{}/>\n",
+                    "  <pane index=\"{}\" cwd=\"{}\" front_state=\"{}\" mode=\"{}\" runtime=\"{}\" last_verified_shell_stack=\"{}\"{}{}{}{}{}{}{}{}{}{}{}{}{}{}/>\n",
                     pane.pane_index,
                     xml_escape(cwd),
                     pane.front_state.as_str(),
@@ -2036,6 +2222,7 @@ impl TerminalContext {
                     xml_escape(&format_runtime_stack(&pane.runtime_stack)),
                     xml_escape(&format_runtime_stack(&pane.last_verified_runtime_stack)),
                     host,
+                    remote_workspace,
                     host_confidence,
                     active_scope,
                     busy,
@@ -2068,6 +2255,37 @@ impl TerminalContext {
             prompt.push_str("</pane_layout_summary>\n");
         } else if let Some(cwd) = &self.cwd {
             prompt.push_str(&format!("<cwd>{}</cwd>\n", xml_escape(cwd)));
+        }
+
+        let mut remote_workspaces = Vec::new();
+        if let Some(anchor) = &self.focused_remote_workspace {
+            remote_workspaces.push((self.focused_pane_index, anchor));
+        }
+        for pane in &self.other_panes {
+            if let Some(anchor) = &pane.remote_workspace {
+                remote_workspaces.push((pane.pane_index, anchor));
+            }
+        }
+        remote_workspaces.sort_by(|(pane_a, anchor_a), (pane_b, anchor_b)| {
+            anchor_a
+                .host
+                .cmp(&anchor_b.host)
+                .then_with(|| pane_a.cmp(pane_b))
+        });
+        remote_workspaces.dedup_by(|(_, a), (_, b)| a.host == b.host);
+        if !remote_workspaces.is_empty() {
+            prompt.push_str("<remote_workspaces>\n");
+            for (pane_index, anchor) in remote_workspaces {
+                prompt.push_str(&format!(
+                    "  <workspace host=\"{}\" pane_index=\"{}\" source=\"{}\" confidence=\"{}\">{}</workspace>\n",
+                    xml_escape(&anchor.host),
+                    pane_index,
+                    anchor.source.as_str(),
+                    anchor.confidence.as_str(),
+                    xml_escape(&anchor.note)
+                ));
+            }
+            prompt.push_str("</remote_workspaces>\n");
         }
 
         let work_target_hints = preferred_work_target_hints(self);
@@ -2281,11 +2499,12 @@ mod tests {
     use crate::tmux::{TmuxPaneInfo, TmuxSnapshot};
 
     use super::{
-        PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneMode, PaneObservationFrame,
-        PaneObservationHint, PaneObservationHintKind, PaneObservationSupport, PaneRuntimeEvent,
-        PaneRuntimeScope, PaneRuntimeState, PaneRuntimeTracker, PaneScopeKind, PaneSummary,
-        TerminalContext, derive_screen_hints, detect_tmux_session, direct_terminal_exec_is_safe,
-        infer_pane_mode, shell_metadata_is_fresh,
+        PaneActionKind, PaneActionRecord, PaneConfidence, PaneEvidenceSource, PaneFrontState,
+        PaneMode, PaneObservationFrame, PaneObservationHint, PaneObservationHintKind,
+        PaneObservationSupport, PaneRuntimeEvent, PaneRuntimeScope, PaneRuntimeState,
+        PaneRuntimeTracker, PaneScopeKind, PaneSummary, TerminalContext, derive_screen_hints,
+        detect_tmux_session, direct_terminal_exec_is_safe, infer_pane_mode,
+        remote_workspace_anchor, shell_metadata_is_fresh,
     };
 
     #[test]
@@ -2613,6 +2832,7 @@ mod tests {
             focused_shell_context: None,
             focused_shell_context_fresh: false,
             focused_recent_actions: Vec::new(),
+            focused_remote_workspace: None,
             cwd: Some("/tmp".to_string()),
             recent_output: Vec::new(),
             focused_screen_hints: Vec::new(),
@@ -2724,6 +2944,7 @@ mod tests {
             focused_shell_context: None,
             focused_shell_context_fresh: false,
             focused_recent_actions: Vec::new(),
+            focused_remote_workspace: None,
             cwd: Some("/home/user".to_string()),
             recent_output: Vec::new(),
             focused_screen_hints: Vec::new(),
@@ -2850,6 +3071,62 @@ mod tests {
     }
 
     #[test]
+    fn remote_workspace_anchor_uses_ssh_history_for_prompt_like_remote_shells() {
+        let runtime = PaneRuntimeState {
+            front_state: PaneFrontState::Unknown,
+            mode: PaneMode::Unknown,
+            shell_metadata_fresh: false,
+            remote_host: None,
+            remote_host_confidence: None,
+            remote_host_source: None,
+            agent_cli: None,
+            tmux_session: None,
+            last_verified_scope_stack: Vec::new(),
+            last_verified_tmux_session: None,
+            shell_context: None,
+            shell_context_fresh: false,
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: Vec::new(),
+            recent_actions: vec![PaneActionRecord {
+                sequence: 1,
+                kind: PaneActionKind::PaneCreated,
+                summary: "con created this pane with startup command `ssh haswell`".to_string(),
+                command: Some("ssh haswell".to_string()),
+                source: PaneEvidenceSource::ActionHistory,
+                confidence: PaneConfidence::Advisory,
+                input_generation: None,
+                note: None,
+            }],
+            warnings: Vec::new(),
+        };
+        let observation = PaneObservationFrame {
+            title: Some("ssh haswell".to_string()),
+            cwd: None,
+            recent_output: vec![">".to_string()],
+            screen_hints: vec![PaneObservationHint {
+                kind: PaneObservationHintKind::PromptLikeInput,
+                confidence: PaneConfidence::Advisory,
+                detail: "Prompt-like input is visible near the bottom.".to_string(),
+            }],
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            support: PaneObservationSupport::default(),
+            has_shell_integration: false,
+            is_alt_screen: false,
+            is_busy: false,
+            input_generation: 1,
+            last_command_finished_input_generation: 0,
+        };
+
+        let anchor = remote_workspace_anchor(&runtime, &observation).expect("anchor");
+        assert_eq!(anchor.host, "haswell");
+        assert_eq!(anchor.source, PaneEvidenceSource::ActionHistory);
+        assert_eq!(anchor.confidence, PaneConfidence::Advisory);
+    }
+
+    #[test]
     fn prompt_emits_tmux_snapshot_when_attached() {
         let mut ctx = make_shell_context();
         ctx.focused_tmux_snapshot = Some(TmuxSnapshot {
@@ -2887,6 +3164,7 @@ mod tests {
             hostname: Some("haswell".to_string()),
             hostname_confidence: Some(PaneConfidence::Strong),
             hostname_source: Some(PaneEvidenceSource::ShellProbe),
+            remote_workspace: None,
             title: Some("ssh haswell".to_string()),
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
@@ -2972,6 +3250,7 @@ mod tests {
             hostname: Some("haswell".to_string()),
             hostname_confidence: Some(PaneConfidence::Strong),
             hostname_source: Some(PaneEvidenceSource::ShellProbe),
+            remote_workspace: None,
             title: Some("ops".to_string()),
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
