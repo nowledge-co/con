@@ -84,14 +84,16 @@ Con now commits those rubrics under:
 And ships two support tools:
 
 - `benchmarks/terminal-agent/score.py`
+- `benchmarks/terminal-agent/log_iteration.py`
 - `benchmarks/terminal-agent/report.py`
 
 This gives the project a repeatable loop:
 
 1. run a profile
 2. score the resulting record
-3. capture lessons and next focus
-4. generate trend reports across many runs
+3. append a tracked improvement-log entry
+4. capture lessons and next focus
+5. generate trend reports across many runs
 
 That is how the benchmark becomes a product-improvement system instead of only a demo script.
 

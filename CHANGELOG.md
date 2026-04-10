@@ -67,6 +67,8 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The live agent panel now shows human-readable provider/model labels instead of Rust-style `Thinking("provider:model")` debug text, expanded outputs use quieter inline toggles with a dedicated mono sub-surface, and the default accent path now follows the theme's blue primary token instead of an unintended cyan bias.
 - The terminal-agent benchmark now includes richer operator playbooks and profiles for local Codex dev loops, dual-host SSH maintenance, and remote tmux edit/run/reuse workflows. It can now execute those operator prompt sequences directly and record the transcript instead of only printing a playbook path.
 - The terminal-agent benchmark now has stable scoring rubrics, a scoring tool, a trend-report generator, and a project-local improvement-loop skill so progress can be judged and compared over many iterations instead of living only in screenshots and memory.
+- `con-cli agent ask` and operator benchmark steps can now be bounded with explicit timeouts, so a stuck agent turn fails cleanly instead of hanging the entire automation loop.
+- The benchmark loop now writes a tracked improvement log entry and trend-chart report, so repeated iterations leave behind comparable notes and a durable progress trail in the repo.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

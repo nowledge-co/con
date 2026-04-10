@@ -119,6 +119,14 @@ python3 benchmarks/terminal-agent/score.py \
 
 This writes a scored record under `.context/benchmarks/scored/`.
 
+Append that scored run to the tracked improvement log with:
+
+```bash
+python3 benchmarks/terminal-agent/log_iteration.py \
+  --scorecard .context/benchmarks/scored/<run>.json \
+  --change "one focused product change"
+```
+
 Generate a trend report with:
 
 ```bash

@@ -48,6 +48,20 @@ def history_tail(profile_cards: list[dict], limit: int = 6) -> str:
     return " -> ".join(str(card["total_score"]) for card in tail)
 
 
+def sparkline(profile_cards: list[dict]) -> str:
+    if not profile_cards:
+        return ""
+    glyphs = "▁▂▃▄▅▆▇█"
+    max_score = max(int(card["max_score"]) for card in profile_cards) or 1
+    out = []
+    for card in profile_cards:
+        score = int(card["total_score"])
+        idx = round((score / max_score) * (len(glyphs) - 1))
+        idx = max(0, min(idx, len(glyphs) - 1))
+        out.append(glyphs[idx])
+    return "".join(out)
+
+
 def average_dimension_scores(profile_cards: list[dict]) -> list[tuple[str, float, int]]:
     totals: dict[str, list[int]] = defaultdict(list)
     maximums: dict[str, int] = {}
@@ -122,6 +136,7 @@ def main() -> int:
         lines.append(
             "- Score history: `{}`".format(history_tail(profile_cards))
         )
+        lines.append(f"- Trend chart: `{sparkline(profile_cards)}`")
         lines.append(
             "- Latest vs target: `{}/{}` vs `{}`".format(
                 latest["total_score"],

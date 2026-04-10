@@ -7,7 +7,8 @@ The loop is intentionally layered:
 1. `strict` benchmark runs protect the deterministic control-plane floor.
 2. `operator` benchmark runs exercise realistic multi-turn workflows.
 3. scored operator runs make progress comparable across iterations.
-4. a report step turns many judged runs into a trend view.
+4. a tracked iteration log keeps the learning attached to the repo.
+5. a report step turns many judged runs into a trend view.
 
 ## Why this exists
 
@@ -90,8 +91,22 @@ Each product iteration should produce:
 
 1. a benchmark record
 2. a scored record
-3. one concise summary
-4. a few lessons
-5. the next focused improvement area
+3. a tracked improvement-log entry
+4. one concise summary
+5. a few lessons
+6. the next focused improvement area
 
 That gives us a trail we can turn into a 50-iteration report later without reconstructing the history by hand.
+
+## Improvement log
+
+Append a tracked note with:
+
+```bash
+python3 benchmarks/terminal-agent/log_iteration.py \
+  --scorecard .context/benchmarks/scored/<run>.json \
+  --change "what changed in the product" \
+  --note "anything unusual about the benchmark run"
+```
+
+This updates `docs/impl/terminal-agent-improvement-log.md`, which is the durable human-readable trail that complements the scored JSON files and trend report.

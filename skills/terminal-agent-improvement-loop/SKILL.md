@@ -21,9 +21,11 @@ Primary references:
 3. Score the resulting run with the matching rubric:
    - `python3 benchmarks/terminal-agent/score.py --profile ... --record ... --score ...`
 4. Record one short summary, a few lessons, and a few next-focus bullets in the score record.
-5. Make one focused product change.
-6. Re-run the same operator profile.
-7. Generate a report when you need to inspect trend:
+5. Append the scorecard to the tracked improvement log:
+   - `python3 benchmarks/terminal-agent/log_iteration.py --scorecard ... --change "..."`
+6. Make one focused product change.
+7. Re-run the same operator profile.
+8. Generate a report when you need to inspect trend:
    - `python3 benchmarks/terminal-agent/report.py`
 
 ## Rules
@@ -34,3 +36,4 @@ Primary references:
 - Keep unknowns honest when the backend cannot prove more.
 - When benchmark infra changes, say whether the product improved or the measurement improved.
 - Keep iteration notes concise and comparable across runs.
+- Keep `docs/impl/terminal-agent-improvement-log.md` useful to a human reader; it should explain what changed, not just repeat the numeric score.
