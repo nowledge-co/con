@@ -1,94 +1,195 @@
-# Implementation: Socket API
+# Implementation: Socket API and `con-cli`
 
 ## Overview
 
-con exposes a Unix domain socket for external agents and plugins to control the terminal using a small JSON-RPC protocol.
+con now ships a real local control plane:
 
-## Socket Path
+- the app listens on a Unix domain socket
+- requests use newline-delimited JSON-RPC 2.0
+- `con-cli` is the first client on top of that socket
 
-| Build | Path |
-|-------|------|
-| Production | `/tmp/con.sock` |
-| Debug | `/tmp/con-debug.sock` |
-| Tagged | `/tmp/con-debug-<tag>.sock` |
+This is the first automation slice, not the final surface. The important architectural move is that the CLI does not invent new terminal semantics. It routes into the same pane runtime, tmux adapter, visible-shell execution guard, and per-tab agent session that the built-in UI already uses.
 
-Env override: `CON_SOCKET_PATH`
+That keeps CLI automation honest: if a pane is not a proven shell in the app, `con-cli panes exec` is refused for the same reason.
+
+## Local references that shaped the design
+
+The CLI shape is intentionally informed by the local 3pp references in this repo:
+
+- `3pp/agent-browser` — flat agent-friendly command ergonomics, strong `--json` output, and a CLI that is useful both for humans and other agents
+- `3pp/waveterm/cmd/wsh` — app control over a local socket with a small RPC boundary instead of bolting automation directly onto UI code
+- `3pp/cmux/CLI/cmux.swift` — explicit socket-path discovery and the idea that the socket client should stay thin while the app remains the authority
+
+The result in con is a hybrid:
+
+- user-facing CLI commands are grouped by domain: `tabs`, `panes`, `tmux`, `agent`
+- the transport methods are namespaced JSON-RPC methods such as `panes.list` and `agent.ask`
+
+## Socket path
+
+- Default: `/tmp/con.sock`
+- Override: `CON_SOCKET_PATH`
+- CLI override: `con-cli --socket /custom/path ...`
+
+The app removes stale socket files on startup and creates the live socket with user-only permissions.
 
 ## Protocol
 
-JSON-RPC 2.0 over Unix domain socket. Newline-delimited messages.
+JSON-RPC 2.0 over a Unix domain socket, one JSON request per line and one JSON response per line.
 
 ### Request
+
 ```json
-{"jsonrpc": "2.0", "method": "notification.create", "params": {"title": "Build done", "body": "All tests pass"}, "id": 1}
+{"jsonrpc":"2.0","id":"req-1","method":"panes.read","params":{"tab_index":1,"pane_id":3,"lines":80}}
 ```
 
 ### Response
+
 ```json
-{"jsonrpc": "2.0", "result": {"notification_id": "abc123"}, "id": 1}
+{"jsonrpc":"2.0","id":"req-1","result":{"content":"..."}}
 ```
 
-## Methods
+### Error
+
+```json
+{"jsonrpc":"2.0","id":"req-1","error":{"code":-32602,"message":"Pane index 9 is out of range. Valid panes are ..."}}
+```
+
+## Current method surface
 
 ### System
-| Method | Description |
-|--------|-------------|
-| `system.identify` | Get window/workspace/pane IDs, con version |
-| `system.capabilities` | List all available methods |
 
-### Notifications
-| Method | Description |
-|--------|-------------|
-| `notification.create` | Global notification |
-| `notification.create_for_pane` | Target specific pane (blue ring) |
-| `notification.dismiss` | Dismiss notification by ID |
+- `system.identify`
+- `system.capabilities`
 
-### Terminal
-| Method | Description |
-|--------|-------------|
-| `terminal.write` | Send input to active (or specified) pane |
-| `terminal.read` | Get last N lines of output |
-| `terminal.resize` | Resize pane |
+### Tabs
 
-### Context
-| Method | Description |
-|--------|-------------|
-| `context.get` | Get cwd, git branch, last command, exit code |
-| `context.subscribe` | Stream context changes |
+- `tabs.list`
 
-### Focus
-| Method | Description |
-|--------|-------------|
-| `focus.pane` | Focus a specific pane |
-| `focus.window` | Bring window to front |
+### Panes
 
-## Access Control
+- `panes.list`
+- `panes.read`
+- `panes.exec`
+- `panes.send_keys`
+- `panes.create`
+- `panes.wait`
+- `panes.probe_shell`
 
-```toml
-# config.toml
-[socket]
-access = "con_only"  # default: only child processes can connect
-# access = "automation"  # local clients
-# access = "password"    # require auth
-# access = "off"         # disabled
+### tmux
+
+- `tmux.inspect`
+- `tmux.list`
+- `tmux.capture`
+- `tmux.send_keys`
+- `tmux.run`
+
+### Agent
+
+- `agent.ask`
+- `agent.new_conversation`
+
+## CLI surface
+
+The first shipped client is `con-cli`.
+
+Examples:
+
+```bash
+con-cli identify
+con-cli capabilities
+
+con-cli tabs list
+con-cli panes list --tab 1
+con-cli panes read --tab 1 --pane-id 3 --lines 120
+con-cli panes exec --tab 1 --pane-id 3 cargo test -q
+con-cli panes send-keys --tab 1 --pane-id 3 $'\u0003'
+con-cli panes create --tab 1 --location right --command "htop"
+con-cli panes wait --tab 1 --pane-id 3 --timeout 20
+
+con-cli tmux list --tab 1 --pane-id 3
+con-cli tmux capture --tab 1 --pane-id 3 --target %17 --lines 80
+con-cli tmux run --tab 1 --pane-id 3 --location new-window -- cargo test
+
+con-cli agent ask --tab 1 "Summarize what is happening in this tab"
+con-cli agent ask --tab 1 --auto-approve-tools "Run the test suite and explain failures"
+con-cli agent new-conversation --tab 1
 ```
 
-## Threading
+For automation, every command also supports `--json`.
 
-- Socket listener: dedicated thread
-- Message parsing + validation: off-main-thread
-- Coalesce high-frequency messages (e.g. repeated context.get)
-- Focus-mutating commands dispatch to main/UI thread
-- Never block the render loop
+## Request routing rules
 
-## Plugin Usage
+### Tabs are explicit
 
-```javascript
-// Node.js plugin example
-const { ConClient } = require('@con/sdk');
+- `tab_index` is 1-based in the control API and CLI
+- omitting `tab_index` means "use the active tab"
 
-const con = new ConClient(process.env.CON_SOCKET_PATH);
-await con.notification.create({ title: 'Deploy complete' });
-const ctx = await con.context.get();
-console.log(`User is in ${ctx.cwd} on branch ${ctx.git_branch}`);
-```
+### Pane targets reuse con's stable pane model
+
+- `pane_index` is the current visible position in the split layout
+- `pane_id` is the stable identity for the life of that pane inside the tab
+- follow-up automation should prefer `pane_id`
+
+### Pane actions reuse existing guards
+
+- `panes.exec` goes through the same visible-shell execution path as the built-in agent
+- `tmux.*` methods only work when the pane exposes native tmux capability
+- `panes.probe_shell` only works when the pane exposes `probe_shell_context`
+
+That is deliberate. The CLI is not allowed to bypass the control-plane truths that the UI and agent already depend on.
+
+## Agent session behavior
+
+`agent.ask` targets a tab's existing built-in agent session.
+
+That means:
+
+- it reuses the tab's conversation history
+- it reuses the tab's focused-pane context and peer-pane summary
+- the response also appears in con's own agent UI for that tab
+
+This is the key step that makes CLI-driven end-to-end evaluation possible. A coding agent outside the app can now drive panes, inspect tmux state, call the built-in agent in a real tab session, and verify the visible result without a human acting as the bridge.
+
+## Threading model
+
+- socket accept/read/write runs on the harness Tokio runtime
+- JSON-RPC parsing happens off the GPUI render path
+- requests are bridged onto the workspace over a channel
+- pane/tmux operations still execute through the workspace, because the workspace owns live panes
+- long-running results are delivered back asynchronously over one-shot replies
+
+The render loop stays authoritative, but the socket never blocks on it directly.
+
+## Known limits of the first slice
+
+- no subscription or streaming RPC yet; requests are request/response only
+- no window-focus or pane-focus RPC yet
+- no auth modes beyond local socket file permissions yet
+- `agent.ask` assumes one automation request at a time per tab
+- the socket surface only exposes capabilities that already exist in con's runtime and agent layers; it does not yet add a new app-native Codex/OpenCode attachment
+
+Those are acceptable limits for phase one. The important part is that the control transport now exists and is wired to real product semantics instead of placeholder CLI text.
+
+## Live E2E status
+
+Live app-backed smoke tests were rerun on April 10, 2026 against a real `cargo run -p con` session.
+
+Verified end to end:
+
+- `con-cli identify`
+- `con-cli tabs list`
+- `con-cli panes list`
+- `con-cli panes read`
+- `con-cli panes exec`
+- `con-cli panes wait`
+- `con-cli agent ask`
+
+Verified behavior notes:
+
+- `panes exec` now recovers cleanly when the visible prompt is back but Ghostty shell integration does not emit a matching command-finished signal fast enough for automation. That keeps the pane usable for follow-up `panes exec` calls in the same session.
+- `agent ask` was verified against a real configured model session, not just the transport boundary.
+
+Current known limitation from the same live run:
+
+- `panes.create` now returns promptly with `tab_index`, `pane_index`, and `pane_id`, but the freshly created pane is not yet consistently Ghostty-ready for immediate follow-up shell control. Treat pane creation as partially verified until the new pane reports `is_alive: true` and exposes normal shell control capabilities.

@@ -11,7 +11,7 @@ con is an open-source, macOS-native, GPU-accelerated terminal emulator with a bu
 - **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API (surface lifecycle, action callbacks, clipboard, key/mouse input)
 - **Terminal support crate**: con-terminal — theme and palette helpers only
 - **AI agent**: Rig v0.34.0 (from crates.io, 13 providers, Tool trait)
-- **Socket API**: planned — Unix domain sockets, JSON-RPC
+- **Socket API**: Unix domain sockets + newline-delimited JSON-RPC, served by the app and consumed first by `con-cli`
 
 ## Repository Layout
 
@@ -29,7 +29,7 @@ kingston/
 │   ├── con-terminal/  # Terminal themes and palette helpers
 │   ├── con-ghostty/   # Ghostty FFI wrapper — primary macOS backend (libghostty C API)
 │   ├── con-agent/     # AI harness (Rig 0.34, tools, conversation)
-│   └── con-cli/       # CLI + socket client (stub)
+│   └── con-cli/       # CLI + socket client for the live local control plane
 ├── postmortem/        # Integration & incident postmortems
 ├── assets/            # Themes, fonts, icons
 └── 3pp/               # Third-party source (READ-ONLY reference, .gitignored)
@@ -55,6 +55,18 @@ cargo test --workspace # test
 # GPUI needs runtime_shaders feature (already set)
 # con currently ships the embedded Ghostty runtime on macOS
 ```
+
+## Control Plane
+
+- `con-cli` is a real client for Con's local control socket, not a stub.
+- Implementation details live in `docs/impl/socket-api.md`.
+- The current live E2E workflow lives in `docs/impl/con-cli-e2e.md`.
+
+## Local Skill
+
+- Project-local skill: `skills/con-cli-e2e/SKILL.md`
+- Use it when validating the control plane from an external agent or when writing eval automation against a real running Con session.
+- The skill expects agents to prefer `con-cli --json`, verify pane capabilities before acting, and treat `panes create` as provisional until the new pane reports as alive and shell-ready.
 
 ## Design Language
 
