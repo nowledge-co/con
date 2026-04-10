@@ -2,6 +2,7 @@ use crossbeam_channel::Sender;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::clipboard::Clipboard;
+use gpui_component::divider::Divider;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
@@ -799,43 +800,6 @@ impl AgentPanel {
     fn running_tool_call(&self) -> Option<&ToolCallEntry> {
         self.state.tool_calls.iter().find(|tc| tc.result.is_none())
     }
-
-    fn latest_completed_run_summary(&self) -> Option<(String, String)> {
-        self.state.messages.iter().rev().find_map(|message| {
-            if message.role != "assistant"
-                || (message.content.is_empty() && message.steps.is_empty())
-            {
-                return None;
-            }
-
-            let step_count = message.steps.len();
-            let title = if step_count > 0 {
-                format!(
-                    "Finished · {} step{}",
-                    step_count,
-                    if step_count == 1 { "" } else { "s" }
-                )
-            } else {
-                "Finished".to_string()
-            };
-
-            let mut parts = Vec::new();
-            if let Some(model) = message.model.as_deref() {
-                let model = humanize_model_name(model);
-                if !model.is_empty() {
-                    parts.push(model);
-                }
-            }
-            if let Some(duration_ms) = message.duration_ms {
-                parts.push(format_duration_ms(duration_ms));
-            }
-            if !message.content.is_empty() {
-                parts.push("reply ready".to_string());
-            }
-
-            Some((title, parts.join(" · ")))
-        })
-    }
 }
 
 /// Markdown style for chat messages — readable prose with breathing room.
@@ -1429,11 +1393,11 @@ fn render_result_block(
     if is_short && content != "(no output)" {
         // Short result — inline, no code block
         div()
-            .ml(px(22.0))
-            .py(px(1.0))
+            .ml(px(20.0))
+            .py(px(2.0))
             .text_size(px(10.5))
             .font_family(theme.mono_font_family.clone())
-            .text_color(theme.muted_foreground.opacity(0.5))
+            .text_color(theme.muted_foreground.opacity(0.54))
             .overflow_x_hidden()
             .whitespace_nowrap()
             .child(content.to_string())
@@ -1449,19 +1413,19 @@ fn render_result_block(
             );
         }
         div()
-            .ml(px(20.0))
-            .mr(px(4.0))
+            .ml(px(18.0))
+            .mr(px(2.0))
             .mt(px(2.0))
             .mb(px(2.0))
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(8.0))
-            .bg(theme.muted.opacity(0.05))
+            .px(px(10.0))
+            .py(px(8.0))
+            .rounded(px(10.0))
+            .bg(theme.background.opacity(0.58))
             .overflow_x_hidden()
             .font_family(theme.mono_font_family.clone())
             .text_size(px(10.5))
-            .line_height(px(15.0))
-            .text_color(theme.muted_foreground.opacity(0.6))
+            .line_height(px(15.5))
+            .text_color(theme.muted_foreground.opacity(0.67))
             .child(lines_el)
             .into_any_element()
     }
@@ -1499,53 +1463,49 @@ fn result_toggle_label(content: &str, expanded: bool) -> String {
     }
 }
 
-fn render_step_status_tag(status: StepStatus) -> AnyElement {
+fn render_inline_state(
+    label: SharedString,
+    color: Hsla,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(5.0))
+        .px(px(7.0))
+        .py(px(3.0))
+        .rounded_full()
+        .bg(color.opacity(0.10))
+        .child(div().size(px(5.0)).rounded_full().bg(color.opacity(0.85)))
+        .child(
+            div()
+                .text_size(px(10.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.foreground.opacity(0.62))
+                .child(label),
+        )
+        .into_any_element()
+}
+
+fn render_step_status_tag(status: StepStatus, theme: &gpui_component::Theme) -> Option<AnyElement> {
     match status {
-        StepStatus::Running => Tag::warning()
-            .xsmall()
-            .rounded_full()
-            .child("Live")
-            .into_any_element(),
-        StepStatus::Complete => Tag::success()
-            .xsmall()
-            .rounded_full()
-            .child("Done")
-            .into_any_element(),
-        StepStatus::Denied => Tag::danger()
-            .xsmall()
-            .rounded_full()
-            .child("Denied")
-            .into_any_element(),
+        StepStatus::Running => Some(render_inline_state("Live".into(), theme.warning, theme)),
+        StepStatus::Complete => None,
+        StepStatus::Denied => Some(render_inline_state("Denied".into(), theme.danger, theme)),
     }
 }
 
-fn render_run_status_tag(
-    step_count: usize,
-    running_count: usize,
-    denied_count: usize,
-) -> AnyElement {
+fn run_status_summary(step_count: usize, running_count: usize, denied_count: usize) -> String {
     if running_count > 0 {
-        Tag::warning()
-            .xsmall()
-            .rounded_full()
-            .child(format!("{} live", running_count))
-            .into_any_element()
+        format!("{} live · {} total", running_count, step_count)
     } else if denied_count > 0 {
-        Tag::danger()
-            .xsmall()
-            .rounded_full()
-            .child(format!("{} denied", denied_count))
-            .into_any_element()
+        format!("{} denied · {} total", denied_count, step_count)
     } else {
-        Tag::success()
-            .xsmall()
-            .rounded_full()
-            .child(format!(
-                "{} step{}",
-                step_count,
-                if step_count == 1 { "" } else { "s" }
-            ))
-            .into_any_element()
+        format!(
+            "{} step{}",
+            step_count,
+            if step_count == 1 { "" } else { "s" }
+        )
     }
 }
 
@@ -2100,12 +2060,12 @@ impl Render for AgentPanel {
                     .mr(px(4.0))
                     .mt(px(6.0))
                     .px(px(12.0))
-                    .py(px(10.0))
-                    .rounded(px(12.0))
-                    .bg(theme.muted.opacity(0.04))
+                    .py(px(11.0))
+                    .rounded(px(14.0))
+                    .bg(theme.muted.opacity(0.035))
                     .flex()
                     .flex_col()
-                    .gap(px(8.0));
+                    .gap(px(9.0));
 
                 run_card = run_card.child(
                     div()
@@ -2137,41 +2097,54 @@ impl Render for AgentPanel {
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap(px(1.0))
+                                .gap(px(2.0))
                                 .child(
                                     div()
-                                        .text_size(px(12.5))
+                                        .text_size(px(12.25))
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground.opacity(0.72))
+                                        .text_color(theme.foreground.opacity(0.76))
                                         .child(run_title),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(10.5))
-                                        .text_color(theme.muted_foreground.opacity(0.50))
+                                        .text_color(theme.muted_foreground.opacity(0.48))
                                         .child("Actions, probes, and tool output"),
                                 ),
                         )
                         .child(div().flex_1())
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.0))
-                                .child(Tag::secondary().xsmall().rounded_full().child(format!(
-                                    "{} step{}",
-                                    step_count,
-                                    if step_count == 1 { "" } else { "s" }
-                                )))
-                                .child(render_run_status_tag(
-                                    step_count,
-                                    running_count,
-                                    denied_count,
-                                )),
-                        ),
+                        .child({
+                            let mut summary = div().flex().items_center().gap(px(8.0)).child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(theme.muted_foreground.opacity(0.44))
+                                    .child(run_status_summary(
+                                        step_count,
+                                        running_count,
+                                        denied_count,
+                                    )),
+                            );
+                            if running_count > 0 {
+                                summary = summary.child(render_inline_state(
+                                    format!("{} live", running_count).into(),
+                                    theme.warning,
+                                    theme,
+                                ));
+                            }
+                            if denied_count > 0 {
+                                summary = summary.child(render_inline_state(
+                                    format!("{} denied", denied_count).into(),
+                                    theme.danger,
+                                    theme,
+                                ));
+                            }
+                            summary
+                        }),
                 );
 
                 if !collapsed {
+                    run_card =
+                        run_card.child(Divider::horizontal().color(theme.muted.opacity(0.10)));
                     let mut steps_el = div().flex().flex_col().gap(px(6.0));
 
                     for (step_idx, step) in msg.steps.iter().enumerate() {
@@ -2214,7 +2187,9 @@ impl Render for AgentPanel {
                             )
                             .child(div().flex_1()); // spacer
 
-                        top_line = top_line.child(render_step_status_tag(step.status));
+                        if let Some(status_tag) = render_step_status_tag(step.status, theme) {
+                            top_line = top_line.child(status_tag);
+                        }
 
                         if let Some(dur) = step.duration {
                             top_line = top_line.child(
@@ -2264,7 +2239,7 @@ impl Render for AgentPanel {
                             .px(px(10.0))
                             .py(px(9.0))
                             .rounded(px(10.0))
-                            .bg(theme.muted.opacity(0.03))
+                            .bg(theme.background.opacity(0.34))
                             .child(top_line);
 
                         // Args on second line — consistent indent with approval card
@@ -2389,9 +2364,9 @@ impl Render for AgentPanel {
                 .mr(px(4.0))
                 .gap(px(8.0))
                 .px(px(12.0))
-                .py(px(10.0))
-                .rounded(px(12.0))
-                .bg(theme.warning.opacity(0.05))
+                .py(px(11.0))
+                .rounded(px(14.0))
+                .bg(theme.muted.opacity(0.035))
                 .child(
                     div()
                         .flex()
@@ -2401,30 +2376,38 @@ impl Render for AgentPanel {
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap(px(1.0))
+                                .gap(px(2.0))
                                 .child(
                                     div()
-                                        .text_size(px(12.5))
+                                        .text_size(px(12.25))
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground.opacity(0.72))
+                                        .text_color(theme.foreground.opacity(0.76))
                                         .child("Working now"),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(10.5))
-                                        .text_color(theme.muted_foreground.opacity(0.50))
+                                        .text_color(theme.muted_foreground.opacity(0.48))
                                         .child("Live tools for this reply"),
                                 ),
                         )
                         .child(div().flex_1())
-                        .child(Tag::warning().xsmall().rounded_full().child(format!(
-                                    "{} live",
-                                    visible_tool_calls
-                                        .iter()
-                                        .filter(|(_, tc)| tc.result.is_none())
-                                        .count()
-                                ))),
+                        .child(render_inline_state(
+                            format!(
+                                "{} live",
+                                visible_tool_calls
+                                    .iter()
+                                    .filter(|(_, tc)| tc.result.is_none())
+                                    .count()
+                            )
+                            .into(),
+                            theme.warning,
+                            theme,
+                        )),
                 );
+
+            tc_container =
+                tc_container.child(Divider::horizontal().color(theme.muted.opacity(0.10)));
 
             for (tc_idx, tc) in visible_tool_calls {
                 let is_done = tc.result.is_some();
@@ -2469,11 +2452,6 @@ impl Render for AgentPanel {
                             .child(human_name),
                     )
                     .child(div().flex_1()) // spacer
-                    .child(if is_done {
-                        render_step_status_tag(StepStatus::Complete)
-                    } else {
-                        render_step_status_tag(StepStatus::Running)
-                    })
                     .child(
                         div()
                             .flex_shrink_0()
@@ -2481,6 +2459,11 @@ impl Render for AgentPanel {
                             .text_color(theme.muted_foreground.opacity(0.28))
                             .child(format_step_duration(dur)),
                     );
+                let top_line = if is_done {
+                    top_line
+                } else {
+                    top_line.child(render_inline_state("Live".into(), theme.warning, theme))
+                };
 
                 let mut tc_row = div()
                     .flex()
@@ -2489,7 +2472,7 @@ impl Render for AgentPanel {
                     .px(px(10.0))
                     .py(px(9.0))
                     .rounded(px(10.0))
-                    .bg(theme.muted.opacity(0.03))
+                    .bg(theme.background.opacity(0.34))
                     .child(top_line);
 
                 // Args on second line
@@ -2564,9 +2547,9 @@ impl Render for AgentPanel {
                 .ml(px(19.0))
                 .mr(px(4.0))
                 .px(px(12.0))
-                .py(px(10.0))
-                .rounded(px(10.0))
-                .bg(theme.warning.opacity(0.04))
+                .py(px(11.0))
+                .rounded(px(14.0))
+                .bg(theme.warning.opacity(0.035))
                 // Header — tool info
                 .child(
                     div()
@@ -2588,7 +2571,7 @@ impl Render for AgentPanel {
                                 .flex_shrink_0()
                                 .child(human_tool),
                         )
-                        .child(Tag::warning().outline().xsmall().child("Approve?")),
+                        .child(render_inline_state("Approval".into(), theme.warning, theme)),
                 )
                 // Args — monospace, full width
                 .child(
@@ -2600,6 +2583,7 @@ impl Render for AgentPanel {
                         .whitespace_nowrap()
                         .child(truncate_str(&args_display, 80)),
                 )
+                .child(Divider::horizontal().color(theme.warning.opacity(0.12)))
                 // Action row — clear hierarchy
                 .child(
                     div()
@@ -2777,43 +2761,32 @@ impl Render for AgentPanel {
             Some(
                 div()
                     .flex()
-                    .items_center()
+                    .flex_col()
                     .gap(px(8.0))
                     .mx(px(14.0))
                     .mb(px(8.0))
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .rounded(px(8.0))
-                    .bg(theme.warning.opacity(0.05))
-                    .child(
-                        svg()
-                            .path("phosphor/warning.svg")
-                            .size(px(12.0))
-                            .text_color(theme.warning.opacity(0.75)),
-                    )
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap(px(1.0))
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(px(11.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.foreground.opacity(0.72))
-                                    .child("Approval waiting"),
-                            )
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(render_inline_state(
+                                "Approval waiting".into(),
+                                theme.warning,
+                                theme,
+                            ))
                             .child(
                                 div()
                                     .text_size(px(10.5))
                                     .font_family(theme.mono_font_family.clone())
                                     .text_color(theme.muted_foreground.opacity(0.52))
+                                    .min_w_0()
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
                                     .child(truncate_str(&args_display, 96)),
                             ),
                     )
+                    .child(Divider::horizontal().color(theme.muted.opacity(0.10)))
                     .into_any_element(),
             )
         } else if let Some(tc) = self.running_tool_call() {
@@ -2822,21 +2795,16 @@ impl Render for AgentPanel {
             Some(
                 div()
                     .flex()
-                    .items_center()
+                    .flex_col()
                     .gap(px(8.0))
                     .mx(px(14.0))
                     .mb(px(8.0))
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .rounded(px(8.0))
-                    .bg(theme.muted.opacity(0.04))
-                    .child(Spinner::new().small().color(theme.warning))
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap(px(1.0))
-                            .min_w_0()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(Spinner::new().small().color(theme.warning))
                             .child(
                                 div()
                                     .text_size(px(11.5))
@@ -2849,75 +2817,41 @@ impl Render for AgentPanel {
                                     .text_size(px(10.5))
                                     .font_family(theme.mono_font_family.clone())
                                     .text_color(theme.muted_foreground.opacity(0.52))
+                                    .min_w_0()
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
                                     .child(truncate_str(&args_display, 96)),
                             ),
                     )
+                    .child(Divider::horizontal().color(theme.muted.opacity(0.10)))
                     .into_any_element(),
             )
         } else if let Some((_icon, label)) = self.status_text() {
             Some(
                 div()
                     .flex()
-                    .items_center()
+                    .flex_col()
                     .gap(px(8.0))
                     .mx(px(14.0))
                     .mb(px(8.0))
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .rounded(px(8.0))
-                    .bg(theme.muted.opacity(0.04))
-                    .child(
-                        Spinner::new()
-                            .small()
-                            .color(theme.muted_foreground.opacity(0.6)),
-                    )
                     .child(
                         div()
-                            .text_size(px(11.5))
-                            .text_color(theme.foreground.opacity(0.62))
-                            .child(label),
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                Spinner::new()
+                                    .small()
+                                    .color(theme.muted_foreground.opacity(0.6)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(theme.foreground.opacity(0.62))
+                                    .child(label),
+                            ),
                     )
-                    .into_any_element(),
-            )
-        } else if let Some((title, detail)) = self.latest_completed_run_summary() {
-            let mut completion_detail = div().flex().flex_col().gap(px(1.0)).min_w_0().child(
-                div()
-                    .text_size(px(11.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.foreground.opacity(0.72))
-                    .child(title),
-            );
-            if !detail.is_empty() {
-                completion_detail = completion_detail.child(
-                    div()
-                        .text_size(px(10.5))
-                        .text_color(theme.muted_foreground.opacity(0.52))
-                        .overflow_x_hidden()
-                        .whitespace_nowrap()
-                        .child(detail),
-                );
-            }
-
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .mx(px(14.0))
-                    .mb(px(8.0))
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .rounded(px(8.0))
-                    .bg(theme.success.opacity(0.05))
-                    .child(
-                        svg()
-                            .path("phosphor/check-circle.svg")
-                            .size(px(12.0))
-                            .text_color(theme.success.opacity(0.75)),
-                    )
-                    .child(completion_detail)
+                    .child(Divider::horizontal().color(theme.muted.opacity(0.10)))
                     .into_any_element(),
             )
         } else {
@@ -2934,7 +2868,8 @@ impl Render for AgentPanel {
             .min_h_0()
             .bg(theme.title_bar.opacity(self.ui_opacity))
             .font_family(theme.font_family.clone())
-            .child(header);
+            .child(header)
+            .child(Divider::horizontal().color(theme.muted.opacity(0.08)));
 
         if let Some(live_activity_strip) = live_activity_strip {
             panel = panel.child(live_activity_strip);

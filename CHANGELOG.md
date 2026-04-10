@@ -60,8 +60,8 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Current-screen SSH state is modeled more cleanly too. Login banners and closed-SSH screens are now captured as observations, which helps the agent tell the difference between a live remote shell and a pane whose remote session already ended.
 - tmux-like screens are now captured as observations too. con can describe a pane as looking like tmux and route tmux-oriented questions toward that pane without pretending it already has native tmux control there.
 - SSH workspace reuse is stricter now. A pane that visibly shows a closed SSH connection or a tmux-like screen is no longer silently reused as a plain remote shell target on follow-up turns.
-- The agent panel now groups tool traces into clearer run cards, keeps the latest completed run visible near the top, and uses better inline expansion labels for long outputs so you can tell at a glance whether a run is still active or already finished.
-- The terminal-agent benchmark now includes richer operator playbooks and profiles for local Codex dev loops, dual-host SSH maintenance, and remote tmux edit/run/reuse workflows. This gives Con a more realistic evaluation ladder than simple smoke prompts.
+- The agent panel now uses quieter run cards with calmer state labels, stronger alignment, and cleaner output blocks. Long tool results still expand inline, but the panel no longer relies on a loud “finished” banner to signal that a run is done.
+- The terminal-agent benchmark now includes richer operator playbooks and profiles for local Codex dev loops, dual-host SSH maintenance, and remote tmux edit/run/reuse workflows. It can now execute those operator prompt sequences directly and record the transcript instead of only printing a playbook path.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.
