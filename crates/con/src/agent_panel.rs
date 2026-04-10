@@ -1520,7 +1520,7 @@ fn hidden_result_line_count(content: &str, max_lines: usize) -> usize {
 }
 
 fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.background.opacity(0.0)
+    theme.muted.opacity(0.035)
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
@@ -1533,6 +1533,10 @@ fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
     theme.secondary_active
+}
+
+fn trace_group_header_surface(theme: &gpui_component::Theme) -> Hsla {
+    theme.muted.opacity(0.055)
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
@@ -2357,12 +2361,13 @@ impl Render for AgentPanel {
                     .ml(px(19.0))
                     .mr(px(4.0))
                     .mt(px(6.0))
-                    .px(px(8.0))
-                    .py(px(8.0))
+                    .px(px(10.0))
+                    .py(px(10.0))
+                    .rounded(px(14.0))
                     .bg(trace_group_surface(theme))
                     .flex()
                     .flex_col()
-                    .gap(px(8.0));
+                    .gap(px(10.0));
 
                 run_card = run_card.child(
                     div()
@@ -2370,11 +2375,13 @@ impl Render for AgentPanel {
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .py(px(2.0))
+                        .px(px(10.0))
+                        .py(px(9.0))
+                        .bg(trace_group_header_surface(theme))
                         .cursor_pointer()
-                        .rounded(px(8.0))
+                        .rounded(px(10.0))
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.muted.opacity(0.05)))
+                        .hover(|s| s.bg(theme.muted.opacity(0.07)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, _, cx| {
@@ -2442,8 +2449,8 @@ impl Render for AgentPanel {
 
                 if !collapsed {
                     run_card =
-                        run_card.child(Divider::horizontal().color(theme.muted.opacity(0.10)));
-                    let mut steps_el = div().flex().flex_col().gap(px(6.0));
+                        run_card.child(Divider::horizontal().color(theme.muted.opacity(0.07)));
+                    let mut steps_el = div().flex().flex_col().gap(px(8.0));
 
                     for (step_idx, step) in msg.steps.iter().enumerate() {
                         let icon_color = match step.status {
@@ -2555,7 +2562,7 @@ impl Render for AgentPanel {
                         let mut step_shell = div()
                             .flex()
                             .flex_col()
-                            .rounded(px(10.0))
+                            .rounded(px(11.0))
                             .bg(trace_step_surface(theme));
 
                         if has_detail {
@@ -2594,6 +2601,7 @@ impl Render for AgentPanel {
                                 step_shell = step_shell.child(
                                     div()
                                         .mx(px(6.0))
+                                        .mt(px(2.0))
                                         .mb(px(6.0))
                                         .rounded(px(9.0))
                                         .bg(trace_detail_surface(theme))
@@ -2613,7 +2621,7 @@ impl Render for AgentPanel {
                                     let expanded = step.detail_expanded;
                                     let button_label = result_toggle_label(detail, expanded);
                                     step_shell = step_shell.child(
-                                        div().pl(px(34.0)).pb(px(10.0)).child(
+                                        div().pl(px(36.0)).pb(px(10.0)).child(
                                             div()
                                                 .id(SharedString::from(format!(
                                                     "step-detail-expand-{msg_idx}-{step_idx}"
@@ -2683,14 +2691,19 @@ impl Render for AgentPanel {
                 .ml(px(19.0))
                 .mr(px(4.0))
                 .gap(px(8.0))
-                .px(px(8.0))
-                .py(px(8.0))
+                .px(px(10.0))
+                .py(px(10.0))
+                .rounded(px(14.0))
                 .bg(trace_group_surface(theme))
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(8.0))
+                        .px(px(10.0))
+                        .py(px(9.0))
+                        .bg(trace_group_header_surface(theme))
+                        .rounded(px(10.0))
                         .child(
                             div()
                                 .flex()
@@ -2727,7 +2740,7 @@ impl Render for AgentPanel {
                 );
 
             tc_container =
-                tc_container.child(Divider::horizontal().color(theme.muted.opacity(0.10)));
+                tc_container.child(Divider::horizontal().color(theme.muted.opacity(0.07)));
 
             for (tc_idx, tc) in visible_tool_calls {
                 let is_done = tc.result.is_some();
@@ -2810,7 +2823,7 @@ impl Render for AgentPanel {
                 let mut tc_el = div()
                     .flex()
                     .flex_col()
-                    .rounded(px(10.0))
+                    .rounded(px(11.0))
                     .bg(trace_step_surface(theme))
                     .child(tc_row);
 
@@ -2826,6 +2839,7 @@ impl Render for AgentPanel {
                     tc_el = tc_el.child(
                         div()
                             .mx(px(6.0))
+                            .mt(px(2.0))
                             .mb(px(6.0))
                             .rounded(px(9.0))
                             .bg(trace_detail_surface(theme))
@@ -2845,7 +2859,7 @@ impl Render for AgentPanel {
                         let expanded = tc.result_expanded;
                         let button_label = result_toggle_label(&formatted, expanded);
                         tc_el = tc_el.child(
-                            div().pl(px(34.0)).pb(px(10.0)).child(
+                            div().pl(px(36.0)).pb(px(10.0)).child(
                                 div()
                                     .id(SharedString::from(format!("tc-result-expand-{tc_idx}")))
                                     .cursor_pointer()
