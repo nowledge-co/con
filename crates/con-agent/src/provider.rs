@@ -813,7 +813,7 @@ impl AgentProvider {
             ProviderKind::GitHubCopilot => {
                 let client = self.build_github_copilot_client()?;
                 let model = self.config.effective_model(kind);
-                if model == github_copilot::GPT_5_1_CODEX {
+                if github_copilot::requires_responses_api(model) {
                     stream_with_model!(client.responses_model(model))
                 } else {
                     stream_with!(client)
@@ -1165,7 +1165,7 @@ impl AgentProvider {
             ProviderKind::GitHubCopilot => {
                 let client = self.build_github_copilot_client()?;
                 let model = self.config.effective_model(kind);
-                if model == github_copilot::GPT_5_1_CODEX {
+                if github_copilot::requires_responses_api(model) {
                     do_complete_model!(client.responses_model(model))
                 } else {
                     do_complete!(client)

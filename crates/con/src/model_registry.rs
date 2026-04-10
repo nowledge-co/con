@@ -41,7 +41,13 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
             "gpt-5.3-chat-latest",
             "gpt-5.3-instant",
         ],
-        ProviderKind::GitHubCopilot => &["gpt-4o", "gpt-4"],
+        ProviderKind::GitHubCopilot => &[
+            "gpt-5.4",
+            "gpt-5.3-codex",
+            "gpt-5.2",
+            "claude-sonnet-4.5",
+            "gpt-4o",
+        ],
         ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
             &["MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.5", "MiniMax-M2.7"]
         }

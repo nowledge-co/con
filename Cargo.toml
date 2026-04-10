@@ -37,7 +37,7 @@ gpui-component-macros = { path = "3pp/gpui-component/crates/macros" }
 gpui-component-assets = { path = "3pp/gpui-component/crates/assets" }
 
 # AI Agent
-rig-core = { git = "https://github.com/wey-gu/rig.git", rev = "013723d4506ea0878c3409a3d6ba6ba97c33a9a6", default-features = false, features = ["rustls"] }
+rig-core = { git = "https://github.com/wey-gu/rig.git", rev = "e3520259397809d0ef4d6dbd2658a706280e7371", default-features = false, features = ["rustls"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
