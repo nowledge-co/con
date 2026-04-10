@@ -40,6 +40,7 @@ This layer evaluates real user tasks that are not yet stable enough for brittle 
 
 Current playbooks:
 
+- [`local-codex-workspace.md`](../../benchmarks/terminal-agent/playbooks/local-codex-workspace.md)
 - [`remote-host-reuse.md`](../../benchmarks/terminal-agent/playbooks/remote-host-reuse.md)
 - [`tmux-session-awareness.md`](../../benchmarks/terminal-agent/playbooks/tmux-session-awareness.md)
 - [`tmux-agent-target-preparation.md`](../../benchmarks/terminal-agent/playbooks/tmux-agent-target-preparation.md)
@@ -51,6 +52,23 @@ These are scored against product criteria such as:
 - recovery behavior
 - safety
 - honesty of uncertainty reporting
+
+## Built-in profiles
+
+The benchmark now ships with a small starter profile set:
+
+- `basic-local-shell`
+- `basic-local-codex`
+- `basic-ssh-dual-host`
+- `basic-ssh-tmux`
+
+Profiles combine:
+
+- environment checks
+- the strict suite
+- recommended playbooks for deeper scenario work
+
+This keeps the benchmark maintainable. Everyday development can run a small profile quickly, while deeper release work can expand into the linked playbooks.
 
 ## Why this split is intentional
 

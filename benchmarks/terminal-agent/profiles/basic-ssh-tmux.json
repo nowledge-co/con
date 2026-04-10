@@ -1,0 +1,27 @@
+{
+  "name": "basic-ssh-tmux",
+  "description": "SSH + tmux orientation profile using haswell as the tmux host and cinnamon as the plain SSH host.",
+  "recommended_suite": "all",
+  "env_checks": [
+    {
+      "name": "ssh_haswell",
+      "kind": "ssh_host",
+      "value": "haswell"
+    },
+    {
+      "name": "ssh_cinnamon",
+      "kind": "ssh_host",
+      "value": "cinnamon"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "tmux Session Awareness",
+      "path": "benchmarks/terminal-agent/playbooks/tmux-session-awareness.md"
+    },
+    {
+      "name": "tmux Agent Target Preparation",
+      "path": "benchmarks/terminal-agent/playbooks/tmux-agent-target-preparation.md"
+    }
+  ]
+}

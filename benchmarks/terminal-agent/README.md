@@ -49,6 +49,19 @@ python3 benchmarks/terminal-agent/run.py \
   --record .context/benchmarks/latest.json
 ```
 
+List the built-in profiles:
+
+```bash
+python3 benchmarks/terminal-agent/run.py --list-profiles
+```
+
+Run a concrete profile:
+
+```bash
+python3 benchmarks/terminal-agent/run.py --profile basic-local-shell
+CON_BENCH_ENABLE_AGENT=1 python3 benchmarks/terminal-agent/run.py --profile basic-local-codex --suite all
+```
+
 ## Strict suite coverage
 
 Today the strict runner verifies:
@@ -65,6 +78,7 @@ This is the hard floor. If these break, Con is not ready for higher-level SSH/tm
 
 The playbooks in [`playbooks/`](./playbooks/) cover the product behaviors that still need structured scenario evaluation:
 
+- local Codex workspace preparation and reuse
 - remote host reuse across follow-up turns
 - tmux session understanding
 - tmux agent-target preparation
@@ -78,6 +92,21 @@ Each playbook includes:
 - scoring dimensions
 
 They are designed to become announcement-grade benchmark material later, once the environment setup is stabilized.
+
+## Built-in profiles
+
+The first profile set is intentionally small and typical:
+
+- `basic-local-shell`
+  - baseline local tab and visible shell control
+- `basic-local-codex`
+  - local Codex CLI workflow on `~/dev/temp`
+- `basic-ssh-dual-host`
+  - remote host reuse using `haswell` and `cinnamon`
+- `basic-ssh-tmux`
+  - mixed plain SSH and `ssh -> tmux` orientation using `haswell` and `cinnamon`
+
+Profiles add environment checks and recommended playbooks on top of the strict suite. They are the starting point for day-to-day regression work, not the final public benchmark surface.
 
 ## Benchmark philosophy
 

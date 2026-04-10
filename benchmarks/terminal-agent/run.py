@@ -19,6 +19,7 @@ from typing import Any, Callable
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOCKET = os.environ.get("CON_SOCKET_PATH", "/tmp/con.sock")
 DEFAULT_RECORD_DIR = REPO_ROOT / ".context" / "benchmarks"
+PROFILE_DIR = REPO_ROOT / "benchmarks" / "terminal-agent" / "profiles"
 
 
 class BenchError(RuntimeError):
@@ -32,6 +33,15 @@ class CaseResult:
     duration_ms: int
     note: str
     details: dict[str, Any]
+
+
+@dataclass
+class Profile:
+    name: str
+    description: str
+    recommended_suite: str
+    env_checks: list[dict[str, Any]]
+    playbooks: list[dict[str, Any]]
 
 
 def utc_now() -> str:
@@ -161,6 +171,89 @@ class BenchmarkContext:
         raise BenchError(
             f"pane {pane_id} did not regain {capability} within {timeout_secs:.1f}s"
         ) from None
+
+    def shell_command(self, command: list[str], *, timeout_secs: float = 8.0) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_secs,
+        )
+
+
+def load_profile(profile_name: str) -> Profile:
+    profile_path = PROFILE_DIR / f"{profile_name}.json"
+    if not profile_path.exists():
+        raise BenchError(f"unknown profile `{profile_name}`; expected {profile_path}")
+    data = json.loads(profile_path.read_text())
+    return Profile(
+        name=data["name"],
+        description=data["description"],
+        recommended_suite=data.get("recommended_suite", "strict"),
+        env_checks=data.get("env_checks", []),
+        playbooks=data.get("playbooks", []),
+    )
+
+
+def list_profiles() -> list[Profile]:
+    profiles: list[Profile] = []
+    for profile_path in sorted(PROFILE_DIR.glob("*.json")):
+        data = json.loads(profile_path.read_text())
+        profiles.append(
+            Profile(
+                name=data["name"],
+                description=data["description"],
+                recommended_suite=data.get("recommended_suite", "strict"),
+                env_checks=data.get("env_checks", []),
+                playbooks=data.get("playbooks", []),
+            )
+        )
+    return profiles
+
+
+def env_case_for(check: dict[str, Any]) -> tuple[str, Callable[[BenchmarkContext], tuple[str, dict[str, Any]]]]:
+    kind = check["kind"]
+    name = check["name"]
+    value = check["value"]
+
+    def case_command(ctx: BenchmarkContext) -> tuple[str, dict[str, Any]]:
+        resolved = shutil.which(value)
+        if not resolved:
+            raise BenchError(f"required command `{value}` is not available in PATH")
+        return (f"`{value}` resolved to {resolved}", {"command": value, "resolved_path": resolved})
+
+    def case_path_exists(ctx: BenchmarkContext) -> tuple[str, dict[str, Any]]:
+        path = Path(os.path.expanduser(value))
+        if not path.exists():
+            raise BenchError(f"required path does not exist: {path}")
+        return (f"{path} exists", {"path": str(path)})
+
+    def case_ssh_host(ctx: BenchmarkContext) -> tuple[str, dict[str, Any]]:
+        command = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            value,
+            "printf ok",
+        ]
+        proc = ctx.shell_command(command, timeout_secs=8.0)
+        if proc.returncode != 0 or proc.stdout.strip() != "ok":
+            stderr = proc.stderr.strip() or proc.stdout.strip()
+            raise BenchError(f"ssh host `{value}` is not reachable in batch mode: {stderr}")
+        return (f"`{value}` reachable over batch SSH", {"host": value})
+
+    handlers: dict[str, Callable[[BenchmarkContext], tuple[str, dict[str, Any]]]] = {
+        "command": case_command,
+        "path_exists": case_path_exists,
+        "ssh_host": case_ssh_host,
+    }
+    if kind not in handlers:
+        raise BenchError(f"unsupported env check kind `{kind}` in profile")
+    return (f"env_{name}", handlers[kind])
 
 
 def run_case(
@@ -322,6 +415,15 @@ def parse_args() -> argparse.Namespace:
         description="Run Con terminal-agent benchmark suites against a live con-cli socket.",
     )
     parser.add_argument(
+        "--list-profiles",
+        action="store_true",
+        help="List available benchmark profiles and exit.",
+    )
+    parser.add_argument(
+        "--profile",
+        help="Load a benchmark profile with environment checks and recommended playbooks.",
+    )
+    parser.add_argument(
         "--suite",
         choices=("strict", "agent", "all"),
         default="strict",
@@ -362,13 +464,28 @@ def selected_cases(suite: str) -> list[tuple[str, Callable[[BenchmarkContext], t
 
 def main() -> int:
     args = parse_args()
+    if args.list_profiles:
+        for profile in list_profiles():
+            print(
+                f"{profile.name}: {profile.description} "
+                f"(recommended suite: {profile.recommended_suite})"
+            )
+        return 0
+
+    profile: Profile | None = None
+    env_cases: list[tuple[str, Callable[[BenchmarkContext], tuple[str, dict[str, Any]]]]] = []
+    if args.profile:
+        profile = load_profile(args.profile)
+        env_cases = [env_case_for(check) for check in profile.env_checks]
+
     socket_path = args.socket
     if not Path(socket_path).exists():
         print(f"[terminal-agent-benchmark] missing socket: {socket_path}", file=sys.stderr)
         return 2
 
     ctx = BenchmarkContext(socket_path=socket_path, default_tab=args.tab)
-    results = [run_case(ctx, name, case_fn) for name, case_fn in selected_cases(args.suite)]
+    selected = [*env_cases, *selected_cases(args.suite)]
+    results = [run_case(ctx, name, case_fn) for name, case_fn in selected]
 
     passed = sum(1 for result in results if result.status == "pass")
     failed = sum(1 for result in results if result.status == "fail")
@@ -381,6 +498,7 @@ def main() -> int:
     summary = {
         "benchmark": "terminal-agent",
         "suite": args.suite,
+        "profile": asdict(profile) if profile else None,
         "socket_path": socket_path,
         "tab_override": args.tab,
         "recorded_at": utc_now(),
@@ -396,6 +514,13 @@ def main() -> int:
     for result in results:
         marker = "PASS" if result.status == "pass" else "FAIL"
         print(f"[{marker}] {result.name}: {result.note}")
+
+    if profile and profile.playbooks:
+        print("\nPlaybooks:")
+        for playbook in profile.playbooks:
+            label = playbook.get("name", playbook.get("path", "playbook"))
+            path = playbook.get("path", "")
+            print(f"- {label}: {path}")
 
     record_path = record_path_for(args)
     record_path.parent.mkdir(parents=True, exist_ok=True)

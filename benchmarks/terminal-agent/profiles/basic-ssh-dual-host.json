@@ -1,0 +1,23 @@
+{
+  "name": "basic-ssh-dual-host",
+  "description": "Dual-host SSH profile using haswell and cinnamon for remote workspace reuse.",
+  "recommended_suite": "all",
+  "env_checks": [
+    {
+      "name": "ssh_haswell",
+      "kind": "ssh_host",
+      "value": "haswell"
+    },
+    {
+      "name": "ssh_cinnamon",
+      "kind": "ssh_host",
+      "value": "cinnamon"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Remote Host Reuse",
+      "path": "benchmarks/terminal-agent/playbooks/remote-host-reuse.md"
+    }
+  ]
+}

@@ -20,8 +20,12 @@ Primary references:
    - `python3 benchmarks/terminal-agent/run.py --suite strict`
 3. If provider setup is present, run:
    - `CON_BENCH_ENABLE_AGENT=1 python3 benchmarks/terminal-agent/run.py --suite all`
-4. For SSH/tmux changes, run the relevant playbook under `benchmarks/terminal-agent/playbooks/`.
-5. Save the JSON record under `.context/benchmarks/` and cite it in your report.
+4. Prefer a built-in profile when one matches the workflow:
+   - `python3 benchmarks/terminal-agent/run.py --list-profiles`
+   - `python3 benchmarks/terminal-agent/run.py --profile basic-local-shell`
+   - `CON_BENCH_ENABLE_AGENT=1 python3 benchmarks/terminal-agent/run.py --profile basic-local-codex --suite all`
+5. For SSH/tmux changes, run the relevant playbook under `benchmarks/terminal-agent/playbooks/`.
+6. Save the JSON record under `.context/benchmarks/` and cite it in your report.
 
 ## Rules
 
