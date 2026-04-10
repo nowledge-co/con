@@ -1,0 +1,22 @@
+{
+  "name": "operator-ssh-tmux-devloop",
+  "description": "Operator-grade ssh->tmux workflow with target reuse, remote file edits, long-running jobs, and agent-CLI orientation.",
+  "recommended_suite": "all",
+  "env_checks": [
+    {
+      "name": "ssh_haswell",
+      "kind": "ssh_host",
+      "value": "haswell"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Remote tmux Dev Loop",
+      "path": "benchmarks/terminal-agent/playbooks/tmux-remote-devloop.md"
+    },
+    {
+      "name": "tmux Agent Target Preparation",
+      "path": "benchmarks/terminal-agent/playbooks/tmux-agent-target-preparation.md"
+    }
+  ]
+}

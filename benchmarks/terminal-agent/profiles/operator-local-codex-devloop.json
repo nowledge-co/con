@@ -1,0 +1,28 @@
+{
+  "name": "operator-local-codex-devloop",
+  "description": "Operator-grade local coding workflow using Codex in ~/dev/temp with a real file-edit-test-repair loop.",
+  "recommended_suite": "all",
+  "env_checks": [
+    {
+      "name": "codex_cli",
+      "kind": "command",
+      "value": "codex"
+    },
+    {
+      "name": "python3",
+      "kind": "command",
+      "value": "python3"
+    },
+    {
+      "name": "temp_project_root",
+      "kind": "path_exists",
+      "value": "~/dev/temp"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Local Codex Two Sum Dev Loop",
+      "path": "benchmarks/terminal-agent/playbooks/local-codex-two-sum-devloop.md"
+    }
+  ]
+}

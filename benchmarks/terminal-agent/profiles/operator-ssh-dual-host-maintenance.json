@@ -1,0 +1,23 @@
+{
+  "name": "operator-ssh-dual-host-maintenance",
+  "description": "Operator-grade remote maintenance workflow across haswell and cinnamon with follow-up reuse and safe package-manager handling.",
+  "recommended_suite": "all",
+  "env_checks": [
+    {
+      "name": "ssh_haswell",
+      "kind": "ssh_host",
+      "value": "haswell"
+    },
+    {
+      "name": "ssh_cinnamon",
+      "kind": "ssh_host",
+      "value": "cinnamon"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Remote Dual-Host Maintenance",
+      "path": "benchmarks/terminal-agent/playbooks/remote-dual-host-maintenance.md"
+    }
+  ]
+}
