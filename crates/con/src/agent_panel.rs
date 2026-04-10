@@ -1432,7 +1432,7 @@ fn render_result_block(
                     div()
                         .text_size(px(10.5))
                         .font_family(theme.mono_font_family.clone())
-                        .text_color(theme.muted_foreground.opacity(0.62))
+                        .text_color(theme.muted_foreground.opacity(0.66))
                         .overflow_x_hidden()
                         .whitespace_nowrap()
                         .child(content.to_string()),
@@ -1475,7 +1475,7 @@ fn render_result_block(
                 .font_family(theme.mono_font_family.clone())
                 .text_size(px(10.5))
                 .line_height(px(15.5))
-                .text_color(theme.muted_foreground.opacity(0.69))
+                .text_color(theme.muted_foreground.opacity(0.74))
                 .child(body)
                 .into_any_element()
         } else {
@@ -1542,13 +1542,13 @@ fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Them
                     div()
                         .w(px(94.0))
                         .flex_shrink_0()
-                        .text_color(theme.muted_foreground.opacity(0.48))
+                        .text_color(theme.muted_foreground.opacity(0.54))
                         .child(key.clone()),
                 )
                 .child(
                     div()
                         .flex_1()
-                        .text_color(theme.foreground.opacity(0.75))
+                        .text_color(theme.foreground.opacity(0.82))
                         .child(value.clone()),
                 ),
         );
@@ -1557,7 +1557,7 @@ fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Them
 }
 
 fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary_hover
+    theme.secondary_active.opacity(0.58)
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
@@ -1577,7 +1577,7 @@ fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
 }
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary_hover
+    theme.secondary
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
@@ -1732,6 +1732,34 @@ fn render_inline_state(
         .into_any_element()
 }
 
+fn render_meta_chip(
+    label: impl Into<SharedString>,
+    surface: Hsla,
+    text: Hsla,
+    theme: &gpui_component::Theme,
+    mono: bool,
+) -> AnyElement {
+    let mut label_el = div()
+        .text_size(px(10.25))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(text)
+        .child(label.into());
+
+    if mono {
+        label_el = label_el.font_family(theme.mono_font_family.clone());
+    }
+
+    div()
+        .flex()
+        .items_center()
+        .px(px(8.0))
+        .py(px(3.0))
+        .rounded(px(7.0))
+        .bg(surface)
+        .child(label_el)
+        .into_any_element()
+}
+
 fn humanize_provider_name(name: &str) -> String {
     match name.trim().to_ascii_lowercase().as_str() {
         "chatgpt" => "ChatGPT".to_string(),
@@ -1779,26 +1807,32 @@ fn render_model_chips(
     theme: &gpui_component::Theme,
 ) -> AnyElement {
     let (provider, label) = split_model_identity(model);
-    let mut row = div().flex().items_center().gap(px(6.0));
+    let mut row = div().flex().items_center().gap(px(7.0));
 
     if let Some(provider) = provider {
         row = row.child(
-            Tag::secondary()
-                .outline()
-                .xsmall()
-                .rounded_full()
+            div()
+                .text_size(px(10.75))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.muted_foreground.opacity(0.50))
                 .child(provider),
         );
     }
 
-    row = row.child(Tag::secondary().xsmall().rounded_full().child(label));
+    row = row.child(render_meta_chip(
+        label,
+        theme.secondary,
+        theme.foreground.opacity(0.64),
+        theme,
+        true,
+    ));
 
     if let Some(dur) = duration_ms {
         row = row.child(
             div()
                 .text_size(px(10.0))
                 .font_family(theme.mono_font_family.clone())
-                .text_color(theme.muted_foreground.opacity(0.34))
+                .text_color(theme.muted_foreground.opacity(0.38))
                 .child(format_duration_ms(dur)),
         );
     }
@@ -1838,7 +1872,7 @@ fn render_result_toggle_chrome(
             div()
                 .text_size(px(10.0))
                 .font_family(theme.mono_font_family.clone())
-                .text_color(theme.muted_foreground.opacity(0.30))
+                .text_color(theme.muted_foreground.opacity(0.34))
                 .child(label),
         )
         .into_any_element()
@@ -1846,9 +1880,9 @@ fn render_result_toggle_chrome(
 
 fn render_section_kicker(label: &str, theme: &gpui_component::Theme) -> AnyElement {
     div()
-        .text_size(px(9.0))
+        .text_size(px(8.75))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(theme.muted_foreground.opacity(0.38))
+        .text_color(theme.muted_foreground.opacity(0.34))
         .child(label.to_ascii_uppercase())
         .into_any_element()
 }
@@ -2404,7 +2438,7 @@ impl Render for AgentPanel {
                     .mt(px(6.0))
                     .px(px(10.0))
                     .py(px(10.0))
-                    .rounded(px(18.0))
+                    .rounded(px(15.0))
                     .bg(trace_group_surface(theme))
                     .flex()
                     .flex_col()
@@ -2444,15 +2478,15 @@ impl Render for AgentPanel {
                                 .child(render_section_kicker(run_title, theme))
                                 .child(
                                     div()
-                                        .text_size(px(12.25))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground.opacity(0.76))
-                                        .child("Actions, probes, and output"),
+                                    .text_size(px(12.25))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.foreground.opacity(0.72))
+                                    .child("Actions, probes, and output"),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(10.5))
-                                        .text_color(theme.muted_foreground.opacity(0.48))
+                                        .text_color(theme.muted_foreground.opacity(0.44))
                                         .child("A compact trace of what the agent actually did"),
                                 ),
                         )
@@ -2523,7 +2557,7 @@ impl Render for AgentPanel {
                             .child(
                                 div()
                                     .text_size(px(12.0))
-                                    .text_color(theme.muted_foreground.opacity(0.55))
+                                    .text_color(theme.foreground.opacity(0.60))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(step_name.to_string()),
                             )
@@ -2538,7 +2572,7 @@ impl Render for AgentPanel {
                                 div()
                                     .flex_shrink_0()
                                     .text_size(px(10.0))
-                                    .text_color(theme.muted_foreground.opacity(0.28))
+                                    .text_color(theme.muted_foreground.opacity(0.34))
                                     .child(format_step_duration(dur)),
                             );
                         }
@@ -2552,7 +2586,7 @@ impl Render for AgentPanel {
                                     .child(
                                         div()
                                             .text_size(px(10.0))
-                                            .text_color(theme.muted_foreground.opacity(0.40))
+                                            .text_color(theme.muted_foreground.opacity(0.38))
                                             .child(if detail_collapsed {
                                                 "Details"
                                             } else {
@@ -2588,7 +2622,7 @@ impl Render for AgentPanel {
                                 div()
                                     .ml(px(18.0))
                                     .text_size(px(11.0))
-                                    .text_color(theme.muted_foreground.opacity(0.45))
+                                    .text_color(theme.muted_foreground.opacity(0.50))
                                     .font_family(theme.mono_font_family.clone())
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
@@ -2599,7 +2633,7 @@ impl Render for AgentPanel {
                         let mut step_shell = div()
                             .flex()
                             .flex_col()
-                            .rounded(px(14.0))
+                            .rounded(px(12.0))
                             .overflow_hidden()
                             .bg(trace_step_surface(theme))
                             .gap(px(0.0));
@@ -2746,7 +2780,7 @@ impl Render for AgentPanel {
                 .gap(px(10.0))
                 .px(px(10.0))
                 .py(px(10.0))
-                .rounded(px(18.0))
+                .rounded(px(15.0))
                 .bg(trace_group_surface(theme))
                 .child(
                     div()
@@ -2765,13 +2799,13 @@ impl Render for AgentPanel {
                                     div()
                                         .text_size(px(12.25))
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground.opacity(0.76))
+                                        .text_color(theme.foreground.opacity(0.72))
                                         .child("Live tools for this reply"),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(10.5))
-                                        .text_color(theme.muted_foreground.opacity(0.48))
+                                        .text_color(theme.muted_foreground.opacity(0.44))
                                         .child("Commands and reads still in progress"),
                                 ),
                         )
@@ -2828,7 +2862,7 @@ impl Render for AgentPanel {
                     .child(
                         div()
                             .text_size(px(12.0))
-                            .text_color(theme.muted_foreground.opacity(0.55))
+                            .text_color(theme.foreground.opacity(0.60))
                             .font_weight(FontWeight::MEDIUM)
                             .child(human_name),
                     )
@@ -2837,7 +2871,7 @@ impl Render for AgentPanel {
                         div()
                             .flex_shrink_0()
                             .text_size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.28))
+                            .text_color(theme.muted_foreground.opacity(0.34))
                             .child(format_step_duration(dur)),
                     );
                 let top_line = if is_done {
@@ -2860,7 +2894,7 @@ impl Render for AgentPanel {
                         div()
                             .ml(px(18.0))
                             .text_size(px(11.0))
-                            .text_color(theme.muted_foreground.opacity(0.45))
+                            .text_color(theme.muted_foreground.opacity(0.50))
                             .font_family(theme.mono_font_family.clone())
                             .overflow_x_hidden()
                             .whitespace_nowrap()
@@ -2871,7 +2905,7 @@ impl Render for AgentPanel {
                 let mut tc_el = div()
                     .flex()
                     .flex_col()
-                    .rounded(px(14.0))
+                    .rounded(px(12.0))
                     .overflow_hidden()
                     .bg(trace_step_surface(theme))
                     .gap(px(0.0))
