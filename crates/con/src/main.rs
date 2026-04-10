@@ -4,6 +4,7 @@
 
 mod agent_panel;
 mod assets;
+mod chat_markdown;
 mod command_palette;
 #[cfg(target_os = "macos")]
 mod ghostty_view;

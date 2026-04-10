@@ -32,6 +32,7 @@ rust-embed.workspace = true
 dirs.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
+pulldown-cmark.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 con-ghostty.workspace = true

@@ -7,7 +7,6 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
 use gpui_component::tag::Tag;
-use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{ActiveTheme, Icon, Sizable as _};
 
 /// Max lines to show for tool result previews in collapsed steps
@@ -20,6 +19,7 @@ use con_core::harness::HarnessEvent;
 
 use chrono::Utc;
 
+use crate::chat_markdown::{ChatMarkdownTone, render_chat_markdown};
 use crate::input_bar::SkillEntry;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -824,18 +824,6 @@ impl AgentPanel {
     fn running_tool_call(&self) -> Option<&ToolCallEntry> {
         self.state.tool_calls.iter().find(|tc| tc.result.is_none())
     }
-}
-
-/// Markdown style for chat messages — readable prose with breathing room.
-fn chat_markdown_style() -> TextViewStyle {
-    TextViewStyle::default()
-        .paragraph_gap(rems(0.72))
-        .heading_font_size(|level, _base| match level {
-            1 => px(17.5),
-            2 => px(15.75),
-            3 => px(14.5),
-            _ => px(14.0),
-        })
 }
 
 fn tool_icon(tool_name: &str) -> &'static str {
@@ -2364,17 +2352,11 @@ impl Render for AgentPanel {
                                     .text_size(px(12.0))
                                     .line_height(px(18.0))
                                     .text_color(theme.muted_foreground.opacity(0.54))
-                                    .child(
-                                        TextView::markdown(
-                                            ElementId::Name(
-                                                format!("thinking-md-{msg_idx}").into(),
-                                            ),
-                                            display_text,
-                                        )
-                                        .selectable(true)
-                                        .style(chat_markdown_style())
-                                        .text_size(px(12.0)),
-                                    ),
+                                    .child(render_chat_markdown(
+                                        &display_text,
+                                        ChatMarkdownTone::Thinking,
+                                        theme,
+                                    )),
                             );
                         }
                     }
@@ -2390,15 +2372,11 @@ impl Render for AgentPanel {
                             .text_size(px(14.0))
                             .line_height(px(23.0))
                             .text_color(theme.foreground.opacity(0.88))
-                            .child(
-                                TextView::markdown(
-                                    ElementId::Name(format!("msg-md-{msg_idx}").into()),
-                                    content,
-                                )
-                                .selectable(true)
-                                .style(chat_markdown_style())
-                                .text_size(px(14.0)),
-                            ),
+                            .child(render_chat_markdown(
+                                &content,
+                                ChatMarkdownTone::Message,
+                                theme,
+                            )),
                     );
 
                     // Copy button — slightly tighter
