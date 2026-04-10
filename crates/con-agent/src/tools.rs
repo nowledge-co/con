@@ -1369,6 +1369,71 @@ fn pane_has_screen_hint(pane: &PaneInfo, kind: crate::context::PaneObservationHi
     pane.screen_hints.iter().any(|hint| hint.kind == kind)
 }
 
+fn pane_recent_command_matches(pane: &PaneInfo, predicate: impl Fn(&str) -> bool) -> bool {
+    pane.recent_actions
+        .iter()
+        .filter_map(|action| action.command.as_deref())
+        .any(predicate)
+}
+
+fn pane_has_local_shell_continuity(pane: &PaneInfo, cwd_contains: Option<&String>) -> bool {
+    if pane_is_disconnected_workspace(pane)
+        || pane_has_tmux_layer(pane)
+        || pane_has_tmux_observation(pane)
+        || pane_has_remote_shell_context(pane)
+        || pane.remote_workspace.is_some()
+        || !pane_has_screen_hint(
+            pane,
+            crate::context::PaneObservationHintKind::PromptLikeInput,
+        )
+    {
+        return false;
+    }
+
+    if cwd_contains.is_none() && pane.cwd.is_some() {
+        return true;
+    }
+
+    pane_matches_cwd(pane, cwd_contains)
+        || cwd_contains.is_some_and(|needle| {
+            pane_recent_command_matches(pane, |command| {
+                command.to_ascii_lowercase().contains(needle)
+            })
+        })
+}
+
+fn pane_has_local_agent_continuity(
+    pane: &PaneInfo,
+    agent_name: &str,
+    cwd_contains: Option<&String>,
+) -> bool {
+    if pane_is_disconnected_workspace(pane)
+        || pane_has_tmux_layer(pane)
+        || pane_has_tmux_observation(pane)
+        || pane_has_remote_shell_context(pane)
+        || pane.remote_workspace.is_some()
+    {
+        return false;
+    }
+
+    let launch = default_agent_launch_command(agent_name).unwrap_or(agent_name);
+    let launch_match = pane_recent_command_matches(pane, |command| {
+        command
+            .split_whitespace()
+            .any(|token| classify_agent_cli_command(token) == Some(agent_name))
+            || command.contains(launch)
+    });
+
+    launch_match
+        && (cwd_contains.is_none()
+            || pane_matches_cwd(pane, cwd_contains)
+            || cwd_contains.is_some_and(|needle| {
+                pane_recent_command_matches(pane, |command| {
+                    command.to_ascii_lowercase().contains(needle)
+                })
+            }))
+}
+
 fn workspace_kind_for_pane(pane: &PaneInfo) -> crate::context::TabWorkspaceKind {
     if pane.tmux_control.is_some()
         || pane.tmux_session.is_some()
@@ -1952,6 +2017,31 @@ fn resolve_work_target_candidates(
                     candidates.push((
                         65 + if pane.is_focused { 1 } else { 0 },
                         make_tmux_workspace_candidate(&pane, reason, suggested_tool),
+                    ));
+                } else if agent_name.as_deref().is_some_and(|name| {
+                    pane_has_local_agent_continuity(&pane, name, cwd_contains.as_ref())
+                }) {
+                    let label = agent_name
+                        .as_deref()
+                        .and_then(canonical_agent_cli_name)
+                        .unwrap_or("agent CLI");
+                    candidates.push((
+                        150 + if pane.is_focused { 1 } else { 0 },
+                        WorkTargetCandidate {
+                            pane_index: pane.index,
+                            pane_id: pane.pane_id,
+                            pane_title: pane.title.clone(),
+                            host: pane.hostname.clone(),
+                            control_path: WorkTargetControlPath::VisibleAgentUi,
+                            visible_target: pane.visible_target.clone(),
+                            tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
+                            tmux_target: None,
+                            requires_preparation: false,
+                            suggested_tool: "send_keys".to_string(),
+                            reason: format!(
+                                "This pane was previously created for local {label} work and still looks like the same local agent target."
+                            ),
+                        },
                     ));
                 } else if pane_is_local_shell_candidate(&pane) {
                     let label = agent_name
@@ -2881,7 +2971,10 @@ fn ensure_local_agent_target_impl(
         .iter()
         .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
         .filter(|pane| args.pane_id.is_none_or(|id| pane.pane_id == id))
-        .filter(|pane| pane_is_visible_local_agent_cli(pane, Some(&agent_name.to_string())))
+        .filter(|pane| {
+            pane_is_visible_local_agent_cli(pane, Some(&agent_name.to_string()))
+                || pane_has_local_agent_continuity(pane, agent_name, cwd_lower.as_ref())
+        })
         .filter(|pane| pane_matches_cwd(pane, cwd_lower.as_ref()))
         .max_by_key(|pane| 10 + if pane.is_focused { 5 } else { 0 });
 
@@ -4213,7 +4306,10 @@ fn ensure_local_shell_target_impl(
         .iter()
         .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
         .filter(|pane| args.pane_id.is_none_or(|id| pane.pane_id == id))
-        .filter(|pane| pane_is_local_shell_candidate(pane))
+        .filter(|pane| {
+            pane_is_local_shell_candidate(pane)
+                || pane_has_local_shell_continuity(pane, cwd_lower.as_ref())
+        })
         .filter(|pane| pane_matches_cwd(pane, cwd_lower.as_ref()))
         .max_by_key(|pane| 10 + if pane.is_focused { 5 } else { 0 });
 
@@ -4238,7 +4334,9 @@ fn ensure_local_shell_target_impl(
             .iter()
             .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
             .filter(|pane| args.pane_id.is_none_or(|id| pane.pane_id == id))
-            .filter(|pane| pane_is_local_shell_candidate(pane))
+            .filter(|pane| {
+                pane_is_local_shell_candidate(pane) || pane_has_local_shell_continuity(pane, None)
+            })
             .max_by_key(|pane| 10 + if pane.is_focused { 5 } else { 0 });
 
         if let Some(pane) = reusable {

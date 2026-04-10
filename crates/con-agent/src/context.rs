@@ -1479,6 +1479,15 @@ fn classify_tmux_agent_cli_command(command: &str) -> Option<&'static str> {
     canonical_agent_cli_name(basename)
 }
 
+fn classify_recent_agent_cli_action(actions: &[PaneActionRecord]) -> Option<&'static str> {
+    actions.iter().find_map(|action| {
+        let command = action.command.as_deref()?;
+        command
+            .split_whitespace()
+            .find_map(classify_tmux_agent_cli_command)
+    })
+}
+
 fn has_tmux_scope(scopes: &[PaneRuntimeScope]) -> bool {
     scopes
         .iter()
@@ -1995,6 +2004,77 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
         });
     }
 
+    let focused_prompt_like = ctx
+        .focused_screen_hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::PromptLikeInput);
+    let focused_local_shell = !focused_looks_tmux
+        && !focused_disconnected
+        && ctx.focused_hostname.is_none()
+        && ctx.focused_remote_workspace.is_none()
+        && (focused_supports_visible_shell(ctx) || focused_prompt_like);
+    let mut best_local_shell: Option<(usize, Option<&str>, bool)> = None;
+    if focused_local_shell {
+        best_local_shell = Some((
+            ctx.focused_pane_index,
+            ctx.cwd.as_deref(),
+            focused_supports_visible_shell(ctx),
+        ));
+    }
+    for pane in &ctx.other_panes {
+        let tmux_like = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
+        let disconnected = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
+        let prompt_like = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::PromptLikeInput);
+        if tmux_like
+            || disconnected
+            || pane.hostname.is_some()
+            || pane.remote_workspace.is_some()
+            || (!pane_supports_visible_shell(pane) && !prompt_like)
+        {
+            continue;
+        }
+        let candidate = (
+            pane.pane_index,
+            pane.cwd.as_deref(),
+            pane_supports_visible_shell(pane),
+        );
+        match best_local_shell {
+            None => best_local_shell = Some(candidate),
+            Some((current_index, _current_cwd, current_proven)) => {
+                if candidate.2 && !current_proven
+                    || (candidate.2 == current_proven && candidate.0 < current_index)
+                {
+                    best_local_shell = Some(candidate);
+                }
+            }
+        }
+    }
+    if let Some((pane_index, cwd, proven)) = best_local_shell {
+        hints.push(match (cwd, proven) {
+            (Some(cwd), true) => format!(
+                "Best local shell target right now: pane {pane_index} at `{cwd}`. Prefer ensure_local_shell_target or terminal_exec there before creating another shell pane."
+            ),
+            (Some(cwd), false) => format!(
+                "A likely reusable local shell target is pane {pane_index} at `{cwd}`, but it is backed by continuity and prompt-like screen state rather than a fresh proven shell prompt."
+            ),
+            (None, true) => format!(
+                "Best local shell target right now: pane {pane_index}. Prefer ensure_local_shell_target or terminal_exec there before creating another shell pane."
+            ),
+            (None, false) => format!(
+                "A likely reusable local shell target is pane {pane_index}, but it is backed by continuity and prompt-like screen state rather than a fresh proven shell prompt."
+            ),
+        });
+    }
+
     let mut remote_workspaces = Vec::new();
     if !focused_looks_tmux && !focused_disconnected {
         if let Some(anchor) = &ctx.focused_remote_workspace {
@@ -2037,6 +2117,63 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
                 ))
                 .collect::<Vec<_>>()
                 .join(", ")
+        ));
+    }
+
+    let focused_local_agent = !focused_looks_tmux
+        && !focused_disconnected
+        && ctx.focused_hostname.is_none()
+        && ctx.focused_remote_workspace.is_none()
+        && (ctx.focused_control.visible_target.kind == PaneVisibleTargetKind::AgentCli
+            || classify_recent_agent_cli_action(&ctx.focused_recent_actions).is_some());
+    let mut best_local_agent: Option<(usize, &'static str)> = None;
+    if focused_local_agent {
+        if let Some(agent) = ctx
+            .focused_control
+            .visible_target
+            .label
+            .as_deref()
+            .and_then(canonical_agent_cli_name)
+            .or_else(|| classify_recent_agent_cli_action(&ctx.focused_recent_actions))
+        {
+            best_local_agent = Some((ctx.focused_pane_index, agent));
+        }
+    }
+    for pane in &ctx.other_panes {
+        let tmux_like = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
+        let disconnected = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
+        if tmux_like || disconnected || pane.hostname.is_some() || pane.remote_workspace.is_some() {
+            continue;
+        }
+        let agent = if pane.control.visible_target.kind == PaneVisibleTargetKind::AgentCli {
+            pane.control
+                .visible_target
+                .label
+                .as_deref()
+                .and_then(canonical_agent_cli_name)
+                .or_else(|| pane.agent_cli.as_deref().and_then(canonical_agent_cli_name))
+        } else {
+            pane.agent_cli.as_deref().and_then(canonical_agent_cli_name)
+        };
+        if let Some(agent) = agent {
+            match best_local_agent {
+                None => best_local_agent = Some((pane.pane_index, agent)),
+                Some((current_index, _)) if pane.pane_index < current_index => {
+                    best_local_agent = Some((pane.pane_index, agent))
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some((pane_index, agent)) = best_local_agent {
+        hints.push(format!(
+            "Best local {agent} target right now: pane {pane_index}. Prefer ensure_local_agent_target or reuse this pane before launching another local agent CLI."
         ));
     }
 
