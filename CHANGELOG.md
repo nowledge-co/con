@@ -53,6 +53,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - SSH workspaces are now tracked across the whole tab, not just the focused pane. con keeps a typed inventory of proven remote hosts and con-managed SSH continuity, so follow-up requests can reuse the right host panes instead of recreating them.
 - Follow-up remote work is now allowed to reuse con-created SSH panes even when fresh shell integration is not currently proven, as long as the pane still looks like a prompt and no tmux or TUI evidence contradicts that continuity.
 - Pane tools now expose both `pane_index` and stable `pane_id`. `pane_index` remains the current visible layout position, while `pane_id` stays stable for the life of that pane inside the tab. Follow-up agent work now prefers `pane_id`, so adding or closing a split does not silently retarget later actions.
+- Stale pane targeting is now explained more clearly too. If a pane was closed or the split layout changed, con returns a direct recovery message that tells the agent to re-run `list_panes` and continue with `pane_id` instead of quietly failing on an old index.
 - con now summarizes the whole tab as typed workspaces. The agent can distinguish a ready remote shell, a tmux workspace, a disconnected SSH pane, or a pane that still needs inspection before it acts.
 - Multi-host remote work now has a higher-level `remote_exec` path. The agent can reuse or create SSH workspaces for multiple hosts and run the same command across them in parallel without manually stitching pane creation and batch execution together.
 - Current-screen SSH state is modeled more cleanly too. Login banners and closed-SSH screens are now captured as observations, which helps the agent tell the difference between a live remote shell and a pane whose remote session already ended.
@@ -108,6 +109,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 **Interface**
 - Smart input bar that auto-detects intent — shell commands go to the terminal, questions go to the agent, /skills invoke workflows
 - Agent panel (Cmd+L) with structured tool call cards, inline approval dialogs, code block rendering, and a resizable width you can drag to adjust
+- The agent panel now keeps live activity visible near the top while a run is in progress, shows a labeled Stop action in the header, and lets you expand long tool results instead of forcing every step into the same short preview.
 - Settings panel (Cmd+,) to configure your provider, model, and preferences
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs

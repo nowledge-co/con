@@ -2180,7 +2180,7 @@ impl TerminalContext {
                For local-only tasks: git, file searches, package lookups. Never for remote environments.\n\n\
              - create_pane: Create a new terminal pane (split in current tab). Optionally run a startup command \
                (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it. Supports split placement via `location` (`right` or `down`).\n\
-               Returns the pane index AND initial output (waits for output to settle). \
+               Returns both `pane_index` and stable `pane_id`, plus initial output (waits for output to settle). \
                Check the output to see what happened — no need for a separate read_pane.\n\n\
              - list_panes: List all panes with metadata, stable pane ids, control state, capabilities, and addressing notes.\n\n\
              - list_tab_workspaces: Summarize the current tab as typed workspaces such as remote shell, tmux workspace, disconnected SSH pane, or local shell.\n\n\
@@ -2200,9 +2200,9 @@ impl TerminalContext {
              - tmux_inspect: Inspect tmux adapter state for a pane containing a tmux session.\n\
              - tmux_list_targets: List tmux windows/panes through a proven same-session tmux shell anchor.\n\
              - tmux_find_targets: Find likely tmux shell panes, agent CLI panes, or other matching targets without hand-filtering tmux_list_targets.\n\
-             - resolve_work_target: Choose the best con pane or tmux target for shell work, tmux work, or agent CLI interaction using the typed control plane.\n\
-             - ensure_remote_shell_target: Reuse an existing SSH pane for a host, or create one if needed. Prefer this over repeatedly creating duplicate SSH panes during multi-host work.\n\
-             - remote_exec: Reuse or create remote SSH workspaces for one or more hosts, then run the same command on them in parallel.\n\
+             - resolve_work_target: Choose the best con pane or tmux target for shell work, tmux work, or agent CLI interaction using the typed control plane. When it returns a con pane, carry its `pane_id` into the next tool call.\n\
+             - ensure_remote_shell_target: Reuse an existing SSH pane for a host, or create one if needed. Prefer this over repeatedly creating duplicate SSH panes during multi-host work. Carry the returned `pane_id` into follow-up work.\n\
+             - remote_exec: Reuse or create remote SSH workspaces for one or more hosts, then run the same command on them in parallel. Its per-host results include stable `pane_id` values for follow-up work.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
              - tmux_ensure_shell_target: Reuse or create a tmux shell target through a proven same-session tmux shell anchor.\n\
              - tmux_ensure_agent_target: Reuse or create a tmux target for Codex CLI, Claude Code, or OpenCode. This stays in tmux control; it does not imply a native Codex/OpenCode attachment unless con explicitly proves one.\n\
@@ -2221,6 +2221,7 @@ impl TerminalContext {
              - Action history is causal evidence, not foreground truth. Use recent con actions to understand how a pane was reached, but rely on current probes and control capabilities before acting.\n\
              - `runtime_stack` is current-only. `last_verified_shell_stack` describes the most recent shell frame con verified, and may be historical.\n\
              - `pane_index` is positional within the current pane layout snapshot and can change when panes are created or closed. `pane_id` is the stable pane identity within the lifetime of this tab.\n\
+             - After list_panes, create_pane, ensure_remote_shell_target, resolve_work_target, or remote_exec, carry `pane_id` forward for follow-up actions. Use `pane_index` only as a human-readable snapshot.\n\
              - Prefer typed attachments and probes over inference. If `probe_shell_context` is available, use it before guessing about SSH, tmux, or editor context.\n\
              - `<remote_workspaces>` is not a guess. It is con's current host-workspace inventory for this tab, built from pane-local runtime facts and con-managed SSH continuity.\n\
              - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\

@@ -502,15 +502,19 @@ impl ConWorkspace {
             Some(index) => {
                 if index == 0 || index > all_terminals.len() {
                     return Err(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        "Pane index {} is no longer valid in the current layout. The pane layout changed or that pane was closed. Re-run list_panes and prefer pane_id for follow-up targeting.",
                         index,
-                        all_terminals.len()
                     ));
                 }
                 let pane = all_terminals[index - 1].clone();
                 let pane_id = pane_tree
                     .pane_id_for_terminal(&pane)
-                    .ok_or_else(|| format!("Pane {} is no longer available.", index))?;
+                    .ok_or_else(|| {
+                        format!(
+                            "Pane index {} no longer resolves to a live pane. Re-run list_panes and prefer pane_id for follow-up targeting.",
+                            index
+                        )
+                    })?;
                 Some(ResolvedPaneTarget {
                     pane,
                     pane_index: index,
@@ -536,7 +540,7 @@ impl ConWorkspace {
                     })
                     .ok_or_else(|| {
                         format!(
-                            "Pane id {} is no longer available in this tab. Re-run list_panes.",
+                            "Pane id {} is no longer available in this tab. That pane was likely closed. Re-run list_panes to choose a new target.",
                             pane_id
                         )
                     })?;
@@ -549,7 +553,7 @@ impl ConWorkspace {
             (Some(from_index), Some(from_id)) => {
                 if from_index.pane_id != from_id.pane_id {
                     return Err(format!(
-                        "pane_index {} and pane_id {} refer to different panes. Re-run list_panes and use one consistent selector.",
+                        "pane_index {} and pane_id {} refer to different panes. The layout likely changed between tool calls. Re-run list_panes and continue with pane_id.",
                         from_index.pane_index, from_id.pane_id
                     ));
                 }

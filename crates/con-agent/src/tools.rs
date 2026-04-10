@@ -2876,7 +2876,7 @@ impl Tool for ResolveWorkTargetTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Resolve the best pane or tmux target for a specific kind of work using con's typed control plane. Use this when multiple panes are open and you need to choose the right shell, the right tmux workspace, the best tmux shell pane, or a matching agent CLI target without re-deriving that logic from list_panes manually.".to_string(),
+            description: "Resolve the best pane or tmux target for a specific kind of work using con's typed control plane. Use this when multiple panes are open and you need to choose the right shell, the right tmux workspace, the best tmux shell pane, or a matching agent CLI target without re-deriving that logic from list_panes manually. When it returns a con pane target, prefer its stable pane_id for follow-up work.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -3912,7 +3912,7 @@ impl Tool for EnsureRemoteShellTargetTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Reuse an existing SSH pane for a specific remote host when one is already available, or create a new pane and connect to that host when none exists. This is the preferred tool for multi-host remote orchestration so the agent does not keep creating duplicate SSH panes across turns.".to_string(),
+            description: "Reuse an existing SSH pane for a specific remote host when one is already available, or create a new pane and connect to that host when none exists. This is the preferred tool for multi-host remote orchestration so the agent does not keep creating duplicate SSH panes across turns. The result includes stable pane_id for follow-up work.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -4004,7 +4004,7 @@ impl Tool for RemoteExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Reuse or create SSH workspaces for one or more hosts, then execute the same shell command on all of them in parallel. This is the preferred high-level tool for routine multi-host checks so the model does not need to stitch ensure_remote_shell_target and batch_exec together manually.".to_string(),
+            description: "Reuse or create SSH workspaces for one or more hosts, then execute the same shell command on all of them in parallel. This is the preferred high-level tool for routine multi-host checks so the model does not need to stitch ensure_remote_shell_target and batch_exec together manually. Each host result includes stable pane_id for follow-up work.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

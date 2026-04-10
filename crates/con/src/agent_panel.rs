@@ -33,6 +33,7 @@ struct ToolCallEntry {
     tool_name: String,
     args: String,
     result: Option<String>,
+    result_expanded: bool,
     started_at: std::time::Instant,
     duration: Option<std::time::Duration>,
 }
@@ -161,6 +162,7 @@ impl PanelState {
                 detail: None,
                 status: StepStatus::Complete,
                 detail_collapsed: true,
+                detail_expanded: false,
                 duration: None,
             });
         }
@@ -173,6 +175,7 @@ impl PanelState {
             tool_name: tool_name.to_string(),
             args: args.to_string(),
             result: None,
+            result_expanded: false,
             started_at: std::time::Instant::now(),
             duration: None,
         });
@@ -288,6 +291,7 @@ impl PanelState {
                     detail,
                     status,
                     detail_collapsed: true,
+                    detail_expanded: false,
                     duration: tc.duration,
                 });
             }
@@ -401,6 +405,8 @@ struct StepEntry {
     status: StepStatus,
     /// Whether the detail section is collapsed (default: true)
     detail_collapsed: bool,
+    /// Whether the visible result content is fully expanded.
+    detail_expanded: bool,
     /// How long this step took to execute.
     duration: Option<std::time::Duration>,
 }
@@ -729,6 +735,7 @@ impl AgentPanel {
                 detail: None,
                 status,
                 detail_collapsed: true,
+                detail_expanded: false,
                 duration: None,
             });
         }
@@ -788,6 +795,10 @@ impl AgentPanel {
             AgentStatus::Idle => None,
         }
     }
+
+    fn running_tool_call(&self) -> Option<&ToolCallEntry> {
+        self.state.tool_calls.iter().find(|tc| tc.result.is_none())
+    }
 }
 
 /// Markdown style for chat messages — readable prose with breathing room.
@@ -806,18 +817,43 @@ fn tool_icon(tool_name: &str) -> &'static str {
     match tool_name {
         "terminal_exec" | "batch_exec" => "phosphor/play.svg",
         "shell_exec" => "phosphor/terminal.svg",
+        "probe_shell_context" => "phosphor/magnifying-glass.svg",
         "file_write" => "phosphor/pencil-simple.svg",
         "file_read" => "phosphor/file-code.svg",
         "edit_file" => "phosphor/pencil-simple.svg",
         "list_files" => "phosphor/folder.svg",
         "search" | "search_panes" => "phosphor/magnifying-glass.svg",
-        "list_panes" => "phosphor/columns.svg",
+        "list_panes" | "list_tab_workspaces" | "tmux_list_targets" | "tmux_find_targets" => {
+            "phosphor/columns.svg"
+        }
         "read_pane" => "phosphor/eye.svg",
-        "send_keys" => "phosphor/keyboard.svg",
+        "tmux_capture_pane" => "phosphor/eye.svg",
+        "send_keys" | "tmux_send_keys" => "phosphor/keyboard.svg",
         "wait_for" => "phosphor/hourglass.svg",
-        "create_pane" => "phosphor/plus.svg",
+        "create_pane"
+        | "ensure_remote_shell_target"
+        | "tmux_ensure_shell_target"
+        | "tmux_ensure_agent_target" => "phosphor/plus.svg",
+        "resolve_work_target" => "phosphor/compass.svg",
+        "remote_exec" | "tmux_run_command" => "phosphor/play.svg",
         _ => "phosphor/gear.svg",
     }
+}
+
+fn format_pane_target(v: &serde_json::Value) -> Option<String> {
+    let pane_index = v.get("pane_index").and_then(|i| i.as_u64());
+    let pane_id = v.get("pane_id").and_then(|i| i.as_u64());
+
+    match (pane_index, pane_id) {
+        (Some(index), Some(id)) => Some(format!("pane {} · id {}", index, id)),
+        (Some(index), None) => Some(format!("pane {}", index)),
+        (None, Some(id)) => Some(format!("id {}", id)),
+        (None, None) => None,
+    }
+}
+
+fn result_is_expandable(content: &str) -> bool {
+    content.lines().count() > TOOL_RESULT_PREVIEW_LINES
 }
 
 fn format_tool_args(tool_name: &str, args: &str) -> String {
@@ -825,6 +861,9 @@ fn format_tool_args(tool_name: &str, args: &str) -> String {
         match tool_name {
             "terminal_exec" | "shell_exec" => {
                 if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
+                    if let Some(target) = format_pane_target(&v) {
+                        return format!("{target} · {cmd}");
+                    }
                     return cmd.to_string();
                 }
             }
@@ -857,16 +896,18 @@ fn format_tool_args(tool_name: &str, args: &str) -> String {
             }
             "send_keys" => {
                 if let Some(keys) = v.get("keys").and_then(|k| k.as_str()) {
+                    if let Some(target) = format_pane_target(&v) {
+                        return format!("{target} · {keys}");
+                    }
                     return keys.to_string();
                 }
             }
             "wait_for" => {
-                let idx = v.get("pane_index").and_then(|i| i.as_u64());
                 let pattern = v.get("pattern").and_then(|p| p.as_str()).unwrap_or("");
                 let timeout = v.get("timeout_secs").and_then(|t| t.as_u64());
                 let mut parts = Vec::new();
-                if let Some(i) = idx {
-                    parts.push(format!("pane {}", i));
+                if let Some(target) = format_pane_target(&v) {
+                    parts.push(target);
                 }
                 if !pattern.is_empty() {
                     parts.push(format!("\"{}\"", pattern));
@@ -883,17 +924,115 @@ fn format_tool_args(tool_name: &str, args: &str) -> String {
             "create_pane" => {
                 let cmd = v.get("command").and_then(|c| c.as_str());
                 let dir = v.get("directory").and_then(|d| d.as_str());
-                return match (cmd, dir) {
+                let location = v.get("location").and_then(|loc| loc.as_str());
+                let body = match (cmd, dir) {
                     (Some(c), _) => c.to_string(),
                     (None, Some(d)) => d.to_string(),
                     _ => "new pane".to_string(),
                 };
+                return match location {
+                    Some(location) => format!("{body} · {location}"),
+                    None => body,
+                };
             }
             "read_pane" | "list_panes" => {
-                if let Some(idx) = v.get("pane_index").and_then(|i| i.as_u64()) {
-                    return format!("pane {}", idx);
+                if let Some(target) = format_pane_target(&v) {
+                    return target;
                 }
                 return "all panes".to_string();
+            }
+            "list_tab_workspaces" => {
+                return "tab workspaces".to_string();
+            }
+            "resolve_work_target" => {
+                let intent = v.get("intent").and_then(|i| i.as_str()).unwrap_or("work");
+                let host = v.get("host_contains").and_then(|h| h.as_str());
+                let agent = v.get("agent_name").and_then(|a| a.as_str());
+                let mut parts = vec![intent.replace('_', " ")];
+                if let Some(host) = host {
+                    parts.push(format!("host={host}"));
+                }
+                if let Some(agent) = agent {
+                    parts.push(format!("agent={agent}"));
+                }
+                if let Some(target) = format_pane_target(&v) {
+                    parts.push(target);
+                }
+                return parts.join(" · ");
+            }
+            "ensure_remote_shell_target" => {
+                if let Some(host) = v.get("host").and_then(|h| h.as_str()) {
+                    return host.to_string();
+                }
+            }
+            "remote_exec" => {
+                let hosts = v
+                    .get("hosts")
+                    .and_then(|hosts| hosts.as_array())
+                    .map(|hosts| {
+                        hosts
+                            .iter()
+                            .filter_map(|host| host.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .filter(|hosts| !hosts.is_empty());
+                let command = v.get("command").and_then(|cmd| cmd.as_str());
+                return match (hosts, command) {
+                    (Some(hosts), Some(command)) => format!("{hosts} · {command}"),
+                    (Some(hosts), None) => hosts,
+                    (None, Some(command)) => command.to_string(),
+                    (None, None) => "remote exec".to_string(),
+                };
+            }
+            "tmux_list_targets" | "tmux_find_targets" | "tmux_inspect" => {
+                if let Some(target) = format_pane_target(&v) {
+                    return target;
+                }
+                return "tmux".to_string();
+            }
+            "tmux_capture_pane" => {
+                let outer = format_pane_target(&v);
+                let target = v.get("target").and_then(|t| t.as_str());
+                return match (outer, target) {
+                    (Some(outer), Some(target)) => format!("{outer} · {target}"),
+                    (Some(outer), None) => outer,
+                    (None, Some(target)) => target.to_string(),
+                    (None, None) => "tmux capture".to_string(),
+                };
+            }
+            "tmux_send_keys" => {
+                let outer = format_pane_target(&v);
+                let target = v.get("target").and_then(|t| t.as_str());
+                let text = v
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .or_else(|| v.get("keys").and_then(|t| t.as_str()));
+                return match (outer, target, text) {
+                    (Some(outer), Some(target), Some(text)) => {
+                        format!("{outer} · {target} · {text}")
+                    }
+                    (Some(outer), Some(target), None) => format!("{outer} · {target}"),
+                    (Some(outer), None, Some(text)) => format!("{outer} · {text}"),
+                    (Some(outer), None, None) => outer,
+                    (None, Some(target), Some(text)) => format!("{target} · {text}"),
+                    (None, Some(target), None) => target.to_string(),
+                    (None, None, Some(text)) => text.to_string(),
+                    (None, None, None) => "tmux keys".to_string(),
+                };
+            }
+            "tmux_run_command" | "tmux_ensure_shell_target" | "tmux_ensure_agent_target" => {
+                let outer = format_pane_target(&v);
+                let command = v
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .or_else(|| v.get("agent").and_then(|a| a.as_str()));
+                return match (outer, command) {
+                    (Some(outer), Some(command)) => format!("{outer} · {command}"),
+                    (Some(outer), None) => outer,
+                    (None, Some(command)) => command.to_string(),
+                    (None, None) => "tmux command".to_string(),
+                };
             }
             _ => {}
         }
@@ -914,6 +1053,7 @@ fn humanize_tool_name(name: &str) -> String {
     match name {
         "terminal_exec" | "shell_exec" => "Run".to_string(),
         "batch_exec" => "Batch Run".to_string(),
+        "probe_shell_context" => "Probe Shell".to_string(),
         "file_read" => "Read".to_string(),
         "file_write" => "Write".to_string(),
         "edit_file" => "Edit".to_string(),
@@ -921,10 +1061,22 @@ fn humanize_tool_name(name: &str) -> String {
         "search" => "Search".to_string(),
         "search_panes" => "Search Panes".to_string(),
         "list_panes" => "List Panes".to_string(),
+        "list_tab_workspaces" => "List Workspaces".to_string(),
         "read_pane" => "Read Pane".to_string(),
         "send_keys" => "Send Keys".to_string(),
         "create_pane" => "New Pane".to_string(),
         "wait_for" => "Wait For".to_string(),
+        "resolve_work_target" => "Resolve Target".to_string(),
+        "ensure_remote_shell_target" => "Prepare Remote Shell".to_string(),
+        "remote_exec" => "Run on Hosts".to_string(),
+        "tmux_inspect" => "Inspect tmux".to_string(),
+        "tmux_list_targets" => "List tmux".to_string(),
+        "tmux_find_targets" => "Find tmux".to_string(),
+        "tmux_capture_pane" => "Capture tmux Pane".to_string(),
+        "tmux_ensure_shell_target" => "Prepare tmux Shell".to_string(),
+        "tmux_ensure_agent_target" => "Prepare Agent Target".to_string(),
+        "tmux_run_command" => "Run in tmux".to_string(),
+        "tmux_send_keys" => "Send tmux Keys".to_string(),
         _ => {
             // Fallback: title-case with _ → space
             name.split('_')
@@ -1060,6 +1212,7 @@ fn format_list_panes_result(value: &serde_json::Value) -> String {
     let mut out = String::new();
     for item in arr {
         let idx = item.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+        let pane_id = item.get("pane_id").and_then(|v| v.as_u64());
         let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("?");
         let focused = item
             .get("is_focused")
@@ -1096,7 +1249,13 @@ fn format_list_panes_result(value: &serde_json::Value) -> String {
         } else {
             format!(" ({})", flags.join(", "))
         };
-        out.push_str(&format!("{}. {}{} {}\n", idx, title, flag_str, location));
+        let id_str = pane_id
+            .map(|pane_id| format!(" [id {}]", pane_id))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "{}{}. {}{} {}\n",
+            idx, id_str, title, flag_str, location
+        ));
     }
     out.trim_end().to_string()
 }
@@ -1971,12 +2130,45 @@ impl Render for AgentPanel {
                         // Expanded detail
                         if let Some(detail) = &step.detail {
                             if !detail_collapsed {
-                                let preview = result_preview(detail, TOOL_RESULT_PREVIEW_LINES);
+                                let is_expandable = result_is_expandable(detail);
+                                let visible_detail = if step.detail_expanded || !is_expandable {
+                                    detail.to_string()
+                                } else {
+                                    result_preview(detail, TOOL_RESULT_PREVIEW_LINES)
+                                };
                                 step_el = step_el.child(render_result_block(
-                                    &preview,
+                                    &visible_detail,
                                     &format!("step-result-{msg_idx}-{step_idx}"),
                                     theme,
                                 ));
+                                if is_expandable {
+                                    let expanded = step.detail_expanded;
+                                    let button_label =
+                                        if expanded { "Show less" } else { "Show more" };
+                                    step_el = step_el.child(
+                                        div().ml(px(22.0)).child(
+                                            Button::new(format!(
+                                                "step-detail-expand-{msg_idx}-{step_idx}"
+                                            ))
+                                            .label(button_label)
+                                            .ghost()
+                                            .xsmall()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if let Some(message) =
+                                                    this.state.messages.get_mut(msg_idx)
+                                                {
+                                                    if let Some(step) =
+                                                        message.steps.get_mut(step_idx)
+                                                    {
+                                                        step.detail_expanded =
+                                                            !step.detail_expanded;
+                                                    }
+                                                }
+                                                cx.notify();
+                                            })),
+                                        ),
+                                    );
+                                }
                             }
                         }
 
@@ -2087,12 +2279,37 @@ impl Render for AgentPanel {
                 // Result preview
                 if let Some(result) = &tc.result {
                     let formatted = format_tool_result(&tc.tool_name, result);
-                    let preview = result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES);
+                    let is_expandable = result_is_expandable(&formatted);
+                    let visible = if tc.result_expanded || !is_expandable {
+                        formatted.clone()
+                    } else {
+                        result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES)
+                    };
                     tc_el = tc_el.child(render_result_block(
-                        &preview,
+                        &visible,
                         &format!("tc-result-{tc_idx}"),
                         theme,
                     ));
+                    if is_expandable {
+                        let expanded = tc.result_expanded;
+                        let button_label = if expanded { "Show less" } else { "Show more" };
+                        tc_el = tc_el.child(
+                            div().ml(px(22.0)).child(
+                                Button::new(format!("tc-result-expand-{tc_idx}"))
+                                    .label(button_label)
+                                    .ghost()
+                                    .xsmall()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(tool_call) =
+                                            this.state.tool_calls.get_mut(tc_idx)
+                                        {
+                                            tool_call.result_expanded = !tool_call.result_expanded;
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                        );
+                    }
                 }
                 tc_container = tc_container.child(tc_el);
             }
@@ -2257,6 +2474,15 @@ impl Render for AgentPanel {
             )
             .child(status_indicator);
 
+        if let Some((_icon, label)) = self.status_text() {
+            header_left = header_left.child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(theme.muted_foreground.opacity(0.45))
+                    .child(label),
+            );
+        }
+
         // Auto-approve badge — use Tag component
         if self.auto_approve {
             header_left = header_left.child(Tag::warning().outline().xsmall().child("YOLO"));
@@ -2277,9 +2503,9 @@ impl Render for AgentPanel {
                 if self.state.status != AgentStatus::Idle {
                     actions = actions.child(
                         Button::new("agent-stop")
-                            .icon(Icon::default().path("phosphor/stop.svg"))
+                            .label("Stop")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .tooltip("Stop")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.emit(CancelRequest);
@@ -2314,6 +2540,119 @@ impl Render for AgentPanel {
                     )
             });
 
+        let live_activity_strip = if let Some(approval) = self.state.pending_approvals.first() {
+            let args_display = format_tool_args(&approval.tool_name, &approval.args);
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .mx(px(14.0))
+                    .mb(px(8.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded(px(8.0))
+                    .bg(theme.warning.opacity(0.05))
+                    .child(
+                        svg()
+                            .path("phosphor/warning.svg")
+                            .size(px(12.0))
+                            .text_color(theme.warning.opacity(0.75)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.foreground.opacity(0.72))
+                                    .child("Approval waiting"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground.opacity(0.52))
+                                    .overflow_x_hidden()
+                                    .whitespace_nowrap()
+                                    .child(truncate_str(&args_display, 96)),
+                            ),
+                    )
+                    .into_any_element(),
+            )
+        } else if let Some(tc) = self.running_tool_call() {
+            let args_display = format_tool_args(&tc.tool_name, &tc.args);
+            let human_name = humanize_tool_name(&tc.tool_name);
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .mx(px(14.0))
+                    .mb(px(8.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded(px(8.0))
+                    .bg(theme.muted.opacity(0.04))
+                    .child(Spinner::new().small().color(theme.warning))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.foreground.opacity(0.72))
+                                    .child(human_name),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground.opacity(0.52))
+                                    .overflow_x_hidden()
+                                    .whitespace_nowrap()
+                                    .child(truncate_str(&args_display, 96)),
+                            ),
+                    )
+                    .into_any_element(),
+            )
+        } else if let Some((_icon, label)) = self.status_text() {
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .mx(px(14.0))
+                    .mb(px(8.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded(px(8.0))
+                    .bg(theme.muted.opacity(0.04))
+                    .child(
+                        Spinner::new()
+                            .small()
+                            .color(theme.muted_foreground.opacity(0.6)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(theme.foreground.opacity(0.62))
+                            .child(label),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+
         // ── Panel ───────────────────────────────────────────────
         // Use system proportional font for readable prose — the workspace root
         // sets Ioskeley Mono which would cascade here without this override.
@@ -2325,6 +2664,10 @@ impl Render for AgentPanel {
             .bg(theme.title_bar.opacity(self.ui_opacity))
             .font_family(theme.font_family.clone())
             .child(header);
+
+        if let Some(live_activity_strip) = live_activity_strip {
+            panel = panel.child(live_activity_strip);
+        }
 
         if self.showing_history {
             let mut history_content = div()
