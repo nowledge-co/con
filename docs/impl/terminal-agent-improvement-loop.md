@@ -57,6 +57,18 @@ python3 benchmarks/terminal-agent/score.py \
 
 This writes a scored record under `.context/benchmarks/scored/`.
 
+For broader repeated work, use the isolated batch runner:
+
+```bash
+python3 benchmarks/terminal-agent/iterate.py \
+  --suite operator \
+  --profile operator-local-codex-devloop \
+  --profile operator-ssh-dual-host-maintenance \
+  --profile operator-ssh-tmux-devloop
+```
+
+`iterate.py` launches a fresh Con runtime per iteration with its own socket and XDG homes, which keeps restored pane state from contaminating the next scored run.
+
 ## Reporting
 
 Generate a trend report with:

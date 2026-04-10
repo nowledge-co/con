@@ -18,6 +18,7 @@ Primary references:
 1. Choose the smallest operator profile that matches the problem.
 2. Run the benchmark on an idle tab:
    - `python3 benchmarks/terminal-agent/run.py --profile operator-local-codex-devloop --suite operator`
+   - for repeated clean iterations, prefer `python3 benchmarks/terminal-agent/iterate.py ...`
 3. Score the resulting run with the matching rubric:
    - `python3 benchmarks/terminal-agent/score.py --profile ... --record ... --score ...`
 4. Record one short summary, a few lessons, and a few next-focus bullets in the score record.

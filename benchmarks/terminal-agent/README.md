@@ -71,6 +71,18 @@ python3 benchmarks/terminal-agent/run.py --profile operator-ssh-dual-host-mainte
 python3 benchmarks/terminal-agent/run.py --profile operator-ssh-tmux-devloop --suite operator
 ```
 
+Run an isolated multi-iteration batch:
+
+```bash
+python3 benchmarks/terminal-agent/iterate.py \
+  --suite operator \
+  --profile operator-local-codex-devloop \
+  --profile operator-ssh-dual-host-maintenance \
+  --profile operator-ssh-tmux-devloop
+```
+
+`iterate.py` launches a fresh Con app instance for each iteration with its own socket, XDG data home, and XDG config home. Use it when you want a real trend line instead of one hand-run benchmark.
+
 Use a tab that is not already serving another in-progress agent request. Operator suites serialize turns on one tab by design, and the runner will fail fast if the tab stays busy too long.
 
 ## Strict suite coverage

@@ -71,6 +71,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - `con-cli agent ask` and operator benchmark steps can now be bounded with explicit timeouts, so a stuck agent turn fails cleanly instead of hanging the entire automation loop.
 - The benchmark loop now writes a tracked improvement log entry and trend-chart report, so repeated iterations leave behind comparable notes and a durable progress trail in the repo.
 - Operator benchmark profiles can now start from a fresh conversation and run deterministic visible-shell setup commands before the first prompt, which makes repeated local Codex and SSH/tmux evaluations more stable.
+- The terminal-agent benchmark now ships an isolated batch runner, so multi-iteration evaluation can launch a fresh Con runtime per run instead of reusing polluted session state.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

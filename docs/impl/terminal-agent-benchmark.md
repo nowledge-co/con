@@ -23,6 +23,7 @@ This layer is machine-checkable and should run often.
 Current runner:
 
 - [`benchmarks/terminal-agent/run.py`](../../benchmarks/terminal-agent/run.py)
+- [`benchmarks/terminal-agent/iterate.py`](../../benchmarks/terminal-agent/iterate.py)
 
 Current focus:
 
@@ -97,6 +98,8 @@ This gives the project a repeatable loop:
 3. append a tracked improvement-log entry
 4. capture lessons and next focus
 5. generate trend reports across many runs
+
+For broader evaluation, `iterate.py` now launches a fresh Con app instance per iteration with an isolated socket and isolated XDG data/config homes. That keeps one operator run from polluting the next with restored session state.
 
 That is how the benchmark becomes a product-improvement system instead of only a demo script.
 
