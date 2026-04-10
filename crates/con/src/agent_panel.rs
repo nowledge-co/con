@@ -1524,15 +1524,23 @@ fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary
+    theme.muted.opacity(0.07)
+}
+
+fn trace_step_header_surface(theme: &gpui_component::Theme) -> Hsla {
+    theme.muted.opacity(0.105)
+}
+
+fn trace_step_header_hover_surface(theme: &gpui_component::Theme) -> Hsla {
+    theme.muted.opacity(0.125)
 }
 
 fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary_hover
+    theme.secondary
 }
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary_active
+    theme.secondary_hover
 }
 
 fn trace_group_header_surface(theme: &gpui_component::Theme) -> Hsla {
@@ -2563,16 +2571,23 @@ impl Render for AgentPanel {
                             .flex()
                             .flex_col()
                             .rounded(px(11.0))
+                            .overflow_hidden()
                             .bg(trace_step_surface(theme));
+
+                        let step_header_shell = step_header
+                            .px(px(2.0))
+                            .py(px(2.0))
+                            .bg(trace_step_header_surface(theme))
+                            .rounded(px(11.0));
 
                         if has_detail {
                             step_shell = step_shell.child(
-                                step_header
+                                step_header_shell
                                     .id(SharedString::from(format!(
                                         "step-detail-{msg_idx}-{step_idx}"
                                     )))
                                     .cursor_pointer()
-                                    .hover(|s| s.bg(theme.muted.opacity(0.035)))
+                                    .hover(|s| s.bg(trace_step_header_hover_surface(theme)))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
@@ -2586,7 +2601,7 @@ impl Render for AgentPanel {
                                     ),
                             );
                         } else {
-                            step_shell = step_shell.child(step_header);
+                            step_shell = step_shell.child(step_header_shell);
                         }
 
                         // Expanded detail
@@ -2824,8 +2839,15 @@ impl Render for AgentPanel {
                     .flex()
                     .flex_col()
                     .rounded(px(11.0))
+                    .overflow_hidden()
                     .bg(trace_step_surface(theme))
-                    .child(tc_row);
+                    .child(
+                        tc_row
+                            .px(px(2.0))
+                            .py(px(2.0))
+                            .bg(trace_step_header_surface(theme))
+                            .rounded(px(11.0)),
+                    );
 
                 // Result preview
                 if let Some(result) = &tc.result {
