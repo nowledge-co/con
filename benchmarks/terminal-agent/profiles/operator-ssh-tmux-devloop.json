@@ -18,5 +18,33 @@
       "name": "tmux Agent Target Preparation",
       "path": "benchmarks/terminal-agent/playbooks/tmux-agent-target-preparation.md"
     }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Remote tmux Dev Loop",
+      "case_name": "operator_remote_tmux_dev_loop",
+      "steps": [
+        {
+          "label": "describe_and_prepare_shell_target",
+          "prompt": "Describe this tmux workspace and prepare a clean tmux shell target for file work."
+        },
+        {
+          "label": "create_and_run_hello",
+          "prompt": "In that tmux target, create hello.py that prints READY_TMUX_HELLO and run it."
+        },
+        {
+          "label": "edit_and_rerun",
+          "prompt": "Edit hello.py to accept a name argument and rerun it with Alice."
+        },
+        {
+          "label": "separate_long_running_work",
+          "prompt": "Start sleep 30 in a separate tmux target, then reuse the original file-work target to show hello.py still works."
+        },
+        {
+          "label": "agent_cli_orientation",
+          "prompt": "Check whether claude, codex, or opencode is installed in this tmux workspace, and explain which target you would use next."
+        }
+      ]
+    }
   ]
 }

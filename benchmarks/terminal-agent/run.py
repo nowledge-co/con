@@ -42,6 +42,7 @@ class Profile:
     recommended_suite: str
     env_checks: list[dict[str, Any]]
     playbooks: list[dict[str, Any]]
+    operator_scenarios: list[dict[str, Any]]
 
 
 def utc_now() -> str:
@@ -126,8 +127,54 @@ class BenchmarkContext:
             args.extend(["--timeout", str(timeout_secs)])
         return self.run_json(*args)
 
-    def agent_ask(self, tab_index: int, prompt: str) -> dict[str, Any]:
-        return self.run_json("agent", "ask", "--tab", str(tab_index), prompt)
+    def agent_ask(
+        self,
+        tab_index: int,
+        prompt: str,
+        *,
+        wait_for_turn_secs: float = 30.0,
+        poll_interval_secs: float = 1.0,
+    ) -> dict[str, Any]:
+        deadline = time.time() + wait_for_turn_secs
+        while True:
+            cmd = [
+                *self.cli_base,
+                "--json",
+                "--socket",
+                self.socket_path,
+                "agent",
+                "ask",
+                "--tab",
+                str(tab_index),
+                prompt,
+            ]
+            proc = subprocess.run(
+                cmd,
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if proc.returncode == 0:
+                try:
+                    return json.loads(proc.stdout)
+                except json.JSONDecodeError as exc:
+                    raise BenchError(
+                        f"`{' '.join(cmd)}` did not return valid JSON: {exc}: {proc.stdout!r}"
+                    ) from exc
+
+            message = proc.stderr.strip() or proc.stdout.strip()
+            pending_turn = "pending con-cli agent request" in message
+            if not pending_turn:
+                raise BenchError(
+                    f"`{' '.join(cmd)}` failed with exit {proc.returncode}: {message}"
+                )
+            if time.time() >= deadline:
+                raise BenchError(
+                    "the target tab stayed busy with another agent request for too long; "
+                    "use an idle benchmark tab or wait for the in-tab conversation to finish"
+                )
+            time.sleep(poll_interval_secs)
 
     def active_tab_index(self) -> int:
         if self.default_tab is not None:
@@ -198,6 +245,7 @@ def load_profile(profile_name: str) -> Profile:
         recommended_suite=data.get("recommended_suite", "strict"),
         env_checks=data.get("env_checks", []),
         playbooks=data.get("playbooks", []),
+        operator_scenarios=data.get("operator_scenarios", []),
     )
 
 
@@ -212,6 +260,7 @@ def list_profiles() -> list[Profile]:
                 recommended_suite=data.get("recommended_suite", "strict"),
                 env_checks=data.get("env_checks", []),
                 playbooks=data.get("playbooks", []),
+                operator_scenarios=data.get("operator_scenarios", []),
             )
         )
     return profiles
@@ -426,6 +475,68 @@ AGENT_CASES: list[tuple[str, Callable[[BenchmarkContext], tuple[str, dict[str, A
 ]
 
 
+def operator_case_for(
+    scenario: dict[str, Any],
+) -> tuple[str, Callable[[BenchmarkContext], tuple[str, dict[str, Any]]]]:
+    scenario_name = scenario.get("name", "operator_scenario")
+    case_name = scenario.get("case_name", f"operator_{scenario_name}")
+    steps = scenario.get("steps", [])
+
+    def case(ctx: BenchmarkContext) -> tuple[str, dict[str, Any]]:
+        if not steps:
+            raise BenchError(f"operator scenario `{scenario_name}` has no steps")
+
+        tab_index = ctx.active_tab_index()
+        executed_steps: list[dict[str, Any]] = []
+
+        for idx, step in enumerate(steps, start=1):
+            prompt = step.get("prompt", "").strip()
+            if not prompt:
+                raise BenchError(
+                    f"operator scenario `{scenario_name}` step {idx} has an empty prompt"
+                )
+
+            label = step.get("label") or f"step_{idx}"
+            result = ctx.agent_ask(tab_index, prompt)
+            message = result.get("message", {})
+            content = str(message.get("content", "")).strip()
+            if not content:
+                raise BenchError(
+                    f"operator scenario `{scenario_name}` step {idx} returned no assistant content"
+                )
+
+            expect_contains = step.get("expect_contains", [])
+            missing = [needle for needle in expect_contains if needle not in content]
+            if missing:
+                raise BenchError(
+                    f"operator scenario `{scenario_name}` step {idx} missing expected content: {missing}"
+                )
+
+            executed_steps.append(
+                {
+                    "index": idx,
+                    "label": label,
+                    "prompt": prompt,
+                    "conversation_id": result.get("conversation_id"),
+                    "message_id": message.get("id"),
+                    "duration_ms": message.get("duration_ms"),
+                    "content": content,
+                }
+            )
+
+        return (
+            f"{scenario_name}: executed {len(executed_steps)} operator step(s) on tab {tab_index}; review transcript for quality",
+            {
+                "tab_index": tab_index,
+                "scenario": scenario_name,
+                "review_required": True,
+                "steps": executed_steps,
+            },
+        )
+
+    return case_name, case
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run Con terminal-agent benchmark suites against a live con-cli socket.",
@@ -441,7 +552,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--suite",
-        choices=("strict", "agent", "all"),
+        choices=("strict", "agent", "operator", "all"),
         default="strict",
         help="Which benchmark suite to run.",
     )
@@ -475,6 +586,8 @@ def selected_cases(suite: str) -> list[tuple[str, Callable[[BenchmarkContext], t
         return STRICT_CASES
     if suite == "agent":
         return AGENT_CASES
+    if suite == "operator":
+        return []
     return [*STRICT_CASES, *AGENT_CASES]
 
 
@@ -494,13 +607,28 @@ def main() -> int:
         profile = load_profile(args.profile)
         env_cases = [env_case_for(check) for check in profile.env_checks]
 
+    if args.suite == "operator" and (
+        profile is None or not profile.operator_scenarios
+    ):
+        print(
+            "[terminal-agent-benchmark] operator suite requires a profile with operator_scenarios",
+            file=sys.stderr,
+        )
+        return 2
+
     socket_path = args.socket
     if not Path(socket_path).exists():
         print(f"[terminal-agent-benchmark] missing socket: {socket_path}", file=sys.stderr)
         return 2
 
     ctx = BenchmarkContext(socket_path=socket_path, default_tab=args.tab)
-    selected = [*env_cases, *selected_cases(args.suite)]
+    operator_cases: list[
+        tuple[str, Callable[[BenchmarkContext], tuple[str, dict[str, Any]]]]
+    ] = []
+    if profile and profile.operator_scenarios and args.suite in {"operator", "all"}:
+        operator_cases = [operator_case_for(s) for s in profile.operator_scenarios]
+
+    selected = [*env_cases, *selected_cases(args.suite), *operator_cases]
     results = [run_case(ctx, name, case_fn) for name, case_fn in selected]
 
     passed = sum(1 for result in results if result.status == "pass")

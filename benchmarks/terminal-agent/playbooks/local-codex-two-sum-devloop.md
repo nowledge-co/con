@@ -15,7 +15,7 @@ Verify that Con can prepare and reuse a local Codex workspace for a small real c
 
 1. `Please prepare a Codex workspace in ~/dev/temp/con-bench-twosum`
 2. `In that workspace, create a small Python two_sum implementation and a test file, then run the tests.`
-3. `Now break one test on purpose and ask Codex to fix it without creating a new target.`
+3. `Now break one test on purpose. If Codex is waiting at a trust or continue prompt for this directory, accept it in the same target. Then ask Codex to fix the test without creating a new target.`
 4. `Summarize which pane or target you used for each step.`
 
 ## Success looks like

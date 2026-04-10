@@ -19,5 +19,29 @@
       "name": "Remote Dual-Host Maintenance",
       "path": "benchmarks/terminal-agent/playbooks/remote-dual-host-maintenance.md"
     }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Remote Dual-Host Maintenance",
+      "case_name": "operator_remote_dual_host_maintenance",
+      "steps": [
+        {
+          "label": "healthcheck",
+          "prompt": "Please connect to haswell and cinnamon and collect uptime, memory, and disk summaries."
+        },
+        {
+          "label": "package_manager_state",
+          "prompt": "Reuse the same host workspaces and check package-manager update state. If apt exists, do a safe read-only check first. Only run apt update if passwordless sudo is available and you explain that choice."
+        },
+        {
+          "label": "warning_logs",
+          "prompt": "Reuse the same host workspaces again and collect the last 20 lines of dmesg or an equivalent warning log on each host."
+        },
+        {
+          "label": "continuity_proof",
+          "prompt": "Start a short sleep on cinnamon, then prove you still know which workspace is haswell and which is cinnamon."
+        }
+      ]
+    }
   ]
 }

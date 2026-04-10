@@ -24,5 +24,29 @@
       "name": "Local Codex Two Sum Dev Loop",
       "path": "benchmarks/terminal-agent/playbooks/local-codex-two-sum-devloop.md"
     }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Local Codex Two Sum Dev Loop",
+      "case_name": "operator_local_codex_two_sum_dev_loop",
+      "steps": [
+        {
+          "label": "prepare_codex_workspace",
+          "prompt": "Please prepare a Codex workspace in ~/dev/temp/con-bench-twosum"
+        },
+        {
+          "label": "create_code_and_tests",
+          "prompt": "In that workspace, create a small Python two_sum implementation and a test file, then run the tests."
+        },
+        {
+          "label": "repair_without_new_target",
+          "prompt": "Now break one test on purpose. If Codex is waiting at a trust or continue prompt for this directory, accept it in the same target. Then ask Codex to fix the test without creating a new target."
+        },
+        {
+          "label": "summarize_target_reuse",
+          "prompt": "Summarize which pane or target you used for each step."
+        }
+      ]
+    }
   ]
 }

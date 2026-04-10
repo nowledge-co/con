@@ -2,10 +2,11 @@
 
 This benchmark is how Con measures progress toward a real terminal-native agent.
 
-It is intentionally split into two layers:
+It is intentionally split into three layers:
 
 - **Strict suites**: machine-checkable control-plane verification against a live running Con session
-- **Playbooks**: scenario-based evaluation for SSH, tmux, and agent workflow behavior where product quality matters more than brittle exact-string matching
+- **Operator suites**: replayable multi-turn prompt sequences that execute real SSH, tmux, and coding workflows and record the transcript
+- **Playbooks**: scenario guides and scoring rubrics for judging the operator runs honestly
 
 That split is deliberate. Con should have hard invariants where the product is deterministic, and honest rubrics where the product is agentic.
 
@@ -62,6 +63,16 @@ python3 benchmarks/terminal-agent/run.py --profile basic-local-shell
 CON_BENCH_ENABLE_AGENT=1 python3 benchmarks/terminal-agent/run.py --profile basic-local-codex --suite all
 ```
 
+Run a complex operator benchmark:
+
+```bash
+python3 benchmarks/terminal-agent/run.py --profile operator-local-codex-devloop --suite operator
+python3 benchmarks/terminal-agent/run.py --profile operator-ssh-dual-host-maintenance --suite operator
+python3 benchmarks/terminal-agent/run.py --profile operator-ssh-tmux-devloop --suite operator
+```
+
+Use a tab that is not already serving another in-progress agent request. Operator suites serialize turns on one tab by design, and the runner will fail fast if the tab stays busy too long.
+
 ## Strict suite coverage
 
 Today the strict runner verifies:
@@ -73,6 +84,18 @@ Today the strict runner verifies:
 - optional live built-in agent response
 
 This is the hard floor. If these break, Con is not ready for higher-level SSH/tmux evaluation.
+
+## Operator suites
+
+Operator suites are real multi-turn `agent ask` flows driven by the benchmark runner.
+
+They do not pretend to be fully machine-scored intelligence benchmarks. Instead, they:
+
+- execute the full prompt sequence automatically
+- record the assistant transcript for each turn
+- give you one JSON record you can review after the run
+
+This is the practical bridge between the strict floor and the final public benchmark story.
 
 ## Playbooks
 
@@ -124,7 +147,7 @@ These are the richer human-scored scenario tracks:
 - `operator-ssh-tmux-devloop`
   - remote `ssh -> tmux` file work, long-running target separation, and agent-CLI orientation
 
-Profiles add environment checks and recommended playbooks on top of the strict suite. Starter profiles are for day-to-day regression work. Operator profiles are the current bridge toward the final public benchmark story.
+Profiles add environment checks, operator scenarios, and recommended playbooks on top of the strict suite. Starter profiles are for day-to-day regression work. Operator profiles are the current bridge toward the final public benchmark story.
 
 ## Safety model
 

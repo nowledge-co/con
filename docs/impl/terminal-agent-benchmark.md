@@ -34,7 +34,24 @@ Current focus:
 
 These are hard product invariants. If they fail, higher-level SSH/tmux evaluation is not meaningful.
 
-### 2. Playbook workflows
+### 2. Operator suites
+
+This layer executes real multi-turn benchmark prompts through `con-cli agent ask`.
+
+It is not pretending to be a fully machine-scored intelligence benchmark yet. The current purpose is:
+
+- exercise complex terminal-agent workflows end to end
+- keep the prompt sequence stable and replayable
+- record the full transcript as benchmark evidence
+
+Current operator flows live in the operator profiles under `benchmarks/terminal-agent/profiles/`.
+
+Operational rule:
+
+- run operator suites on an idle tab
+- do not point the runner at a tab that already has an in-progress `agent ask`
+
+### 3. Playbook workflows
 
 This layer evaluates real user tasks that are not yet stable enough for brittle exact-output assertions.
 
@@ -77,6 +94,7 @@ Profiles combine:
 
 - environment checks
 - the strict suite
+- optional operator scenarios
 - recommended playbooks for deeper scenario work
 
 This keeps the benchmark maintainable. Everyday development can run a small profile quickly, while deeper release work can expand into the operator playbooks.
@@ -102,6 +120,7 @@ If Con only does human demos, regressions will slip constantly.
 So the benchmark stays hybrid:
 
 - strict where the product is deterministic
+- operator-replayed where the workflow should be exercised end to end
 - rubric-based where the product is still agentic
 
 ## Result discipline
