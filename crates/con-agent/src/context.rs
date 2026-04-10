@@ -2264,6 +2264,7 @@ impl TerminalContext {
              - When multiple panes are visible and the user asks about the terminal/session state, mention the pane count and summarize materially different peer panes. Do not collapse the whole tab into only the focused pane unless the user explicitly asks about that pane alone.\n\
              - Never restate stale shell metadata as if it were the current foreground runtime. If shell metadata is not fresh, label it as historical shell metadata or omit it.\n\
              - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_find_targets or tmux_list_targets, then tmux_capture_pane.\n\
+             - LOCAL CODING CLI workflows (Codex / Claude Code / OpenCode on the local machine) → keep the interactive CLI target separate from shell work. Use ensure_local_shell_target to prepare a paired local shell pane for file edits, test runs, and other shell commands.\n\
              - TMUX SHELL PREPARATION on a pane with tmux native control → tmux_ensure_shell_target to reuse or create a safe shell pane before remote file work or shell execution inside tmux.\n\
              - TMUX AGENT TARGET PREPARATION on a pane with tmux native control → tmux_ensure_agent_target to reuse or create a Codex CLI, Claude Code, or OpenCode tmux pane before interacting with that agent.\n\
              - TMUX NATIVE COMMAND LAUNCH on a pane with tmux native control → tmux_run_command to create a new tmux window or split for a shell, Codex CLI, Claude Code, OpenCode, or a long-running command.\n\
@@ -2310,6 +2311,7 @@ impl TerminalContext {
              - tmux_list_targets: List tmux windows/panes through a proven same-session tmux shell anchor.\n\
              - tmux_find_targets: Find likely tmux shell panes, agent CLI panes, or other matching targets without hand-filtering tmux_list_targets.\n\
              - resolve_work_target: Choose the best con pane or tmux target for shell work, tmux work, or agent CLI interaction using the typed control plane. When it returns a con pane, carry its `pane_id` into the next tool call.\n\
+             - ensure_local_shell_target: Reuse an existing LOCAL shell pane, or create one if needed. Use this as the companion shell target for local Codex / Claude Code / OpenCode workflows so shell work stays out of the interactive agent UI.\n\
              - ensure_remote_shell_target: Reuse an existing SSH pane for a host, or create one if needed. Prefer this over repeatedly creating duplicate SSH panes during multi-host work. Carry the returned `pane_id` into follow-up work.\n\
              - remote_exec: Reuse or create remote SSH workspaces for one or more hosts, then run the same command on them in parallel. Its per-host results include stable `pane_id` values for follow-up work.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
@@ -2966,6 +2968,20 @@ impl TerminalContext {
                         .iter()
                         .any(|scope| scope.kind == PaneScopeKind::Multiplexer)
             });
+        let has_local_agent_cli = (self.focused_control.visible_target.kind
+            == PaneVisibleTargetKind::AgentCli
+            && !is_remote
+            && !has_tmux)
+            || self.other_panes.iter().any(|p| {
+                p.control.visible_target.kind == PaneVisibleTargetKind::AgentCli
+                    && p.hostname.is_none()
+                    && p.remote_workspace.is_none()
+                    && !p
+                        .control
+                        .target_stack
+                        .iter()
+                        .any(|t| t.kind == PaneVisibleTargetKind::TmuxSession)
+            });
 
         if !focused_is_tui && !any_other_pane_tui && !is_remote && !has_tmux {
             return;
@@ -2976,6 +2992,10 @@ impl TerminalContext {
         // Remote work rules come first — they change what tools are valid
         if is_remote {
             prompt.push_str(playbooks::REMOTE_WORK);
+            prompt.push('\n');
+        }
+        if has_local_agent_cli {
+            prompt.push_str(playbooks::LOCAL_AGENT_CLI_WORK);
             prompt.push('\n');
         }
 

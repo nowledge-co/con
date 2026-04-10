@@ -420,7 +420,11 @@ fn join_words(words: Vec<String>) -> String {
 }
 
 fn join_shell_words(words: Vec<String>) -> String {
-    words.into_iter().map(shell_quote).collect::<Vec<_>>().join(" ")
+    words
+        .into_iter()
+        .map(shell_quote)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn shell_quote(word: String) -> String {

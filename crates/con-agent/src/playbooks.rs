@@ -116,3 +116,14 @@ Otherwise, send_keys \"command\\n\" in a remote shell prompt.
 - shell_exec runs on the LOCAL machine — never use it for remote work.
 - The cwd shown in shell metadata may be LOCAL — it does NOT reflect the remote working directory.
 ";
+
+/// Local agent-CLI workflows — emitted when a visible local agent CLI is present.
+pub const LOCAL_AGENT_CLI_WORK: &str = "\
+## Working with a local agent CLI
+
+When Codex CLI, Claude Code, or OpenCode is running locally in a visible pane:
+- Keep the interactive agent target and shell work separate.
+- Use ensure_local_shell_target(cwd=\"...\") to reuse or create a paired local shell pane for file edits, test runs, git status, and other shell commands.
+- Do NOT type shell setup or test commands into the agent CLI unless the CLI itself is prompting for them.
+- Reuse the same local shell target across follow-up turns instead of creating a new pane each time.
+";

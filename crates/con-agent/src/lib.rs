@@ -28,11 +28,11 @@ pub use shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
 pub use skills::{Skill, SkillRegistry};
 pub use tmux::{TmuxCapture, TmuxExecLocation, TmuxExecResult, TmuxPaneInfo, TmuxSnapshot};
 pub use tools::{
-    BatchExecTool, CreatePaneTool, EditFileTool, EnsureRemoteShellTargetTool, FileReadTool,
-    FileWriteTool, ListFilesTool, ListPanesTool, ListTabWorkspacesTool, PaneCreateLocation,
-    PaneInfo, PaneQuery, PaneRequest, PaneResponse, ProbeShellContextTool, ReadPaneTool,
-    RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool, SearchTool, SendKeysTool,
-    ShellExecTool, TerminalExecRequest, TerminalExecResponse, TerminalExecTool, TmuxCaptureTool,
-    TmuxEnsureShellTargetTool, TmuxFindTargetsTool, TmuxInspectTool, TmuxListTool,
-    TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
+    BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalShellTargetTool,
+    EnsureRemoteShellTargetTool, FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool,
+    ListTabWorkspacesTool, PaneCreateLocation, PaneInfo, PaneQuery, PaneRequest, PaneResponse,
+    ProbeShellContextTool, ReadPaneTool, RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool,
+    SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecResponse,
+    TerminalExecTool, TmuxCaptureTool, TmuxEnsureShellTargetTool, TmuxFindTargetsTool,
+    TmuxInspectTool, TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
 };
