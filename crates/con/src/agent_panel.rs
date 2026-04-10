@@ -1419,14 +1419,13 @@ fn render_result_block(
     } else {
         trace_step_surface(theme)
     };
+    let structured_rows = parse_key_value_rows(content);
 
     if is_short && content != "(no output)" {
         if connected {
             div()
-                .pl(px(28.0))
-                .pr(px(10.0))
-                .pt(px(8.0))
-                .pb(px(7.0))
+                .px(px(10.0))
+                .py(px(9.0))
                 .child(
                     div()
                         .px(px(9.0))
@@ -1455,24 +1454,27 @@ fn render_result_block(
                 .into_any_element()
         }
     } else {
-        let mut lines_el = div().flex().flex_col().gap(px(0.5));
-        for line in content.lines() {
-            lines_el = lines_el.child(
-                div()
-                    .whitespace_nowrap()
-                    .child(if line.is_empty() { " " } else { line }.to_string()),
-            );
-        }
+        let body = if let Some(rows) = structured_rows {
+            render_key_value_rows(&rows, theme).into_any_element()
+        } else {
+            let mut lines_el = div().flex().flex_col().gap(px(0.5));
+            for line in content.lines() {
+                lines_el = lines_el.child(
+                    div()
+                        .whitespace_nowrap()
+                        .child(if line.is_empty() { " " } else { line }.to_string()),
+                );
+            }
+            lines_el.into_any_element()
+        };
         if connected {
             div()
-                .pl(px(28.0))
-                .pr(px(10.0))
-                .pt(px(8.0))
-                .pb(px(8.0))
+                .px(px(10.0))
+                .py(px(9.0))
                 .child(
                     div()
-                        .px(px(9.0))
-                        .py(px(8.0))
+                        .px(px(10.0))
+                        .py(px(9.0))
                         .rounded(px(8.0))
                         .bg(nested_surface)
                         .overflow_x_hidden()
@@ -1480,17 +1482,13 @@ fn render_result_block(
                         .text_size(px(10.5))
                         .line_height(px(15.5))
                         .text_color(theme.muted_foreground.opacity(0.67))
-                        .child(lines_el),
+                        .child(body),
                 )
                 .into_any_element()
         } else {
             div()
-                .ml(px(18.0))
-                .mr(px(2.0))
-                .mt(px(2.0))
-                .mb(px(2.0))
                 .px(px(10.0))
-                .py(px(8.0))
+                .py(px(9.0))
                 .rounded(px(10.0))
                 .bg(trace_step_surface(theme))
                 .overflow_x_hidden()
@@ -1498,7 +1496,7 @@ fn render_result_block(
                 .text_size(px(10.5))
                 .line_height(px(15.5))
                 .text_color(theme.muted_foreground.opacity(0.67))
-                .child(lines_el)
+                .child(body)
                 .into_any_element()
         }
     }
@@ -1519,12 +1517,57 @@ fn hidden_result_line_count(content: &str, max_lines: usize) -> usize {
     content.lines().count().saturating_sub(max_lines)
 }
 
+fn parse_key_value_rows(content: &str) -> Option<Vec<(String, String)>> {
+    let mut rows = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("…") {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once(": ") else {
+            return None;
+        };
+        if key.len() > 32 || value.is_empty() {
+            return None;
+        }
+        rows.push((key.to_string(), value.to_string()));
+    }
+
+    (rows.len() >= 2).then_some(rows)
+}
+
+fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Theme) -> Div {
+    let mut container = div().flex().flex_col().gap(px(5.0));
+    for (key, value) in rows {
+        container = container.child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .w(px(102.0))
+                        .flex_shrink_0()
+                        .text_color(theme.muted_foreground.opacity(0.52))
+                        .child(key.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_color(theme.foreground.opacity(0.78))
+                        .child(value.clone()),
+                ),
+        );
+    }
+    container
+}
+
 fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.background.opacity(0.0)
+    theme.secondary
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary
+    theme.background
 }
 
 fn trace_step_header_surface(theme: &gpui_component::Theme) -> Hsla {
@@ -1536,7 +1579,7 @@ fn trace_step_header_hover_surface(theme: &gpui_component::Theme) -> Hsla {
 }
 
 fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.045)
+    theme.muted.opacity(0.06)
 }
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
@@ -1544,7 +1587,7 @@ fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
 }
 
 fn trace_group_header_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.04)
+    theme.secondary_hover
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
