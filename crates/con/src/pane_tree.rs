@@ -474,11 +474,14 @@ impl PaneTree {
                 let divider = match dir {
                     SplitDirection::Horizontal => div()
                         .id(divider_id)
-                        .w(px(1.0))
+                        .w(px(4.0))
                         .h_full()
                         .flex_shrink_0()
                         .cursor_col_resize()
-                        .hover(|s| s.bg(theme.primary.opacity(0.15)))
+                        .flex()
+                        .justify_center()
+                        .child(div().w(px(1.0)).h_full().bg(theme.muted.opacity(0.18)))
+                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
                         .on_mouse_down(
                             MouseButton::Left,
                             move |event: &MouseDownEvent, _window, _cx| {
@@ -487,11 +490,14 @@ impl PaneTree {
                         ),
                     SplitDirection::Vertical => div()
                         .id(divider_id)
-                        .h(px(1.0))
+                        .h(px(4.0))
                         .w_full()
                         .flex_shrink_0()
                         .cursor_row_resize()
-                        .hover(|s| s.bg(theme.primary.opacity(0.15)))
+                        .flex()
+                        .items_center()
+                        .child(div().h(px(1.0)).w_full().bg(theme.muted.opacity(0.18)))
+                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
                         .on_mouse_down(
                             MouseButton::Left,
                             move |event: &MouseDownEvent, _window, _cx| {

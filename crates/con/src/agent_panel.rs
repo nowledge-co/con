@@ -1414,7 +1414,7 @@ fn render_result_block(
     connected: bool,
 ) -> AnyElement {
     let is_short = content.lines().count() <= 1 && content.len() < 80;
-    let nested_surface = theme.secondary.opacity(if connected { 0.72 } else { 0.52 });
+    let nested_surface = theme.secondary.opacity(if connected { 0.88 } else { 0.62 });
 
     if is_short && content != "(no output)" {
         if connected {
@@ -2340,7 +2340,7 @@ impl Render for AgentPanel {
                     .px(px(12.0))
                     .py(px(11.0))
                     .rounded(px(14.0))
-                    .bg(theme.muted.opacity(0.035))
+                    .bg(theme.secondary.opacity(0.28))
                     .flex()
                     .flex_col()
                     .gap(px(9.0));
@@ -2537,7 +2537,7 @@ impl Render for AgentPanel {
                             .flex()
                             .flex_col()
                             .rounded(px(10.0))
-                            .bg(theme.muted.opacity(0.045));
+                            .bg(theme.secondary.opacity(0.42));
 
                         if has_detail {
                             step_shell = step_shell.child(
@@ -2657,7 +2657,7 @@ impl Render for AgentPanel {
                 .px(px(12.0))
                 .py(px(11.0))
                 .rounded(px(14.0))
-                .bg(theme.muted.opacity(0.035))
+                .bg(theme.secondary.opacity(0.28))
                 .child(
                     div()
                         .flex()
@@ -2783,7 +2783,7 @@ impl Render for AgentPanel {
                     .flex()
                     .flex_col()
                     .rounded(px(10.0))
-                    .bg(theme.muted.opacity(0.045))
+                    .bg(theme.secondary.opacity(0.42))
                     .child(tc_row);
 
                 // Result preview
