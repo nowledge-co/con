@@ -443,9 +443,10 @@ impl PaneTree {
         let theme = cx.theme();
 
         match node {
-            PaneNode::Leaf { terminal, .. } => {
-                div().size_full().child(terminal.render_child()).into_any_element()
-            }
+            PaneNode::Leaf { terminal, .. } => div()
+                .size_full()
+                .child(terminal.render_child())
+                .into_any_element(),
             PaneNode::Split {
                 split_id,
                 direction,

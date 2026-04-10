@@ -11,9 +11,9 @@
 //! sequences), so application cursor mode, kitty keyboard protocol, and
 //! ghostty key bindings all work correctly.
 
+use std::cell::Cell;
 #[cfg(target_os = "macos")]
 use std::os::raw::c_void;
-use std::cell::Cell;
 use std::sync::Arc;
 
 use con_ghostty::ffi;

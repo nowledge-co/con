@@ -4337,7 +4337,12 @@ impl CreatePaneTool {
                             pane_id,
                             poll_num
                         );
-                        return (String::new(), surface_ready, is_alive, has_shell_integration);
+                        return (
+                            String::new(),
+                            surface_ready,
+                            is_alive,
+                            has_shell_integration,
+                        );
                     }
                 } else {
                     ready_count = 0;
@@ -4397,7 +4402,12 @@ impl CreatePaneTool {
             phase_changed,
             last_snapshot.len()
         );
-        (last_snapshot, surface_ready, is_alive, has_shell_integration)
+        (
+            last_snapshot,
+            surface_ready,
+            is_alive,
+            has_shell_integration,
+        )
     }
 }
 
