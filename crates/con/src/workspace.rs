@@ -267,7 +267,9 @@ impl ConWorkspace {
         });
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
         let registry = model_registry.clone();
-        let settings_panel = cx.new(|cx| SettingsPanel::new(&config, registry, window, cx));
+        let oauth_runtime = harness.runtime_handle();
+        let settings_panel =
+            cx.new(|cx| SettingsPanel::new(&config, registry, oauth_runtime, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
         agent_panel.update(cx, |panel, _cx| panel.set_ui_opacity(ui_opacity));
         input_bar.update(cx, |bar, _cx| bar.set_ui_opacity(ui_opacity));

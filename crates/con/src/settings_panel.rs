@@ -3,6 +3,7 @@ use con_agent::{
     authorize_oauth_provider,
 };
 use con_core::Config;
+use futures::{FutureExt, StreamExt};
 use gpui::*;
 
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -16,6 +17,7 @@ use gpui_component::{ActiveTheme, Disableable, Icon, IndexPath, Sizable as _, in
 
 use crate::model_registry::ModelRegistry;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
@@ -70,6 +72,7 @@ pub struct SettingsPanel {
     visible: bool,
     config: Config,
     registry: ModelRegistry,
+    oauth_runtime: Arc<tokio::runtime::Runtime>,
     focus_handle: FocusHandle,
     active_section: SettingsSection,
 
@@ -291,17 +294,30 @@ impl SettingsPanel {
         state.error_message = None;
         cx.notify();
 
+        let runtime = self.oauth_runtime.clone();
         cx.spawn_in(window, async move |this, window| {
-            let (prompt_tx, mut prompt_rx) =
-                tokio::sync::mpsc::unbounded_channel::<OAuthDevicePrompt>();
-            let auth_future = authorize_oauth_provider(provider.clone(), move |prompt| {
-                let _ = prompt_tx.send(prompt);
+            let (prompt_tx, prompt_rx) = futures::channel::mpsc::unbounded::<OAuthDevicePrompt>();
+            let (result_tx, result_rx) = futures::channel::oneshot::channel::<Result<(), String>>();
+
+            runtime.spawn({
+                let provider = provider.clone();
+                async move {
+                    let result = authorize_oauth_provider(provider, move |prompt| {
+                        let _ = prompt_tx.unbounded_send(prompt);
+                    })
+                    .await
+                    .map_err(|err| err.to_string());
+
+                    let _ = result_tx.send(result);
+                }
             });
-            tokio::pin!(auth_future);
+
+            let mut prompt_rx = prompt_rx.fuse();
+            let mut result_rx = result_rx.fuse();
 
             loop {
-                tokio::select! {
-                    maybe_prompt = prompt_rx.recv() => {
+                futures::select! {
+                    maybe_prompt = prompt_rx.next() => {
                         let Some(prompt) = maybe_prompt else {
                             continue;
                         };
@@ -318,21 +334,26 @@ impl SettingsPanel {
                             let _ = window;
                         });
                     }
-                    result = &mut auth_future => {
+                    result = result_rx => {
                         let _ = window.update(|window, cx| {
                             let _ = this.update(cx, |panel, cx| {
                                 let state = panel.oauth_state_mut(&provider);
                                 state.in_progress = false;
                                 match result {
-                                    Ok(()) => {
+                                    Ok(Ok(())) => {
                                         state.connected = true;
                                         state.prompt = None;
                                         state.status_message = Some("Authorized and stored in Con’s auth cache.".to_string());
                                         state.error_message = None;
                                     }
-                                    Err(err) => {
+                                    Ok(Err(err)) => {
                                         state.connected = false;
-                                        state.error_message = Some(err.to_string());
+                                        state.error_message = Some(err);
+                                        state.status_message = None;
+                                    }
+                                    Err(_) => {
+                                        state.connected = false;
+                                        state.error_message = Some("OAuth flow ended unexpectedly.".to_string());
                                         state.status_message = None;
                                     }
                                 }
@@ -523,6 +544,7 @@ impl SettingsPanel {
     pub fn new(
         config: &Config,
         registry: ModelRegistry,
+        oauth_runtime: Arc<tokio::runtime::Runtime>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -753,6 +775,7 @@ impl SettingsPanel {
             visible: false,
             config: config.clone(),
             registry,
+            oauth_runtime,
             focus_handle: cx.focus_handle(),
             active_section: SettingsSection::General,
             selected_provider: config.agent.provider.clone(),

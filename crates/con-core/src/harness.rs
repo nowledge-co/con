@@ -209,6 +209,10 @@ impl AgentHarness {
         self.runtime.spawn(future);
     }
 
+    pub fn runtime_handle(&self) -> Arc<Runtime> {
+        self.runtime.clone()
+    }
+
     /// Classify user input: NLP, command, or skill.
     ///
     /// `is_remote` should be true when the focused pane is an SSH session,
