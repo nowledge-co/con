@@ -23,6 +23,8 @@ target
 3pp
 .context
 .DS_Store
+__pycache__/
+*.pyc
 dist
 .env
 
