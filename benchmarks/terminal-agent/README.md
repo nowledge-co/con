@@ -79,9 +79,12 @@ This is the hard floor. If these break, Con is not ready for higher-level SSH/tm
 The playbooks in [`playbooks/`](./playbooks/) cover the product behaviors that still need structured scenario evaluation:
 
 - local Codex workspace preparation and reuse
+- local Codex file-edit-test-repair loops
 - remote host reuse across follow-up turns
+- remote dual-host maintenance flows
 - tmux session understanding
 - tmux agent-target preparation
+- remote tmux file-edit-run-reuse loops
 
 Each playbook includes:
 
@@ -95,7 +98,11 @@ They are designed to become announcement-grade benchmark material later, once th
 
 ## Built-in profiles
 
-The first profile set is intentionally small and typical:
+The profile set is now split into two bands.
+
+### Starter profiles
+
+These are the fast everyday regressions:
 
 - `basic-local-shell`
   - baseline local tab and visible shell control
@@ -106,7 +113,28 @@ The first profile set is intentionally small and typical:
 - `basic-ssh-tmux`
   - mixed plain SSH and `ssh -> tmux` orientation using `haswell` and `cinnamon`
 
-Profiles add environment checks and recommended playbooks on top of the strict suite. They are the starting point for day-to-day regression work, not the final public benchmark surface.
+### Operator profiles
+
+These are the richer human-scored scenario tracks:
+
+- `operator-local-codex-devloop`
+  - local Codex workspace setup, file creation, test execution, and repair loop
+- `operator-ssh-dual-host-maintenance`
+  - multi-host SSH continuity for health, package-manager, and follow-up maintenance work
+- `operator-ssh-tmux-devloop`
+  - remote `ssh -> tmux` file work, long-running target separation, and agent-CLI orientation
+
+Profiles add environment checks and recommended playbooks on top of the strict suite. Starter profiles are for day-to-day regression work. Operator profiles are the current bridge toward the final public benchmark story.
+
+## Safety model
+
+The richer SSH and tmux playbooks are intentionally safe by default.
+
+- They prefer read-only checks first
+- They treat package-manager mutation as conditional and explicit
+- They require the agent to explain privilege boundaries instead of bluffing past them
+
+That matters for credibility. A benchmark that only passes on hand-held, over-permissioned hosts is not useful.
 
 ## Benchmark philosophy
 

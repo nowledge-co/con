@@ -41,9 +41,12 @@ This layer evaluates real user tasks that are not yet stable enough for brittle 
 Current playbooks:
 
 - [`local-codex-workspace.md`](../../benchmarks/terminal-agent/playbooks/local-codex-workspace.md)
+- [`local-codex-two-sum-devloop.md`](../../benchmarks/terminal-agent/playbooks/local-codex-two-sum-devloop.md)
 - [`remote-host-reuse.md`](../../benchmarks/terminal-agent/playbooks/remote-host-reuse.md)
+- [`remote-dual-host-maintenance.md`](../../benchmarks/terminal-agent/playbooks/remote-dual-host-maintenance.md)
 - [`tmux-session-awareness.md`](../../benchmarks/terminal-agent/playbooks/tmux-session-awareness.md)
 - [`tmux-agent-target-preparation.md`](../../benchmarks/terminal-agent/playbooks/tmux-agent-target-preparation.md)
+- [`tmux-remote-devloop.md`](../../benchmarks/terminal-agent/playbooks/tmux-remote-devloop.md)
 
 These are scored against product criteria such as:
 
@@ -55,12 +58,20 @@ These are scored against product criteria such as:
 
 ## Built-in profiles
 
-The benchmark now ships with a small starter profile set:
+The benchmark now ships with two profile bands.
+
+Starter profiles:
 
 - `basic-local-shell`
 - `basic-local-codex`
 - `basic-ssh-dual-host`
 - `basic-ssh-tmux`
+
+Operator profiles:
+
+- `operator-local-codex-devloop`
+- `operator-ssh-dual-host-maintenance`
+- `operator-ssh-tmux-devloop`
 
 Profiles combine:
 
@@ -68,7 +79,19 @@ Profiles combine:
 - the strict suite
 - recommended playbooks for deeper scenario work
 
-This keeps the benchmark maintainable. Everyday development can run a small profile quickly, while deeper release work can expand into the linked playbooks.
+This keeps the benchmark maintainable. Everyday development can run a small profile quickly, while deeper release work can expand into the operator playbooks.
+
+## Safety discipline
+
+The operator profiles are deliberately not “do anything destructive and hope”.
+
+Rules:
+
+- prefer read-only checks before mutating admin commands
+- treat privilege escalation as an explicit branch in the scenario
+- keep the benchmark honest when hosts, package managers, or remote tooling differ
+
+That makes the benchmark usable across real environments instead of only on one curated machine.
 
 ## Why this split is intentional
 
