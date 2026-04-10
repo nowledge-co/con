@@ -1520,31 +1520,31 @@ fn hidden_result_line_count(content: &str, max_lines: usize) -> usize {
 }
 
 fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.02)
+    theme.background.opacity(0.0)
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.035)
+    theme.secondary
 }
 
 fn trace_step_header_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.075)
+    theme.secondary_hover
 }
 
 fn trace_step_header_hover_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.10)
+    theme.secondary_active
 }
 
 fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.05)
+    theme.muted.opacity(0.045)
 }
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.09)
+    theme.secondary_hover
 }
 
 fn trace_group_header_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.045)
+    theme.muted.opacity(0.04)
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
