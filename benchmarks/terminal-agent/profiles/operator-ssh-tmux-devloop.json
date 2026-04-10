@@ -3,6 +3,10 @@
   "description": "Operator-grade ssh->tmux workflow with target reuse, remote file edits, long-running jobs, and agent-CLI orientation.",
   "recommended_suite": "all",
   "fresh_conversation": true,
+  "setup_local_shell_commands": [
+    "ssh haswell 'tmux kill-session -t con-bench >/dev/null 2>&1 || true'",
+    "ssh haswell 'rm -f ~/hello.py'"
+  ],
   "env_checks": [
     {
       "name": "ssh_haswell",
@@ -27,8 +31,8 @@
       "steps": [
         {
           "label": "describe_and_prepare_shell_target",
-          "prompt": "Please connect to haswell, attach or create a tmux session for this benchmark, describe that tmux workspace, and prepare a clean tmux shell target for file work.",
-          "timeout_secs": 150
+          "prompt": "Please connect to haswell, create a tmux session named con-bench for this benchmark, describe that tmux workspace, and prepare a clean tmux shell target for file work.",
+          "timeout_secs": 180
         },
         {
           "label": "create_and_run_hello",
@@ -38,7 +42,7 @@
         {
           "label": "edit_and_rerun",
           "prompt": "Edit hello.py to accept a name argument and rerun it with Alice.",
-          "timeout_secs": 120
+          "timeout_secs": 150
         },
         {
           "label": "separate_long_running_work",

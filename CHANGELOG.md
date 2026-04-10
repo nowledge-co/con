@@ -84,8 +84,10 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The terminal-agent benchmark now includes richer operator playbooks and profiles for local Codex dev loops, dual-host SSH maintenance, and remote tmux edit/run/reuse workflows. It can now execute those operator prompt sequences directly and record the transcript instead of only printing a playbook path.
 - The terminal-agent benchmark now has stable scoring rubrics, a scoring tool, a trend-report generator, and a project-local improvement-loop skill so progress can be judged and compared over many iterations instead of living only in screenshots and memory.
 - `con-cli agent ask` and operator benchmark steps can now be bounded with explicit timeouts, so a stuck agent turn fails cleanly instead of hanging the entire automation loop.
+- Control-plane `agent ask` timeouts are now request-scoped. A finished `con-cli agent ask` can no longer leave behind a stale timer that aborts the next request on the same tab.
 - The benchmark loop now writes a tracked improvement log entry and trend-chart report, so repeated iterations leave behind comparable notes and a durable progress trail in the repo.
 - Operator benchmark profiles can now start from a fresh conversation and run deterministic visible-shell setup commands before the first prompt, which makes repeated local Codex and SSH/tmux evaluations more stable.
+- Operator benchmark profiles can now also run deterministic local shell setup commands before the first prompt. The built-in operator profiles use that for dependency-free local Python setup and clean tmux-session hygiene on remote hosts.
 - The terminal-agent benchmark now ships an isolated batch runner, so multi-iteration evaluation can launch a fresh Con runtime per run instead of reusing polluted session state.
 
 **Terminal**

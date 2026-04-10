@@ -33,13 +33,13 @@
         },
         {
           "label": "package_manager_state",
-          "prompt": "Reuse the same host workspaces and check package-manager update state. If apt exists, do a safe read-only check first. Only run apt update if passwordless sudo is available and you explain that choice.",
-          "timeout_secs": 120
+          "prompt": "Reuse the same host workspaces and report package manager plus whether updates appear pending, using read-only commands only. On apt hosts, prefer `apt list --upgradable` or `apt-get -s upgrade`; do not perform a real update.",
+          "timeout_secs": 180
         },
         {
           "label": "warning_logs",
           "prompt": "Reuse the same host workspaces again and collect the last 20 lines of dmesg or an equivalent warning log on each host.",
-          "timeout_secs": 120
+          "timeout_secs": 180
         },
         {
           "label": "continuity_proof",

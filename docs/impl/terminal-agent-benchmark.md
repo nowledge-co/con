@@ -45,6 +45,7 @@ It is not pretending to be a fully machine-scored intelligence benchmark yet. Th
 - keep the prompt sequence stable and replayable
 - reset the in-tab conversation when a profile needs a clean slate
 - allow explicit visible-shell setup commands when a profile needs deterministic prep
+- allow explicit local shell setup commands when a profile needs deterministic preflight outside Con itself, such as clearing a remote tmux session before a run
 - record the full transcript as benchmark evidence
 
 Current operator flows live in the operator profiles under `benchmarks/terminal-agent/profiles/`.

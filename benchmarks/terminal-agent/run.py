@@ -50,6 +50,7 @@ class Profile:
     playbooks: list[dict[str, Any]]
     operator_scenarios: list[dict[str, Any]]
     fresh_conversation: bool
+    setup_local_shell_commands: list[str]
     setup_visible_shell_commands: list[str]
 
 
@@ -270,6 +271,7 @@ def load_profile(profile_name: str) -> Profile:
         playbooks=data.get("playbooks", []),
         operator_scenarios=data.get("operator_scenarios", []),
         fresh_conversation=bool(data.get("fresh_conversation", False)),
+        setup_local_shell_commands=data.get("setup_local_shell_commands", []),
         setup_visible_shell_commands=data.get("setup_visible_shell_commands", []),
     )
 
@@ -287,6 +289,7 @@ def list_profiles() -> list[Profile]:
                 playbooks=data.get("playbooks", []),
                 operator_scenarios=data.get("operator_scenarios", []),
                 fresh_conversation=bool(data.get("fresh_conversation", False)),
+                setup_local_shell_commands=data.get("setup_local_shell_commands", []),
                 setup_visible_shell_commands=data.get("setup_visible_shell_commands", []),
             )
         )
@@ -508,6 +511,24 @@ AGENT_CASES: list[tuple[str, Callable[[BenchmarkContext], tuple[str, dict[str, A
 
 def run_profile_setup(ctx: BenchmarkContext, profile: Profile, tab_index: int) -> list[dict[str, Any]]:
     setup_actions: list[dict[str, Any]] = []
+
+    for command in profile.setup_local_shell_commands:
+        proc = ctx.shell_command(["/bin/sh", "-lc", command], timeout_secs=60.0)
+        if proc.returncode != 0:
+            raise BenchError(
+                "setup local shell command failed: "
+                f"{command!r} (exit {proc.returncode}): "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+        setup_actions.append(
+            {
+                "kind": "local_shell_command",
+                "command": command,
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
+                "exit_code": proc.returncode,
+            }
+        )
 
     if profile.fresh_conversation:
         result = ctx.agent_new_conversation(tab_index)

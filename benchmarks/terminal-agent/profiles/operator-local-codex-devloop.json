@@ -41,12 +41,12 @@
         },
         {
           "label": "create_code_and_tests",
-          "prompt": "In that workspace, create a small Python two_sum implementation and a test file, then run the tests.",
+          "prompt": "In that workspace, create a small Python two_sum implementation and a unittest-based test file, then run `python3 -m unittest -q`.",
           "timeout_secs": 120
         },
         {
           "label": "repair_without_new_target",
-          "prompt": "Now break one test on purpose. If Codex is waiting at a trust or continue prompt for this directory, accept it in the same target. Then ask Codex to fix the test without creating a new target.",
+          "prompt": "Now break one unittest on purpose. If Codex is waiting at a trust or continue prompt for this directory, accept it in the same target. Then ask Codex to fix the failing test without creating a new target, and rerun `python3 -m unittest -q`.",
           "timeout_secs": 150
         },
         {

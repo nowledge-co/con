@@ -106,6 +106,7 @@ They do not pretend to be fully machine-scored intelligence benchmarks. Instead,
 - execute the full prompt sequence automatically
 - start from a fresh in-tab conversation when the profile asks for it
 - optionally run visible-shell setup commands before the first operator turn
+- optionally run local shell setup commands before the first operator turn when benchmark hygiene needs work outside the live Con tab
 - record the assistant transcript for each turn
 - give you one JSON record you can review after the run
 

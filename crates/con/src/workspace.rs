@@ -92,6 +92,9 @@ pub struct ConWorkspace {
     control_socket: Option<con_core::ControlSocketHandle>,
     /// Pending external agent requests keyed by 0-based tab index.
     pending_control_agent_requests: HashMap<usize, PendingControlAgentRequest>,
+    /// Monotonic request id for control-plane agent asks so stale timeout tasks cannot
+    /// cancel a newer request on the same tab.
+    next_control_agent_request_id: u64,
     /// Window handle used to re-enter a window-aware context from deferred control work.
     window_handle: AnyWindowHandle,
     /// Weak self handle for deferred window callbacks.
@@ -114,6 +117,7 @@ struct PendingCreatePane {
 }
 
 struct PendingControlAgentRequest {
+    request_id: u64,
     prompt: String,
     auto_approve_tools: bool,
     response_tx: tokio::sync::oneshot::Sender<ControlResult>,
@@ -464,6 +468,7 @@ impl ConWorkspace {
             control_request_rx,
             control_socket,
             pending_control_agent_requests: HashMap::new(),
+            next_control_agent_request_id: 1,
             window_handle: window.window_handle(),
             workspace_handle: cx.weak_entity(),
         }
@@ -1391,16 +1396,25 @@ impl ConWorkspace {
 
                     let context = self.build_agent_context_for_tab(tab_idx, cx);
                     let session = &self.tabs[tab_idx].session;
+                    let request_id = self.next_control_agent_request_id;
+                    self.next_control_agent_request_id =
+                        self.next_control_agent_request_id.wrapping_add(1);
                     self.pending_control_agent_requests.insert(
                         tab_idx,
                         PendingControlAgentRequest {
+                            request_id,
                             prompt: prompt.clone(),
                             auto_approve_tools,
                             response_tx,
                         },
                     );
                     if let Some(timeout_secs) = timeout_secs.map(|secs| secs.clamp(5, 600)) {
-                        self.spawn_control_agent_request_timeout(tab_idx, timeout_secs, cx);
+                        self.spawn_control_agent_request_timeout(
+                            tab_idx,
+                            request_id,
+                            timeout_secs,
+                            cx,
+                        );
                     }
                     self.harness.send_message(session, prompt, context);
                 }
@@ -1412,6 +1426,7 @@ impl ConWorkspace {
     fn spawn_control_agent_request_timeout(
         &self,
         tab_idx: usize,
+        request_id: u64,
         timeout_secs: u64,
         cx: &mut Context<Self>,
     ) {
@@ -1421,7 +1436,15 @@ impl ConWorkspace {
                 .await;
 
             let _ = this.update(cx, |workspace, _| {
-                if let Some(pending) = workspace.pending_control_agent_requests.remove(&tab_idx) {
+                let is_current_request = workspace
+                    .pending_control_agent_requests
+                    .get(&tab_idx)
+                    .is_some_and(|pending| pending.request_id == request_id);
+                if is_current_request {
+                    let pending = workspace
+                        .pending_control_agent_requests
+                        .remove(&tab_idx)
+                        .expect("pending request must exist");
                     Self::send_control_result(
                         pending.response_tx,
                         Err(ControlError::internal(format!(
