@@ -799,6 +799,43 @@ impl AgentPanel {
     fn running_tool_call(&self) -> Option<&ToolCallEntry> {
         self.state.tool_calls.iter().find(|tc| tc.result.is_none())
     }
+
+    fn latest_completed_run_summary(&self) -> Option<(String, String)> {
+        self.state.messages.iter().rev().find_map(|message| {
+            if message.role != "assistant"
+                || (message.content.is_empty() && message.steps.is_empty())
+            {
+                return None;
+            }
+
+            let step_count = message.steps.len();
+            let title = if step_count > 0 {
+                format!(
+                    "Finished · {} step{}",
+                    step_count,
+                    if step_count == 1 { "" } else { "s" }
+                )
+            } else {
+                "Finished".to_string()
+            };
+
+            let mut parts = Vec::new();
+            if let Some(model) = message.model.as_deref() {
+                let model = humanize_model_name(model);
+                if !model.is_empty() {
+                    parts.push(model);
+                }
+            }
+            if let Some(duration_ms) = message.duration_ms {
+                parts.push(format_duration_ms(duration_ms));
+            }
+            if !message.content.is_empty() {
+                parts.push("reply ready".to_string());
+            }
+
+            Some((title, parts.join(" · ")))
+        })
+    }
 }
 
 /// Markdown style for chat messages — readable prose with breathing room.
@@ -1412,14 +1449,14 @@ fn render_result_block(
             );
         }
         div()
-            .ml(px(22.0))
+            .ml(px(20.0))
             .mr(px(4.0))
             .mt(px(2.0))
             .mb(px(2.0))
             .px(px(8.0))
-            .py(px(5.0))
-            .rounded(px(6.0))
-            .bg(theme.muted.opacity(0.04))
+            .py(px(6.0))
+            .rounded(px(8.0))
+            .bg(theme.muted.opacity(0.05))
             .overflow_x_hidden()
             .font_family(theme.mono_font_family.clone())
             .text_size(px(10.5))
@@ -1438,6 +1475,77 @@ fn result_preview(formatted: &str, max_lines: usize) -> String {
     } else {
         let preview: String = lines[..max_lines].join("\n");
         format!("{}\n… {} more lines", preview, lines.len() - max_lines)
+    }
+}
+
+fn hidden_result_line_count(content: &str, max_lines: usize) -> usize {
+    content.lines().count().saturating_sub(max_lines)
+}
+
+fn result_toggle_label(content: &str, expanded: bool) -> String {
+    if expanded {
+        "Show less".to_string()
+    } else {
+        let hidden = hidden_result_line_count(content, TOOL_RESULT_PREVIEW_LINES);
+        if hidden > 0 {
+            format!(
+                "Show {} more line{}",
+                hidden,
+                if hidden == 1 { "" } else { "s" }
+            )
+        } else {
+            "Show more".to_string()
+        }
+    }
+}
+
+fn render_step_status_tag(status: StepStatus) -> AnyElement {
+    match status {
+        StepStatus::Running => Tag::warning()
+            .xsmall()
+            .rounded_full()
+            .child("Live")
+            .into_any_element(),
+        StepStatus::Complete => Tag::success()
+            .xsmall()
+            .rounded_full()
+            .child("Done")
+            .into_any_element(),
+        StepStatus::Denied => Tag::danger()
+            .xsmall()
+            .rounded_full()
+            .child("Denied")
+            .into_any_element(),
+    }
+}
+
+fn render_run_status_tag(
+    step_count: usize,
+    running_count: usize,
+    denied_count: usize,
+) -> AnyElement {
+    if running_count > 0 {
+        Tag::warning()
+            .xsmall()
+            .rounded_full()
+            .child(format!("{} live", running_count))
+            .into_any_element()
+    } else if denied_count > 0 {
+        Tag::danger()
+            .xsmall()
+            .rounded_full()
+            .child(format!("{} denied", denied_count))
+            .into_any_element()
+    } else {
+        Tag::success()
+            .xsmall()
+            .rounded_full()
+            .child(format!(
+                "{} step{}",
+                step_count,
+                if step_count == 1 { "" } else { "s" }
+            ))
+            .into_any_element()
     }
 }
 
@@ -1969,18 +2077,45 @@ impl Render for AgentPanel {
                 } else {
                     "phosphor/caret-down.svg"
                 };
+                let running_count = msg
+                    .steps
+                    .iter()
+                    .filter(|step| step.status == StepStatus::Running)
+                    .count();
+                let denied_count = msg
+                    .steps
+                    .iter()
+                    .filter(|step| step.status == StepStatus::Denied)
+                    .count();
+                let run_title = if running_count > 0 {
+                    "Working now"
+                } else if denied_count > 0 {
+                    "Run needs review"
+                } else {
+                    "Run trace"
+                };
 
-                // Toggle header
-                msg_el = msg_el.child(
+                let mut run_card = div()
+                    .ml(px(19.0))
+                    .mr(px(4.0))
+                    .mt(px(6.0))
+                    .px(px(12.0))
+                    .py(px(10.0))
+                    .rounded(px(12.0))
+                    .bg(theme.muted.opacity(0.04))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0));
+
+                run_card = run_card.child(
                     div()
                         .id(SharedString::from(format!("steps-toggle-{msg_idx}")))
                         .flex()
                         .items_center()
-                        .gap(px(5.0))
-                        .ml(px(19.0))
+                        .gap(px(8.0))
                         .py(px(2.0))
-                        .px(px(4.0))
-                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .rounded(px(8.0))
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.muted.opacity(0.05)))
                         .on_mouse_down(
@@ -1995,23 +2130,49 @@ impl Render for AgentPanel {
                         .child(
                             svg()
                                 .path(chevron)
-                                .size(px(10.0))
-                                .text_color(theme.muted_foreground.opacity(0.3)),
+                                .size(px(11.0))
+                                .text_color(theme.muted_foreground.opacity(0.34)),
                         )
                         .child(
                             div()
-                                .text_size(px(11.0))
-                                .text_color(theme.muted_foreground.opacity(0.4))
-                                .child(format!(
+                                .flex()
+                                .flex_col()
+                                .gap(px(1.0))
+                                .child(
+                                    div()
+                                        .text_size(px(12.5))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.foreground.opacity(0.72))
+                                        .child(run_title),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .text_color(theme.muted_foreground.opacity(0.50))
+                                        .child("Actions, probes, and tool output"),
+                                ),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .child(Tag::secondary().xsmall().rounded_full().child(format!(
                                     "{} step{}",
                                     step_count,
                                     if step_count == 1 { "" } else { "s" }
+                                )))
+                                .child(render_run_status_tag(
+                                    step_count,
+                                    running_count,
+                                    denied_count,
                                 )),
                         ),
                 );
 
                 if !collapsed {
-                    let mut steps_el = div().flex().flex_col().ml(px(19.0)).gap(px(2.0));
+                    let mut steps_el = div().flex().flex_col().gap(px(6.0));
 
                     for (step_idx, step) in msg.steps.iter().enumerate() {
                         let icon_color = match step.status {
@@ -2053,6 +2214,8 @@ impl Render for AgentPanel {
                             )
                             .child(div().flex_1()); // spacer
 
+                        top_line = top_line.child(render_step_status_tag(step.status));
+
                         if let Some(dur) = step.duration {
                             top_line = top_line.child(
                                 div()
@@ -2065,15 +2228,31 @@ impl Render for AgentPanel {
 
                         if has_detail {
                             top_line = top_line.child(
-                                svg()
-                                    .path(if detail_collapsed {
-                                        "phosphor/caret-right.svg"
-                                    } else {
-                                        "phosphor/caret-down.svg"
-                                    })
-                                    .size(px(10.0))
-                                    .flex_shrink_0()
-                                    .text_color(theme.muted_foreground.opacity(0.30)),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .text_color(theme.muted_foreground.opacity(0.40))
+                                            .child(if detail_collapsed {
+                                                "Details"
+                                            } else {
+                                                "Hide"
+                                            }),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path(if detail_collapsed {
+                                                "phosphor/caret-right.svg"
+                                            } else {
+                                                "phosphor/caret-down.svg"
+                                            })
+                                            .size(px(10.0))
+                                            .flex_shrink_0()
+                                            .text_color(theme.muted_foreground.opacity(0.30)),
+                                    ),
                             );
                         }
 
@@ -2081,22 +2260,24 @@ impl Render for AgentPanel {
                         let mut step_header = div()
                             .flex()
                             .flex_col()
-                            .gap(px(1.0))
-                            .py(px(3.0))
-                            .px(px(4.0))
+                            .gap(px(2.0))
+                            .px(px(10.0))
+                            .py(px(9.0))
+                            .rounded(px(10.0))
+                            .bg(theme.muted.opacity(0.03))
                             .child(top_line);
 
                         // Args on second line — consistent indent with approval card
                         if let Some(detail_text) = step_detail {
                             step_header = step_header.child(
                                 div()
-                                    .ml(px(18.0)) // align with text after icon
+                                    .ml(px(18.0))
                                     .text_size(px(11.0))
                                     .text_color(theme.muted_foreground.opacity(0.45))
                                     .font_family(theme.mono_font_family.clone())
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
-                                    .child(truncate_str(detail_text, 60)),
+                                    .child(truncate_str(detail_text, 84)),
                             );
                         }
 
@@ -2109,7 +2290,7 @@ impl Render for AgentPanel {
                                         "step-detail-{msg_idx}-{step_idx}"
                                     )))
                                     .cursor_pointer()
-                                    .rounded(px(5.0))
+                                    .rounded(px(10.0))
                                     .hover(|s| s.bg(theme.muted.opacity(0.05)))
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -2143,15 +2324,14 @@ impl Render for AgentPanel {
                                 ));
                                 if is_expandable {
                                     let expanded = step.detail_expanded;
-                                    let button_label =
-                                        if expanded { "Show less" } else { "Show more" };
+                                    let button_label = result_toggle_label(detail, expanded);
                                     step_el = step_el.child(
-                                        div().ml(px(22.0)).child(
+                                        div().ml(px(20.0)).child(
                                             Button::new(format!(
                                                 "step-detail-expand-{msg_idx}-{step_idx}"
                                             ))
                                             .label(button_label)
-                                            .ghost()
+                                            .text()
                                             .xsmall()
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 if let Some(message) =
@@ -2174,8 +2354,11 @@ impl Render for AgentPanel {
 
                         steps_el = steps_el.child(step_el);
                     }
-                    msg_el = msg_el.child(steps_el);
+
+                    run_card = run_card.child(steps_el);
                 }
+
+                msg_el = msg_el.child(run_card);
             }
 
             messages_content = messages_content.child(msg_el);
@@ -2199,7 +2382,49 @@ impl Render for AgentPanel {
             .collect();
 
         if !visible_tool_calls.is_empty() {
-            let mut tc_container = div().flex().flex_col().ml(px(19.0)).gap(px(2.0));
+            let mut tc_container = div()
+                .flex()
+                .flex_col()
+                .ml(px(19.0))
+                .mr(px(4.0))
+                .gap(px(8.0))
+                .px(px(12.0))
+                .py(px(10.0))
+                .rounded(px(12.0))
+                .bg(theme.warning.opacity(0.05))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(1.0))
+                                .child(
+                                    div()
+                                        .text_size(px(12.5))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.foreground.opacity(0.72))
+                                        .child("Working now"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .text_color(theme.muted_foreground.opacity(0.50))
+                                        .child("Live tools for this reply"),
+                                ),
+                        )
+                        .child(div().flex_1())
+                        .child(Tag::warning().xsmall().rounded_full().child(format!(
+                                    "{} live",
+                                    visible_tool_calls
+                                        .iter()
+                                        .filter(|(_, tc)| tc.result.is_none())
+                                        .count()
+                                ))),
+                );
 
             for (tc_idx, tc) in visible_tool_calls {
                 let is_done = tc.result.is_some();
@@ -2244,6 +2469,11 @@ impl Render for AgentPanel {
                             .child(human_name),
                     )
                     .child(div().flex_1()) // spacer
+                    .child(if is_done {
+                        render_step_status_tag(StepStatus::Complete)
+                    } else {
+                        render_step_status_tag(StepStatus::Running)
+                    })
                     .child(
                         div()
                             .flex_shrink_0()
@@ -2255,9 +2485,11 @@ impl Render for AgentPanel {
                 let mut tc_row = div()
                     .flex()
                     .flex_col()
-                    .gap(px(1.0))
-                    .py(px(3.0))
-                    .px(px(4.0))
+                    .gap(px(2.0))
+                    .px(px(10.0))
+                    .py(px(9.0))
+                    .rounded(px(10.0))
+                    .bg(theme.muted.opacity(0.03))
                     .child(top_line);
 
                 // Args on second line
@@ -2292,12 +2524,12 @@ impl Render for AgentPanel {
                     ));
                     if is_expandable {
                         let expanded = tc.result_expanded;
-                        let button_label = if expanded { "Show less" } else { "Show more" };
+                        let button_label = result_toggle_label(&formatted, expanded);
                         tc_el = tc_el.child(
-                            div().ml(px(22.0)).child(
+                            div().ml(px(20.0)).child(
                                 Button::new(format!("tc-result-expand-{tc_idx}"))
                                     .label(button_label)
-                                    .ghost()
+                                    .text()
                                     .xsmall()
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if let Some(tool_call) =
@@ -2647,6 +2879,45 @@ impl Render for AgentPanel {
                             .text_color(theme.foreground.opacity(0.62))
                             .child(label),
                     )
+                    .into_any_element(),
+            )
+        } else if let Some((title, detail)) = self.latest_completed_run_summary() {
+            let mut completion_detail = div().flex().flex_col().gap(px(1.0)).min_w_0().child(
+                div()
+                    .text_size(px(11.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.foreground.opacity(0.72))
+                    .child(title),
+            );
+            if !detail.is_empty() {
+                completion_detail = completion_detail.child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(theme.muted_foreground.opacity(0.52))
+                        .overflow_x_hidden()
+                        .whitespace_nowrap()
+                        .child(detail),
+                );
+            }
+
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .mx(px(14.0))
+                    .mb(px(8.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded(px(8.0))
+                    .bg(theme.success.opacity(0.05))
+                    .child(
+                        svg()
+                            .path("phosphor/check-circle.svg")
+                            .size(px(12.0))
+                            .text_color(theme.success.opacity(0.75)),
+                    )
+                    .child(completion_detail)
                     .into_any_element(),
             )
         } else {

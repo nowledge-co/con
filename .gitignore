@@ -25,3 +25,6 @@ target
 .DS_Store
 dist
 .env
+
+__pycache__
+.sparkle
