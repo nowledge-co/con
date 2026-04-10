@@ -3170,12 +3170,20 @@ impl Render for ConWorkspace {
                             .clamp(AGENT_PANEL_MIN_WIDTH, AGENT_PANEL_MAX_WIDTH);
                         if (this.agent_panel_width - new_width).abs() > 1.0 {
                             this.agent_panel_width = new_width;
+                            if this.active_tab >= this.tabs.len() {
+                                cx.notify();
+                                return;
+                            }
                             // Notify all terminals so they detect new available space
                             for terminal in this.tabs[this.active_tab].pane_tree.all_terminals() {
                                 terminal.notify(cx);
                             }
                             cx.notify();
                         }
+                        return;
+                    }
+
+                    if this.active_tab >= this.tabs.len() {
                         return;
                     }
 
@@ -3232,6 +3240,9 @@ impl Render for ConWorkspace {
                         this.agent_panel_drag = None;
                         this.save_session(cx);
                         cx.notify();
+                        return;
+                    }
+                    if this.active_tab >= this.tabs.len() {
                         return;
                     }
                     let pane_tree = &mut this.tabs[this.active_tab].pane_tree;

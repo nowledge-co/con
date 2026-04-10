@@ -295,6 +295,7 @@ pub enum PaneObservationHintKind {
     HtopLikeScreen,
     LoginBannerVisible,
     SshConnectionClosed,
+    TmuxLikeScreen,
 }
 
 impl PaneObservationHintKind {
@@ -304,6 +305,7 @@ impl PaneObservationHintKind {
             Self::HtopLikeScreen => "htop_like_screen",
             Self::LoginBannerVisible => "login_banner_visible",
             Self::SshConnectionClosed => "ssh_connection_closed",
+            Self::TmuxLikeScreen => "tmux_like_screen",
         }
     }
 }
@@ -1213,6 +1215,21 @@ pub fn remote_workspace_anchor(
     })
 }
 
+fn title_looks_tmux_like(title: &str) -> bool {
+    let lower = title.to_ascii_lowercase();
+    if lower.contains("tmux") || lower.contains("tmate") {
+        return true;
+    }
+
+    let has_window_box = title.chars().any(|ch| matches!(ch, '❐' | '❑' | '❏'));
+    let has_window_state = title.chars().any(|ch| matches!(ch, '●' | '○' | '◉' | '*'));
+    let has_numbered_window = title
+        .split_whitespace()
+        .any(|token| token.chars().next().is_some_and(|ch| ch.is_ascii_digit()));
+
+    has_window_box && has_window_state && has_numbered_window
+}
+
 fn parse_ssh_target(command: &str) -> Option<String> {
     let mut tokens = command.split_whitespace().peekable();
     while let Some(token) = tokens.next() {
@@ -1275,7 +1292,7 @@ fn format_scope_summary(scope: &PaneRuntimeScope) -> String {
     scope.summary()
 }
 
-pub fn derive_screen_hints(lines: &[String]) -> Vec<PaneObservationHint> {
+pub fn derive_screen_hints(title: Option<&str>, lines: &[String]) -> Vec<PaneObservationHint> {
     let mut hints = Vec::new();
 
     let non_empty: Vec<&str> = lines
@@ -1344,6 +1361,14 @@ pub fn derive_screen_hints(lines: &[String]) -> Vec<PaneObservationHint> {
         });
     }
 
+    if title.is_some_and(title_looks_tmux_like) {
+        hints.push(PaneObservationHint {
+            kind: PaneObservationHintKind::TmuxLikeScreen,
+            confidence: PaneConfidence::Advisory,
+            detail: "The pane title resembles a tmux session or tmux status title. Treat this as an observation, not native tmux proof.".to_string(),
+        });
+    }
+
     hints
 }
 
@@ -1389,10 +1414,19 @@ fn focused_screen_assessment(
     let has_ssh_closed = hints
         .iter()
         .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
+    let has_tmux_like = hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
 
     let summary = match (has_prompt, has_htop) {
         _ if has_ssh_closed => {
             "The current visible screen shows an SSH connection that appears closed. Treat this pane as a disconnected remote workspace until a stronger fact source proves otherwise."
+        }
+        _ if has_tmux_like && has_prompt => {
+            "The current visible screen looks like a tmux workspace sitting at a prompt-like line, but con does not yet have native tmux control or authoritative foreground-process proof."
+        }
+        _ if has_tmux_like => {
+            "The current visible screen or pane title looks tmux-like, but that remains an observation rather than proof of a live tmux control channel."
         }
         _ if has_login_banner && has_prompt => {
             "The current visible screen looks like a logged-in shell with a recent login banner still visible."
@@ -1471,8 +1505,13 @@ fn pane_screen_assessment_label(
             let login_banner = hints
                 .iter()
                 .any(|hint| hint.kind == PaneObservationHintKind::LoginBannerVisible);
+            let tmux_like = hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
             match (prompt_like, htop_like) {
                 _ if ssh_closed => "screen shows an SSH session that appears closed",
+                _ if tmux_like && prompt_like => "screen looks like tmux at a prompt",
+                _ if tmux_like => "screen looks tmux-like",
                 _ if login_banner && prompt_like => "screen looks like a logged-in remote shell",
                 (true, true) => {
                     "mixed current screen: prompt-like bottom with htop-like content above"
@@ -1490,10 +1529,14 @@ fn derive_workspace_kind(
     tmux_session: Option<&str>,
     runtime_stack: &[PaneRuntimeScope],
     last_verified_runtime_stack: &[PaneRuntimeScope],
+    screen_hints: &[PaneObservationHint],
 ) -> TabWorkspaceKind {
     if tmux_session.is_some()
         || has_tmux_scope(runtime_stack)
         || has_tmux_scope(last_verified_runtime_stack)
+        || screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen)
     {
         TabWorkspaceKind::TmuxWorkspace
     } else if host.is_some() {
@@ -1560,8 +1603,16 @@ fn workspace_note(
         (_, TabWorkspaceState::Disconnected, Some(host), _) => {
             format!("SSH workspace for `{host}` appears disconnected.")
         }
+        (TabWorkspaceKind::TmuxWorkspace, TabWorkspaceState::Ready, Some(host), None) => {
+            format!("Remote tmux workspace on `{host}` looks ready.")
+        }
         (TabWorkspaceKind::TmuxWorkspace, TabWorkspaceState::Ready, Some(host), Some(session)) => {
             format!("Remote tmux workspace on `{host}` session `{session}` is ready.")
+        }
+        (TabWorkspaceKind::TmuxWorkspace, _, Some(host), None) => {
+            format!(
+                "Remote tmux workspace on `{host}` is visible, but needs inspection before control."
+            )
         }
         (TabWorkspaceKind::TmuxWorkspace, _, Some(host), Some(session)) => {
             format!(
@@ -1626,6 +1677,12 @@ fn summarize_focused_pane_layout(ctx: &TerminalContext) -> String {
             "tmux appears in the runtime stack, but no tmux control anchor is established"
                 .to_string(),
         );
+    } else if ctx
+        .focused_screen_hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen)
+    {
+        parts.push("screen looks tmux-like, but control is not established".to_string());
     }
 
     parts.push(
@@ -1693,6 +1750,12 @@ fn summarize_peer_pane_layout(pane: &PaneSummary) -> String {
             "tmux appears in the runtime stack, but no tmux control anchor is established"
                 .to_string(),
         );
+    } else if pane
+        .screen_hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen)
+    {
+        parts.push("screen looks tmux-like, but control is not established".to_string());
     }
 
     parts.push(pane_screen_assessment_label(pane.front_state, &pane.screen_hints).to_string());
@@ -1711,6 +1774,7 @@ fn summarize_peer_pane_layout(pane: &PaneSummary) -> String {
             .or(pane.tmux_session.as_deref()),
         &pane.runtime_stack,
         &pane.last_verified_runtime_stack,
+        &pane.screen_hints,
     );
     let state = derive_workspace_state(
         kind,
@@ -1786,6 +1850,7 @@ fn tab_workspaces(ctx: &TerminalContext) -> Vec<TabWorkspaceSummary> {
                 .or(ctx.tmux_session.as_deref()),
             &ctx.focused_runtime_stack,
             &ctx.focused_last_verified_runtime_stack,
+            &ctx.focused_screen_hints,
         ),
         state: derive_workspace_state(
             derive_workspace_kind(
@@ -1797,6 +1862,7 @@ fn tab_workspaces(ctx: &TerminalContext) -> Vec<TabWorkspaceSummary> {
                     .or(ctx.tmux_session.as_deref()),
                 &ctx.focused_runtime_stack,
                 &ctx.focused_last_verified_runtime_stack,
+                &ctx.focused_screen_hints,
             ),
             ctx.focused_front_state,
             &ctx.focused_screen_hints,
@@ -1820,6 +1886,7 @@ fn tab_workspaces(ctx: &TerminalContext) -> Vec<TabWorkspaceSummary> {
                 .or(pane.tmux_session.as_deref()),
             &pane.runtime_stack,
             &pane.last_verified_runtime_stack,
+            &pane.screen_hints,
         );
         let state = derive_workspace_state(
             kind,
@@ -1860,7 +1927,18 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
     let mut hints = Vec::new();
 
     let mut best_remote_shell: Option<(usize, Option<&str>, bool)> = None;
-    if focused_supports_visible_shell(ctx) || ctx.focused_remote_workspace.is_some() {
+    let focused_looks_tmux = ctx
+        .focused_screen_hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
+    let focused_disconnected = ctx
+        .focused_screen_hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
+    if !focused_looks_tmux
+        && !focused_disconnected
+        && (focused_supports_visible_shell(ctx) || ctx.focused_remote_workspace.is_some())
+    {
         best_remote_shell = Some((
             ctx.focused_pane_index,
             ctx.focused_hostname.as_deref().or_else(|| {
@@ -1872,6 +1950,17 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
         ));
     }
     for pane in &ctx.other_panes {
+        let tmux_like = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
+        let disconnected = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
+        if tmux_like || disconnected {
+            continue;
+        }
         if !pane_supports_visible_shell(pane) && pane.remote_workspace.is_none() {
             continue;
         }
@@ -1907,10 +1996,23 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
     }
 
     let mut remote_workspaces = Vec::new();
-    if let Some(anchor) = &ctx.focused_remote_workspace {
-        remote_workspaces.push((ctx.focused_pane_index, anchor));
+    if !focused_looks_tmux && !focused_disconnected {
+        if let Some(anchor) = &ctx.focused_remote_workspace {
+            remote_workspaces.push((ctx.focused_pane_index, anchor));
+        }
     }
     for pane in &ctx.other_panes {
+        let tmux_like = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
+        let disconnected = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
+        if tmux_like || disconnected {
+            continue;
+        }
         if let Some(anchor) = &pane.remote_workspace {
             remote_workspaces.push((pane.pane_index, anchor));
         }
@@ -1939,7 +2041,7 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
     }
 
     let mut best_tmux: Option<(usize, Option<&str>, bool)> = None;
-    if ctx.focused_control.tmux.is_some() {
+    if ctx.focused_control.tmux.is_some() || focused_looks_tmux {
         best_tmux = Some((
             ctx.focused_pane_index,
             ctx.focused_control
@@ -1950,12 +2052,19 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
         ));
     }
     for pane in &ctx.other_panes {
-        let Some(tmux) = &pane.control.tmux else {
+        let looks_tmux = pane
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
+        if pane.control.tmux.is_none() && !looks_tmux {
             continue;
-        };
+        }
         let candidate = (
             pane.pane_index,
-            tmux.session_name.as_deref(),
+            pane.control
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.as_deref()),
             pane_has_native_tmux(pane),
         );
         match best_tmux {
@@ -2610,12 +2719,32 @@ impl TerminalContext {
         }
 
         let mut remote_workspaces = Vec::new();
-        if let Some(anchor) = &self.focused_remote_workspace {
-            remote_workspaces.push((self.focused_pane_index, self.focused_pane_id, anchor));
+        let focused_tmux_like = self
+            .focused_screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
+        let focused_disconnected = self
+            .focused_screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
+        if !focused_tmux_like && !focused_disconnected {
+            if let Some(anchor) = &self.focused_remote_workspace {
+                remote_workspaces.push((self.focused_pane_index, self.focused_pane_id, anchor));
+            }
         }
         for pane in &self.other_panes {
-            if let Some(anchor) = &pane.remote_workspace {
-                remote_workspaces.push((pane.pane_index, pane.pane_id, anchor));
+            let tmux_like = pane
+                .screen_hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
+            let disconnected = pane
+                .screen_hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
+            if !tmux_like && !disconnected {
+                if let Some(anchor) = &pane.remote_workspace {
+                    remote_workspaces.push((pane.pane_index, pane.pane_id, anchor));
+                }
             }
         }
         remote_workspaces.sort_by(|(pane_a, _, anchor_a), (pane_b, _, anchor_b)| {
@@ -3425,12 +3554,16 @@ mod tests {
 
     #[test]
     fn derive_screen_hints_marks_visible_prompt_and_htop_as_observations() {
-        let hints = derive_screen_hints(&[
-            "Tasks: 105, 738 thr, 692 kthr; 1 running".to_string(),
-            "Load average: 0.08 0.09 0.06".to_string(),
-            "  PID USER      PRI  NI  VIRT   RES   SHR S CPU% MEM%   TIME+  Command".to_string(),
-            ") htop".to_string(),
-        ]);
+        let hints = derive_screen_hints(
+            None,
+            &[
+                "Tasks: 105, 738 thr, 692 kthr; 1 running".to_string(),
+                "Load average: 0.08 0.09 0.06".to_string(),
+                "  PID USER      PRI  NI  VIRT   RES   SHR S CPU% MEM%   TIME+  Command"
+                    .to_string(),
+                ") htop".to_string(),
+            ],
+        );
 
         assert!(
             hints
@@ -3446,6 +3579,20 @@ mod tests {
             hints
                 .iter()
                 .all(|hint| hint.confidence == PaneConfidence::Advisory)
+        );
+    }
+
+    #[test]
+    fn derive_screen_hints_marks_tmux_like_titles_as_observations() {
+        let hints = derive_screen_hints(
+            Some("haswell ❐ 0 ● 4 zsh"),
+            &["~".to_string(), "❯".to_string()],
+        );
+
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen)
         );
     }
 

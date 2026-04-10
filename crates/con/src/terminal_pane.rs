@@ -190,10 +190,11 @@ impl TerminalPane {
 
     pub fn observation_frame(&self, recent_output_lines: usize, cx: &App) -> PaneObservationFrame {
         let recent_output = self.content_lines(recent_output_lines, cx);
+        let title = self.title(cx);
         PaneObservationFrame {
-            title: self.title(cx),
+            title: title.clone(),
             cwd: self.current_dir(cx),
-            screen_hints: derive_screen_hints(&recent_output),
+            screen_hints: derive_screen_hints(title.as_deref(), &recent_output),
             recent_output,
             last_command: self.last_command(cx),
             last_exit_code: self.last_exit_code(cx),

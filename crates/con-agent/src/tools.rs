@@ -1292,8 +1292,15 @@ fn pane_has_tmux_native(pane: &PaneInfo) -> bool {
         .is_some_and(|tmux| tmux.mode == TmuxControlMode::Native)
 }
 
+fn pane_has_tmux_observation(pane: &PaneInfo) -> bool {
+    pane_has_screen_hint(
+        pane,
+        crate::context::PaneObservationHintKind::TmuxLikeScreen,
+    )
+}
+
 fn pane_has_tmux_layer(pane: &PaneInfo) -> bool {
-    pane.tmux_control.is_some() || pane.tmux_session.is_some()
+    pane.tmux_control.is_some() || pane.tmux_session.is_some() || pane_has_tmux_observation(pane)
 }
 
 fn pane_has_remote_shell_context(pane: &PaneInfo) -> bool {
@@ -1313,7 +1320,17 @@ fn pane_recent_ssh_target(pane: &PaneInfo) -> Option<String> {
     ssh_target_from_recent_actions(&pane.recent_actions)
 }
 
+fn pane_is_disconnected_workspace(pane: &PaneInfo) -> bool {
+    pane_has_screen_hint(
+        pane,
+        crate::context::PaneObservationHintKind::SshConnectionClosed,
+    )
+}
+
 fn pane_matches_remote_anchor(pane: &PaneInfo, host_contains: Option<&String>) -> bool {
+    if pane_is_disconnected_workspace(pane) || pane_has_tmux_observation(pane) {
+        return false;
+    }
     let ssh_target = pane_recent_ssh_target(pane);
     host_contains.is_none_or(|needle| {
         pane.hostname
@@ -1346,6 +1363,7 @@ fn pane_has_screen_hint(pane: &PaneInfo, kind: crate::context::PaneObservationHi
 fn workspace_kind_for_pane(pane: &PaneInfo) -> crate::context::TabWorkspaceKind {
     if pane.tmux_control.is_some()
         || pane.tmux_session.is_some()
+        || pane_has_tmux_observation(pane)
         || pane
             .runtime_stack
             .iter()
@@ -1419,6 +1437,19 @@ fn workspace_note_for_pane(
             crate::context::TabWorkspaceKind::TmuxWorkspace,
             crate::context::TabWorkspaceState::Ready,
             Some(host),
+        ) if pane
+            .tmux_control
+            .as_ref()
+            .and_then(|tmux| tmux.session_name.as_deref())
+            .or(pane.tmux_session.as_deref())
+            .is_none() =>
+        {
+            format!("Remote tmux workspace on `{host}` looks ready.")
+        }
+        (
+            crate::context::TabWorkspaceKind::TmuxWorkspace,
+            crate::context::TabWorkspaceState::Ready,
+            Some(host),
         ) => {
             let session = pane
                 .tmux_control
@@ -1427,6 +1458,16 @@ fn workspace_note_for_pane(
                 .or(pane.tmux_session.as_deref())
                 .unwrap_or("tmux");
             format!("Remote tmux workspace on `{host}` session `{session}` is ready.")
+        }
+        (crate::context::TabWorkspaceKind::TmuxWorkspace, _, Some(host))
+            if pane
+                .tmux_control
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.as_deref())
+                .or(pane.tmux_session.as_deref())
+                .is_none() =>
+        {
+            format!("Remote tmux workspace on `{host}` is visible, but needs inspection.")
         }
         (crate::context::TabWorkspaceKind::TmuxWorkspace, _, Some(host)) => {
             let session = pane
@@ -1612,6 +1653,9 @@ fn resolve_work_target_candidates(
                 if !pane_matches_cwd(&pane, cwd_contains.as_ref()) {
                     continue;
                 }
+                if pane_is_disconnected_workspace(&pane) || pane_has_tmux_observation(&pane) {
+                    continue;
+                }
                 let has_remote_fact = pane_has_remote_shell_context(&pane);
                 let has_remote_anchor = pane_matches_remote_anchor(&pane, host_contains.as_ref());
                 if !has_remote_fact && !has_remote_anchor {
@@ -1668,6 +1712,12 @@ fn resolve_work_target_candidates(
                         140 + if pane.is_focused { 1 } else { 0 },
                         "tmux_list_targets",
                         "This pane has a native tmux control anchor, so tmux targets can be queried directly.",
+                    )
+                } else if pane_has_tmux_observation(&pane) {
+                    (
+                        75 + if pane.is_focused { 1 } else { 0 },
+                        "read_pane",
+                        "This pane currently looks tmux-like on screen, but a native tmux control anchor is not established yet.",
                     )
                 } else {
                     (
@@ -1814,6 +1864,21 @@ fn resolve_work_target_candidates(
                             ),
                         ));
                     }
+                } else if pane_has_tmux_layer(&pane) {
+                    let suggested_tool = if pane_has_tmux_observation(&pane) {
+                        "read_pane"
+                    } else {
+                        "probe_shell_context"
+                    };
+                    let reason = if pane_has_tmux_observation(&pane) {
+                        "This pane currently looks like a tmux workspace for agent-CLI work, but native tmux control is not established yet.".to_string()
+                    } else {
+                        "This pane has a tmux layer for agent-CLI work, but native tmux control is not established yet.".to_string()
+                    };
+                    candidates.push((
+                        65 + if pane.is_focused { 1 } else { 0 },
+                        make_tmux_workspace_candidate(&pane, reason, suggested_tool),
+                    ));
                 }
             }
         }
@@ -3791,6 +3856,8 @@ fn ensure_remote_shell_target_impl(
         .into_iter()
         .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
         .filter(|pane| args.pane_id.is_none_or(|id| pane.pane_id == id))
+        .filter(|pane| !pane_is_disconnected_workspace(pane))
+        .filter(|pane| !pane_has_tmux_observation(pane))
         .filter_map(|pane| {
             if pane
                 .hostname
@@ -4656,6 +4723,72 @@ mod tests {
         assert_eq!(best.pane_index, 2);
         assert_eq!(best.control_path, WorkTargetControlPath::TmuxQuery);
         assert_eq!(best.suggested_tool, "tmux_list_targets");
+    }
+
+    #[test]
+    fn resolve_work_target_recognizes_tmux_like_screen_without_native_control() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut tmux_like = test_pane(2, "haswell ❐ 0 ● 4 zsh");
+        tmux_like.remote_workspace = Some(RemoteWorkspaceAnchor {
+            host: "haswell".to_string(),
+            source: PaneEvidenceSource::ActionHistory,
+            confidence: PaneConfidence::Advisory,
+            note: "managed".to_string(),
+        });
+        tmux_like.screen_hints = vec![crate::context::PaneObservationHint {
+            kind: crate::context::PaneObservationHintKind::TmuxLikeScreen,
+            confidence: PaneConfidence::Advisory,
+            detail: "tmux-like".to_string(),
+        }];
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![tmux_like],
+            WorkTargetIntent::TmuxWorkspace,
+            None,
+            None,
+            None,
+            None,
+            None,
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.pane_index, 2);
+        assert_eq!(best.suggested_tool, "read_pane");
+    }
+
+    #[test]
+    fn resolve_work_target_does_not_reuse_disconnected_remote_workspace() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut disconnected = test_pane(2, "disconnected");
+        disconnected.remote_workspace = Some(RemoteWorkspaceAnchor {
+            host: "haswell".to_string(),
+            source: PaneEvidenceSource::ActionHistory,
+            confidence: PaneConfidence::Advisory,
+            note: "managed".to_string(),
+        });
+        disconnected.screen_hints = vec![crate::context::PaneObservationHint {
+            kind: crate::context::PaneObservationHintKind::SshConnectionClosed,
+            confidence: PaneConfidence::Advisory,
+            detail: "closed".to_string(),
+        }];
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![disconnected],
+            WorkTargetIntent::RemoteShell,
+            None,
+            None,
+            Some("haswell".to_string()),
+            None,
+            None,
+            8,
+        )
+        .expect("resolve");
+
+        assert!(result.best_match.is_none());
     }
 
     #[test]

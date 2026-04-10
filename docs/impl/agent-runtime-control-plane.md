@@ -64,6 +64,8 @@ What it solves:
 - recent con actions stay available as causal evidence so the agent can understand how a pane was reached without treating history as present-tense truth
 - when the current foreground target is unproven, control falls back to `unknown` while `last_verified_shell_stack` remains available as historical orientation
 - con-managed SSH continuity is now a first-class middle layer for remote shell work: if con created or recently drove an SSH pane, and the current screen still looks prompt-like without tmux/TUI contradictions, that pane stays reusable for follow-up host work even when fresh shell integration is absent
+- that continuity now has explicit stop conditions too: if the current screen shows a closed SSH connection, or if the pane only looks tmux-like rather than plain-shell-like, con keeps the host history for orientation but stops treating that pane as a reusable plain remote shell target
+- tmux-like titles and screens now live in the observation tier, not the fact tier. They can influence summaries and target suggestions, but they do not create tmux-native control by themselves
 
 con now also ships the first true protocol attachment beyond raw pane observation:
 

@@ -57,6 +57,8 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - con now summarizes the whole tab as typed workspaces. The agent can distinguish a ready remote shell, a tmux workspace, a disconnected SSH pane, or a pane that still needs inspection before it acts.
 - Multi-host remote work now has a higher-level `remote_exec` path. The agent can reuse or create SSH workspaces for multiple hosts and run the same command across them in parallel without manually stitching pane creation and batch execution together.
 - Current-screen SSH state is modeled more cleanly too. Login banners and closed-SSH screens are now captured as observations, which helps the agent tell the difference between a live remote shell and a pane whose remote session already ended.
+- tmux-like screens are now captured as observations too. con can describe a pane as looking like tmux and route tmux-oriented questions toward that pane without pretending it already has native tmux control there.
+- SSH workspace reuse is stricter now. A pane that visibly shows a closed SSH connection or a tmux-like screen is no longer silently reused as a plain remote shell target on follow-up turns.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.
@@ -88,6 +90,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Clipboard integration with Cmd+C / Cmd+V, including bracketed paste mode for safe pasting into editors
 - Cmd+K now clears the current Ghostty screen and scrollback using Ghostty's native action path
 - Fixed a Ghostty theme sync regression where the Settings panel could update con's chrome but leave the terminal on an old palette after a later runtime config update
+- Fixed a shutdown crash in the workspace mouse/resize path when the active tab index outlived the tab list during window teardown
 - Tab management — Cmd+T to open, Cmd+W to close, Cmd+1–9 to switch, Cmd+Shift+[/] to cycle
 - Session restore — your tabs, layout, and panel state are preserved when you relaunch
 - Full compatibility with terminal applications like vim, htop, and tmux (alternate screen, application cursor keys, DEC private modes, Kitty keyboard protocol)
