@@ -28,7 +28,7 @@ Current focus:
 
 - socket identity
 - tab discovery
-- pane discovery
+- pane discovery, including live surface readiness
 - visible shell execution
 - optional live in-tab `agent ask`
 

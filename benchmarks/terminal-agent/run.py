@@ -139,10 +139,14 @@ class BenchmarkContext:
         panes = self.panes_list(tab_index)
         for pane in panes.get("panes", []):
             capabilities = pane.get("control_capabilities", [])
-            if "exec_visible_shell" in capabilities and pane.get("is_alive"):
+            if (
+                "exec_visible_shell" in capabilities
+                and pane.get("is_alive")
+                and pane.get("surface_ready", False)
+            ):
                 return int(pane["pane_id"]), int(pane["index"]), pane
         raise BenchError(
-            f"tab {tab_index} does not expose a live pane with exec_visible_shell"
+            f"tab {tab_index} does not expose a live, surface-ready pane with exec_visible_shell"
         )
 
     def wait_for_pane_capability(
@@ -328,6 +332,15 @@ def case_panes_list(ctx: BenchmarkContext) -> tuple[str, dict[str, Any]]:
     alive = [pane for pane in listed if pane.get("is_alive")]
     if not alive:
         raise BenchError(f"tab {tab_index} returned no live panes")
+    unready = [
+        pane["pane_id"]
+        for pane in alive
+        if pane.get("surface_ready", False) is not True
+    ]
+    if unready:
+        raise BenchError(
+            f"tab {tab_index} returned live panes without initialized surfaces: {unready}"
+        )
     focused = [pane for pane in listed if pane.get("is_focused")]
     if len(focused) != 1:
         raise BenchError(f"expected one focused pane, found {len(focused)}")
@@ -337,6 +350,7 @@ def case_panes_list(ctx: BenchmarkContext) -> tuple[str, dict[str, Any]]:
             "tab_index": tab_index,
             "pane_count": len(listed),
             "focused_pane_id": focused[0]["pane_id"],
+            "live_surface_ready_panes": [pane["pane_id"] for pane in alive],
         },
     )
 
@@ -365,6 +379,8 @@ def case_visible_shell_exec(ctx: BenchmarkContext) -> tuple[str, dict[str, Any]]
             "tab_index": tab_index,
             "pane_id": pane_id,
             "pane_index": pane_index,
+            "surface_ready_before": pane.get("surface_ready"),
+            "surface_ready_after": fresh.get("surface_ready"),
             "front_state_before": pane.get("front_state"),
             "front_state_after": fresh.get("front_state"),
             "wait_status": wait_result.get("status"),

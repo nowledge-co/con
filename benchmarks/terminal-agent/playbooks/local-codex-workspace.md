@@ -19,6 +19,7 @@ Verify that Con can prepare and reuse a local Codex CLI workspace on this machin
 
 - The agent routes the work to a stable pane or tmux target instead of spawning duplicates every turn
 - It uses the local project path you requested
+- A newly created local pane reports `surface_ready=true` and `is_alive=true` instead of returning a placeholder pane
 - The follow-up turn reuses the existing Codex target
 - It does not confuse the Codex target with the outer shell pane once the target is prepared
 
@@ -26,6 +27,7 @@ Verify that Con can prepare and reuse a local Codex CLI workspace on this machin
 
 - A fresh pane or target is created on every follow-up
 - The project path is ignored or silently changed
+- Pane creation claims success but the resulting pane is not actually initialized
 - Raw shell execution is sent into the wrong foreground target
 - The agent cannot explain which pane or target it is reusing
 

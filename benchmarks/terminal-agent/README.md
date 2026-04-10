@@ -68,7 +68,7 @@ Today the strict runner verifies:
 
 - socket identity and method inventory
 - tab discovery
-- pane discovery on the active tab
+- pane discovery on the active tab, including surface-ready live panes
 - visible shell execution and reuse of a proven shell pane
 - optional live built-in agent response
 
