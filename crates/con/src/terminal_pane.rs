@@ -188,6 +188,12 @@ impl TerminalPane {
             .unwrap_or(0)
     }
 
+    pub fn recover_shell_prompt_state(&self, cx: &App) {
+        if let Some(terminal) = self.entity.read(cx).terminal() {
+            terminal.recover_shell_prompt_state();
+        }
+    }
+
     pub fn observation_frame(&self, recent_output_lines: usize, cx: &App) -> PaneObservationFrame {
         let recent_output = self.content_lines(recent_output_lines, cx);
         let title = self.title(cx);

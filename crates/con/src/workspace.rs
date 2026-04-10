@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::*;
 use gpui_component::ActiveTheme;
+use serde_json::json;
 
 const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
@@ -31,6 +32,10 @@ use crate::ghostty_view::{
 use crate::{CloseTab, FocusInput, NewTab, Quit, SplitDown, SplitRight, ToggleAgentPanel};
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
+use con_core::control::{
+    AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
+    SystemIdentifyResult, TabInfo,
+};
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
 use con_core::session::Session;
 
@@ -81,6 +86,16 @@ pub struct ConWorkspace {
     ghostty_app: std::sync::Arc<con_ghostty::GhosttyApp>,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
+    /// Control-plane requests from the external `con-cli` socket bridge.
+    control_request_rx: crossbeam_channel::Receiver<ControlRequestEnvelope>,
+    /// Keeps the Unix socket alive for this workspace instance.
+    control_socket: Option<con_core::ControlSocketHandle>,
+    /// Pending external agent requests keyed by 0-based tab index.
+    pending_control_agent_requests: HashMap<usize, PendingControlAgentRequest>,
+    /// Window handle used to re-enter a window-aware context from deferred control work.
+    window_handle: AnyWindowHandle,
+    /// Weak self handle for deferred window callbacks.
+    workspace_handle: WeakEntity<ConWorkspace>,
 }
 
 #[derive(Clone)]
@@ -93,8 +108,15 @@ struct ResolvedPaneTarget {
 /// A deferred create-pane request waiting for a window-aware context.
 struct PendingCreatePane {
     command: Option<String>,
+    tab_idx: usize,
     location: con_agent::tools::PaneCreateLocation,
     response_tx: crossbeam_channel::Sender<con_agent::PaneResponse>,
+}
+
+struct PendingControlAgentRequest {
+    prompt: String,
+    auto_approve_tools: bool,
+    response_tx: tokio::sync::oneshot::Sender<ControlResult>,
 }
 
 // ── Theme conversion ──────────────────────────────────────────
@@ -189,6 +211,17 @@ impl ConWorkspace {
             );
             panic!("Fatal: agent harness initialization failed: {}", e);
         });
+        let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
+        let control_socket = match con_core::spawn_control_socket_server(
+            harness.runtime_handle(),
+            control_request_tx,
+        ) {
+            Ok(handle) => Some(handle),
+            Err(err) => {
+                log::error!("Failed to start con control socket: {}", err);
+                None
+            }
+        };
         let model_registry = ModelRegistry::new();
         if model_registry.needs_refresh() {
             let registry_for_fetch = model_registry.clone();
@@ -334,6 +367,11 @@ impl ConWorkspace {
                         // Agent events
                         while let Ok(event) = workspace.tabs[tab_idx].session.events().try_recv() {
                             got_event = true;
+                            let suppress_event =
+                                workspace.handle_pending_control_agent_event(tab_idx, &event);
+                            if suppress_event {
+                                continue;
+                            }
                             if is_active {
                                 workspace.handle_harness_event(event, cx);
                             } else {
@@ -359,6 +397,11 @@ impl ConWorkspace {
                             got_event = true;
                             workspace.handle_pane_request_for_tab(tab_idx, req, cx);
                         }
+                    }
+
+                    while let Ok(request) = workspace.control_request_rx.try_recv() {
+                        got_event = true;
+                        workspace.handle_control_request(request, cx);
                     }
                 })
                 .ok();
@@ -414,6 +457,11 @@ impl ConWorkspace {
             terminal_theme,
             ghostty_app,
             pending_create_pane_requests: Vec::new(),
+            control_request_rx,
+            control_socket,
+            pending_control_agent_requests: HashMap::new(),
+            window_handle: window.window_handle(),
+            workspace_handle: cx.weak_entity(),
         }
     }
 
@@ -429,6 +477,85 @@ impl ConWorkspace {
 
     fn active_terminal(&self) -> &TerminalPane {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
+    }
+
+    fn schedule_pending_create_pane_flush(&self, cx: &mut Context<Self>) {
+        let window_handle = self.window_handle;
+        let workspace_handle = self.workspace_handle.clone();
+        cx.defer(move |cx| {
+            let result = window_handle.update(cx, |_root, window, cx| {
+                if let Some(workspace) = workspace_handle.upgrade() {
+                    let _ = workspace.update(cx, |workspace, cx| {
+                        workspace.flush_pending_create_pane_requests(window, cx);
+                    });
+                }
+            });
+            if let Err(err) = result {
+                log::warn!(
+                    "[control] failed to flush deferred pane creation in a window-aware context: {err}"
+                );
+            }
+        });
+    }
+
+    fn flush_pending_create_pane_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending = std::mem::take(&mut self.pending_create_pane_requests);
+        if pending.is_empty() {
+            return;
+        }
+
+        for req in pending {
+            let terminal = self.create_terminal(None, window, cx);
+            let direction = match req.location {
+                con_agent::tools::PaneCreateLocation::Right => SplitDirection::Horizontal,
+                con_agent::tools::PaneCreateLocation::Down => SplitDirection::Vertical,
+            };
+            self.tabs[req.tab_idx]
+                .pane_tree
+                .split(direction, terminal.clone());
+            terminal.notify(cx);
+            let should_focus = req.tab_idx == self.active_tab;
+            if should_focus {
+                terminal.focus(window, cx);
+            }
+            let mounted_terminal = terminal.clone();
+            window.on_next_frame(move |window, cx| {
+                mounted_terminal.notify(cx);
+                if should_focus {
+                    mounted_terminal.focus(window, cx);
+                }
+            });
+
+            if let Some(cmd) = &req.command {
+                let cmd_with_newline = format!("{}\n", cmd);
+                terminal.write(cmd_with_newline.as_bytes(), cx);
+            }
+            self.record_runtime_event_for_terminal(
+                req.tab_idx,
+                &terminal,
+                con_agent::context::PaneRuntimeEvent::PaneCreated {
+                    startup_command: req.command.clone(),
+                },
+            );
+
+            let pane_tree = &self.tabs[req.tab_idx].pane_tree;
+            let pane_index = pane_tree
+                .all_terminals()
+                .iter()
+                .enumerate()
+                .find(|(_, pane)| pane.entity_id() == terminal.entity_id())
+                .map(|(idx, _)| idx + 1)
+                .unwrap_or_else(|| pane_tree.pane_count());
+            let pane_id = pane_tree
+                .pane_id_for_terminal(&terminal)
+                .unwrap_or(pane_index);
+            let _ = req.response_tx.send(con_agent::PaneResponse::PaneCreated {
+                pane_index,
+                pane_id,
+            });
+        }
+
+        cx.notify();
     }
 
     fn reconcile_runtime_trackers_for_tab(&self, tab_idx: usize) {
@@ -643,11 +770,11 @@ impl ConWorkspace {
             .remote_host
     }
 
-    /// Build agent context from the focused pane, including summaries of other panes.
-    fn build_agent_context(&self, cx: &App) -> con_agent::TerminalContext {
-        self.reconcile_runtime_trackers_for_tab(self.active_tab);
-        let pane_tree = &self.tabs[self.active_tab].pane_tree;
-        let focused = self.active_terminal();
+    /// Build agent context from a tab's focused pane, including summaries of peer panes.
+    fn build_agent_context_for_tab(&self, tab_idx: usize, cx: &App) -> con_agent::TerminalContext {
+        self.reconcile_runtime_trackers_for_tab(tab_idx);
+        let pane_tree = &self.tabs[tab_idx].pane_tree;
+        let focused = pane_tree.focused_terminal();
 
         // Determine focused pane's 1-based index and hostname
         let all_terminals = pane_tree.all_terminals();
@@ -659,7 +786,7 @@ impl ConWorkspace {
             .map(|(i, _)| i + 1)
             .unwrap_or(1);
         let (focused_observation, focused_runtime) =
-            self.observe_terminal_runtime_for_tab(self.active_tab, focused, 50, cx);
+            self.observe_terminal_runtime_for_tab(tab_idx, focused, 50, cx);
 
         let mut other_pane_summaries = Vec::new();
         if pane_tree.pane_count() > 1 {
@@ -669,7 +796,7 @@ impl ConWorkspace {
                         continue;
                     }
                     let (observation, runtime) =
-                        self.observe_terminal_runtime_for_tab(self.active_tab, terminal, 10, cx);
+                        self.observe_terminal_runtime_for_tab(tab_idx, terminal, 10, cx);
                     let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                     let remote_workspace =
                         con_agent::context::remote_workspace_anchor(&runtime, &observation);
@@ -712,6 +839,551 @@ impl ConWorkspace {
             &focused_runtime,
             other_pane_summaries,
         )
+    }
+
+    /// Build agent context from the active tab.
+    fn build_agent_context(&self, cx: &App) -> con_agent::TerminalContext {
+        self.build_agent_context_for_tab(self.active_tab, cx)
+    }
+
+    fn resolve_control_tab_index(&self, tab_index: Option<usize>) -> Result<usize, ControlError> {
+        match tab_index {
+            Some(index) if index == 0 || index > self.tabs.len() => {
+                Err(ControlError::invalid_params(format!(
+                    "Tab index {} is out of range. Valid tabs are 1..={}.",
+                    index,
+                    self.tabs.len()
+                )))
+            }
+            Some(index) => Ok(index - 1),
+            None => Ok(self.active_tab),
+        }
+    }
+
+    fn pane_selector_from_target(target: con_core::PaneTarget) -> con_agent::tools::PaneSelector {
+        con_agent::tools::PaneSelector::new(target.pane_index, target.pane_id)
+    }
+
+    fn send_control_result(
+        response_tx: tokio::sync::oneshot::Sender<ControlResult>,
+        result: ControlResult,
+    ) {
+        let _ = response_tx.send(result);
+    }
+
+    fn pane_response_to_control_result(
+        tab_idx: usize,
+        response: con_agent::PaneResponse,
+    ) -> ControlResult {
+        match response {
+            con_agent::PaneResponse::PaneList(panes) => Ok(json!({
+                "tab_index": tab_idx + 1,
+                "panes": panes,
+            })),
+            con_agent::PaneResponse::Content(content) => Ok(json!({ "content": content })),
+            con_agent::PaneResponse::KeysSent => Ok(json!({ "status": "sent" })),
+            con_agent::PaneResponse::TmuxInfo(tmux) => Ok(json!({
+                "tab_index": tab_idx + 1,
+                "tmux": tmux,
+            })),
+            con_agent::PaneResponse::TmuxList(snapshot) => Ok(json!({
+                "tab_index": tab_idx + 1,
+                "snapshot": snapshot,
+            })),
+            con_agent::PaneResponse::TmuxCapture(capture) => Ok(json!({
+                "tab_index": tab_idx + 1,
+                "capture": capture,
+            })),
+            con_agent::PaneResponse::TmuxExec(exec) => Ok(json!({
+                "tab_index": tab_idx + 1,
+                "exec": exec,
+            })),
+            con_agent::PaneResponse::ShellProbe(shell) => Ok(json!({
+                "tab_index": tab_idx + 1,
+                "shell": shell,
+            })),
+            con_agent::PaneResponse::SearchResults(matches) => Ok(json!({
+                "matches": matches,
+            })),
+            con_agent::PaneResponse::BusyStatus {
+                is_busy,
+                has_shell_integration,
+            } => Ok(json!({
+                "is_busy": is_busy,
+                "has_shell_integration": has_shell_integration,
+            })),
+            con_agent::PaneResponse::WaitComplete { status, output } => Ok(json!({
+                "status": status,
+                "output": output,
+            })),
+            con_agent::PaneResponse::PaneCreated {
+                pane_index,
+                pane_id,
+            } => Ok(json!({
+                "tab_index": tab_idx + 1,
+                "pane_index": pane_index,
+                "pane_id": pane_id,
+            })),
+            con_agent::PaneResponse::Error(err) => Err(ControlError::invalid_params(err)),
+        }
+    }
+
+    fn terminal_exec_response_to_control_result(response: TerminalExecResponse) -> ControlResult {
+        Ok(json!({
+            "output": response.output,
+            "exit_code": response.exit_code,
+        }))
+    }
+
+    fn spawn_control_pane_query(
+        &mut self,
+        tab_idx: usize,
+        query: con_agent::PaneQuery,
+        response_tx: tokio::sync::oneshot::Sender<ControlResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let (pane_response_tx, pane_response_rx) = crossbeam_channel::bounded(1);
+        self.handle_pane_request_for_tab(
+            tab_idx,
+            con_agent::PaneRequest {
+                query,
+                response_tx: pane_response_tx,
+            },
+            cx,
+        );
+
+        self.harness.spawn_detached(async move {
+            let result = match tokio::task::spawn_blocking(move || {
+                pane_response_rx.recv_timeout(std::time::Duration::from_secs(240))
+            })
+            .await
+            {
+                Ok(Ok(response)) => Self::pane_response_to_control_result(tab_idx, response),
+                Ok(Err(_)) => Err(ControlError::internal(
+                    "Timed out waiting for the pane operation to finish",
+                )),
+                Err(err) => Err(ControlError::internal(format!(
+                    "Pane operation join failed: {err}"
+                ))),
+            };
+            Self::send_control_result(response_tx, result);
+        });
+    }
+
+    fn spawn_control_terminal_exec(
+        &mut self,
+        tab_idx: usize,
+        command: String,
+        target: con_core::PaneTarget,
+        response_tx: tokio::sync::oneshot::Sender<ControlResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let (exec_response_tx, exec_response_rx) = crossbeam_channel::bounded(1);
+        self.handle_terminal_exec_request_for_tab(
+            tab_idx,
+            TerminalExecRequest {
+                command,
+                working_dir: None,
+                target: Self::pane_selector_from_target(target),
+                response_tx: exec_response_tx,
+            },
+            cx,
+        );
+
+        self.harness.spawn_detached(async move {
+            let result = match tokio::task::spawn_blocking(move || {
+                exec_response_rx.recv_timeout(std::time::Duration::from_secs(240))
+            })
+            .await
+            {
+                Ok(Ok(response)) => Self::terminal_exec_response_to_control_result(response),
+                Ok(Err(_)) => Err(ControlError::internal(
+                    "Timed out waiting for the visible shell command to finish",
+                )),
+                Err(err) => Err(ControlError::internal(format!(
+                    "Visible shell join failed: {err}"
+                ))),
+            };
+            Self::send_control_result(response_tx, result);
+        });
+    }
+
+    fn handle_pending_control_agent_event(&mut self, tab_idx: usize, event: &HarnessEvent) -> bool {
+        let auto_approve = self
+            .pending_control_agent_requests
+            .get(&tab_idx)
+            .map(|pending| pending.auto_approve_tools)
+            .unwrap_or(false);
+
+        if auto_approve {
+            if let HarnessEvent::ToolApprovalNeeded {
+                call_id,
+                approval_tx,
+                ..
+            } = event
+            {
+                let _ = approval_tx.send(con_agent::ToolApprovalDecision {
+                    call_id: call_id.clone(),
+                    allowed: true,
+                    reason: Some("auto-approved by con-cli".to_string()),
+                });
+                return true;
+            }
+        }
+
+        match event {
+            HarnessEvent::ResponseComplete(message) => {
+                if let Some(pending) = self.pending_control_agent_requests.remove(&tab_idx) {
+                    let result = serde_json::to_value(AgentAskResult {
+                        tab_index: tab_idx + 1,
+                        conversation_id: self.tabs[tab_idx].session.conversation_id(),
+                        prompt: pending.prompt,
+                        message: message.clone(),
+                    })
+                    .map_err(|err| {
+                        ControlError::internal(format!(
+                            "Failed to serialize agent response for control output: {err}"
+                        ))
+                    });
+                    Self::send_control_result(pending.response_tx, result);
+                }
+            }
+            HarnessEvent::Error(err) => {
+                if err.starts_with("Retrying (") {
+                    return false;
+                }
+                if let Some(pending) = self.pending_control_agent_requests.remove(&tab_idx) {
+                    Self::send_control_result(
+                        pending.response_tx,
+                        Err(ControlError::internal(err.clone())),
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        false
+    }
+
+    fn handle_control_request(&mut self, request: ControlRequestEnvelope, cx: &mut Context<Self>) {
+        let ControlRequestEnvelope {
+            command,
+            response_tx,
+        } = request;
+
+        match command {
+            ControlCommand::SystemIdentify => {
+                let result = serde_json::to_value(SystemIdentifyResult {
+                    app: "con".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    socket_path: self
+                        .control_socket
+                        .as_ref()
+                        .map(|handle| handle.path().display().to_string())
+                        .unwrap_or_else(|| con_core::control_socket_path().display().to_string()),
+                    active_tab_index: self.active_tab + 1,
+                    tab_count: self.tabs.len(),
+                    methods: con_core::control_methods(),
+                })
+                .map_err(|err| ControlError::internal(err.to_string()));
+                Self::send_control_result(response_tx, result);
+            }
+            ControlCommand::SystemCapabilities => {
+                Self::send_control_result(
+                    response_tx,
+                    Ok(json!({ "methods": con_core::control_methods() })),
+                );
+            }
+            ControlCommand::TabsList => {
+                let tabs = self
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, tab)| TabInfo {
+                        index: idx + 1,
+                        title: tab
+                            .pane_tree
+                            .focused_terminal()
+                            .title(cx)
+                            .unwrap_or_else(|| tab.title.clone()),
+                        is_active: idx == self.active_tab,
+                        pane_count: tab.pane_tree.pane_count(),
+                        focused_pane_id: tab.pane_tree.focused_pane_id(),
+                        needs_attention: tab.needs_attention,
+                        conversation_id: tab.session.conversation_id(),
+                    })
+                    .collect::<Vec<_>>();
+                Self::send_control_result(
+                    response_tx,
+                    Ok(json!({
+                        "active_tab_index": self.active_tab + 1,
+                        "tabs": tabs,
+                    })),
+                );
+            }
+            ControlCommand::PanesList { tab_index } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => {
+                        self.spawn_control_pane_query(
+                            tab_idx,
+                            con_agent::PaneQuery::List,
+                            response_tx,
+                            cx,
+                        );
+                    }
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
+            ControlCommand::PanesRead {
+                tab_index,
+                target,
+                lines,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => self.spawn_control_pane_query(
+                    tab_idx,
+                    con_agent::PaneQuery::ReadContent {
+                        target: Self::pane_selector_from_target(target),
+                        lines,
+                    },
+                    response_tx,
+                    cx,
+                ),
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::PanesExec {
+                tab_index,
+                target,
+                command,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => {
+                    self.spawn_control_terminal_exec(tab_idx, command, target, response_tx, cx)
+                }
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::PanesSendKeys {
+                tab_index,
+                target,
+                keys,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => self.spawn_control_pane_query(
+                    tab_idx,
+                    con_agent::PaneQuery::SendKeys {
+                        target: Self::pane_selector_from_target(target),
+                        keys,
+                    },
+                    response_tx,
+                    cx,
+                ),
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::PanesCreate {
+                tab_index,
+                location,
+                command,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => self.spawn_control_pane_query(
+                    tab_idx,
+                    con_agent::PaneQuery::CreatePane { command, location },
+                    response_tx,
+                    cx,
+                ),
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::PanesWait {
+                tab_index,
+                target,
+                timeout_secs,
+                pattern,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => self.spawn_control_pane_query(
+                    tab_idx,
+                    con_agent::PaneQuery::WaitFor {
+                        target: Self::pane_selector_from_target(target),
+                        timeout_secs,
+                        pattern,
+                    },
+                    response_tx,
+                    cx,
+                ),
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::PanesProbeShell { tab_index, target } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => self.spawn_control_pane_query(
+                        tab_idx,
+                        con_agent::PaneQuery::ProbeShellContext {
+                            target: Self::pane_selector_from_target(target),
+                        },
+                        response_tx,
+                        cx,
+                    ),
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
+            ControlCommand::TmuxInspect { tab_index, target } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => self.spawn_control_pane_query(
+                        tab_idx,
+                        con_agent::PaneQuery::InspectTmux {
+                            target: Self::pane_selector_from_target(target),
+                        },
+                        response_tx,
+                        cx,
+                    ),
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
+            ControlCommand::TmuxList { tab_index, target } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => self.spawn_control_pane_query(
+                        tab_idx,
+                        con_agent::PaneQuery::TmuxList {
+                            pane: Self::pane_selector_from_target(target),
+                        },
+                        response_tx,
+                        cx,
+                    ),
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
+            ControlCommand::TmuxCapture {
+                tab_index,
+                pane,
+                target,
+                lines,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => self.spawn_control_pane_query(
+                    tab_idx,
+                    con_agent::PaneQuery::TmuxCapture {
+                        pane: Self::pane_selector_from_target(pane),
+                        target,
+                        lines,
+                    },
+                    response_tx,
+                    cx,
+                ),
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::TmuxSendKeys {
+                tab_index,
+                pane,
+                target,
+                literal_text,
+                key_names,
+                append_enter,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => self.spawn_control_pane_query(
+                    tab_idx,
+                    con_agent::PaneQuery::TmuxSendKeys {
+                        pane: Self::pane_selector_from_target(pane),
+                        target,
+                        literal_text,
+                        key_names,
+                        append_enter,
+                    },
+                    response_tx,
+                    cx,
+                ),
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::TmuxRun {
+                tab_index,
+                pane,
+                target,
+                location,
+                command,
+                window_name,
+                cwd,
+                detached,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => self.spawn_control_pane_query(
+                    tab_idx,
+                    con_agent::PaneQuery::TmuxRunCommand {
+                        pane: Self::pane_selector_from_target(pane),
+                        target,
+                        location,
+                        command,
+                        window_name,
+                        cwd,
+                        detached,
+                    },
+                    response_tx,
+                    cx,
+                ),
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::AgentNewConversation { tab_index } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => {
+                        self.tabs[tab_idx].session.new_conversation();
+                        if tab_idx == self.active_tab {
+                            self.agent_panel.update(cx, |panel, cx| {
+                                panel.clear_messages(cx);
+                            });
+                        } else {
+                            self.tabs[tab_idx].panel_state.clear();
+                        }
+                        self.save_session(cx);
+                        Self::send_control_result(
+                            response_tx,
+                            Ok(json!({
+                                "tab_index": tab_idx + 1,
+                                "conversation_id": self.tabs[tab_idx].session.conversation_id(),
+                            })),
+                        );
+                    }
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
+            ControlCommand::AgentAsk {
+                tab_index,
+                prompt,
+                auto_approve_tools,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => {
+                    if prompt.trim().is_empty() {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(
+                                "agent.ask requires a non-empty prompt",
+                            )),
+                        );
+                        return;
+                    }
+                    if self.pending_control_agent_requests.contains_key(&tab_idx) {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(format!(
+                                "Tab {} already has a pending con-cli agent request",
+                                tab_idx + 1
+                            ))),
+                        );
+                        return;
+                    }
+
+                    if tab_idx == self.active_tab {
+                        self.agent_panel.update(cx, |panel, cx| {
+                            panel.add_message("user", &prompt, cx);
+                        });
+                    } else {
+                        self.tabs[tab_idx].panel_state.add_message("user", &prompt);
+                    }
+
+                    let context = self.build_agent_context_for_tab(tab_idx, cx);
+                    let session = &self.tabs[tab_idx].session;
+                    self.pending_control_agent_requests.insert(
+                        tab_idx,
+                        PendingControlAgentRequest {
+                            prompt: prompt.clone(),
+                            auto_approve_tools,
+                            response_tx,
+                        },
+                    );
+                    self.harness.send_message(session, prompt, context);
+                }
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+        }
     }
 
     fn panel_state_from_conversation(&self, conv: &Conversation) -> PanelState {
@@ -1439,25 +2111,94 @@ impl ConWorkspace {
         let fallback_response_tx = req.response_tx;
         let pane_for_fallback = pane.clone();
         cx.spawn(async move |_this, cx| {
+            enum VisibleExecPoll {
+                Finished {
+                    output: String,
+                    exit_code: Option<i32>,
+                },
+                Observe {
+                    output: String,
+                    prompt_like: bool,
+                },
+            }
+
+            const PROMPT_STABLE_POLLS: u32 = 2;
+            let mut last_prompt_snapshot = String::new();
+            let mut stable_prompt_polls = 0u32;
+
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(500))
                 .await;
 
             for _ in 0..29 {
-                let finished = _this
-                    .update(cx, |_ws, cx| pane_for_fallback.take_command_finished(cx))
-                    .ok()
-                    .flatten();
+                let poll = _this
+                    .update(cx, |_ws, cx| {
+                        if let Some((exit_code, _duration)) =
+                            pane_for_fallback.take_command_finished(cx)
+                        {
+                            return VisibleExecPoll::Finished {
+                                output: pane_for_fallback.recent_lines(50, cx).join("\n"),
+                                exit_code,
+                            };
+                        }
 
-                if let Some((exit_code, _duration)) = finished {
-                    let output = _this
-                        .update(cx, |_ws, cx| {
-                            pane_for_fallback.recent_lines(50, cx).join("\n")
-                        })
-                        .unwrap_or_default();
-                    let _ =
-                        fallback_response_tx.try_send(TerminalExecResponse { output, exit_code });
-                    return;
+                        let observation = pane_for_fallback.observation_frame(50, cx);
+                        let output = observation
+                            .recent_output
+                            .iter()
+                            .map(|line| line.trim_end())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let prompt_like = observation.screen_hints.iter().any(|hint| {
+                            matches!(
+                                hint.kind,
+                                con_agent::context::PaneObservationHintKind::PromptLikeInput
+                            )
+                        });
+
+                        VisibleExecPoll::Observe {
+                            output,
+                            prompt_like,
+                        }
+                    })
+                    .ok();
+
+                match poll {
+                    Some(VisibleExecPoll::Finished { output, exit_code }) => {
+                        let _ = fallback_response_tx
+                            .try_send(TerminalExecResponse { output, exit_code });
+                        return;
+                    }
+                    Some(VisibleExecPoll::Observe {
+                        output,
+                        prompt_like,
+                    }) if prompt_like => {
+                        if !output.is_empty() && output == last_prompt_snapshot {
+                            stable_prompt_polls += 1;
+                        } else {
+                            last_prompt_snapshot = output;
+                            stable_prompt_polls = 0;
+                        }
+
+                        if stable_prompt_polls >= PROMPT_STABLE_POLLS {
+                            let output = _this
+                                .update(cx, |_ws, cx| {
+                                    pane_for_fallback.recover_shell_prompt_state(cx);
+                                    pane_for_fallback.recent_lines(50, cx).join("\n")
+                                })
+                                .unwrap_or_else(|_| last_prompt_snapshot.clone());
+                            let _ = fallback_response_tx.try_send(TerminalExecResponse {
+                                output,
+                                exit_code: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(VisibleExecPoll::Observe { output, .. }) => {
+                        last_prompt_snapshot = output;
+                        stable_prompt_polls = 0;
+                    }
+                    None => return,
                 }
 
                 cx.background_executor()
@@ -2183,14 +2924,15 @@ impl ConWorkspace {
                 }
             }
             PaneQuery::CreatePane { command, location } => {
-                // Creating a terminal requires a Window, which is not available
-                // in the poll loop. Defer to the next render cycle.
+                // Creating a terminal requires a Window, so defer into an explicit
+                // window-aware callback instead of depending on a later render.
                 self.pending_create_pane_requests.push(PendingCreatePane {
                     command,
+                    tab_idx,
                     location,
                     response_tx: req.response_tx,
                 });
-                cx.notify();
+                self.schedule_pending_create_pane_flush(cx);
                 return;
             }
         };
@@ -2473,7 +3215,13 @@ impl ConWorkspace {
             placement,
             terminal.clone(),
         );
+        terminal.notify(cx);
         terminal.focus(window, cx);
+        let mounted_terminal = terminal.clone();
+        window.on_next_frame(move |window, cx| {
+            mounted_terminal.notify(cx);
+            mounted_terminal.focus(window, cx);
+        });
         cx.notify();
     }
 
@@ -2686,7 +3434,13 @@ impl ConWorkspace {
             placement,
             terminal.clone(),
         );
+        terminal.notify(cx);
         terminal.focus(window, cx);
+        let mounted_terminal = terminal.clone();
+        window.on_next_frame(move |window, cx| {
+            mounted_terminal.notify(cx);
+            mounted_terminal.focus(window, cx);
+        });
         self.active_tab = tab_idx;
         self.record_runtime_event_for_terminal(
             tab_idx,
@@ -2702,51 +3456,7 @@ impl ConWorkspace {
 
 impl Render for ConWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Process any deferred create-pane requests that need window access.
-        // Creates a split within the agent's tab so the new pane is addressable
-        // by index alongside existing panes (not isolated in a separate tab).
-        let pending = std::mem::take(&mut self.pending_create_pane_requests);
-        for req in pending {
-            let terminal = self.create_terminal(None, window, cx);
-            let direction = match req.location {
-                con_agent::tools::PaneCreateLocation::Right => SplitDirection::Horizontal,
-                con_agent::tools::PaneCreateLocation::Down => SplitDirection::Vertical,
-            };
-            self.tabs[self.active_tab]
-                .pane_tree
-                .split(direction, terminal.clone());
-            terminal.focus(window, cx);
-
-            if let Some(cmd) = &req.command {
-                let cmd_with_newline = format!("{}\n", cmd);
-                terminal.write(cmd_with_newline.as_bytes(), cx);
-            }
-            self.record_runtime_event_for_terminal(
-                self.active_tab,
-                &terminal,
-                con_agent::context::PaneRuntimeEvent::PaneCreated {
-                    startup_command: req.command.clone(),
-                },
-            );
-
-            let pane_tree = &self.tabs[self.active_tab].pane_tree;
-            let pane_index = pane_tree
-                .all_terminals()
-                .iter()
-                .enumerate()
-                .find(|(_, pane)| pane.entity_id() == terminal.entity_id())
-                .map(|(idx, _)| idx + 1)
-                .unwrap_or_else(|| pane_tree.pane_count());
-            let pane_id = pane_tree
-                .pane_id_for_terminal(&terminal)
-                .unwrap_or(pane_index);
-            let _ = req.response_tx.send(con_agent::PaneResponse::PaneCreated {
-                pane_index,
-                pane_id,
-            });
-
-            cx.notify();
-        }
+        self.flush_pending_create_pane_requests(window, cx);
 
         let active_terminal = self.active_terminal().clone();
 

@@ -823,6 +823,14 @@ impl GhosttyTerminal {
         self.state.lock().last_command_finished_input_generation
     }
 
+    /// Recover shell-ready state when the prompt is visibly back but Ghostty did not
+    /// emit a matching COMMAND_FINISHED signal for the latest input generation.
+    pub fn recover_shell_prompt_state(&self) {
+        let mut state = self.state.lock();
+        state.is_busy = false;
+        state.last_command_finished_input_generation = state.input_generation;
+    }
+
     /// Whether the terminal has a text selection.
     pub fn has_selection(&self) -> bool {
         unsafe { ffi::ghostty_surface_has_selection(self.surface) }
