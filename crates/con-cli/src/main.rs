@@ -273,7 +273,7 @@ fn main() -> Result<()> {
                     ControlCommand::PanesExec {
                         tab_index: args.target.tab.tab,
                         target: args.target.target(),
-                        command: join_words(args.command),
+                        command: join_shell_words(args.command),
                     },
                 )?;
                 print_result(&result, cli.json, render_exec_result)?;
@@ -378,7 +378,7 @@ fn main() -> Result<()> {
                         pane: args.pane.target(),
                         target: args.target,
                         location: args.location.into(),
-                        command: join_words(args.command),
+                        command: join_shell_words(args.command),
                         window_name: args.window_name,
                         cwd: args.cwd,
                         detached: args.detached,
@@ -417,6 +417,25 @@ fn main() -> Result<()> {
 
 fn join_words(words: Vec<String>) -> String {
     words.join(" ")
+}
+
+fn join_shell_words(words: Vec<String>) -> String {
+    words.into_iter().map(shell_quote).collect::<Vec<_>>().join(" ")
+}
+
+fn shell_quote(word: String) -> String {
+    if word.is_empty() {
+        return "''".to_string();
+    }
+
+    if word
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || "@%_+=:,./-".contains(ch))
+    {
+        return word;
+    }
+
+    format!("'{}'", word.replace('\'', "'\"'\"'"))
 }
 
 fn send_command(socket_path: &Path, command: ControlCommand) -> Result<Value> {

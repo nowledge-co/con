@@ -522,6 +522,11 @@ def run_profile_setup(ctx: BenchmarkContext, profile: Profile, tab_index: int) -
     for command in profile.setup_visible_shell_commands:
         pane_id, pane_index, _pane = ctx.choose_exec_visible_shell(tab_index)
         exec_result = ctx.panes_exec(tab_index, pane_id, "/bin/sh", "-lc", command)
+        exit_code = exec_result.get("exit_code")
+        if exit_code not in (0, None):
+            raise BenchError(
+                f"setup shell command failed on pane {pane_index}: {command!r} (exit {exit_code})"
+            )
         fresh = ctx.wait_for_pane_capability(tab_index, pane_id, "exec_visible_shell")
         setup_actions.append(
             {
