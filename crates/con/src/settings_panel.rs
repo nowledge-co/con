@@ -1,21 +1,35 @@
-use con_agent::{AgentConfig, ProviderConfig, ProviderKind, SuggestionModelConfig};
+use con_agent::{
+    AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind, SuggestionModelConfig,
+    authorize_oauth_provider,
+};
 use con_core::Config;
 use gpui::*;
 
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::clipboard::Clipboard;
 use gpui_component::input::InputState;
 use gpui_component::kbd::Kbd;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::slider::{Slider, SliderEvent, SliderState};
 use gpui_component::switch::Switch;
-use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _, input::Input};
+use gpui_component::{ActiveTheme, Disableable, Icon, IndexPath, Sizable as _, input::Input};
 
 use crate::model_registry::ModelRegistry;
+use std::collections::HashMap;
 
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
 /// Emitted when the user selects a different terminal theme for live preview.
 pub struct ThemePreview(pub String);
+
+#[derive(Debug, Clone, Default)]
+struct ProviderOAuthState {
+    in_progress: bool,
+    connected: bool,
+    prompt: Option<OAuthDevicePrompt>,
+    status_message: Option<String>,
+    error_message: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SettingsSection {
@@ -62,6 +76,7 @@ pub struct SettingsPanel {
     selected_provider: ProviderKind,
     model_input: Entity<InputState>,
     model_select: Entity<SelectState<SearchableVec<String>>>,
+    endpoint_preset_select: Entity<SelectState<Vec<String>>>,
     api_key_input: Entity<InputState>,
     base_url_input: Entity<InputState>,
     max_tokens_input: Entity<InputState>,
@@ -70,6 +85,7 @@ pub struct SettingsPanel {
     auto_approve: bool,
 
     suggestion_model_input: Entity<InputState>,
+    oauth_states: HashMap<ProviderKind, ProviderOAuthState>,
 
     terminal_font_select: Entity<SelectState<SearchableVec<String>>>,
     ui_font_select: Entity<SelectState<SearchableVec<String>>>,
@@ -95,7 +111,15 @@ pub struct SettingsPanel {
 const ALL_PROVIDERS: &[ProviderKind] = &[
     ProviderKind::Anthropic,
     ProviderKind::OpenAI,
+    ProviderKind::ChatGPT,
+    ProviderKind::GitHubCopilot,
     ProviderKind::OpenAICompatible,
+    ProviderKind::MiniMax,
+    ProviderKind::MiniMaxAnthropic,
+    ProviderKind::Moonshot,
+    ProviderKind::MoonshotAnthropic,
+    ProviderKind::ZAI,
+    ProviderKind::ZAIAnthropic,
     ProviderKind::DeepSeek,
     ProviderKind::Groq,
     ProviderKind::Gemini,
@@ -121,6 +145,14 @@ const BACKGROUND_IMAGE_POSITIONS: &[&str] = &[
 ];
 
 const BACKGROUND_IMAGE_FITS: &[&str] = &["contain", "cover", "stretch", "none"];
+const ENDPOINT_DEFAULT_LABEL: &str = "Provider Default";
+const ENDPOINT_CUSTOM_LABEL: &str = "Custom";
+
+#[derive(Clone, Copy)]
+struct EndpointPreset {
+    label: &'static str,
+    base_url: &'static str,
+}
 
 impl SettingsPanel {
     fn clamp_terminal_opacity(value: f32) -> f32 {
@@ -185,6 +217,291 @@ impl SettingsPanel {
         preferred
     }
 
+    fn provider_api_key_placeholder(provider: &ProviderKind) -> &'static str {
+        match provider {
+            ProviderKind::ChatGPT | ProviderKind::GitHubCopilot => {
+                "Optional override for advanced setups"
+            }
+            _ => "sk-... or env var like ANTHROPIC_API_KEY",
+        }
+    }
+
+    fn provider_api_key_label(provider: &ProviderKind) -> &'static str {
+        match provider {
+            ProviderKind::ChatGPT => "Access Token Override",
+            ProviderKind::GitHubCopilot => "API Key Override",
+            _ => "API Key",
+        }
+    }
+
+    fn provider_api_key_hint(provider: &ProviderKind) -> &'static str {
+        match provider {
+            ProviderKind::ChatGPT => {
+                "Optional. Leave blank to use Con-managed ChatGPT device login."
+            }
+            ProviderKind::GitHubCopilot => {
+                "Optional. Leave blank to use Con-managed GitHub device login."
+            }
+            _ => "Paste a key or an env var name like ANTHROPIC_API_KEY",
+        }
+    }
+
+    fn provider_has_oauth(provider: &ProviderKind) -> bool {
+        matches!(
+            provider,
+            ProviderKind::ChatGPT | ProviderKind::GitHubCopilot
+        )
+    }
+
+    fn provider_oauth_label(provider: &ProviderKind) -> Option<&'static str> {
+        match provider {
+            ProviderKind::ChatGPT => Some("ChatGPT Subscription"),
+            ProviderKind::GitHubCopilot => Some("GitHub Copilot"),
+            _ => None,
+        }
+    }
+
+    fn provider_oauth_button_label(provider: &ProviderKind) -> Option<&'static str> {
+        match provider {
+            ProviderKind::ChatGPT => Some("Sign In with ChatGPT"),
+            ProviderKind::GitHubCopilot => Some("Sign In with GitHub"),
+            _ => None,
+        }
+    }
+
+    fn oauth_state(&self, provider: &ProviderKind) -> Option<&ProviderOAuthState> {
+        self.oauth_states.get(provider)
+    }
+
+    fn oauth_state_mut(&mut self, provider: &ProviderKind) -> &mut ProviderOAuthState {
+        self.oauth_states.entry(provider.clone()).or_default()
+    }
+
+    fn start_provider_oauth(
+        &mut self,
+        provider: ProviderKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let state = self.oauth_state_mut(&provider);
+        state.in_progress = true;
+        state.connected = false;
+        state.prompt = None;
+        state.status_message = Some("Waiting for device authorization…".to_string());
+        state.error_message = None;
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, window| {
+            let (prompt_tx, mut prompt_rx) =
+                tokio::sync::mpsc::unbounded_channel::<OAuthDevicePrompt>();
+            let auth_future = authorize_oauth_provider(provider.clone(), move |prompt| {
+                let _ = prompt_tx.send(prompt);
+            });
+            tokio::pin!(auth_future);
+
+            loop {
+                tokio::select! {
+                    maybe_prompt = prompt_rx.recv() => {
+                        let Some(prompt) = maybe_prompt else {
+                            continue;
+                        };
+                        let verification_uri = prompt.verification_uri.clone();
+                        let _ = window.update(|window, cx| {
+                            let _ = this.update(cx, |panel, cx| {
+                                let state = panel.oauth_state_mut(&provider);
+                                state.prompt = Some(prompt);
+                                state.status_message = Some("Finish sign-in in your browser. Con will continue automatically.".to_string());
+                                state.error_message = None;
+                                cx.open_url(&verification_uri);
+                                cx.notify();
+                            });
+                            let _ = window;
+                        });
+                    }
+                    result = &mut auth_future => {
+                        let _ = window.update(|window, cx| {
+                            let _ = this.update(cx, |panel, cx| {
+                                let state = panel.oauth_state_mut(&provider);
+                                state.in_progress = false;
+                                match result {
+                                    Ok(()) => {
+                                        state.connected = true;
+                                        state.prompt = None;
+                                        state.status_message = Some("Authorized and stored in Con’s auth cache.".to_string());
+                                        state.error_message = None;
+                                    }
+                                    Err(err) => {
+                                        state.connected = false;
+                                        state.error_message = Some(err.to_string());
+                                        state.status_message = None;
+                                    }
+                                }
+                                cx.notify();
+                            });
+                            let _ = window;
+                        });
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn provider_base_url_hint(provider: &ProviderKind) -> &'static str {
+        if Self::provider_endpoint_presets(provider).is_empty() {
+            "Leave blank for the default endpoint"
+        } else {
+            "Leave blank for the provider default, or choose a preset below"
+        }
+    }
+
+    fn provider_endpoint_presets(provider: &ProviderKind) -> &'static [EndpointPreset] {
+        match provider {
+            ProviderKind::MiniMax => &[
+                EndpointPreset {
+                    label: "Global",
+                    base_url: "https://api.minimax.io/v1",
+                },
+                EndpointPreset {
+                    label: "China",
+                    base_url: "https://api.minimaxi.com/v1",
+                },
+            ],
+            ProviderKind::MiniMaxAnthropic => &[
+                EndpointPreset {
+                    label: "Global",
+                    base_url: "https://api.minimax.io/anthropic",
+                },
+                EndpointPreset {
+                    label: "China",
+                    base_url: "https://api.minimaxi.com/anthropic",
+                },
+            ],
+            ProviderKind::Moonshot => &[
+                EndpointPreset {
+                    label: "Global",
+                    base_url: "https://api.moonshot.ai/v1",
+                },
+                EndpointPreset {
+                    label: "China",
+                    base_url: "https://api.moonshot.cn/v1",
+                },
+            ],
+            ProviderKind::MoonshotAnthropic => &[EndpointPreset {
+                label: "Global",
+                base_url: "https://api.moonshot.ai/anthropic",
+            }],
+            ProviderKind::ZAI => &[
+                EndpointPreset {
+                    label: "General",
+                    base_url: "https://api.z.ai/api/paas/v4",
+                },
+                EndpointPreset {
+                    label: "Coding",
+                    base_url: "https://api.z.ai/api/coding/paas/v4",
+                },
+            ],
+            ProviderKind::ZAIAnthropic => &[EndpointPreset {
+                label: "Anthropic",
+                base_url: "https://api.z.ai/api/anthropic",
+            }],
+            _ => &[],
+        }
+    }
+
+    fn endpoint_options(provider: &ProviderKind) -> Vec<String> {
+        let presets = Self::provider_endpoint_presets(provider);
+        if presets.is_empty() {
+            return vec![ENDPOINT_DEFAULT_LABEL.to_string()];
+        }
+
+        let mut options = Vec::with_capacity(presets.len() + 2);
+        options.push(ENDPOINT_DEFAULT_LABEL.to_string());
+        options.extend(presets.iter().map(|preset| preset.label.to_string()));
+        options.push(ENDPOINT_CUSTOM_LABEL.to_string());
+        options
+    }
+
+    fn endpoint_label_for_base_url(
+        provider: &ProviderKind,
+        base_url: Option<&str>,
+    ) -> &'static str {
+        let Some(base_url) = base_url.map(str::trim).filter(|value| !value.is_empty()) else {
+            return ENDPOINT_DEFAULT_LABEL;
+        };
+
+        for preset in Self::provider_endpoint_presets(provider) {
+            if preset.base_url == base_url {
+                return preset.label;
+            }
+        }
+
+        ENDPOINT_CUSTOM_LABEL
+    }
+
+    fn make_endpoint_preset_select(
+        provider: &ProviderKind,
+        current_base_url: &Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<Vec<String>>> {
+        let options = Self::endpoint_options(provider);
+        let selected_index = options
+            .iter()
+            .position(|item| {
+                item == Self::endpoint_label_for_base_url(provider, current_base_url.as_deref())
+            })
+            .map(IndexPath::new);
+        let entity = cx.new(|cx| SelectState::new(options, selected_index, window, cx));
+        cx.subscribe_in(
+            &entity,
+            window,
+            |this, _, ev: &SelectEvent<Vec<String>>, window, cx| {
+                let SelectEvent::Confirm(Some(value)) = ev else {
+                    return;
+                };
+
+                match value.as_str() {
+                    ENDPOINT_DEFAULT_LABEL => {
+                        this.base_url_input
+                            .update(cx, |input, cx| input.set_value("", window, cx));
+                    }
+                    ENDPOINT_CUSTOM_LABEL => {}
+                    _ => {
+                        if let Some(preset) =
+                            Self::provider_endpoint_presets(&this.selected_provider)
+                                .iter()
+                                .find(|preset| preset.label == value.as_str())
+                        {
+                            this.base_url_input.update(cx, |input, cx| {
+                                input.set_value(preset.base_url, window, cx);
+                            });
+                        }
+                    }
+                }
+
+                cx.notify();
+            },
+        )
+        .detach();
+        entity
+    }
+
+    fn sync_provider_placeholders(
+        &self,
+        provider: &ProviderKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.api_key_input.update(cx, |input, cx| {
+            input.set_placeholder(Self::provider_api_key_placeholder(provider), window, cx);
+        });
+        self.base_url_input.update(cx, |input, cx| {
+            input.set_placeholder("Default endpoint", window, cx);
+        });
+    }
+
     fn make_searchable_string_select(
         options: &[String],
         current_value: &str,
@@ -220,9 +537,15 @@ impl SettingsPanel {
         });
         let model_select =
             Self::make_model_select(&agent.provider, &pc.model, &registry, window, cx);
+        let endpoint_preset_select =
+            Self::make_endpoint_preset_select(&agent.provider, &pc.base_url, window, cx);
         let api_key_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
-            s.set_placeholder("sk-... or env var like ANTHROPIC_API_KEY", window, cx);
+            s.set_placeholder(
+                Self::provider_api_key_placeholder(&agent.provider),
+                window,
+                cx,
+            );
             let val = pc
                 .api_key
                 .clone()
@@ -435,6 +758,7 @@ impl SettingsPanel {
             selected_provider: config.agent.provider.clone(),
             model_input,
             model_select,
+            endpoint_preset_select,
             api_key_input,
             base_url_input,
             max_tokens_input,
@@ -442,6 +766,7 @@ impl SettingsPanel {
             temperature_input,
             auto_approve: config.agent.auto_approve_tools,
             suggestion_model_input,
+            oauth_states: HashMap::new(),
             terminal_font_select,
             ui_font_select,
             font_size_input,
@@ -467,6 +792,7 @@ impl SettingsPanel {
             self.selected_provider = agent.provider.clone();
             let pc = agent.providers.get_or_default(&self.selected_provider);
             self.load_provider_inputs(&pc, window, cx);
+            self.sync_provider_placeholders(&self.selected_provider, window, cx);
             self.max_turns_input.update(cx, |s, cx| {
                 s.set_value(&agent.max_turns.to_string(), window, cx)
             });
@@ -487,6 +813,8 @@ impl SettingsPanel {
             self.auto_approve = agent.auto_approve_tools;
             self.model_select =
                 Self::make_model_select(&agent.provider, &pc.model, &self.registry, window, cx);
+            self.endpoint_preset_select =
+                Self::make_endpoint_preset_select(&agent.provider, &pc.base_url, window, cx);
             self.terminal_font_select.update(cx, |select, cx| {
                 select.set_selected_value(&self.config.terminal.font_family, window, cx);
             });
@@ -569,6 +897,12 @@ impl SettingsPanel {
             .update(cx, |s, cx| s.set_value(&key_val, window, cx));
         self.base_url_input.update(cx, |s, cx| {
             s.set_value(&pc.base_url.clone().unwrap_or_default(), window, cx)
+        });
+        let endpoint_label =
+            Self::endpoint_label_for_base_url(&self.selected_provider, pc.base_url.as_deref())
+                .to_string();
+        self.endpoint_preset_select.update(cx, |select, cx| {
+            select.set_selected_value(&endpoint_label, window, cx);
         });
         self.max_tokens_input.update(cx, |s, cx| {
             s.set_value(
@@ -966,10 +1300,13 @@ impl SettingsPanel {
         // Load new provider's saved config (or defaults)
         let pc = self.config.agent.providers.get_or_default(&provider);
         self.load_provider_inputs(&pc, window, cx);
+        self.sync_provider_placeholders(&provider, window, cx);
 
         // Rebuild model select for new provider
         self.model_select =
             Self::make_model_select(&provider, &pc.model, &self.registry, window, cx);
+        self.endpoint_preset_select =
+            Self::make_endpoint_preset_select(&provider, &pc.base_url, window, cx);
         cx.notify();
     }
 
@@ -1024,145 +1361,143 @@ impl SettingsPanel {
             "Fonts, terminal defaults, and agent behavior.",
             theme,
         )
-            .child(
-                card(theme, card_opacity)
-                    .child(searchable_select_row(
-                        "Terminal Font",
-                        "Used for terminal text and terminal-style chrome across Con.",
-                        &terminal_font_select,
-                        theme,
-                    ))
-                    .child(row_separator(theme))
-                    .child(searchable_select_row(
-                        "UI Font",
-                        "Used for settings, agent prose, and the rest of the non-terminal interface.",
-                        &ui_font_select,
-                        theme,
-                    ))
-                    .child(row_separator(theme))
-                    .child(row_field("Font Size", &font_size_input))
-                    .child(row_separator(theme))
-                    .child(
+        .child(
+            card(theme, card_opacity)
+                .child(searchable_select_row(
+                    "Terminal Font",
+                    "Used for terminal text and terminal-style chrome across Con.",
+                    &terminal_font_select,
+                    theme,
+                ))
+                .child(row_separator(theme))
+                .child(searchable_select_row(
+                    "UI Font",
+                    "Used for settings, agent prose, and the rest of the non-terminal interface.",
+                    &ui_font_select,
+                    theme,
+                ))
+                .child(row_separator(theme))
+                .child(row_field("Font Size", &font_size_input))
+                .child(row_separator(theme))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px(px(16.0))
+                        .h(px(44.0))
+                        .child(div().text_sm().child("Scrollback"))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme.muted_foreground)
+                                .child("Managed by Ghostty"),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Agent", &theme))
+                .child(
+                    card(theme, card_opacity).child(
                         div()
                             .flex()
                             .items_center()
                             .justify_between()
                             .px(px(16.0))
                             .h(px(44.0))
-                            .child(div().text_sm().child("Scrollback"))
                             .child(
                                 div()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.muted_foreground)
-                                    .child("Managed by Ghostty"),
-                            ),
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .child(div().text_sm().child("Auto-approve tools"))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(theme.muted_foreground)
+                                            .child("Allow agent to run tools without confirmation"),
+                                    ),
+                            )
+                            .child(toggle),
                     ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(group_label("Agent", &theme))
-                    .child(
-                        card(theme, card_opacity).child(
+                ),
+        )
+        // Skills paths
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Skills", &theme))
+                .child(
+                    card(theme, card_opacity)
+                        // Project paths row
+                        .child(
                             div()
                                 .flex()
-                                .items_center()
-                                .justify_between()
+                                .flex_col()
+                                .gap(px(6.0))
                                 .px(px(16.0))
-                                .h(px(44.0))
+                                .py(px(12.0))
                                 .child(
                                     div()
                                         .flex()
-                                        .flex_col()
-                                        .gap(px(2.0))
-                                        .child(div().text_sm().child("Auto-approve tools"))
+                                        .items_center()
+                                        .justify_between()
+                                        .child(div().text_sm().child("Project paths"))
                                         .child(
                                             div()
-                                                .text_size(px(11.0))
-                                                .text_color(theme.muted_foreground)
-                                                .child(
-                                                    "Allow agent to run tools without confirmation",
-                                                ),
+                                                .text_size(px(10.0))
+                                                .text_color(theme.muted_foreground.opacity(0.5))
+                                                .child("relative to cwd"),
                                         ),
                                 )
-                                .child(toggle),
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .gap(px(4.0))
+                                        .children(project_chips)
+                                        .children(project_presets),
+                                ),
+                        )
+                        .child(row_separator(theme))
+                        // Global paths row
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.0))
+                                .px(px(16.0))
+                                .py(px(12.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(div().text_sm().child("Global paths"))
+                                        .child(
+                                            div()
+                                                .text_size(px(10.0))
+                                                .text_color(theme.muted_foreground.opacity(0.5))
+                                                .child("~ expanded to home"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .gap(px(4.0))
+                                        .children(global_chips)
+                                        .children(global_presets),
+                                ),
                         ),
-                    ),
-            )
-            // Skills paths
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(group_label("Skills", &theme))
-                    .child(
-                        card(theme, card_opacity)
-                            // Project paths row
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(6.0))
-                                    .px(px(16.0))
-                                    .py(px(12.0))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(div().text_sm().child("Project paths"))
-                                            .child(
-                                                div()
-                                                    .text_size(px(10.0))
-                                                    .text_color(theme.muted_foreground.opacity(0.5))
-                                                    .child("relative to cwd"),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_wrap()
-                                            .gap(px(4.0))
-                                            .children(project_chips)
-                                            .children(project_presets),
-                                    ),
-                            )
-                            .child(row_separator(theme))
-                            // Global paths row
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(6.0))
-                                    .px(px(16.0))
-                                    .py(px(12.0))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(div().text_sm().child("Global paths"))
-                                            .child(
-                                                div()
-                                                    .text_size(px(10.0))
-                                                    .text_color(theme.muted_foreground.opacity(0.5))
-                                                    .child("~ expanded to home"),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_wrap()
-                                            .gap(px(4.0))
-                                            .children(global_chips)
-                                            .children(global_presets),
-                                    ),
-                            ),
-                    ),
-            )
+                ),
+        )
     }
 
     /// Render removable path chips for a given path list.
@@ -1872,6 +2207,8 @@ impl SettingsPanel {
         let suggestion_model_input = self.suggestion_model_input.clone();
         let models = self.registry.models_for(&self.selected_provider);
         let model_select = self.model_select.clone();
+        let endpoint_preset_select = self.endpoint_preset_select.clone();
+        let endpoint_presets = Self::provider_endpoint_presets(&self.selected_provider);
 
         let mut provider_list = div().flex().flex_col();
         for provider in ALL_PROVIDERS.iter() {
@@ -1937,7 +2274,27 @@ impl SettingsPanel {
             );
         }
 
-        let has_key = !self.api_key_input.read(cx).value().is_empty();
+        let oauth_state = self.oauth_state(&self.selected_provider).cloned();
+        let has_key_override = !self.api_key_input.read(cx).value().is_empty();
+        let connection_ready = if Self::provider_has_oauth(&self.selected_provider) {
+            oauth_state
+                .as_ref()
+                .map(|state| state.connected || state.in_progress)
+                .unwrap_or(false)
+        } else {
+            has_key_override
+        };
+        let connection_label = if Self::provider_has_oauth(&self.selected_provider) {
+            match oauth_state.as_ref() {
+                Some(state) if state.in_progress => "Signing In",
+                Some(state) if state.connected => "Signed In",
+                _ => "OAuth",
+            }
+        } else if has_key_override {
+            "Ready"
+        } else {
+            "No key"
+        };
 
         // ── Model card — Select dropdown for known providers, text input for custom ──
         let model_card_content = card(theme, card_opacity).child(
@@ -1963,7 +2320,7 @@ impl SettingsPanel {
                                 .flex()
                                 .items_center()
                                 .gap(px(6.0))
-                                .child(div().size(px(6.0)).rounded_full().bg(if has_key {
+                                .child(div().size(px(6.0)).rounded_full().bg(if connection_ready {
                                     theme.success
                                 } else {
                                     theme.muted_foreground.opacity(0.2)
@@ -1972,7 +2329,7 @@ impl SettingsPanel {
                                     div()
                                         .text_size(px(10.0))
                                         .text_color(theme.muted_foreground.opacity(0.45))
-                                        .child(if has_key { "Ready" } else { "No key" }),
+                                        .child(connection_label),
                                 ),
                         ),
                 )
@@ -2009,18 +2366,159 @@ impl SettingsPanel {
                                 .font_weight(FontWeight::MEDIUM)
                                 .child("Connection"),
                         )
+                        .children(Self::provider_oauth_label(&self.selected_provider).map(|provider_name| {
+                            let oauth = oauth_state.clone().unwrap_or_default();
+                            let provider_for_click = self.selected_provider.clone();
+                            let prompt = oauth.prompt.clone();
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(10.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap(px(12.0))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(2.0))
+                                                .child(div().text_sm().child(format!("{provider_name} OAuth")))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.0))
+                                                        .text_color(theme.muted_foreground)
+                                                        .child("Use device login to authorize this subscription inside Con."),
+                                                ),
+                                        )
+                                        .child(
+                                            Button::new(format!("oauth-connect-{}", provider_label(&self.selected_provider)))
+                                                .label(
+                                                    if oauth.connected {
+                                                        "Reconnect"
+                                                    } else {
+                                                        Self::provider_oauth_button_label(&self.selected_provider).unwrap_or("Sign In")
+                                                    }
+                                                )
+                                                .small()
+                                                .primary()
+                                                .loading(oauth.in_progress)
+                                                .disabled(oauth.in_progress)
+                                                .on_click(cx.listener(move |this, _, window, cx| {
+                                                    this.start_provider_oauth(provider_for_click.clone(), window, cx);
+                                                })),
+                                        ),
+                                )
+                                .children(oauth.status_message.as_ref().map(|message| {
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(theme.muted_foreground)
+                                        .child(message.clone())
+                                }))
+                                .children(oauth.error_message.as_ref().map(|message| {
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(theme.danger)
+                                        .child(message.clone())
+                                }))
+                                .children(prompt.map(|prompt| {
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(8.0))
+                                        .p(px(10.0))
+                                        .rounded(px(8.0))
+                                        .bg(theme.muted.opacity(0.05))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .text_color(theme.muted_foreground)
+                                                .child("Browser authorization"),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .gap(px(8.0))
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap(px(2.0))
+                                                        .child(div().text_size(px(11.0)).text_color(theme.muted_foreground).child("Code"))
+                                                        .child(
+                                                            div()
+                                                                .font_weight(FontWeight::SEMIBOLD)
+                                                                .child(prompt.user_code.clone()),
+                                                        ),
+                                                )
+                                                .child(Clipboard::new(format!(
+                                                    "oauth-code-{}",
+                                                    provider_label(&self.selected_provider)
+                                                ))
+                                                .value(SharedString::from(prompt.user_code.clone()))),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .gap(px(8.0))
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .text_size(px(11.0))
+                                                        .text_color(theme.muted_foreground)
+                                                        .child(prompt.verification_uri.clone()),
+                                                )
+                                                .child(
+                                                    Button::new(format!(
+                                                        "oauth-open-{}",
+                                                        provider_label(&self.selected_provider)
+                                                    ))
+                                                    .label("Open Browser")
+                                                    .small()
+                                                    .ghost()
+                                                    .on_click(move |_, _, cx| {
+                                                        cx.open_url(&prompt.verification_uri);
+                                                    }),
+                                                ),
+                                        )
+                                }))
+                                .into_any_element()
+                        }))
+                        .children(if Self::provider_has_oauth(&self.selected_provider) {
+                            Some(div().child(row_separator(theme)))
+                        } else {
+                            None
+                        })
                         .child(stacked_input_field(
-                            "API Key",
-                            "Paste a key or an env var name like ANTHROPIC_API_KEY",
+                            Self::provider_api_key_label(&self.selected_provider),
+                            Self::provider_api_key_hint(&self.selected_provider),
                             &api_key_input,
                             theme,
                         ))
                         .child(stacked_input_field(
                             "Base URL",
-                            "Leave blank for the default endpoint",
+                            Self::provider_base_url_hint(&self.selected_provider),
                             &base_url_input,
                             theme,
-                        )),
+                        ))
+                        .children(if endpoint_presets.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                div().child(select_row(
+                                    "Endpoint Preset",
+                                    "Use an explicit regional or protocol endpoint, or keep the provider default.",
+                                    &endpoint_preset_select,
+                                    theme,
+                                )),
+                            )
+                        }),
                 ),
             )
             .child(
@@ -2689,11 +3187,7 @@ fn searchable_select_row(
             div()
                 .w(px(220.0))
                 .flex_shrink_0()
-                .child(
-                    Select::new(select)
-                        .placeholder("Search fonts…")
-                        .small(),
-                ),
+                .child(Select::new(select).placeholder("Search fonts…").small()),
         )
 }
 
@@ -2844,7 +3338,15 @@ fn provider_label(provider: &ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Anthropic => "Anthropic",
         ProviderKind::OpenAI => "OpenAI",
+        ProviderKind::ChatGPT => "ChatGPT Subscription",
+        ProviderKind::GitHubCopilot => "GitHub Copilot",
         ProviderKind::OpenAICompatible => "OpenAI Compatible",
+        ProviderKind::MiniMax => "MiniMax",
+        ProviderKind::MiniMaxAnthropic => "MiniMax / Anthropic",
+        ProviderKind::Moonshot => "Moonshot",
+        ProviderKind::MoonshotAnthropic => "Moonshot / Anthropic",
+        ProviderKind::ZAI => "Z.AI",
+        ProviderKind::ZAIAnthropic => "Z.AI / Anthropic",
         ProviderKind::DeepSeek => "DeepSeek",
         ProviderKind::Groq => "Groq",
         ProviderKind::Cohere => "Cohere",

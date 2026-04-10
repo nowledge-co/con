@@ -1140,6 +1140,7 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "tokio",
  "toml 0.8.23",
  "tracing",
  "uuid",
@@ -5477,7 +5478,7 @@ dependencies = [
 [[package]]
 name = "rig-core"
 version = "0.34.0"
-source = "git+https://github.com/0xPlaygrounds/rig.git?rev=24fb07dbc5b973566183d06d0d02190d06bebc70#24fb07dbc5b973566183d06d0d02190d06bebc70"
+source = "git+https://github.com/wey-gu/rig.git?rev=df4707dbc3612a116a62cf37e66e1edefdb78f7b#df4707dbc3612a116a62cf37e66e1edefdb78f7b"
 dependencies = [
  "as-any",
  "async-stream",

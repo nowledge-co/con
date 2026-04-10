@@ -21,8 +21,8 @@ pub use control::{
 pub use conversation::{Conversation, ConversationSummary, Message, MessageRole};
 pub use hook::{ConHook, ToolApprovalDecision, is_dangerous};
 pub use provider::{
-    AgentConfig, AgentEvent, AgentProvider, ProviderConfig, ProviderKind, ProviderMap,
-    SuggestionModelConfig,
+    AgentConfig, AgentEvent, AgentProvider, OAuthDevicePrompt, ProviderConfig, ProviderKind,
+    ProviderMap, SuggestionModelConfig, authorize_oauth_provider, oauth_token_dir,
 };
 pub use shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
 pub use skills::{Skill, SkillRegistry};

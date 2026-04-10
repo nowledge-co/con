@@ -34,6 +34,23 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
             "gpt-4.1-mini",
             "gpt-4.1-nano",
         ],
+        ProviderKind::ChatGPT => &[
+            "gpt-5.4",
+            "gpt-5.4-pro",
+            "gpt-5.3-codex",
+            "gpt-5.3-chat-latest",
+            "gpt-5.3-instant",
+        ],
+        ProviderKind::GitHubCopilot => &["gpt-4o", "gpt-4"],
+        ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
+            &["MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.5", "MiniMax-M2.7"]
+        }
+        ProviderKind::Moonshot | ProviderKind::MoonshotAnthropic => {
+            &["kimi-k2.5", "kimi-k2", "moonshot-v1-128k"]
+        }
+        ProviderKind::ZAI | ProviderKind::ZAIAnthropic => {
+            &["glm-4.6", "glm-4.6-air", "glm-4.5", "glm-4.5v"]
+        }
         ProviderKind::DeepSeek => &["deepseek-chat", "deepseek-reasoner"],
         ProviderKind::Groq => &[
             "llama-3.3-70b-versatile",
@@ -77,6 +94,11 @@ fn models_dev_id_to_provider(id: &str) -> Option<ProviderKind> {
     match id {
         "anthropic" => Some(ProviderKind::Anthropic),
         "openai" => Some(ProviderKind::OpenAI),
+        "chatgpt" => Some(ProviderKind::ChatGPT),
+        "github-copilot" => Some(ProviderKind::GitHubCopilot),
+        "minimax" => Some(ProviderKind::MiniMax),
+        "moonshot" => Some(ProviderKind::Moonshot),
+        "z-ai" | "zai" => Some(ProviderKind::ZAI),
         "deepseek" => Some(ProviderKind::DeepSeek),
         "groq" => Some(ProviderKind::Groq),
         "google" => Some(ProviderKind::Gemini),

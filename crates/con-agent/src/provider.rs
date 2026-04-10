@@ -6,11 +6,12 @@ use rig::client::CompletionClient;
 use rig::client::Nothing;
 use rig::completion::CompletionModel as _;
 use rig::providers::{
-    anthropic, cohere, deepseek, gemini, groq, mistral, ollama, openai, openrouter, perplexity,
-    together, xai,
+    anthropic, chatgpt, cohere, deepseek, gemini, github_copilot, groq, minimax, mistral, moonshot,
+    ollama, openai, openrouter, perplexity, together, xai, zai,
 };
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -34,8 +35,24 @@ use crate::tools::{
 pub enum ProviderKind {
     Anthropic,
     OpenAI,
+    #[serde(rename = "chatgpt")]
+    ChatGPT,
+    #[serde(rename = "github-copilot", alias = "githubcopilot")]
+    GitHubCopilot,
     #[serde(alias = "openai-compatible")]
     OpenAICompatible,
+    #[serde(rename = "minimax")]
+    MiniMax,
+    #[serde(rename = "minimax-anthropic")]
+    MiniMaxAnthropic,
+    #[serde(rename = "moonshot")]
+    Moonshot,
+    #[serde(rename = "moonshot-anthropic")]
+    MoonshotAnthropic,
+    #[serde(rename = "z-ai", alias = "zai")]
+    ZAI,
+    #[serde(rename = "z-ai-anthropic", alias = "zai-anthropic")]
+    ZAIAnthropic,
     DeepSeek,
     Groq,
     Cohere,
@@ -59,7 +76,15 @@ impl std::fmt::Display for ProviderKind {
         match self {
             Self::Anthropic => write!(f, "anthropic"),
             Self::OpenAI => write!(f, "openai"),
+            Self::ChatGPT => write!(f, "chatgpt"),
+            Self::GitHubCopilot => write!(f, "github-copilot"),
             Self::OpenAICompatible => write!(f, "openai-compatible"),
+            Self::MiniMax => write!(f, "minimax"),
+            Self::MiniMaxAnthropic => write!(f, "minimax-anthropic"),
+            Self::Moonshot => write!(f, "moonshot"),
+            Self::MoonshotAnthropic => write!(f, "moonshot-anthropic"),
+            Self::ZAI => write!(f, "z-ai"),
+            Self::ZAIAnthropic => write!(f, "z-ai-anthropic"),
             Self::DeepSeek => write!(f, "deepseek"),
             Self::Groq => write!(f, "groq"),
             Self::Cohere => write!(f, "cohere"),
@@ -78,8 +103,13 @@ impl ProviderKind {
     pub fn default_api_key_env(&self) -> &str {
         match self {
             Self::Anthropic => "ANTHROPIC_API_KEY",
+            Self::ChatGPT => "CHATGPT_ACCESS_TOKEN",
+            Self::GitHubCopilot => "GITHUB_COPILOT_API_KEY",
             Self::OpenAICompatible => "OPENAI_API_KEY",
             Self::OpenAI => "OPENAI_API_KEY",
+            Self::MiniMax | Self::MiniMaxAnthropic => "MINIMAX_API_KEY",
+            Self::Moonshot | Self::MoonshotAnthropic => "MOONSHOT_API_KEY",
+            Self::ZAI | Self::ZAIAnthropic => "ZAI_API_KEY",
             Self::DeepSeek => "DEEPSEEK_API_KEY",
             Self::Groq => "GROQ_API_KEY",
             Self::Cohere => "COHERE_API_KEY",
@@ -96,8 +126,16 @@ impl ProviderKind {
     pub fn default_model(&self) -> &str {
         match self {
             Self::Anthropic => "claude-sonnet-4-6",
+            Self::ChatGPT => "gpt-5.3-codex",
+            Self::GitHubCopilot => "gpt-4o",
             Self::OpenAICompatible => "gpt-4o",
             Self::OpenAI => "gpt-4o",
+            Self::MiniMax => "MiniMax-M2",
+            Self::MiniMaxAnthropic => "MiniMax-M2",
+            Self::Moonshot => "kimi-k2.5",
+            Self::MoonshotAnthropic => "kimi-k2.5",
+            Self::ZAI => "glm-4.6",
+            Self::ZAIAnthropic => "glm-4.6",
             Self::DeepSeek => "deepseek-chat",
             Self::Groq => "llama-3.3-70b-versatile",
             Self::Cohere => "command-a-03-2025",
@@ -109,6 +147,83 @@ impl ProviderKind {
             Self::Together => "meta-llama/Llama-3.3-70B-Instruct-Turbo",
             Self::XAI => "grok-3",
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OAuthDevicePrompt {
+    pub verification_uri: String,
+    pub user_code: String,
+}
+
+pub fn oauth_token_dir(kind: &ProviderKind) -> Option<PathBuf> {
+    let provider_dir = match kind {
+        ProviderKind::ChatGPT => "chatgpt-subscription",
+        ProviderKind::GitHubCopilot => "github-copilot",
+        _ => return None,
+    };
+
+    Some(
+        dirs::config_dir()
+            .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("con")
+            .join("auth")
+            .join(provider_dir),
+    )
+}
+
+pub async fn authorize_oauth_provider<F>(kind: ProviderKind, prompt_handler: F) -> Result<()>
+where
+    F: Fn(OAuthDevicePrompt) + Send + Sync + 'static,
+{
+    let prompt_handler = Arc::new(prompt_handler);
+
+    match kind {
+        ProviderKind::ChatGPT => {
+            let prompt_handler = prompt_handler.clone();
+            let mut builder = chatgpt::Client::builder()
+                .oauth()
+                .on_device_code(move |prompt| {
+                    prompt_handler(OAuthDevicePrompt {
+                        verification_uri: prompt.verification_uri,
+                        user_code: prompt.user_code,
+                    });
+                });
+            if let Some(dir) = oauth_token_dir(&kind) {
+                builder = builder.token_dir(dir);
+            }
+            let client = builder
+                .build()
+                .map_err(|e| anyhow::anyhow!("ChatGPT client error: {e}"))?;
+            client
+                .authorize()
+                .await
+                .map_err(|e| anyhow::anyhow!("ChatGPT OAuth error: {e}"))
+        }
+        ProviderKind::GitHubCopilot => {
+            let prompt_handler = prompt_handler.clone();
+            let mut builder =
+                github_copilot::Client::builder()
+                    .oauth()
+                    .on_device_code(move |prompt| {
+                        prompt_handler(OAuthDevicePrompt {
+                            verification_uri: prompt.verification_uri,
+                            user_code: prompt.user_code,
+                        });
+                    });
+            if let Some(dir) = oauth_token_dir(&kind) {
+                builder = builder.token_dir(dir);
+            }
+            let client = builder
+                .build()
+                .map_err(|e| anyhow::anyhow!("GitHub Copilot client error: {e}"))?;
+            client
+                .authorize()
+                .await
+                .map_err(|e| anyhow::anyhow!("GitHub Copilot OAuth error: {e}"))
+        }
+        _ => anyhow::bail!("{kind} does not support OAuth device login"),
     }
 }
 
@@ -138,8 +253,28 @@ pub struct ProviderMap {
     pub anthropic: Option<ProviderConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub openai: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chatgpt: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "github-copilot")]
+    pub github_copilot: Option<ProviderConfig>,
     #[serde(skip_serializing_if = "Option::is_none", alias = "openai-compatible")]
     pub openaicompatible: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimax: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "minimax-anthropic")]
+    pub minimax_anthropic: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moonshot: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "moonshot-anthropic")]
+    pub moonshot_anthropic: Option<ProviderConfig>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "z-ai",
+        alias = "zai"
+    )]
+    pub zai: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "z-ai-anthropic")]
+    pub zai_anthropic: Option<ProviderConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deepseek: Option<ProviderConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,7 +302,15 @@ impl ProviderMap {
         match kind {
             ProviderKind::Anthropic => self.anthropic.as_ref(),
             ProviderKind::OpenAI => self.openai.as_ref(),
+            ProviderKind::ChatGPT => self.chatgpt.as_ref(),
+            ProviderKind::GitHubCopilot => self.github_copilot.as_ref(),
             ProviderKind::OpenAICompatible => self.openaicompatible.as_ref(),
+            ProviderKind::MiniMax => self.minimax.as_ref(),
+            ProviderKind::MiniMaxAnthropic => self.minimax_anthropic.as_ref(),
+            ProviderKind::Moonshot => self.moonshot.as_ref(),
+            ProviderKind::MoonshotAnthropic => self.moonshot_anthropic.as_ref(),
+            ProviderKind::ZAI => self.zai.as_ref(),
+            ProviderKind::ZAIAnthropic => self.zai_anthropic.as_ref(),
             ProviderKind::DeepSeek => self.deepseek.as_ref(),
             ProviderKind::Groq => self.groq.as_ref(),
             ProviderKind::Cohere => self.cohere.as_ref(),
@@ -189,7 +332,15 @@ impl ProviderMap {
         let slot = match kind {
             ProviderKind::Anthropic => &mut self.anthropic,
             ProviderKind::OpenAI => &mut self.openai,
+            ProviderKind::ChatGPT => &mut self.chatgpt,
+            ProviderKind::GitHubCopilot => &mut self.github_copilot,
             ProviderKind::OpenAICompatible => &mut self.openaicompatible,
+            ProviderKind::MiniMax => &mut self.minimax,
+            ProviderKind::MiniMaxAnthropic => &mut self.minimax_anthropic,
+            ProviderKind::Moonshot => &mut self.moonshot,
+            ProviderKind::MoonshotAnthropic => &mut self.moonshot_anthropic,
+            ProviderKind::ZAI => &mut self.zai,
+            ProviderKind::ZAIAnthropic => &mut self.zai_anthropic,
             ProviderKind::DeepSeek => &mut self.deepseek,
             ProviderKind::Groq => &mut self.groq,
             ProviderKind::Cohere => &mut self.cohere,
@@ -589,12 +740,95 @@ impl AgentProvider {
             };
         }
 
+        macro_rules! stream_with_model {
+            ($model:expr) => {{
+                let root: std::path::PathBuf = workspace_root.clone();
+                let mut builder = rig::agent::AgentBuilder::new($model)
+                    .preamble(&system_prompt)
+                    .tool(TerminalExecTool::new(terminal_exec_tx.clone()))
+                    .tool(ShellExecTool)
+                    .tool(FileReadTool::new(root.clone()))
+                    .tool(FileWriteTool::new(root.clone()))
+                    .tool(EditFileTool::new(root.clone()))
+                    .tool(ListFilesTool::new(root.clone()))
+                    .tool(SearchTool::new(root))
+                    .tool(ListPanesTool::new(pane_tx.clone()))
+                    .tool(TmuxInspectTool::new(pane_tx.clone()))
+                    .tool(TmuxListTool::new(pane_tx.clone()))
+                    .tool(TmuxCaptureTool::new(pane_tx.clone()))
+                    .tool(TmuxFindTargetsTool::new(pane_tx.clone()))
+                    .tool(ResolveWorkTargetTool::new(pane_tx.clone()))
+                    .tool(TmuxSendKeysTool::new(pane_tx.clone()))
+                    .tool(TmuxRunCommandTool::new(pane_tx.clone()))
+                    .tool(TmuxEnsureShellTargetTool::new(pane_tx.clone()))
+                    .tool(TmuxEnsureAgentTargetTool::new(pane_tx.clone()))
+                    .tool(ProbeShellContextTool::new(pane_tx.clone()))
+                    .tool(ReadPaneTool::new(pane_tx.clone()))
+                    .tool(SendKeysTool::new(pane_tx.clone()))
+                    .tool(SearchPanesTool::new(pane_tx.clone()))
+                    .tool(CreatePaneTool::new(pane_tx.clone()))
+                    .tool(WaitForTool::new(pane_tx, cancelled.clone()))
+                    .tool(BatchExecTool::new(terminal_exec_tx))
+                    .default_max_turns(self.config.max_turns);
+
+                if let Some(max_tokens) = self.config.effective_max_tokens(kind) {
+                    builder = builder.max_tokens(max_tokens);
+                }
+                if let Some(temp) = self.config.temperature {
+                    builder = builder.temperature(temp);
+                }
+
+                let agent = builder.build();
+                match agent.tool_server_handle.get_tool_defs(None).await {
+                    Ok(defs) => {
+                        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+                        log::info!(
+                            "[agent] Registered {} tools for {:?}/{}: {:?}",
+                            defs.len(),
+                            kind,
+                            self.config.effective_model(kind),
+                            names,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("[agent] Failed to query tool definitions: {}", e);
+                    }
+                }
+
+                let stream = agent
+                    .stream_prompt(&last_user_msg)
+                    .with_hook(hook)
+                    .with_history(chat_history)
+                    .await;
+
+                consume_stream(stream, &event_tx, &cancelled).await?
+            }};
+        }
+
         let response = match *kind {
             ProviderKind::Anthropic => stream_with!(self.build_anthropic_client()?),
             ProviderKind::OpenAI => stream_with!(self.build_openai_client()?),
+            ProviderKind::ChatGPT => stream_with!(self.build_chatgpt_client()?),
+            ProviderKind::GitHubCopilot => {
+                let client = self.build_github_copilot_client()?;
+                let model = self.config.effective_model(kind);
+                if model == github_copilot::GPT_5_1_CODEX {
+                    stream_with_model!(client.responses_model(model))
+                } else {
+                    stream_with!(client)
+                }
+            }
             ProviderKind::OpenAICompatible => {
                 stream_with!(self.build_openai_compatible_client()?)
             }
+            ProviderKind::MiniMax => stream_with!(self.build_minimax_client()?),
+            ProviderKind::MiniMaxAnthropic => stream_with!(self.build_minimax_anthropic_client()?),
+            ProviderKind::Moonshot => stream_with!(self.build_moonshot_client()?),
+            ProviderKind::MoonshotAnthropic => {
+                stream_with!(self.build_moonshot_anthropic_client()?)
+            }
+            ProviderKind::ZAI => stream_with!(self.build_zai_client()?),
+            ProviderKind::ZAIAnthropic => stream_with!(self.build_zai_anthropic_client()?),
             ProviderKind::DeepSeek => stream_with!(self.build_deepseek_client()?),
             ProviderKind::Groq => stream_with!(self.build_groq_client()?),
             ProviderKind::Cohere => stream_with!(self.build_cohere_client()?),
@@ -646,17 +880,131 @@ impl AgentProvider {
     /// rather than the Responses API (`/responses`). Most third-party providers
     /// (MiniMax, Together, etc.) only implement the completions endpoint.
     fn build_openai_compatible_client(&self) -> Result<openai::CompletionsClient> {
-        let api_key = self.resolve_api_key(&ProviderKind::OpenAICompatible)?;
+        self.build_openai_compatible_client_for(&ProviderKind::OpenAICompatible)
+    }
+
+    fn build_openai_compatible_client_for(
+        &self,
+        kind: &ProviderKind,
+    ) -> Result<openai::CompletionsClient> {
+        let api_key = self.resolve_api_key(kind)?;
         let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
-        if let Some(url) = self
-            .config
-            .effective_base_url(&ProviderKind::OpenAICompatible)
-        {
+        if let Some(url) = self.config.effective_base_url(kind) {
             builder = builder.base_url(url);
         }
         builder
             .build()
             .map_err(|e| anyhow::anyhow!("OpenAI-compatible client error: {e}"))
+    }
+
+    fn build_chatgpt_client(&self) -> Result<chatgpt::Client> {
+        let mut builder = chatgpt::Client::builder();
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::ChatGPT) {
+            builder = builder.base_url(url);
+        }
+        let mut builder =
+            if let Some(api_key) = self.resolve_optional_api_key(&ProviderKind::ChatGPT)? {
+                builder.api_key(api_key)
+            } else {
+                builder.oauth()
+            };
+        if let Some(dir) = oauth_token_dir(&ProviderKind::ChatGPT) {
+            builder = builder.token_dir(dir);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("ChatGPT client error: {e}"))
+    }
+
+    fn build_github_copilot_client(&self) -> Result<github_copilot::Client> {
+        let mut builder = github_copilot::Client::builder();
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::GitHubCopilot) {
+            builder = builder.base_url(url);
+        }
+        let mut builder =
+            if let Some(api_key) = self.resolve_optional_api_key(&ProviderKind::GitHubCopilot)? {
+                builder.api_key(api_key)
+            } else {
+                builder.oauth()
+            };
+        if let Some(dir) = oauth_token_dir(&ProviderKind::GitHubCopilot) {
+            builder = builder.token_dir(dir);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("GitHub Copilot client error: {e}"))
+    }
+
+    fn build_minimax_client(&self) -> Result<minimax::Client> {
+        let api_key = self.resolve_api_key(&ProviderKind::MiniMax)?;
+        let mut builder = minimax::Client::builder().api_key(api_key);
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::MiniMax) {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("MiniMax client error: {e}"))
+    }
+
+    fn build_minimax_anthropic_client(&self) -> Result<minimax::AnthropicClient> {
+        let api_key = self.resolve_api_key(&ProviderKind::MiniMaxAnthropic)?;
+        let mut builder = minimax::AnthropicClient::builder().api_key(api_key);
+        if let Some(url) = self
+            .config
+            .effective_base_url(&ProviderKind::MiniMaxAnthropic)
+        {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("MiniMax Anthropic client error: {e}"))
+    }
+
+    fn build_moonshot_client(&self) -> Result<moonshot::Client> {
+        let api_key = self.resolve_api_key(&ProviderKind::Moonshot)?;
+        let mut builder = moonshot::Client::builder().api_key(&api_key);
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::Moonshot) {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Moonshot client error: {e}"))
+    }
+
+    fn build_moonshot_anthropic_client(&self) -> Result<moonshot::AnthropicClient> {
+        let api_key = self.resolve_api_key(&ProviderKind::MoonshotAnthropic)?;
+        let mut builder = moonshot::AnthropicClient::builder().api_key(api_key);
+        if let Some(url) = self
+            .config
+            .effective_base_url(&ProviderKind::MoonshotAnthropic)
+        {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Moonshot Anthropic client error: {e}"))
+    }
+
+    fn build_zai_client(&self) -> Result<zai::Client> {
+        let api_key = self.resolve_api_key(&ProviderKind::ZAI)?;
+        let mut builder = zai::Client::builder().api_key(api_key);
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::ZAI) {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Z.AI client error: {e}"))
+    }
+
+    fn build_zai_anthropic_client(&self) -> Result<zai::AnthropicClient> {
+        let api_key = self.resolve_api_key(&ProviderKind::ZAIAnthropic)?;
+        let mut builder = zai::AnthropicClient::builder().api_key(api_key);
+        if let Some(url) = self.config.effective_base_url(&ProviderKind::ZAIAnthropic) {
+            builder = builder.base_url(url);
+        }
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Z.AI Anthropic client error: {e}"))
     }
 
     fn build_deepseek_client(&self) -> Result<deepseek::Client> {
@@ -793,12 +1141,46 @@ impl AgentProvider {
             }};
         }
 
+        macro_rules! do_complete_model {
+            ($model:expr) => {{
+                let response = $model
+                    .completion_request(prompt)
+                    .preamble(preamble.to_string())
+                    .max_tokens(100)
+                    .send()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))?;
+                match response.choice.first() {
+                    AssistantContent::Text(t) => Ok(t.text.clone()),
+                    _ => Ok(String::new()),
+                }
+            }};
+        }
+
         match *kind {
             ProviderKind::Anthropic => do_complete!(self.build_anthropic_client()?),
             ProviderKind::OpenAI => do_complete!(self.build_openai_client()?),
+            ProviderKind::ChatGPT => do_complete!(self.build_chatgpt_client()?),
+            ProviderKind::GitHubCopilot => {
+                let client = self.build_github_copilot_client()?;
+                let model = self.config.effective_model(kind);
+                if model == github_copilot::GPT_5_1_CODEX {
+                    do_complete_model!(client.responses_model(model))
+                } else {
+                    do_complete!(client)
+                }
+            }
             ProviderKind::OpenAICompatible => {
                 do_complete!(self.build_openai_compatible_client()?)
             }
+            ProviderKind::MiniMax => do_complete!(self.build_minimax_client()?),
+            ProviderKind::MiniMaxAnthropic => do_complete!(self.build_minimax_anthropic_client()?),
+            ProviderKind::Moonshot => do_complete!(self.build_moonshot_client()?),
+            ProviderKind::MoonshotAnthropic => {
+                do_complete!(self.build_moonshot_anthropic_client()?)
+            }
+            ProviderKind::ZAI => do_complete!(self.build_zai_client()?),
+            ProviderKind::ZAIAnthropic => do_complete!(self.build_zai_anthropic_client()?),
             ProviderKind::DeepSeek => do_complete!(self.build_deepseek_client()?),
             ProviderKind::Groq => do_complete!(self.build_groq_client()?),
             ProviderKind::Cohere => do_complete!(self.build_cohere_client()?),
@@ -814,6 +1196,19 @@ impl AgentProvider {
 
     /// Resolve API key for a specific provider from the providers map.
     fn resolve_api_key(&self, kind: &ProviderKind) -> Result<String> {
+        if let Some(api_key) = self.resolve_optional_api_key(kind)? {
+            return Ok(api_key);
+        }
+
+        let default_env = kind.default_api_key_env();
+        anyhow::bail!(
+            "No API key found for {}. Set {} or configure api_key in settings.",
+            kind,
+            default_env
+        );
+    }
+
+    fn resolve_optional_api_key(&self, kind: &ProviderKind) -> Result<Option<String>> {
         let pc = self.config.providers.get(kind);
 
         // 1. Direct api_key from provider config
@@ -821,7 +1216,7 @@ impl AgentProvider {
             .and_then(|p| p.api_key.as_ref())
             .filter(|k| !k.is_empty())
         {
-            return Ok(key.clone());
+            return Ok(Some(key.clone()));
         }
 
         // 2. api_key_env — could be env var name or direct key (legacy compat)
@@ -834,25 +1229,22 @@ impl AgentProvider {
                 .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
             if is_env_var_name {
                 if let Ok(val) = std::env::var(key_or_env) {
-                    return Ok(val);
+                    return Ok(Some(val));
                 }
             } else {
-                return Ok(key_or_env.clone());
+                return Ok(Some(key_or_env.clone()));
             }
         }
 
         // 3. Fall back to provider's default env var
         let default_env = kind.default_api_key_env();
         if *kind == ProviderKind::Ollama {
-            return Ok(std::env::var(default_env).unwrap_or_else(|_| "ollama".into()));
+            return Ok(Some(
+                std::env::var(default_env).unwrap_or_else(|_| "ollama".into()),
+            ));
         }
-        std::env::var(default_env).map_err(|_| {
-            anyhow::anyhow!(
-                "No API key found for {}. Set {} or configure api_key in settings.",
-                kind,
-                default_env
-            )
-        })
+
+        Ok(std::env::var(default_env).ok())
     }
 }
 
