@@ -36,12 +36,12 @@
       "steps": [
         {
           "label": "prepare_codex_workspace",
-          "prompt": "Please prepare a Codex workspace in ~/dev/temp/con-bench-twosum",
+          "prompt": "Please prepare a Codex workspace in ~/dev/temp/con-bench-twosum by launching Codex there and preparing a paired local shell target for file and test work.",
           "timeout_secs": 90
         },
         {
           "label": "create_code_and_tests",
-          "prompt": "In that workspace, create a small Python two_sum implementation and a unittest-based test file, then run `python3 -m unittest -q`.",
+          "prompt": "Using that Codex target plus its paired local shell target, create a small Python two_sum implementation and a unittest-based test file, then run `python3 -m unittest -q`.",
           "timeout_secs": 120
         },
         {

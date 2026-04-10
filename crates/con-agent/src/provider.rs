@@ -19,13 +19,13 @@ use crate::context::TerminalContext;
 use crate::conversation::{AgentStep, Conversation, Message};
 use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{
-    BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalShellTargetTool,
-    EnsureRemoteShellTargetTool, FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool,
-    ListTabWorkspacesTool, PaneRequest, ProbeShellContextTool, ReadPaneTool, RemoteExecTool,
-    ResolveWorkTargetTool, SearchPanesTool, SearchTool, SendKeysTool, ShellExecTool,
-    TerminalExecRequest, TerminalExecTool, TmuxCaptureTool, TmuxEnsureAgentTargetTool,
-    TmuxEnsureShellTargetTool, TmuxFindTargetsTool, TmuxInspectTool, TmuxListTool,
-    TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
+    BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalAgentTargetTool,
+    EnsureLocalShellTargetTool, EnsureRemoteShellTargetTool, FileReadTool, FileWriteTool,
+    ListFilesTool, ListPanesTool, ListTabWorkspacesTool, PaneRequest, ProbeShellContextTool,
+    ReadPaneTool, RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool, SearchTool, SendKeysTool,
+    ShellExecTool, TerminalExecRequest, TerminalExecTool, TmuxCaptureTool,
+    TmuxEnsureAgentTargetTool, TmuxEnsureShellTargetTool, TmuxFindTargetsTool, TmuxInspectTool,
+    TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
 };
 
 // ── Provider enum ───────────────────────────────────────────────────
@@ -622,6 +622,7 @@ macro_rules! build_and_stream {
             .tool(TmuxCaptureTool::new($pane_tx.clone()))
             .tool(TmuxFindTargetsTool::new($pane_tx.clone()))
             .tool(ResolveWorkTargetTool::new($pane_tx.clone()))
+            .tool(EnsureLocalAgentTargetTool::new($pane_tx.clone()))
             .tool(EnsureLocalShellTargetTool::new($pane_tx.clone()))
             .tool(EnsureRemoteShellTargetTool::new($pane_tx.clone()))
             .tool(RemoteExecTool::new(
@@ -808,6 +809,7 @@ impl AgentProvider {
                     .tool(TmuxCaptureTool::new(pane_tx.clone()))
                     .tool(TmuxFindTargetsTool::new(pane_tx.clone()))
                     .tool(ResolveWorkTargetTool::new(pane_tx.clone()))
+                    .tool(EnsureLocalAgentTargetTool::new(pane_tx.clone()))
                     .tool(EnsureLocalShellTargetTool::new(pane_tx.clone()))
                     .tool(EnsureRemoteShellTargetTool::new(pane_tx.clone()))
                     .tool(RemoteExecTool::new(

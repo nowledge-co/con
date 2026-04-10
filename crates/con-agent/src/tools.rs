@@ -1002,6 +1002,7 @@ pub enum WorkTargetIntent {
 pub enum WorkTargetControlPath {
     VisibleShellExec,
     LocalShellTarget,
+    LocalAgentTarget,
     TmuxQuery,
     TmuxShellTarget,
     TmuxAgentTarget,
@@ -1221,7 +1222,7 @@ fn agent_cli_matches_selector(command: &str, agent_name: Option<&String>) -> boo
         .is_none_or(|expected| expected == actual)
 }
 
-fn default_tmux_agent_launch_command(agent_name: &str) -> Option<&'static str> {
+fn default_agent_launch_command(agent_name: &str) -> Option<&'static str> {
     match canonical_agent_cli_name(agent_name)? {
         "codex" => Some("codex"),
         "claude" => Some("claude"),
@@ -1556,6 +1557,22 @@ fn make_local_shell_preparation_candidate(pane: &PaneInfo, reason: String) -> Wo
         tmux_target: None,
         requires_preparation: true,
         suggested_tool: "ensure_local_shell_target".to_string(),
+        reason,
+    }
+}
+
+fn make_local_agent_preparation_candidate(pane: &PaneInfo, reason: String) -> WorkTargetCandidate {
+    WorkTargetCandidate {
+        pane_index: pane.index,
+        pane_id: pane.pane_id,
+        pane_title: pane.title.clone(),
+        host: pane.hostname.clone(),
+        control_path: WorkTargetControlPath::LocalAgentTarget,
+        visible_target: pane.visible_target.clone(),
+        tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
+        tmux_target: None,
+        requires_preparation: true,
+        suggested_tool: "ensure_local_agent_target".to_string(),
         reason,
     }
 }
@@ -1935,6 +1952,20 @@ fn resolve_work_target_candidates(
                     candidates.push((
                         65 + if pane.is_focused { 1 } else { 0 },
                         make_tmux_workspace_candidate(&pane, reason, suggested_tool),
+                    ));
+                } else if pane_is_local_shell_candidate(&pane) {
+                    let label = agent_name
+                        .as_deref()
+                        .and_then(canonical_agent_cli_name)
+                        .unwrap_or("agent CLI");
+                    candidates.push((
+                        90 + if pane.is_focused { 1 } else { 0 },
+                        make_local_agent_preparation_candidate(
+                            &pane,
+                            format!(
+                                "This local shell pane is the right place to launch or reuse {label}. Prepare a dedicated local agent target instead of mixing CLI interaction into the shell."
+                            ),
+                        ),
                     ));
                 }
             }
@@ -2787,6 +2818,212 @@ impl Tool for TmuxEnsureShellTargetTool {
     }
 }
 
+// ── ensure_local_agent_target tool ───────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalAgentTargetMatchSource {
+    ReusedAgent,
+    Created,
+}
+
+#[derive(Serialize)]
+pub struct EnsureLocalAgentTargetResult {
+    pub agent_name: String,
+    pub created: bool,
+    pub pane_index: usize,
+    pub pane_id: Option<usize>,
+    pub cwd: Option<String>,
+    pub match_source: LocalAgentTargetMatchSource,
+    pub launch_command: String,
+    pub output: String,
+    pub reason: String,
+    pub native_attachment_state: AgentCliNativeAttachmentState,
+    pub native_attachment_note: String,
+}
+
+#[derive(Deserialize)]
+pub struct EnsureLocalAgentTargetArgs {
+    pub agent_name: String,
+    pub cwd: Option<String>,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
+    pub launch_command: Option<String>,
+    #[serde(default = "default_pane_create_location")]
+    pub location: PaneCreateLocation,
+}
+
+pub struct EnsureLocalAgentTargetTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl EnsureLocalAgentTargetTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+fn ensure_local_agent_target_impl(
+    pane_tx: &Sender<PaneRequest>,
+    args: EnsureLocalAgentTargetArgs,
+) -> Result<EnsureLocalAgentTargetResult, ToolError> {
+    let Some(agent_name) = canonical_agent_cli_name(&args.agent_name) else {
+        return Err(ToolError::CommandFailed(format!(
+            "Unsupported agent_name `{}`. Expected codex, claude, or opencode.",
+            args.agent_name
+        )));
+    };
+    let cwd_lower = normalize_lower(&args.cwd);
+    let panes = pane_query_list(pane_tx)?;
+    let (native_attachment_state, native_attachment_note) = agent_cli_native_attachment(agent_name);
+
+    let best_existing = panes
+        .iter()
+        .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
+        .filter(|pane| args.pane_id.is_none_or(|id| pane.pane_id == id))
+        .filter(|pane| pane_is_visible_local_agent_cli(pane, Some(&agent_name.to_string())))
+        .filter(|pane| pane_matches_cwd(pane, cwd_lower.as_ref()))
+        .max_by_key(|pane| 10 + if pane.is_focused { 5 } else { 0 });
+
+    let launch_command = args.launch_command.clone().unwrap_or_else(|| {
+        default_agent_launch_command(agent_name)
+            .unwrap_or(agent_name)
+            .to_string()
+    });
+
+    if let Some(pane) = best_existing {
+        return Ok(EnsureLocalAgentTargetResult {
+            agent_name: agent_name.to_string(),
+            created: false,
+            pane_index: pane.index,
+            pane_id: Some(pane.pane_id),
+            cwd: args.cwd,
+            match_source: LocalAgentTargetMatchSource::ReusedAgent,
+            launch_command,
+            output: String::new(),
+            reason: format!(
+                "Pane {} already exposes a matching local {} target.",
+                pane.index, agent_name
+            ),
+            native_attachment_state,
+            native_attachment_note,
+        });
+    }
+
+    let command = if let Some(cwd) = args.cwd.as_ref() {
+        format!("cd {} && {}", shell_quote_fragment(cwd), launch_command)
+    } else {
+        launch_command.clone()
+    };
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    pane_tx
+        .send(PaneRequest {
+            query: PaneQuery::CreatePane {
+                command: Some(command.clone()),
+                location: args.location,
+            },
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+    let response = tokio::task::block_in_place(|| {
+        response_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|_| ToolError::CommandFailed("Create pane request timed out".into()))
+    })?;
+
+    let (pane_index, pane_id) = match response {
+        PaneResponse::PaneCreated {
+            pane_index,
+            pane_id,
+            ..
+        } => (pane_index, pane_id),
+        PaneResponse::Error(e) => return Err(ToolError::CommandFailed(e)),
+        _ => return Err(ToolError::CommandFailed("Unexpected response".into())),
+    };
+
+    Ok(EnsureLocalAgentTargetResult {
+        agent_name: agent_name.to_string(),
+        created: true,
+        pane_index,
+        pane_id: Some(pane_id),
+        cwd: args.cwd.clone(),
+        match_source: LocalAgentTargetMatchSource::Created,
+        launch_command,
+        output: String::new(),
+        reason: if let Some(cwd) = args.cwd {
+            format!(
+                "No reusable local {agent_name} target matched `{cwd}`, so con created a new local agent pane there."
+            )
+        } else {
+            format!(
+                "No reusable local {agent_name} target existed, so con created a new local agent pane."
+            )
+        },
+        native_attachment_state,
+        native_attachment_note,
+    })
+}
+
+impl Tool for EnsureLocalAgentTargetTool {
+    const NAME: &'static str = "ensure_local_agent_target";
+    type Error = ToolError;
+    type Args = EnsureLocalAgentTargetArgs;
+    type Output = EnsureLocalAgentTargetResult;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Reuse an existing LOCAL Codex, Claude Code, or OpenCode pane when one already matches, or create a fresh local agent-cli pane when needed. Pair this with ensure_local_shell_target so local coding workflows keep interactive agent UI and shell/file/test work in separate panes.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Agent CLI family to reuse or launch, such as codex, claude, or opencode."
+                    },
+                    "cwd": {
+                        "type": ["string", "null"],
+                        "description": "Optional working directory for the local agent target. Existing targets whose cwd contains this value are preferred, and new panes start there."
+                    },
+                    "pane_index": {
+                        "type": ["integer", "null"],
+                        "description": "Optional con pane index to constrain reuse checks. Positional only."
+                    },
+                    "pane_id": {
+                        "type": ["integer", "null"],
+                        "description": "Optional stable pane id to constrain reuse checks."
+                    },
+                    "launch_command": {
+                        "type": ["string", "null"],
+                        "description": "Optional explicit launch command. Defaults to the canonical CLI name for the requested agent."
+                    },
+                    "location": {
+                        "type": "string",
+                        "enum": ["right", "down"],
+                        "description": "Where to place a newly created agent pane if one is needed. Defaults to right."
+                    }
+                },
+                "required": ["agent_name"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let result = ensure_local_agent_target_impl(&self.pane_tx, args)?;
+        let output = if result.created {
+            wait_for_pane_initial_output(
+                &self.pane_tx,
+                selector_from(Some(result.pane_index), result.pane_id),
+            )
+            .await?
+        } else {
+            String::new()
+        };
+        Ok(EnsureLocalAgentTargetResult { output, ..result })
+    }
+}
+
 // ── resolve_work_target tool ─────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -2912,7 +3149,7 @@ impl Tool for TmuxEnsureAgentTargetTool {
 
         let launch_command = match args.launch_command {
             Some(command) => command,
-            None => default_tmux_agent_launch_command(agent_name)
+            None => default_agent_launch_command(agent_name)
                 .ok_or_else(|| {
                     ToolError::CommandFailed(format!(
                         "No default launch command is defined for agent `{agent_name}`."
@@ -5167,6 +5404,36 @@ mod tests {
         assert_eq!(best.pane_index, 3);
         assert_eq!(best.control_path, WorkTargetControlPath::VisibleAgentUi);
         assert_eq!(best.suggested_tool, "send_keys");
+    }
+
+    #[test]
+    fn resolve_work_target_agent_cli_can_request_local_agent_preparation() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut shell = test_pane(2, "shell");
+        shell.control_capabilities = vec![PaneControlCapability::ExecVisibleShell];
+        shell.visible_target.kind = PaneVisibleTargetKind::ShellPrompt;
+        shell.front_state = PaneFrontState::ShellPrompt;
+        shell.mode = super::PaneMode::Shell;
+        shell.shell_metadata_fresh = true;
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![shell],
+            WorkTargetIntent::AgentCli,
+            None,
+            None,
+            None,
+            None,
+            Some("codex".to_string()),
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.pane_index, 2);
+        assert_eq!(best.control_path, WorkTargetControlPath::LocalAgentTarget);
+        assert_eq!(best.suggested_tool, "ensure_local_agent_target");
+        assert!(best.requires_preparation);
     }
 
     #[test]
