@@ -13,6 +13,12 @@ use tokio::runtime::Runtime;
 
 use crate::config::Config;
 
+#[derive(Default, Debug, Clone)]
+struct RequestTrace {
+    steps: Vec<con_agent::conversation::AgentStep>,
+    thinking: String,
+}
+
 /// Events from the harness to the UI.
 ///
 /// These flow over a crossbeam channel polled by the GPUI workspace.
@@ -331,24 +337,41 @@ impl AgentHarness {
                 }
 
                 let (agent_tx, agent_rx) = crossbeam_channel::unbounded();
+                let trace = Arc::new(Mutex::new(RequestTrace::default()));
 
                 // Bridge AgentEvent → HarnessEvent on a blocking thread.
                 // Recreated per attempt so each stream gets a fresh channel.
                 let htx = harness_tx.clone();
                 let per_request_approval_tx = approval_tx.clone();
+                let trace_for_bridge = trace.clone();
                 let bridge = tokio::task::spawn_blocking(move || {
                     let bridge_start = std::time::Instant::now();
                     while let Ok(event) = agent_rx.recv() {
                         let mapped = match event {
                             AgentEvent::Thinking => HarnessEvent::Thinking,
-                            AgentEvent::ThinkingDelta(t) => HarnessEvent::ThinkingDelta(t),
+                            AgentEvent::ThinkingDelta(t) => {
+                                trace_for_bridge.lock().thinking.push_str(&t);
+                                HarnessEvent::ThinkingDelta(t)
+                            }
                             AgentEvent::Token(t) => HarnessEvent::Token(t),
-                            AgentEvent::Step(s) => HarnessEvent::Step(s),
+                            AgentEvent::Step(s) => {
+                                trace_for_bridge.lock().steps.push(s.clone());
+                                HarnessEvent::Step(s)
+                            }
                             AgentEvent::ToolCallStart {
                                 call_id,
                                 tool_name,
                                 args,
                             } => {
+                                let input = serde_json::from_str(&args)
+                                    .unwrap_or_else(|_| serde_json::Value::String(args.clone()));
+                                trace_for_bridge.lock().steps.push(
+                                    con_agent::conversation::AgentStep::ToolCall {
+                                        call_id: Some(call_id.clone()),
+                                        tool: tool_name.clone(),
+                                        input,
+                                    },
+                                );
                                 if is_dangerous(&tool_name) {
                                     let _ = htx.send(HarnessEvent::ToolApprovalNeeded {
                                         call_id: call_id.clone(),
@@ -367,11 +390,21 @@ impl AgentHarness {
                                 call_id,
                                 tool_name,
                                 result,
-                            } => HarnessEvent::ToolCallComplete {
-                                call_id,
-                                tool_name,
-                                result,
-                            },
+                            } => {
+                                trace_for_bridge.lock().steps.push(
+                                    con_agent::conversation::AgentStep::ToolResult {
+                                        call_id: Some(call_id.clone()),
+                                        tool: tool_name.clone(),
+                                        output: result.clone(),
+                                        success: true,
+                                    },
+                                );
+                                HarnessEvent::ToolCallComplete {
+                                    call_id,
+                                    tool_name,
+                                    result,
+                                }
+                            }
                             AgentEvent::Done(mut m) => {
                                 let duration_ms = bridge_start.elapsed().as_millis() as u64;
                                 m.duration_ms = Some(duration_ms);
@@ -405,6 +438,11 @@ impl AgentHarness {
                     Ok(mut assistant_msg) => {
                         let duration_ms = request_start.elapsed().as_millis() as u64;
                         assistant_msg.duration_ms = Some(duration_ms);
+                        let trace = trace.lock().clone();
+                        assistant_msg.steps = trace.steps;
+                        if !trace.thinking.trim().is_empty() {
+                            assistant_msg.thinking = Some(trace.thinking);
+                        }
                         log::info!(
                             "[harness] provider.send() completed: {} chars in {}ms",
                             assistant_msg.content.len(),

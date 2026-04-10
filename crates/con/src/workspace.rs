@@ -1410,13 +1410,19 @@ impl ConWorkspace {
                         .harness
                         .display_label_for_user_message(&msg.content)
                         .unwrap_or_else(|| msg.content.clone());
-                    state.add_message("user", &visible);
+                    state.restore_message("user", &visible, None, None);
                 }
                 con_agent::MessageRole::Assistant => {
-                    state.add_message("assistant", &msg.content);
+                    state.restore_message(
+                        "assistant",
+                        &msg.content,
+                        msg.model.as_deref(),
+                        msg.duration_ms,
+                    );
+                    state.restore_last_assistant_trace(msg.thinking.as_deref(), &msg.steps);
                 }
                 con_agent::MessageRole::System | con_agent::MessageRole::Tool => {
-                    state.add_message("system", &msg.content);
+                    state.restore_message("system", &msg.content, None, None);
                 }
             }
         }

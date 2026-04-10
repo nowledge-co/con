@@ -18,6 +18,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 **AI Agent**
 - Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.
 - Agent conversations persist per-tab across restarts
+- Restored agent conversations now keep the assistant trace too, including thinking text, tool steps, model labels, and durations, instead of collapsing back to plain message bodies after restart.
 - Command duration and exit code are now included in the agent's context. When you ask "what happened?", the agent can tell you a build took 12 seconds and failed with exit code 1 — not just show you the output.
 - A first local automation control plane now ships with `con-cli`. External agents can list tabs and panes, read pane content, run visible shell commands, drive tmux through con's typed tmux adapter, and send prompts into a tab's built-in agent session over a local Unix socket.
 

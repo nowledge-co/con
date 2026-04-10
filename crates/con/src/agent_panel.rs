@@ -15,7 +15,7 @@ const TOOL_RESULT_PREVIEW_LINES: usize = 6;
 /// Max characters to show in expanded thinking section
 const THINKING_DISPLAY_LEN: usize = 2000;
 
-use con_agent::{ConversationSummary, ToolApprovalDecision};
+use con_agent::{ConversationSummary, ToolApprovalDecision, conversation::AgentStep};
 use con_core::harness::HarnessEvent;
 
 use chrono::Utc;
@@ -113,7 +113,7 @@ impl PanelState {
         self.messages.len()
     }
 
-    /// Populate from a loaded conversation (replay messages without steps/tools).
+    /// Populate from a loaded conversation, including persisted thinking and steps.
     pub fn from_conversation(conv: &con_agent::Conversation) -> Self {
         let mut state = Self::new();
         for msg in &conv.messages {
@@ -123,7 +123,8 @@ impl PanelState {
                 con_agent::MessageRole::System => "system",
                 con_agent::MessageRole::Tool => "system",
             };
-            state.add_message(role, &msg.content);
+            state.restore_message(role, &msg.content, msg.model.as_deref(), msg.duration_ms);
+            state.restore_last_assistant_trace(msg.thinking.as_deref(), &msg.steps);
         }
         state
     }
@@ -152,6 +153,38 @@ impl PanelState {
         self.streaming = false;
         self.status = AgentStatus::Idle;
         self.messages.push(PanelMessage::new(role, content));
+    }
+
+    pub fn restore_message(
+        &mut self,
+        role: &str,
+        content: &str,
+        model: Option<&str>,
+        duration_ms: Option<u64>,
+    ) {
+        self.streaming = false;
+        self.status = AgentStatus::Idle;
+        let mut message = PanelMessage::new(role, content);
+        message.model = model.map(ToOwned::to_owned);
+        message.duration_ms = duration_ms;
+        self.messages.push(message);
+    }
+
+    pub fn restore_last_assistant_trace(
+        &mut self,
+        thinking: Option<&str>,
+        steps: &[AgentStep],
+    ) {
+        if let Some(last) = self.messages.last_mut() {
+            if last.role == "assistant" {
+                last.thinking = thinking.map(ToOwned::to_owned);
+                last.steps = restored_steps_from_agent_steps(steps);
+                last.thinking_collapsed = true;
+                if !last.steps.is_empty() {
+                    last.steps_collapsed = true;
+                }
+            }
+        }
     }
 
     pub fn add_step(&mut self, step: &str) {
@@ -1463,6 +1496,106 @@ fn result_toggle_label(content: &str, expanded: bool) -> String {
     }
 }
 
+fn restored_steps_from_agent_steps(agent_steps: &[AgentStep]) -> Vec<StepEntry> {
+    use std::collections::HashMap;
+
+    let mut restored = Vec::new();
+    let mut tool_call_positions: HashMap<String, usize> = HashMap::new();
+
+    for step in agent_steps {
+        match step {
+            AgentStep::Thinking(text) => {
+                restored.push(StepEntry {
+                    icon: "phosphor/brain-duotone.svg",
+                    label: text.clone(),
+                    detail: None,
+                    status: StepStatus::Complete,
+                    detail_collapsed: true,
+                    detail_expanded: false,
+                    duration: None,
+                });
+            }
+            AgentStep::ToolCall {
+                call_id,
+                tool,
+                input,
+            } => {
+                let args = if input.is_string() {
+                    input
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| input.to_string())
+                } else {
+                    input.to_string()
+                };
+                let label = format!(
+                    "{}: {}",
+                    humanize_tool_name(tool),
+                    truncate_str(&format_tool_args(tool, &args), 60)
+                );
+                let idx = restored.len();
+                restored.push(StepEntry {
+                    icon: tool_icon(tool),
+                    label,
+                    detail: None,
+                    status: StepStatus::Running,
+                    detail_collapsed: true,
+                    detail_expanded: false,
+                    duration: None,
+                });
+                if let Some(call_id) = call_id.as_deref() {
+                    tool_call_positions.insert(call_id.to_string(), idx);
+                }
+            }
+            AgentStep::ToolResult {
+                call_id,
+                tool,
+                output,
+                success,
+            } => {
+                let detail = Some(format_tool_result(tool, output));
+                let status = if *success {
+                    StepStatus::Complete
+                } else {
+                    StepStatus::Denied
+                };
+
+                let mut updated = false;
+                if let Some(call_id) = call_id.as_deref() {
+                    if let Some(idx) = tool_call_positions.remove(call_id) {
+                        if let Some(existing) = restored.get_mut(idx) {
+                            existing.detail = detail.clone();
+                            existing.status = status;
+                            updated = true;
+                        }
+                    }
+                }
+
+                if !updated {
+                    restored.push(StepEntry {
+                        icon: tool_icon(tool),
+                        label: humanize_tool_name(tool),
+                        detail,
+                        status,
+                        detail_collapsed: true,
+                        detail_expanded: false,
+                        duration: None,
+                    });
+                }
+            }
+            AgentStep::Text(_) => {}
+        }
+    }
+
+    for idx in tool_call_positions.into_values() {
+        if let Some(step) = restored.get_mut(idx) {
+            step.status = StepStatus::Complete;
+        }
+    }
+
+    restored
+}
+
 fn render_inline_state(
     label: SharedString,
     color: Hsla,
@@ -1486,6 +1619,7 @@ fn render_inline_state(
         )
         .into_any_element()
 }
+
 
 fn render_section_kicker(label: &str, theme: &gpui_component::Theme) -> AnyElement {
     div()

@@ -21,10 +21,14 @@ pub enum MessageRole {
 pub enum AgentStep {
     Thinking(String),
     ToolCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
         tool: String,
         input: serde_json::Value,
     },
     ToolResult {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
         tool: String,
         output: String,
         success: bool,
@@ -38,6 +42,8 @@ pub struct Message {
     pub role: MessageRole,
     pub content: String,
     pub steps: Vec<AgentStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
     pub timestamp: DateTime<Utc>,
     /// Model name that generated this response (assistant messages only)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,6 +60,7 @@ impl Message {
             role: MessageRole::User,
             content: content.into(),
             steps: Vec::new(),
+            thinking: None,
             timestamp: Utc::now(),
             model: None,
             duration_ms: None,
@@ -66,6 +73,7 @@ impl Message {
             role: MessageRole::Assistant,
             content: content.into(),
             steps: Vec::new(),
+            thinking: None,
             timestamp: Utc::now(),
             model: None,
             duration_ms: None,
@@ -78,6 +86,7 @@ impl Message {
             role: MessageRole::System,
             content: content.into(),
             steps: Vec::new(),
+            thinking: None,
             timestamp: Utc::now(),
             model: None,
             duration_ms: None,
@@ -93,6 +102,12 @@ impl Message {
     /// Builder: attach duration to this message.
     pub fn with_duration_ms(mut self, ms: u64) -> Self {
         self.duration_ms = Some(ms);
+        self
+    }
+
+    /// Builder: attach persisted thinking text to this message.
+    pub fn with_thinking(mut self, thinking: impl Into<String>) -> Self {
+        self.thinking = Some(thinking.into());
         self
     }
 }
@@ -302,5 +317,69 @@ impl Conversation {
 impl Default for Conversation {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_serialization_round_trips_thinking_and_steps() {
+        let mut message = Message::assistant("done")
+            .with_model("gpt-5.4")
+            .with_duration_ms(1234)
+            .with_thinking("checking shell context");
+        message.steps = vec![
+            AgentStep::ToolCall {
+                call_id: Some("call-1".to_string()),
+                tool: "list_panes".to_string(),
+                input: serde_json::json!({"pane_id": 7}),
+            },
+            AgentStep::ToolResult {
+                call_id: Some("call-1".to_string()),
+                tool: "list_panes".to_string(),
+                output: "{\"ok\":true}".to_string(),
+                success: true,
+            },
+        ];
+
+        let json = serde_json::to_string(&message).expect("serialize message");
+        let round_trip: Message = serde_json::from_str(&json).expect("deserialize message");
+
+        assert_eq!(round_trip.content, "done");
+        assert_eq!(round_trip.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(round_trip.duration_ms, Some(1234));
+        assert_eq!(
+            round_trip.thinking.as_deref(),
+            Some("checking shell context")
+        );
+        assert_eq!(round_trip.steps.len(), 2);
+        match &round_trip.steps[0] {
+            AgentStep::ToolCall {
+                call_id,
+                tool,
+                input,
+            } => {
+                assert_eq!(call_id.as_deref(), Some("call-1"));
+                assert_eq!(tool, "list_panes");
+                assert_eq!(input["pane_id"], 7);
+            }
+            other => panic!("unexpected first step: {other:?}"),
+        }
+        match &round_trip.steps[1] {
+            AgentStep::ToolResult {
+                call_id,
+                tool,
+                output,
+                success,
+            } => {
+                assert_eq!(call_id.as_deref(), Some("call-1"));
+                assert_eq!(tool, "list_panes");
+                assert_eq!(output, "{\"ok\":true}");
+                assert!(*success);
+            }
+            other => panic!("unexpected second step: {other:?}"),
+        }
     }
 }
