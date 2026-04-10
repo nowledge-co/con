@@ -20,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOCKET = os.environ.get("CON_SOCKET_PATH", "/tmp/con.sock")
 DEFAULT_RECORD_DIR = REPO_ROOT / ".context" / "benchmarks"
 PROFILE_DIR = REPO_ROOT / "benchmarks" / "terminal-agent" / "profiles"
+DEFAULT_CON_CLI_BIN = REPO_ROOT / "target" / "debug" / "con-cli"
 
 
 class BenchError(RuntimeError):
@@ -65,6 +66,8 @@ class BenchmarkContext:
         override = os.environ.get("CON_BENCH_CON_CLI")
         if override:
             self.cli_base = shlex.split(override)
+        elif DEFAULT_CON_CLI_BIN.exists():
+            self.cli_base = [str(DEFAULT_CON_CLI_BIN)]
         elif shutil.which("con-cli"):
             self.cli_base = ["con-cli"]
         else:
@@ -206,18 +209,49 @@ class BenchmarkContext:
     def agent_new_conversation(self, tab_index: int) -> dict[str, Any]:
         return self.run_json("agent", "new-conversation", "--tab", str(tab_index))
 
-    def choose_exec_visible_shell(self, tab_index: int) -> tuple[int, int, dict[str, Any]]:
-        panes = self.panes_list(tab_index)
-        for pane in panes.get("panes", []):
-            capabilities = pane.get("control_capabilities", [])
-            if (
-                "exec_visible_shell" in capabilities
-                and pane.get("is_alive")
-                and pane.get("surface_ready", False)
-            ):
-                return int(pane["pane_id"]), int(pane["index"]), pane
+    def wait_for_live_surface_ready_panes(
+        self,
+        tab_index: int,
+        *,
+        timeout_secs: float = 20.0,
+        poll_interval_secs: float = 0.5,
+    ) -> dict[str, Any]:
+        deadline = time.time() + timeout_secs
+        last = None
+        while time.time() < deadline:
+            panes = self.panes_list(tab_index)
+            listed = panes.get("panes", [])
+            alive = [pane for pane in listed if pane.get("is_alive")]
+            ready = [pane for pane in alive if pane.get("surface_ready", False) is True]
+            if ready:
+                return panes
+            last = listed
+            time.sleep(poll_interval_secs)
         raise BenchError(
-            f"tab {tab_index} does not expose a live, surface-ready pane with exec_visible_shell"
+            f"tab {tab_index} did not expose a live, surface-ready pane within {timeout_secs:.1f}s; last panes={last!r}"
+        )
+
+    def choose_exec_visible_shell(
+        self,
+        tab_index: int,
+        *,
+        timeout_secs: float = 20.0,
+        poll_interval_secs: float = 0.5,
+    ) -> tuple[int, int, dict[str, Any]]:
+        deadline = time.time() + timeout_secs
+        while time.time() < deadline:
+            panes = self.panes_list(tab_index)
+            for pane in panes.get("panes", []):
+                capabilities = pane.get("control_capabilities", [])
+                if (
+                    "exec_visible_shell" in capabilities
+                    and pane.get("is_alive")
+                    and pane.get("surface_ready", False)
+                ):
+                    return int(pane["pane_id"]), int(pane["index"]), pane
+            time.sleep(poll_interval_secs)
+        raise BenchError(
+            f"tab {tab_index} does not expose a live, surface-ready pane with exec_visible_shell within {timeout_secs:.1f}s"
         )
 
     def wait_for_pane_capability(
@@ -408,7 +442,7 @@ def case_tabs_list(ctx: BenchmarkContext) -> tuple[str, dict[str, Any]]:
 
 def case_panes_list(ctx: BenchmarkContext) -> tuple[str, dict[str, Any]]:
     tab_index = ctx.active_tab_index()
-    panes = ctx.panes_list(tab_index)
+    panes = ctx.wait_for_live_surface_ready_panes(tab_index)
     listed = panes.get("panes", [])
     if not listed:
         raise BenchError(f"tab {tab_index} returned no panes")

@@ -302,6 +302,9 @@ impl Conversation {
     }
 
     fn conversations_dir() -> PathBuf {
+        if let Some(path) = std::env::var_os("CON_CONVERSATIONS_DIR") {
+            return PathBuf::from(path);
+        }
         dirs::data_dir()
             .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
             .unwrap_or_else(|| PathBuf::from("/tmp"))

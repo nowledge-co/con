@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use gpui::*;
 use gpui_component::ActiveTheme;
 use serde_json::json;
+use tokio::sync::oneshot;
 
 const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
@@ -86,6 +87,8 @@ pub struct ConWorkspace {
     ghostty_app: std::sync::Arc<con_ghostty::GhosttyApp>,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
+    /// Pending window-aware control requests such as tab lifecycle mutations.
+    pending_window_control_requests: Vec<PendingWindowControlRequest>,
     /// Control-plane requests from the external `con-cli` socket bridge.
     control_request_rx: crossbeam_channel::Receiver<ControlRequestEnvelope>,
     /// Keeps the Unix socket alive for this workspace instance.
@@ -114,6 +117,16 @@ struct PendingCreatePane {
     tab_idx: usize,
     location: con_agent::tools::PaneCreateLocation,
     response_tx: crossbeam_channel::Sender<con_agent::PaneResponse>,
+}
+
+enum PendingWindowControlRequest {
+    TabsNew {
+        response_tx: oneshot::Sender<ControlResult>,
+    },
+    TabsClose {
+        tab_idx: usize,
+        response_tx: oneshot::Sender<ControlResult>,
+    },
 }
 
 struct PendingControlAgentRequest {
@@ -424,8 +437,15 @@ impl ConWorkspace {
         .detach();
 
         // Focus the initial terminal so the user can start typing immediately
-        let initial_terminal = tabs[active_tab].pane_tree.focused_terminal();
+        let initial_terminal = tabs[active_tab].pane_tree.focused_terminal().clone();
         initial_terminal.focus(window, cx);
+        Self::schedule_terminal_bootstrap_reassert(
+            &initial_terminal,
+            true,
+            window.window_handle(),
+            cx.weak_entity(),
+            cx,
+        );
 
         // Hide non-active tabs' ghostty NSViews so only the active tab is visible
         for (i, tab) in tabs.iter().enumerate() {
@@ -465,6 +485,7 @@ impl ConWorkspace {
             terminal_theme,
             ghostty_app,
             pending_create_pane_requests: Vec::new(),
+            pending_window_control_requests: Vec::new(),
             control_request_rx,
             control_socket,
             pending_control_agent_requests: HashMap::new(),
@@ -488,6 +509,51 @@ impl ConWorkspace {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
     }
 
+    fn schedule_terminal_bootstrap_reassert(
+        terminal: &TerminalPane,
+        should_focus: bool,
+        window_handle: AnyWindowHandle,
+        workspace_handle: WeakEntity<Self>,
+        cx: &mut Context<Self>,
+    ) {
+        let terminal = terminal.clone();
+        cx.spawn(async move |_, cx| {
+            for attempt in 0..8 {
+                let delay_ms = if attempt == 0 { 16 } else { 250 };
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(delay_ms))
+                    .await;
+                let ready = window_handle
+                    .update(cx, |_root, window, cx| {
+                        let Some(workspace) = workspace_handle.upgrade() else {
+                            return false;
+                        };
+                        workspace
+                            .update(cx, |_workspace, cx| {
+                                terminal.ensure_surface(window, cx);
+                                terminal.notify(cx);
+                                terminal.set_native_view_visible(true, cx);
+                                terminal.set_focus_state(should_focus, cx);
+                                if should_focus {
+                                    terminal.focus(window, cx);
+                                }
+                                if terminal.surface_ready(cx) {
+                                    terminal.recover_shell_prompt_state(cx);
+                                    true
+                                } else {
+                                    false
+                                }
+                            })
+                    })
+                    .unwrap_or(false);
+                if ready {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     fn schedule_pending_create_pane_flush(&self, cx: &mut Context<Self>) {
         let window_handle = self.window_handle;
         let workspace_handle = self.workspace_handle.clone();
@@ -495,6 +561,7 @@ impl ConWorkspace {
             let result = window_handle.update(cx, |_root, window, cx| {
                 if let Some(workspace) = workspace_handle.upgrade() {
                     let _ = workspace.update(cx, |workspace, cx| {
+                        workspace.flush_pending_window_control_requests(window, cx);
                         workspace.flush_pending_create_pane_requests(window, cx);
                     });
                 }
@@ -505,6 +572,60 @@ impl ConWorkspace {
                 );
             }
         });
+    }
+
+    fn flush_pending_window_control_requests(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pending = std::mem::take(&mut self.pending_window_control_requests);
+        if pending.is_empty() {
+            return;
+        }
+
+        for request in pending {
+            match request {
+                PendingWindowControlRequest::TabsNew { response_tx } => {
+                    self.new_tab(&NewTab, window, cx);
+                    let result = Ok(json!({
+                        "active_tab_index": self.active_tab + 1,
+                        "tab_count": self.tabs.len(),
+                        "focused_pane_id": self.tabs[self.active_tab].pane_tree.focused_pane_id(),
+                    }));
+                    Self::send_control_result(response_tx, result);
+                }
+                PendingWindowControlRequest::TabsClose { tab_idx, response_tx } => {
+                    if self.tabs.len() <= 1 {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(
+                                "refusing to close the last tab over the control plane",
+                            )),
+                        );
+                        continue;
+                    }
+                    if tab_idx >= self.tabs.len() {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(format!(
+                                "Tab index {} is out of range. Valid tabs are 1..={}.",
+                                tab_idx + 1,
+                                self.tabs.len()
+                            ))),
+                        );
+                        continue;
+                    }
+                    self.close_tab_by_index(tab_idx, window, cx);
+                    let result = Ok(json!({
+                        "active_tab_index": self.active_tab + 1,
+                        "tab_count": self.tabs.len(),
+                        "closed_tab_index": tab_idx + 1,
+                    }));
+                    Self::send_control_result(response_tx, result);
+                }
+            }
+        }
     }
 
     fn flush_pending_create_pane_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -529,13 +650,13 @@ impl ConWorkspace {
             if should_focus {
                 terminal.focus(window, cx);
             }
-            let mounted_terminal = terminal.clone();
-            window.on_next_frame(move |window, cx| {
-                mounted_terminal.notify(cx);
-                if should_focus {
-                    mounted_terminal.focus(window, cx);
-                }
-            });
+            Self::schedule_terminal_bootstrap_reassert(
+                &terminal,
+                should_focus,
+                self.window_handle,
+                self.workspace_handle.clone(),
+                cx,
+            );
 
             if let Some(cmd) = &req.command {
                 let cmd_with_newline = format!("{}\n", cmd);
@@ -814,6 +935,10 @@ impl ConWorkspace {
                     let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                     let remote_workspace =
                         con_agent::context::remote_workspace_anchor(&runtime, &observation);
+                    let workspace_cwd_hint = con_agent::context::workspace_cwd_hint(
+                        observation.cwd.as_deref(),
+                        &runtime.recent_actions,
+                    );
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
                         pane_id: pid,
@@ -836,6 +961,11 @@ impl ConWorkspace {
                         runtime_warnings: runtime.warnings,
                         tmux_session: runtime.tmux_session,
                         cwd: observation.cwd,
+                        workspace_cwd_hint,
+                        workspace_agent_cli_hint: con_agent::context::workspace_agent_cli_hint(
+                            runtime.agent_cli.as_deref(),
+                            &runtime.recent_actions,
+                        ),
                         screen_hints: observation.screen_hints,
                         last_command: observation.last_command,
                         last_exit_code: observation.last_exit_code,
@@ -1144,6 +1274,22 @@ impl ConWorkspace {
                         "tabs": tabs,
                     })),
                 );
+            }
+            ControlCommand::TabsNew => {
+                self.pending_window_control_requests
+                    .push(PendingWindowControlRequest::TabsNew { response_tx });
+                self.schedule_pending_create_pane_flush(cx);
+            }
+            ControlCommand::TabsClose { tab_index } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => {
+                        self.pending_window_control_requests.push(
+                            PendingWindowControlRequest::TabsClose { tab_idx, response_tx },
+                        );
+                        self.schedule_pending_create_pane_flush(cx);
+                    }
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
             }
             ControlCommand::PanesList { tab_index } => {
                 match self.resolve_control_tab_index(tab_index) {
@@ -3149,7 +3295,6 @@ impl ConWorkspace {
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let terminal = self.create_terminal(None, window, cx);
-        terminal.ensure_surface(window, cx);
         let tab_number = self.tabs.len() + 1;
         let old_active = self.active_tab;
 
@@ -3181,6 +3326,13 @@ impl ConWorkspace {
 
         terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
+        Self::schedule_terminal_bootstrap_reassert(
+            &terminal,
+            true,
+            self.window_handle,
+            self.workspace_handle.clone(),
+            cx,
+        );
         self.save_session(cx);
         cx.notify();
     }
@@ -3246,10 +3398,18 @@ impl ConWorkspace {
         // Show and focus new active tab's ghostty views
         for t in self.tabs[self.active_tab].pane_tree.all_terminals() {
             t.set_native_view_visible(true, cx);
+            t.ensure_surface(window, cx);
         }
         let focused = self.tabs[self.active_tab].pane_tree.focused_terminal();
         focused.set_focus_state(true, cx);
         focused.focus(window, cx);
+        Self::schedule_terminal_bootstrap_reassert(
+            focused,
+            true,
+            self.window_handle,
+            self.workspace_handle.clone(),
+            cx,
+        );
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
@@ -3312,11 +3472,13 @@ impl ConWorkspace {
         terminal.notify(cx);
         terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
-        let mounted_terminal = terminal.clone();
-        window.on_next_frame(move |window, cx| {
-            mounted_terminal.notify(cx);
-            mounted_terminal.focus(window, cx);
-        });
+        Self::schedule_terminal_bootstrap_reassert(
+            &terminal,
+            true,
+            self.window_handle,
+            self.workspace_handle.clone(),
+            cx,
+        );
         cx.notify();
     }
 
@@ -3363,10 +3525,18 @@ impl ConWorkspace {
         // Show new tab's ghostty NSViews and focus active surface
         for terminal in self.tabs[index].pane_tree.all_terminals() {
             terminal.set_native_view_visible(true, cx);
+            terminal.ensure_surface(window, cx);
         }
         let focused = self.tabs[index].pane_tree.focused_terminal();
         focused.set_focus_state(true, cx);
         focused.focus(window, cx);
+        Self::schedule_terminal_bootstrap_reassert(
+            focused,
+            true,
+            self.window_handle,
+            self.workspace_handle.clone(),
+            cx,
+        );
 
         self.save_session(cx);
         cx.notify();
@@ -3537,11 +3707,13 @@ impl ConWorkspace {
         terminal.notify(cx);
         terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
-        let mounted_terminal = terminal.clone();
-        window.on_next_frame(move |window, cx| {
-            mounted_terminal.notify(cx);
-            mounted_terminal.focus(window, cx);
-        });
+        Self::schedule_terminal_bootstrap_reassert(
+            &terminal,
+            true,
+            self.window_handle,
+            self.workspace_handle.clone(),
+            cx,
+        );
         self.active_tab = tab_idx;
         self.record_runtime_event_for_terminal(
             tab_idx,

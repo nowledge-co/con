@@ -47,6 +47,8 @@ enum Command {
 #[derive(Subcommand)]
 enum TabsCommand {
     List,
+    New,
+    Close(TabArgs),
 }
 
 #[derive(Subcommand)]
@@ -244,6 +246,19 @@ fn main() -> Result<()> {
             TabsCommand::List => {
                 let result = send_command(&socket_path, ControlCommand::TabsList)?;
                 print_result(&result, cli.json, render_tabs_list)?;
+            }
+            TabsCommand::New => {
+                let result = send_command(&socket_path, ControlCommand::TabsNew)?;
+                print_result(&result, cli.json, render_pretty_json)?;
+            }
+            TabsCommand::Close(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::TabsClose {
+                        tab_index: args.tab,
+                    },
+                )?;
+                print_result(&result, cli.json, render_status_only)?;
             }
         },
         Command::Panes { command } => match command {

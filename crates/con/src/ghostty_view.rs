@@ -15,6 +15,7 @@ use std::cell::Cell;
 #[cfg(target_os = "macos")]
 use std::os::raw::c_void;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use con_ghostty::ffi;
 use con_ghostty::{
@@ -74,6 +75,8 @@ pub struct GhosttyView {
     awaiting_first_layout_visibility: bool,
     /// Guard: emit GhosttyProcessExited exactly once, not every 8ms tick.
     process_exit_emitted: bool,
+    /// Retry surface creation after transient libghostty initialization failures.
+    next_surface_init_retry_at: Option<Instant>,
 }
 
 /// Register ghostty key bindings. Call once at startup.
@@ -124,6 +127,13 @@ impl GhosttyView {
                                 view.last_title = title.clone();
                                 cx.emit(GhosttyTitleChanged(title));
                             }
+                        } else if !view.initialized
+                            && view
+                                .next_surface_init_retry_at
+                                .is_some_and(|deadline| Instant::now() >= deadline)
+                        {
+                            view.next_surface_init_retry_at = None;
+                            cx.notify();
                         }
                     })
                     .is_err()
@@ -150,6 +160,7 @@ impl GhosttyView {
             native_view_visible: Cell::new(true),
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
+            next_surface_init_retry_at: None,
         }
     }
 
@@ -193,6 +204,12 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     fn ensure_initialized(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
         if self.initialized {
+            return;
+        }
+        if self
+            .next_surface_init_retry_at
+            .is_some_and(|deadline| Instant::now() < deadline)
+        {
             return;
         }
 
@@ -243,6 +260,7 @@ impl GhosttyView {
                 self.terminal = Some(Arc::new(terminal));
                 self.nsview = Some(nsview);
                 self.initialized = true;
+                self.next_surface_init_retry_at = None;
                 self.set_visible(
                     self.native_view_visible.get() && !self.awaiting_first_layout_visibility,
                 );
@@ -264,11 +282,12 @@ impl GhosttyView {
                 log::error!("Failed to create ghostty surface: {}", e);
                 // Discard queued writes — no PTY exists.
                 self.pending_write = None;
-                // Mark initialized to prevent infinite retry on every layout.
-                self.initialized = true;
+                self.initialized = false;
+                self.next_surface_init_retry_at = Some(Instant::now() + Duration::from_millis(250));
                 unsafe {
                     let _: () = msg_send![nsview, removeFromSuperview];
                 }
+                self.nsview = None;
             }
         }
     }

@@ -60,6 +60,8 @@ const CONTROL_METHODS: &[(&str, &str)] = &[
         "tabs.list",
         "List tabs and their conversation/session metadata.",
     ),
+    ("tabs.new", "Create a new active tab."),
+    ("tabs.close", "Close a tab by index or close the active tab."),
     (
         "panes.list",
         "List panes for a tab with control/runtime metadata.",
@@ -141,6 +143,10 @@ pub enum ControlCommand {
     SystemIdentify,
     SystemCapabilities,
     TabsList,
+    TabsNew,
+    TabsClose {
+        tab_index: Option<usize>,
+    },
     PanesList {
         tab_index: Option<usize>,
     },
@@ -223,6 +229,8 @@ impl ControlCommand {
             Self::SystemIdentify => "system.identify",
             Self::SystemCapabilities => "system.capabilities",
             Self::TabsList => "tabs.list",
+            Self::TabsNew => "tabs.new",
+            Self::TabsClose { .. } => "tabs.close",
             Self::PanesList { .. } => "panes.list",
             Self::PanesRead { .. } => "panes.read",
             Self::PanesExec { .. } => "panes.exec",
@@ -242,7 +250,10 @@ impl ControlCommand {
 
     pub fn params_json(&self) -> Value {
         match self {
-            Self::SystemIdentify | Self::SystemCapabilities | Self::TabsList => json!({}),
+            Self::SystemIdentify | Self::SystemCapabilities | Self::TabsList | Self::TabsNew => {
+                json!({})
+            }
+            Self::TabsClose { tab_index } => json!({ "tab_index": tab_index }),
             Self::PanesList { tab_index } => json!({ "tab_index": tab_index }),
             Self::PanesRead {
                 tab_index,
@@ -370,6 +381,13 @@ impl ControlCommand {
             "system.identify" => Ok(Self::SystemIdentify),
             "system.capabilities" => Ok(Self::SystemCapabilities),
             "tabs.list" => Ok(Self::TabsList),
+            "tabs.new" => Ok(Self::TabsNew),
+            "tabs.close" => {
+                let params: TabScopedParams = decode_params(params)?;
+                Ok(Self::TabsClose {
+                    tab_index: params.tab_index,
+                })
+            }
             "panes.list" => {
                 let params: TabScopedParams = decode_params(params)?;
                 Ok(Self::PanesList {

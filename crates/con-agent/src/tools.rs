@@ -1503,14 +1503,19 @@ fn workspace_note_for_pane(
     state: crate::context::TabWorkspaceState,
     host: Option<&str>,
 ) -> String {
-    match (kind, state, host) {
-        (_, crate::context::TabWorkspaceState::Disconnected, Some(host)) => {
+    let cwd = crate::context::workspace_cwd_hint(pane.cwd.as_deref(), &pane.recent_actions);
+    let agent_cli =
+        crate::context::workspace_agent_cli_hint(pane.agent_cli.as_deref(), &pane.recent_actions);
+    match (kind, state, host, cwd.as_deref(), agent_cli.as_deref()) {
+        (_, crate::context::TabWorkspaceState::Disconnected, Some(host), _, _) => {
             format!("SSH workspace for `{host}` appears disconnected.")
         }
         (
             crate::context::TabWorkspaceKind::TmuxWorkspace,
             crate::context::TabWorkspaceState::Ready,
             Some(host),
+            _,
+            _,
         ) if pane
             .tmux_control
             .as_ref()
@@ -1524,6 +1529,8 @@ fn workspace_note_for_pane(
             crate::context::TabWorkspaceKind::TmuxWorkspace,
             crate::context::TabWorkspaceState::Ready,
             Some(host),
+            _,
+            _,
         ) => {
             let session = pane
                 .tmux_control
@@ -1533,7 +1540,7 @@ fn workspace_note_for_pane(
                 .unwrap_or("tmux");
             format!("Remote tmux workspace on `{host}` session `{session}` is ready.")
         }
-        (crate::context::TabWorkspaceKind::TmuxWorkspace, _, Some(host))
+        (crate::context::TabWorkspaceKind::TmuxWorkspace, _, Some(host), _, _)
             if pane
                 .tmux_control
                 .as_ref()
@@ -1543,7 +1550,7 @@ fn workspace_note_for_pane(
         {
             format!("Remote tmux workspace on `{host}` is visible, but needs inspection.")
         }
-        (crate::context::TabWorkspaceKind::TmuxWorkspace, _, Some(host)) => {
+        (crate::context::TabWorkspaceKind::TmuxWorkspace, _, Some(host), _, _) => {
             let session = pane
                 .tmux_control
                 .as_ref()
@@ -1558,17 +1565,47 @@ fn workspace_note_for_pane(
             crate::context::TabWorkspaceKind::RemoteShell,
             crate::context::TabWorkspaceState::Ready,
             Some(host),
+            _,
+            _,
         ) => {
             format!("Remote shell workspace on `{host}` looks ready.")
         }
-        (crate::context::TabWorkspaceKind::RemoteShell, _, Some(host)) => {
+        (crate::context::TabWorkspaceKind::RemoteShell, _, Some(host), _, _) => {
             format!("Remote shell workspace on `{host}` exists, but needs inspection.")
         }
         (
             crate::context::TabWorkspaceKind::LocalShell,
             crate::context::TabWorkspaceState::Ready,
             _,
-        ) => "Local shell workspace looks ready.".to_string(),
+            Some(cwd),
+            Some(agent),
+        ) => format!("Local {agent} workspace at `{cwd}` looks reusable."),
+        (
+            crate::context::TabWorkspaceKind::LocalShell,
+            crate::context::TabWorkspaceState::Ready,
+            _,
+            Some(cwd),
+            None,
+        ) => format!("Local shell workspace at `{cwd}` looks ready."),
+        (
+            crate::context::TabWorkspaceKind::LocalShell,
+            crate::context::TabWorkspaceState::Ready,
+            _,
+            None,
+            Some(agent),
+        ) => format!("Local {agent} workspace looks reusable."),
+        (crate::context::TabWorkspaceKind::LocalShell, _, _, Some(cwd), Some(agent)) => {
+            format!("Local {agent} workspace at `{cwd}` exists, but needs inspection.")
+        }
+        (crate::context::TabWorkspaceKind::LocalShell, _, _, Some(cwd), None) => {
+            format!("Local shell workspace at `{cwd}` exists, but needs inspection.")
+        }
+        (crate::context::TabWorkspaceKind::LocalShell, _, _, None, Some(agent)) => {
+            format!("Local {agent} workspace exists, but needs inspection.")
+        }
+        (crate::context::TabWorkspaceKind::LocalShell, _, _, None, None) => {
+            "Local shell workspace exists, but needs inspection.".to_string()
+        }
         _ => "Workspace state is not yet proven.".to_string(),
     }
 }
@@ -1593,6 +1630,11 @@ fn tab_workspaces_from_panes(panes: &[PaneInfo]) -> Vec<crate::context::TabWorks
                     .as_ref()
                     .and_then(|tmux| tmux.session_name.clone())
                     .or_else(|| pane.tmux_session.clone()),
+                cwd: crate::context::workspace_cwd_hint(pane.cwd.as_deref(), &pane.recent_actions),
+                agent_cli: crate::context::workspace_agent_cli_hint(
+                    pane.agent_cli.as_deref(),
+                    &pane.recent_actions,
+                ),
                 kind,
                 state,
                 note: workspace_note_for_pane(pane, kind, state, host),

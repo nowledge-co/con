@@ -365,6 +365,8 @@ pub struct TabWorkspaceSummary {
     pub pane_id: usize,
     pub host: Option<String>,
     pub tmux_session: Option<String>,
+    pub cwd: Option<String>,
+    pub agent_cli: Option<String>,
     pub kind: TabWorkspaceKind,
     pub state: TabWorkspaceState,
     pub note: String,
@@ -1146,6 +1148,8 @@ pub struct PaneSummary {
     pub runtime_warnings: Vec<String>,
     pub tmux_session: Option<String>,
     pub cwd: Option<String>,
+    pub workspace_cwd_hint: Option<String>,
+    pub workspace_agent_cli_hint: Option<String>,
     pub screen_hints: Vec<PaneObservationHint>,
     pub last_command: Option<String>,
     pub last_exit_code: Option<i32>,
@@ -1172,6 +1176,46 @@ pub fn ssh_target_from_recent_actions(actions: &[PaneActionRecord]) -> Option<St
         .rev()
         .filter_map(|action| action.command.as_deref())
         .find_map(parse_ssh_target)
+}
+
+fn parse_workspace_cwd_from_command(command: &str) -> Option<String> {
+    let trimmed = command.trim();
+    let after_cd = trimmed.strip_prefix("cd ")?;
+    let mut cwd = String::new();
+    for ch in after_cd.chars() {
+        if matches!(ch, '&' | ';' | '\n' | '\r') {
+            break;
+        }
+        cwd.push(ch);
+    }
+    let cwd = cwd.trim().trim_matches(&['"', '\''][..]);
+    if cwd.is_empty() {
+        None
+    } else {
+        Some(cwd.to_string())
+    }
+}
+
+pub fn workspace_cwd_hint(
+    cwd: Option<&str>,
+    recent_actions: &[PaneActionRecord],
+) -> Option<String> {
+    recent_actions
+        .iter()
+        .rev()
+        .filter_map(|action| action.command.as_deref())
+        .find_map(parse_workspace_cwd_from_command)
+        .or_else(|| cwd.map(ToString::to_string))
+}
+
+pub fn workspace_agent_cli_hint(
+    visible_agent_cli: Option<&str>,
+    recent_actions: &[PaneActionRecord],
+) -> Option<String> {
+    visible_agent_cli
+        .and_then(canonical_agent_cli_name)
+        .map(ToString::to_string)
+        .or_else(|| classify_recent_agent_cli_action(recent_actions).map(ToString::to_string))
 }
 
 pub fn remote_workspace_anchor(
@@ -1607,38 +1651,65 @@ fn workspace_note(
     state: TabWorkspaceState,
     host: Option<&str>,
     tmux_session: Option<&str>,
+    cwd: Option<&str>,
+    agent_cli: Option<&str>,
 ) -> String {
-    match (kind, state, host, tmux_session) {
-        (_, TabWorkspaceState::Disconnected, Some(host), _) => {
+    match (kind, state, host, tmux_session, cwd, agent_cli) {
+        (_, TabWorkspaceState::Disconnected, Some(host), _, _, _) => {
             format!("SSH workspace for `{host}` appears disconnected.")
         }
-        (TabWorkspaceKind::TmuxWorkspace, TabWorkspaceState::Ready, Some(host), None) => {
+        (TabWorkspaceKind::TmuxWorkspace, TabWorkspaceState::Ready, Some(host), None, _, _) => {
             format!("Remote tmux workspace on `{host}` looks ready.")
         }
-        (TabWorkspaceKind::TmuxWorkspace, TabWorkspaceState::Ready, Some(host), Some(session)) => {
+        (
+            TabWorkspaceKind::TmuxWorkspace,
+            TabWorkspaceState::Ready,
+            Some(host),
+            Some(session),
+            _,
+            _,
+        ) => {
             format!("Remote tmux workspace on `{host}` session `{session}` is ready.")
         }
-        (TabWorkspaceKind::TmuxWorkspace, _, Some(host), None) => {
+        (TabWorkspaceKind::TmuxWorkspace, _, Some(host), None, _, _) => {
             format!(
                 "Remote tmux workspace on `{host}` is visible, but needs inspection before control."
             )
         }
-        (TabWorkspaceKind::TmuxWorkspace, _, Some(host), Some(session)) => {
+        (TabWorkspaceKind::TmuxWorkspace, _, Some(host), Some(session), _, _) => {
             format!(
                 "Remote tmux workspace on `{host}` session `{session}` exists, but needs inspection before control."
             )
         }
-        (TabWorkspaceKind::RemoteShell, TabWorkspaceState::Ready, Some(host), _) => {
+        (TabWorkspaceKind::RemoteShell, TabWorkspaceState::Ready, Some(host), _, _, _) => {
             format!("Remote shell workspace on `{host}` looks ready.")
         }
-        (TabWorkspaceKind::RemoteShell, _, Some(host), _) => {
+        (TabWorkspaceKind::RemoteShell, _, Some(host), _, _, _) => {
             format!("Remote shell workspace on `{host}` exists, but needs inspection.")
         }
-        (TabWorkspaceKind::LocalShell, TabWorkspaceState::Ready, _, _) => {
-            "Local shell workspace looks ready.".to_string()
+        (TabWorkspaceKind::LocalShell, TabWorkspaceState::Ready, _, _, Some(cwd), Some(agent)) => {
+            format!("Local {agent} workspace at `{cwd}` looks reusable.")
         }
-        (TabWorkspaceKind::TmuxWorkspace, TabWorkspaceState::Ready, None, Some(session)) => {
+        (TabWorkspaceKind::LocalShell, TabWorkspaceState::Ready, _, _, Some(cwd), None) => {
+            format!("Local shell workspace at `{cwd}` looks ready.")
+        }
+        (TabWorkspaceKind::LocalShell, TabWorkspaceState::Ready, _, _, None, Some(agent)) => {
+            format!("Local {agent} workspace looks reusable.")
+        }
+        (TabWorkspaceKind::LocalShell, _, _, _, Some(cwd), Some(agent)) => {
+            format!("Local {agent} workspace at `{cwd}` exists, but needs inspection.")
+        }
+        (TabWorkspaceKind::LocalShell, _, _, _, Some(cwd), None) => {
+            format!("Local shell workspace at `{cwd}` exists, but needs inspection.")
+        }
+        (TabWorkspaceKind::LocalShell, _, _, _, None, Some(agent)) => {
+            format!("Local {agent} workspace exists, but needs inspection.")
+        }
+        (TabWorkspaceKind::TmuxWorkspace, TabWorkspaceState::Ready, None, Some(session), _, _) => {
             format!("tmux workspace `{session}` is ready.")
+        }
+        (TabWorkspaceKind::LocalShell, _, _, _, None, None) => {
+            "Local shell workspace exists, but needs inspection.".to_string()
         }
         _ => "Workspace state is not yet proven.".to_string(),
     }
@@ -1835,11 +1906,34 @@ fn pane_has_native_tmux(pane: &PaneSummary) -> bool {
 }
 
 fn tab_workspaces(ctx: &TerminalContext) -> Vec<TabWorkspaceSummary> {
+    let focused_workspace_cwd = workspace_cwd_hint(ctx.cwd.as_deref(), &ctx.focused_recent_actions);
+    let focused_workspace_agent = workspace_agent_cli_hint(
+        ctx.focused_control.visible_target.label.as_deref(),
+        &ctx.focused_recent_actions,
+    );
     let focused_host = ctx.focused_hostname.as_deref().or_else(|| {
         ctx.focused_remote_workspace
             .as_ref()
             .map(|anchor| anchor.host.as_str())
     });
+    let focused_kind = derive_workspace_kind(
+        focused_host,
+        ctx.focused_control
+            .tmux
+            .as_ref()
+            .and_then(|tmux| tmux.session_name.as_deref())
+            .or(ctx.tmux_session.as_deref()),
+        &ctx.focused_runtime_stack,
+        &ctx.focused_last_verified_runtime_stack,
+        &ctx.focused_screen_hints,
+    );
+    let focused_state = derive_workspace_state(
+        focused_kind,
+        ctx.focused_front_state,
+        &ctx.focused_screen_hints,
+        focused_supports_visible_shell(ctx) || ctx.focused_remote_workspace.is_some(),
+        focused_has_native_tmux(ctx),
+    );
     let mut workspaces = vec![TabWorkspaceSummary {
         pane_index: ctx.focused_pane_index,
         pane_id: ctx.focused_pane_id,
@@ -1850,34 +1944,10 @@ fn tab_workspaces(ctx: &TerminalContext) -> Vec<TabWorkspaceSummary> {
             .as_ref()
             .and_then(|tmux| tmux.session_name.clone())
             .or_else(|| ctx.tmux_session.clone()),
-        kind: derive_workspace_kind(
-            focused_host,
-            ctx.focused_control
-                .tmux
-                .as_ref()
-                .and_then(|tmux| tmux.session_name.as_deref())
-                .or(ctx.tmux_session.as_deref()),
-            &ctx.focused_runtime_stack,
-            &ctx.focused_last_verified_runtime_stack,
-            &ctx.focused_screen_hints,
-        ),
-        state: derive_workspace_state(
-            derive_workspace_kind(
-                focused_host,
-                ctx.focused_control
-                    .tmux
-                    .as_ref()
-                    .and_then(|tmux| tmux.session_name.as_deref())
-                    .or(ctx.tmux_session.as_deref()),
-                &ctx.focused_runtime_stack,
-                &ctx.focused_last_verified_runtime_stack,
-                &ctx.focused_screen_hints,
-            ),
-            ctx.focused_front_state,
-            &ctx.focused_screen_hints,
-            focused_supports_visible_shell(ctx) || ctx.focused_remote_workspace.is_some(),
-            focused_has_native_tmux(ctx),
-        ),
+        cwd: focused_workspace_cwd,
+        agent_cli: focused_workspace_agent,
+        kind: focused_kind,
+        state: focused_state,
         note: String::new(),
     }];
     for pane in &ctx.other_panes {
@@ -1914,6 +1984,8 @@ fn tab_workspaces(ctx: &TerminalContext) -> Vec<TabWorkspaceSummary> {
                 .as_ref()
                 .and_then(|tmux| tmux.session_name.clone())
                 .or_else(|| pane.tmux_session.clone()),
+            cwd: pane.workspace_cwd_hint.clone(),
+            agent_cli: pane.workspace_agent_cli_hint.clone(),
             kind,
             state,
             note: String::new(),
@@ -1926,6 +1998,8 @@ fn tab_workspaces(ctx: &TerminalContext) -> Vec<TabWorkspaceSummary> {
             workspace.state,
             workspace.host.as_deref(),
             workspace.tmux_session.as_deref(),
+            workspace.cwd.as_deref(),
+            workspace.agent_cli.as_deref(),
         );
     }
 
@@ -2396,6 +2470,7 @@ impl TerminalContext {
              - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context`, `tmux_snapshot`, or `<tab_workspaces>`. Only call list_tab_workspaces / list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
              - MULTI-PANE TARGET SELECTION (\"which pane should you use?\", \"which pane is safer?\", \"where should you run this?\") → resolve_work_target.\n\
              - FOLLOW-UP REMOTE WORK on hosts that already exist in `<remote_workspaces>` → reuse those workspaces by default. Do not create duplicate SSH panes unless the user asks for a new host or the existing pane is no longer reusable.\n\
+             - FOLLOW-UP LOCAL CODING WORK in `<local_workspaces>` → reuse those local Codex / Claude / OpenCode / shell workspaces by default. Do not create duplicate local panes when a reusable workspace already exists for the same project path.\n\
              - When `<work_target_hints>` is present, use those typed hints before improvising pane choice from raw metadata.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
              - When multiple panes are visible and the user asks about the terminal/session state, mention the pane count and summarize materially different peer panes. Do not collapse the whole tab into only the focused pane unless the user explicitly asks about that pane alone.\n\
@@ -2430,7 +2505,7 @@ impl TerminalContext {
                Returns both `pane_index` and stable `pane_id`, plus initial output (waits for output to settle). \
                Check the output to see what happened — no need for a separate read_pane.\n\n\
              - list_panes: List all panes with metadata, stable pane ids, control state, capabilities, and addressing notes.\n\n\
-             - list_tab_workspaces: Summarize the current tab as typed workspaces such as remote shell, tmux workspace, disconnected SSH pane, or local shell.\n\n\
+             - list_tab_workspaces: Summarize the current tab as typed workspaces such as remote shell, tmux workspace, disconnected SSH pane, local shell, or local coding-cli workspace.\n\n\
              - probe_shell_context: Run a read-only shell-scoped probe in a pane with a proven fresh shell prompt. \
                Use this to gather authoritative shell facts such as hostname, SSH env, tmux env, tmux session/window/pane ids, \
                and NVIM_LISTEN_ADDRESS. This is shell-scope truth, not foreground-app truth after control passes to a TUI.\n\n\
@@ -2473,6 +2548,7 @@ impl TerminalContext {
              - After list_panes, create_pane, ensure_remote_shell_target, resolve_work_target, or remote_exec, carry `pane_id` forward for follow-up actions. Use `pane_index` only as a human-readable snapshot.\n\
              - Prefer typed attachments and probes over inference. If `probe_shell_context` is available, use it before guessing about SSH, tmux, or editor context.\n\
              - `<remote_workspaces>` is not a guess. It is con's current host-workspace inventory for this tab, built from pane-local runtime facts and con-managed SSH continuity.\n\
+             - `<local_workspaces>` is con's current local coding-workspace inventory for this tab. Use it to reuse local shell and local agent-cli panes for the same project path instead of opening duplicates.\n\
              - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
              - `screen_hints` are weak observations derived from the current visible screen snapshot. They can describe what appears to be on screen now, but they are not backend facts and must not unlock control.\n\
              - Do not end a session-state answer with a vague offer to \"inspect more closely\". Only propose a next step when a stronger fact source is concretely available, such as `probe_shell_context`, `tmux_snapshot`, or tmux native tools already present on the pane.\n\
@@ -2911,6 +2987,41 @@ impl TerminalContext {
         }
 
         let tab_workspaces = tab_workspaces(self);
+        let mut local_workspaces: Vec<&TabWorkspaceSummary> = tab_workspaces
+            .iter()
+            .filter(|workspace| {
+                workspace.kind == TabWorkspaceKind::LocalShell
+                    && workspace.state != TabWorkspaceState::Disconnected
+            })
+            .collect();
+        local_workspaces.sort_by(|a, b| {
+            a.agent_cli
+                .is_none()
+                .cmp(&b.agent_cli.is_none())
+                .then_with(|| a.pane_index.cmp(&b.pane_index))
+        });
+        if !local_workspaces.is_empty() {
+            prompt.push_str("<local_workspaces>\n");
+            for workspace in local_workspaces {
+                prompt.push_str(&format!(
+                    "  <workspace pane_index=\"{}\" pane_id=\"{}\" state=\"{}\"",
+                    workspace.pane_index,
+                    workspace.pane_id,
+                    workspace.state.as_str()
+                ));
+                if let Some(agent) = &workspace.agent_cli {
+                    prompt.push_str(&format!(" agent_cli=\"{}\"", xml_escape(agent)));
+                }
+                if let Some(cwd) = &workspace.cwd {
+                    prompt.push_str(&format!(" cwd=\"{}\"", xml_escape(cwd)));
+                }
+                prompt.push_str(">");
+                prompt.push_str(&xml_escape(&workspace.note));
+                prompt.push_str("</workspace>\n");
+            }
+            prompt.push_str("</local_workspaces>\n");
+        }
+
         if !tab_workspaces.is_empty() {
             prompt.push_str("<tab_workspaces>\n");
             for workspace in &tab_workspaces {
@@ -2926,6 +3037,12 @@ impl TerminalContext {
                 }
                 if let Some(session) = &workspace.tmux_session {
                     prompt.push_str(&format!(" tmux_session=\"{}\"", xml_escape(session)));
+                }
+                if let Some(cwd) = &workspace.cwd {
+                    prompt.push_str(&format!(" cwd=\"{}\"", xml_escape(cwd)));
+                }
+                if let Some(agent) = &workspace.agent_cli {
+                    prompt.push_str(&format!(" agent_cli=\"{}\"", xml_escape(agent)));
                 }
                 prompt.push_str(">");
                 prompt.push_str(&xml_escape(&workspace.note));
@@ -3913,6 +4030,8 @@ mod tests {
             runtime_warnings: Vec::new(),
             tmux_session: Some("work".to_string()),
             cwd: None,
+            workspace_cwd_hint: None,
+            workspace_agent_cli_hint: None,
             screen_hints: Vec::new(),
             last_command: None,
             last_exit_code: None,
@@ -3982,6 +4101,8 @@ mod tests {
             runtime_warnings: Vec::new(),
             tmux_session: Some("work".to_string()),
             cwd: None,
+            workspace_cwd_hint: None,
+            workspace_agent_cli_hint: None,
             screen_hints: Vec::new(),
             last_command: None,
             last_exit_code: None,

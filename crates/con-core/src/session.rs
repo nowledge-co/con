@@ -75,6 +75,9 @@ impl Session {
     }
 
     fn session_path() -> PathBuf {
+        if let Some(path) = std::env::var_os("CON_SESSION_PATH") {
+            return PathBuf::from(path);
+        }
         dirs::data_dir()
             .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
             .unwrap_or_else(|| PathBuf::from("/tmp"))
