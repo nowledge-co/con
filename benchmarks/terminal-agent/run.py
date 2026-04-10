@@ -26,6 +26,12 @@ class BenchError(RuntimeError):
     pass
 
 
+class BenchFailure(BenchError):
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.details = details or {}
+
+
 @dataclass
 class CaseResult:
     name: str
@@ -339,6 +345,10 @@ def run_case(
     try:
         note, details = case_fn(ctx)
         status = "pass"
+    except BenchFailure as exc:
+        note = str(exc)
+        details = exc.details
+        status = "fail"
     except BenchError as exc:
         note = str(exc)
         details = {}
@@ -546,45 +556,85 @@ def operator_case_for(
         executed_steps: list[dict[str, Any]] = []
 
         for idx, step in enumerate(steps, start=1):
-            prompt = step.get("prompt", "").strip()
-            if not prompt:
-                raise BenchError(
-                    f"operator scenario `{scenario_name}` step {idx} has an empty prompt"
-                )
+            try:
+                prompt = step.get("prompt", "").strip()
+                if not prompt:
+                    raise BenchFailure(
+                        f"operator scenario `{scenario_name}` step {idx} has an empty prompt",
+                        details={
+                            "tab_index": tab_index,
+                            "scenario": scenario_name,
+                            "review_required": True,
+                            "setup_actions": setup_actions,
+                            "steps": executed_steps,
+                            "failed_step_index": idx,
+                        },
+                    )
 
-            label = step.get("label") or f"step_{idx}"
-            timeout_secs = step.get("timeout_secs")
-            result = ctx.agent_ask(
-                tab_index,
-                prompt,
-                request_timeout_secs=float(timeout_secs) if timeout_secs is not None else 90.0,
-            )
-            message = result.get("message", {})
-            content = str(message.get("content", "")).strip()
-            if not content:
-                raise BenchError(
-                    f"operator scenario `{scenario_name}` step {idx} returned no assistant content"
+                label = step.get("label") or f"step_{idx}"
+                timeout_secs = step.get("timeout_secs")
+                result = ctx.agent_ask(
+                    tab_index,
+                    prompt,
+                    request_timeout_secs=float(timeout_secs)
+                    if timeout_secs is not None
+                    else 90.0,
                 )
+                message = result.get("message", {})
+                content = str(message.get("content", "")).strip()
+                if not content:
+                    raise BenchFailure(
+                        f"operator scenario `{scenario_name}` step {idx} returned no assistant content",
+                        details={
+                            "tab_index": tab_index,
+                            "scenario": scenario_name,
+                            "review_required": True,
+                            "setup_actions": setup_actions,
+                            "steps": executed_steps,
+                            "failed_step_index": idx,
+                        },
+                    )
 
-            expect_contains = step.get("expect_contains", [])
-            missing = [needle for needle in expect_contains if needle not in content]
-            if missing:
-                raise BenchError(
-                    f"operator scenario `{scenario_name}` step {idx} missing expected content: {missing}"
+                expect_contains = step.get("expect_contains", [])
+                missing = [needle for needle in expect_contains if needle not in content]
+                if missing:
+                    raise BenchFailure(
+                        f"operator scenario `{scenario_name}` step {idx} missing expected content: {missing}",
+                        details={
+                            "tab_index": tab_index,
+                            "scenario": scenario_name,
+                            "review_required": True,
+                            "setup_actions": setup_actions,
+                            "steps": executed_steps,
+                            "failed_step_index": idx,
+                            "missing_expectations": missing,
+                        },
+                    )
+
+                executed_steps.append(
+                    {
+                        "index": idx,
+                        "label": label,
+                        "timeout_secs": timeout_secs,
+                        "prompt": prompt,
+                        "conversation_id": result.get("conversation_id"),
+                        "message_id": message.get("id"),
+                        "duration_ms": message.get("duration_ms"),
+                        "content": content,
+                    }
                 )
-
-            executed_steps.append(
-                {
-                    "index": idx,
-                    "label": label,
-                    "timeout_secs": timeout_secs,
-                    "prompt": prompt,
-                    "conversation_id": result.get("conversation_id"),
-                    "message_id": message.get("id"),
-                    "duration_ms": message.get("duration_ms"),
-                    "content": content,
-                }
-            )
+            except BenchError as exc:
+                raise BenchFailure(
+                    str(exc),
+                    details={
+                        "tab_index": tab_index,
+                        "scenario": scenario_name,
+                        "review_required": True,
+                        "setup_actions": setup_actions,
+                        "steps": executed_steps,
+                        "failed_step_index": idx,
+                    },
+                ) from exc
 
         return (
             f"{scenario_name}: executed {len(executed_steps)} operator step(s) on tab {tab_index}; review transcript for quality",
