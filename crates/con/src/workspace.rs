@@ -1920,7 +1920,7 @@ impl ConWorkspace {
                 });
             }
             HarnessEvent::Step(step) => {
-                let step_text = format!("{:?}", step);
+                let step_text = crate::agent_panel::describe_agent_step(&step);
                 self.agent_panel.update(cx, |panel, cx| {
                     panel.add_step(&step_text, cx);
                 });

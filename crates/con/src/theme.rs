@@ -140,11 +140,11 @@ fn apply_gpui_theme_by_name(terminal_theme_name: &str, cx: &mut App) {
 /// Generate a complete GPUI theme JSON string from terminal theme colors.
 ///
 /// Maps terminal ANSI palette to GPUI semantic colors:
-/// - primary = cyan (ansi[6]) — the accent color
+/// - primary = blue (ansi[4]) — the UI accent color
 /// - danger = red (ansi[1])
 /// - success = green (ansi[2])
 /// - warning = yellow (ansi[3])
-/// - info = blue (ansi[4])
+/// - info = cyan (ansi[6])
 /// - Surface colors derived from bg/fg with blending
 fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
     let bg = tt.background;
@@ -168,11 +168,11 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
     // Primary contrast — use bg as text on primary buttons for max contrast
     let primary_fg = bg;
     let primary_hover = if is_dark {
-        darken(cyan, 0.15)
+        darken(blue, 0.15)
     } else {
-        darken(cyan, 0.12)
+        darken(blue, 0.12)
     };
-    let primary_active = darken(cyan, 0.25);
+    let primary_active = darken(blue, 0.25);
 
     // Danger hover/active
     let danger_hover = if is_dark {
@@ -205,10 +205,10 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         "foreground": "{fg_hex}",
         "border": "{border}",
         "input.border": "{border}",
-        "caret": "{cyan_hex}",
-        "ring": "{cyan_hex}",
+        "caret": "{blue_hex}",
+        "ring": "{blue_hex}",
 
-        "primary.background": "{cyan_hex}",
+        "primary.background": "{blue_hex}",
         "primary.foreground": "{primary_fg_hex}",
         "primary.hover.background": "{primary_hover_hex}",
         "primary.active.background": "{primary_active_hex}",
@@ -235,7 +235,7 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         "warning.background": "{yellow_hex}",
         "warning.foreground": "{primary_fg_hex}",
 
-        "info.background": "{blue_hex}",
+        "info.background": "{cyan_hex}",
         "info.foreground": "{primary_fg_hex}",
 
         "title_bar.background": "{surface1_hex}",
@@ -266,7 +266,7 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         "editor.background": "{bg_hex}",
         "editor.active_line.background": "{surface1_hex}",
         "editor.line_number": "{muted_fg_hex}",
-        "editor.active_line_number": "{cyan_hex}",
+        "editor.active_line_number": "{blue_hex}",
         "editor.invisible": "{muted_invisible}",
         "conflict": "{yellow_hex}",
         "created": "{green_hex}",
@@ -319,7 +319,6 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         bg_hex = hex(bg),
         fg_hex = hex(fg),
         border = hex(surface2),
-        cyan_hex = hex(cyan),
         primary_fg_hex = hex(primary_fg),
         primary_hover_hex = hex(primary_hover),
         primary_active_hex = hex(primary_active),
@@ -331,6 +330,7 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         green_hex = hex(green),
         yellow_hex = hex(yellow),
         blue_hex = hex(blue),
+        cyan_hex = hex(cyan),
         magenta_hex = hex(magenta),
         danger_hover_hex = hex(danger_hover),
         danger_active_hex = hex(danger_active),
@@ -340,8 +340,8 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
             tt.ansi[9].b.min(tt.ansi[3].b)
         ),
         purple_hex = hex(tt.ansi[13]),
-        list_active = hex_alpha(cyan, 0x18),
-        selection = hex_alpha(cyan, 0x28),
+        list_active = hex_alpha(blue, 0x18),
+        selection = hex_alpha(blue, 0x28),
         scrollbar = hex_alpha(surface2, 0x80),
         muted_invisible = hex_alpha(muted_fg, 0x66),
     )

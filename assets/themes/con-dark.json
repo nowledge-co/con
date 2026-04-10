@@ -18,13 +18,13 @@
         "foreground": "#CECDC3",
         "border": "#282726",
         "input.border": "#282726",
-        "caret": "#3AA99F",
-        "ring": "#3AA99F",
+        "caret": "#4385BE",
+        "ring": "#4385BE",
 
-        "primary.background": "#3AA99F",
+        "primary.background": "#4385BE",
         "primary.foreground": "#100F0F",
-        "primary.hover.background": "#24837B",
-        "primary.active.background": "#164F4A",
+        "primary.hover.background": "#336A98",
+        "primary.active.background": "#285378",
 
         "secondary.background": "#1C1B1A",
         "secondary.foreground": "#CECDC3",
@@ -58,9 +58,9 @@
         "sidebar.foreground": "#CECDC3",
         "sidebar.border": "#282726",
 
-        "list.active.background": "#3AA99F33",
+        "list.active.background": "#4385BE33",
 
-        "selection.background": "#3AA99F40",
+        "selection.background": "#4385BE40",
 
         "scrollbar.thumb.background": "#28272680",
         "scrollbar.thumb.hover.background": "#343331",

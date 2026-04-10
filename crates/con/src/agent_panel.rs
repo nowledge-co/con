@@ -338,20 +338,7 @@ impl PanelState {
                 self.update_thinking(&text);
             }
             HarnessEvent::Step(step) => {
-                let label = match step {
-                    AgentStep::Thinking(text) => text,
-                    AgentStep::Text(text) => text,
-                    AgentStep::ToolCall { tool, .. } => {
-                        format!("Calling {}", humanize_tool_name(&tool))
-                    }
-                    AgentStep::ToolResult { tool, success, .. } => {
-                        if success {
-                            format!("Finished {}", humanize_tool_name(&tool))
-                        } else {
-                            format!("{} needs review", humanize_tool_name(&tool))
-                        }
-                    }
-                };
+                let label = describe_agent_step(&step);
                 self.add_step(&label);
             }
             HarnessEvent::Token(token) => {
@@ -1435,12 +1422,19 @@ fn render_result_block(
                 .pr(px(10.0))
                 .pt(px(8.0))
                 .pb(px(7.0))
-                .text_size(px(10.5))
-                .font_family(theme.mono_font_family.clone())
-                .text_color(theme.muted_foreground.opacity(0.58))
-                .overflow_x_hidden()
-                .whitespace_nowrap()
-                .child(content.to_string())
+                .child(
+                    div()
+                        .px(px(9.0))
+                        .py(px(7.0))
+                        .rounded(px(8.0))
+                        .bg(theme.muted.opacity(0.05))
+                        .text_size(px(10.5))
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(theme.muted_foreground.opacity(0.58))
+                        .overflow_x_hidden()
+                        .whitespace_nowrap()
+                        .child(content.to_string()),
+                )
                 .into_any_element()
         } else {
             // Short result — inline, no code block
@@ -1470,12 +1464,19 @@ fn render_result_block(
                 .pr(px(10.0))
                 .pt(px(8.0))
                 .pb(px(8.0))
-                .overflow_x_hidden()
-                .font_family(theme.mono_font_family.clone())
-                .text_size(px(10.5))
-                .line_height(px(15.5))
-                .text_color(theme.muted_foreground.opacity(0.67))
-                .child(lines_el)
+                .child(
+                    div()
+                        .px(px(9.0))
+                        .py(px(8.0))
+                        .rounded(px(8.0))
+                        .bg(theme.muted.opacity(0.05))
+                        .overflow_x_hidden()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_size(px(10.5))
+                        .line_height(px(15.5))
+                        .text_color(theme.muted_foreground.opacity(0.67))
+                        .child(lines_el),
+                )
                 .into_any_element()
         } else {
             div()
@@ -1515,17 +1516,13 @@ fn hidden_result_line_count(content: &str, max_lines: usize) -> usize {
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
     if expanded {
-        "Show less".to_string()
+        "collapse output".to_string()
     } else {
         let hidden = hidden_result_line_count(content, TOOL_RESULT_PREVIEW_LINES);
         if hidden > 0 {
-            format!(
-                "Show {} more line{}",
-                hidden,
-                if hidden == 1 { "" } else { "s" }
-            )
+            format!("{} more line{}", hidden, if hidden == 1 { "" } else { "s" })
         } else {
-            "Show more".to_string()
+            "expand output".to_string()
         }
     }
 }
@@ -1628,6 +1625,21 @@ fn restored_steps_from_agent_steps(agent_steps: &[AgentStep]) -> Vec<StepEntry> 
     }
 
     restored
+}
+
+pub(crate) fn describe_agent_step(step: &AgentStep) -> String {
+    match step {
+        AgentStep::Thinking(text) => text.clone(),
+        AgentStep::Text(text) => text.clone(),
+        AgentStep::ToolCall { tool, .. } => format!("Calling {}", humanize_tool_name(tool)),
+        AgentStep::ToolResult { tool, success, .. } => {
+            if *success {
+                format!("Finished {}", humanize_tool_name(tool))
+            } else {
+                format!("{} needs review", humanize_tool_name(tool))
+            }
+        }
+    }
 }
 
 fn render_inline_state(
@@ -1734,6 +1746,36 @@ fn format_model_identity_text(model: &str) -> String {
         Some(provider) => format!("{provider} · {label}"),
         None => label,
     }
+}
+
+fn render_result_toggle_chrome(
+    expanded: bool,
+    label: String,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(5.0))
+        .py(px(2.0))
+        .child(
+            svg()
+                .path(if expanded {
+                    "phosphor/caret-up.svg"
+                } else {
+                    "phosphor/caret-down.svg"
+                })
+                .size(px(9.5))
+                .text_color(theme.muted_foreground.opacity(0.30)),
+        )
+        .child(
+            div()
+                .text_size(px(10.0))
+                .font_family(theme.mono_font_family.clone())
+                .text_color(theme.muted_foreground.opacity(0.36))
+                .child(label),
+        )
+        .into_any_element()
 }
 
 fn render_section_kicker(label: &str, theme: &gpui_component::Theme) -> AnyElement {
@@ -2542,25 +2584,33 @@ impl Render for AgentPanel {
                                     let button_label = result_toggle_label(detail, expanded);
                                     step_shell = step_shell.child(
                                         div().pl(px(28.0)).pb(px(8.0)).child(
-                                            Button::new(format!(
-                                                "step-detail-expand-{msg_idx}-{step_idx}"
-                                            ))
-                                            .label(button_label)
-                                            .text()
-                                            .xsmall()
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                if let Some(message) =
-                                                    this.state.messages.get_mut(msg_idx)
-                                                {
-                                                    if let Some(step) =
-                                                        message.steps.get_mut(step_idx)
-                                                    {
-                                                        step.detail_expanded =
-                                                            !step.detail_expanded;
-                                                    }
-                                                }
-                                                cx.notify();
-                                            })),
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "step-detail-expand-{msg_idx}-{step_idx}"
+                                                )))
+                                                .cursor_pointer()
+                                                .hover(|s| s.bg(theme.muted.opacity(0.03)))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        if let Some(message) =
+                                                            this.state.messages.get_mut(msg_idx)
+                                                        {
+                                                            if let Some(step) =
+                                                                message.steps.get_mut(step_idx)
+                                                            {
+                                                                step.detail_expanded =
+                                                                    !step.detail_expanded;
+                                                            }
+                                                        }
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                                .child(render_result_toggle_chrome(
+                                                    expanded,
+                                                    button_label,
+                                                    theme,
+                                                )),
                                         ),
                                     );
                                 }
@@ -2757,18 +2807,27 @@ impl Render for AgentPanel {
                         let button_label = result_toggle_label(&formatted, expanded);
                         tc_el = tc_el.child(
                             div().pl(px(28.0)).pb(px(8.0)).child(
-                                Button::new(format!("tc-result-expand-{tc_idx}"))
-                                    .label(button_label)
-                                    .text()
-                                    .xsmall()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(tool_call) =
-                                            this.state.tool_calls.get_mut(tc_idx)
-                                        {
-                                            tool_call.result_expanded = !tool_call.result_expanded;
-                                        }
-                                        cx.notify();
-                                    })),
+                                div()
+                                    .id(SharedString::from(format!("tc-result-expand-{tc_idx}")))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.muted.opacity(0.03)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            if let Some(tool_call) =
+                                                this.state.tool_calls.get_mut(tc_idx)
+                                            {
+                                                tool_call.result_expanded =
+                                                    !tool_call.result_expanded;
+                                            }
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(render_result_toggle_chrome(
+                                        expanded,
+                                        button_label,
+                                        theme,
+                                    )),
                             ),
                         );
                     }
