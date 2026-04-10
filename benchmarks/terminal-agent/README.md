@@ -92,8 +92,12 @@ Operator suites are real multi-turn `agent ask` flows driven by the benchmark ru
 They do not pretend to be fully machine-scored intelligence benchmarks. Instead, they:
 
 - execute the full prompt sequence automatically
+- start from a fresh in-tab conversation when the profile asks for it
+- optionally run visible-shell setup commands before the first operator turn
 - record the assistant transcript for each turn
 - give you one JSON record you can review after the run
+
+Each operator step can also carry its own timeout budget, so a stuck agent turn fails the benchmark honestly instead of hanging the whole run forever.
 
 This is the practical bridge between the strict floor and the final public benchmark story.
 

@@ -43,6 +43,8 @@ class Profile:
     env_checks: list[dict[str, Any]]
     playbooks: list[dict[str, Any]]
     operator_scenarios: list[dict[str, Any]]
+    fresh_conversation: bool
+    setup_visible_shell_commands: list[str]
 
 
 def utc_now() -> str:
@@ -194,6 +196,9 @@ class BenchmarkContext:
         identify = self.identify()
         return int(identify["active_tab_index"])
 
+    def agent_new_conversation(self, tab_index: int) -> dict[str, Any]:
+        return self.run_json("agent", "new-conversation", "--tab", str(tab_index))
+
     def choose_exec_visible_shell(self, tab_index: int) -> tuple[int, int, dict[str, Any]]:
         panes = self.panes_list(tab_index)
         for pane in panes.get("panes", []):
@@ -258,6 +263,8 @@ def load_profile(profile_name: str) -> Profile:
         env_checks=data.get("env_checks", []),
         playbooks=data.get("playbooks", []),
         operator_scenarios=data.get("operator_scenarios", []),
+        fresh_conversation=bool(data.get("fresh_conversation", False)),
+        setup_visible_shell_commands=data.get("setup_visible_shell_commands", []),
     )
 
 
@@ -273,6 +280,8 @@ def list_profiles() -> list[Profile]:
                 env_checks=data.get("env_checks", []),
                 playbooks=data.get("playbooks", []),
                 operator_scenarios=data.get("operator_scenarios", []),
+                fresh_conversation=bool(data.get("fresh_conversation", False)),
+                setup_visible_shell_commands=data.get("setup_visible_shell_commands", []),
             )
         )
     return profiles
@@ -487,7 +496,41 @@ AGENT_CASES: list[tuple[str, Callable[[BenchmarkContext], tuple[str, dict[str, A
 ]
 
 
+def run_profile_setup(ctx: BenchmarkContext, profile: Profile, tab_index: int) -> list[dict[str, Any]]:
+    setup_actions: list[dict[str, Any]] = []
+
+    if profile.fresh_conversation:
+        result = ctx.agent_new_conversation(tab_index)
+        setup_actions.append(
+            {
+                "kind": "new_conversation",
+                "tab_index": tab_index,
+                "conversation_id": result.get("conversation_id"),
+            }
+        )
+
+    for command in profile.setup_visible_shell_commands:
+        pane_id, pane_index, _pane = ctx.choose_exec_visible_shell(tab_index)
+        exec_result = ctx.panes_exec(tab_index, pane_id, "/bin/sh", "-lc", command)
+        fresh = ctx.wait_for_pane_capability(tab_index, pane_id, "exec_visible_shell")
+        setup_actions.append(
+            {
+                "kind": "visible_shell_command",
+                "tab_index": tab_index,
+                "pane_id": pane_id,
+                "pane_index": pane_index,
+                "command": command,
+                "surface_ready_after": fresh.get("surface_ready"),
+                "front_state_after": fresh.get("front_state"),
+                "exec_result": exec_result,
+            }
+        )
+
+    return setup_actions
+
+
 def operator_case_for(
+    profile: Profile,
     scenario: dict[str, Any],
 ) -> tuple[str, Callable[[BenchmarkContext], tuple[str, dict[str, Any]]]]:
     scenario_name = scenario.get("name", "operator_scenario")
@@ -499,6 +542,7 @@ def operator_case_for(
             raise BenchError(f"operator scenario `{scenario_name}` has no steps")
 
         tab_index = ctx.active_tab_index()
+        setup_actions = run_profile_setup(ctx, profile, tab_index)
         executed_steps: list[dict[str, Any]] = []
 
         for idx, step in enumerate(steps, start=1):
@@ -548,6 +592,7 @@ def operator_case_for(
                 "tab_index": tab_index,
                 "scenario": scenario_name,
                 "review_required": True,
+                "setup_actions": setup_actions,
                 "steps": executed_steps,
             },
         )
@@ -644,7 +689,7 @@ def main() -> int:
         tuple[str, Callable[[BenchmarkContext], tuple[str, dict[str, Any]]]]
     ] = []
     if profile and profile.operator_scenarios and args.suite in {"operator", "all"}:
-        operator_cases = [operator_case_for(s) for s in profile.operator_scenarios]
+        operator_cases = [operator_case_for(profile, s) for s in profile.operator_scenarios]
 
     selected = [*env_cases, *selected_cases(args.suite), *operator_cases]
     results = [run_case(ctx, name, case_fn) for name, case_fn in selected]

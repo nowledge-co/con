@@ -84,6 +84,7 @@ Guardrails:
 - prefer typed control improvements over prompt-only patching
 - treat unknown as unknown when the backend cannot prove more
 - when the benchmark changes, explain whether the product got stronger or the evaluation only got clearer
+- keep operator runs resettable and bounded; a benchmark that wedges the live tab is not a useful improvement loop
 
 ## Iteration discipline
 

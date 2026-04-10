@@ -2,6 +2,10 @@
   "name": "operator-local-codex-devloop",
   "description": "Operator-grade local coding workflow using Codex in ~/dev/temp with a real file-edit-test-repair loop.",
   "recommended_suite": "all",
+  "fresh_conversation": true,
+  "setup_visible_shell_commands": [
+    "rm -rf ~/dev/temp/con-bench-twosum && mkdir -p ~/dev/temp"
+  ],
   "env_checks": [
     {
       "name": "codex_cli",

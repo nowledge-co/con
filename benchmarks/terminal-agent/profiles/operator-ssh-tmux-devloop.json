@@ -2,6 +2,7 @@
   "name": "operator-ssh-tmux-devloop",
   "description": "Operator-grade ssh->tmux workflow with target reuse, remote file edits, long-running jobs, and agent-CLI orientation.",
   "recommended_suite": "all",
+  "fresh_conversation": true,
   "env_checks": [
     {
       "name": "ssh_haswell",
@@ -26,8 +27,8 @@
       "steps": [
         {
           "label": "describe_and_prepare_shell_target",
-          "prompt": "Describe this tmux workspace and prepare a clean tmux shell target for file work.",
-          "timeout_secs": 90
+          "prompt": "Please connect to haswell, attach or create a tmux session for this benchmark, describe that tmux workspace, and prepare a clean tmux shell target for file work.",
+          "timeout_secs": 150
         },
         {
           "label": "create_and_run_hello",

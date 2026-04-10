@@ -31,6 +31,7 @@ Primary references:
 ## Rules
 
 - Use `strict` suites to protect the floor and `operator` suites to judge real workflows.
+- Prefer operator profiles that start a fresh conversation and have bounded step timeouts.
 - Prefer typed control-plane improvements over prompt-only fixes.
 - Do not overfit to a single benchmark phrase or one host layout.
 - Keep unknowns honest when the backend cannot prove more.

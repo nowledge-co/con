@@ -2,6 +2,7 @@
   "name": "operator-ssh-dual-host-maintenance",
   "description": "Operator-grade remote maintenance workflow across haswell and cinnamon with follow-up reuse and safe package-manager handling.",
   "recommended_suite": "all",
+  "fresh_conversation": true,
   "env_checks": [
     {
       "name": "ssh_haswell",

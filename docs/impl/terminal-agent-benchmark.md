@@ -42,6 +42,8 @@ It is not pretending to be a fully machine-scored intelligence benchmark yet. Th
 
 - exercise complex terminal-agent workflows end to end
 - keep the prompt sequence stable and replayable
+- reset the in-tab conversation when a profile needs a clean slate
+- allow explicit visible-shell setup commands when a profile needs deterministic prep
 - record the full transcript as benchmark evidence
 
 Current operator flows live in the operator profiles under `benchmarks/terminal-agent/profiles/`.
@@ -50,6 +52,7 @@ Operational rule:
 
 - run operator suites on an idle tab
 - do not point the runner at a tab that already has an in-progress `agent ask`
+- bound each operator step with an explicit timeout so a hung turn becomes a benchmark failure, not a wedged session
 
 ### 3. Playbook workflows
 
