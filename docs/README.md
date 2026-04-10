@@ -18,6 +18,7 @@ This folder collects research notes, implementation notes, and design handoff do
 ## Implementation
 
 - `impl/agent-harness.md` — AI harness architecture
+- `impl/terminal-agent-benchmark.md` — benchmark architecture and evaluation policy
 - `impl/terminal-rendering.md` — rendering pipeline
 - `impl/socket-api.md` — automation and control API
 - `impl/build-system.md` — build and dependency notes

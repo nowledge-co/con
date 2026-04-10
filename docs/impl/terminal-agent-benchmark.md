@@ -1,0 +1,95 @@
+# Implementation: Terminal Agent Benchmark
+
+## Why Con needs its own benchmark
+
+Con is not trying to win a generic coding benchmark.
+
+The product claim is narrower and harder:
+
+- understand the current terminal situation
+- preserve pane and host continuity across turns
+- operate safely around SSH, tmux, and nested targets
+- use stronger control channels when they exist
+- stay honest when the runtime cannot actually prove something
+
+That requires a benchmark that mixes deterministic control-plane checks with workflow-level evaluation.
+
+## Benchmark layers
+
+### 1. Strict control-plane suite
+
+This layer is machine-checkable and should run often.
+
+Current runner:
+
+- [`benchmarks/terminal-agent/run.py`](../../benchmarks/terminal-agent/run.py)
+
+Current focus:
+
+- socket identity
+- tab discovery
+- pane discovery
+- visible shell execution
+- optional live in-tab `agent ask`
+
+These are hard product invariants. If they fail, higher-level SSH/tmux evaluation is not meaningful.
+
+### 2. Playbook workflows
+
+This layer evaluates real user tasks that are not yet stable enough for brittle exact-output assertions.
+
+Current playbooks:
+
+- [`remote-host-reuse.md`](../../benchmarks/terminal-agent/playbooks/remote-host-reuse.md)
+- [`tmux-session-awareness.md`](../../benchmarks/terminal-agent/playbooks/tmux-session-awareness.md)
+- [`tmux-agent-target-preparation.md`](../../benchmarks/terminal-agent/playbooks/tmux-agent-target-preparation.md)
+
+These are scored against product criteria such as:
+
+- targeting correctness
+- continuity across turns
+- recovery behavior
+- safety
+- honesty of uncertainty reporting
+
+## Why this split is intentional
+
+If Con tries to make every tmux or SSH behavior a strict exact-output benchmark too early, the benchmark will become fragile and dishonest.
+
+If Con only does human demos, regressions will slip constantly.
+
+So the benchmark stays hybrid:
+
+- strict where the product is deterministic
+- rubric-based where the product is still agentic
+
+## Result discipline
+
+Strict runs write JSON records under `.context/benchmarks/`.
+
+That gives the project:
+
+- reproducible evidence for regressions
+- a history of improvement over time
+- material that can later be turned into an open-source benchmark guide
+
+## Maintenance rules
+
+When adding a new benchmark:
+
+1. Put it in the strict suite only if it is truly machine-checkable and stable.
+2. Use a playbook if success depends on higher-level agent judgment.
+3. Prefer product semantics over benchmark cosmetics. A benchmark that flatters the current implementation is not useful.
+4. Record limits explicitly. Unknown should stay unknown.
+
+## Current environment policy
+
+The strict suite works against:
+
+- local macOS shell
+- a real running Con app session
+- the live Unix socket surface
+
+The playbooks currently assume operator-provided remote hosts such as `haswell`.
+
+The final public benchmark can add a reproducible environment guide later. Until then, the benchmark should stay honest about which scenarios are environment-dependent.
