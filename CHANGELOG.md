@@ -66,6 +66,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The agent panel trace rows now expand as connected cards instead of detached header-and-output boxes, and model identity is shown as chips instead of awkward raw provider/model strings. That makes long tool traces and provider metadata read more like a composed operator surface and less like debug text.
 - The live agent panel now shows human-readable provider/model labels instead of Rust-style `Thinking("provider:model")` debug text, expanded outputs use quieter inline toggles with a dedicated mono sub-surface, and the default accent path now follows the theme's blue primary token instead of an unintended cyan bias.
 - Expanded agent trace output now reads as a clearer nested surface, with a stronger inner tone for code and log text so the card hierarchy stays legible in long tool runs.
+- Agent trace cards now use distinct theme layers for run groups, tool rows, and inner output blocks. Light and dark themes both keep the title row, body, and nested code/log output visually separate instead of flattening into one tone.
 - The terminal-agent benchmark now includes richer operator playbooks and profiles for local Codex dev loops, dual-host SSH maintenance, and remote tmux edit/run/reuse workflows. It can now execute those operator prompt sequences directly and record the transcript instead of only printing a playbook path.
 - The terminal-agent benchmark now has stable scoring rubrics, a scoring tool, a trend-report generator, and a project-local improvement-loop skill so progress can be judged and compared over many iterations instead of living only in screenshots and memory.
 - `con-cli agent ask` and operator benchmark steps can now be bounded with explicit timeouts, so a stuck agent turn fails cleanly instead of hanging the entire automation loop.
@@ -79,6 +80,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Font size changes now apply to existing Ghostty panes immediately, so terminal text updates in place when you save Settings.
 - Terminal theme changes now apply to live Ghostty panes immediately instead of only updating the surrounding con interface.
 - Control-created panes now bootstrap as real Ghostty surfaces immediately instead of staying as uninitialized placeholders until a later render pass. `panes.create` now returns `surface_ready`, `is_alive`, and `has_shell_integration`, which makes CLI- and agent-driven pane setup much more truthful.
+- Split rails now keep a visible resting presence instead of appearing only on hover, so sparse or newly created panes still read as separate terminal workspaces at a glance.
 - Terminal settings are simpler and more honest. con no longer exposes backend switching or fake scrollback tuning for features that are owned by Ghostty itself.
 
 **Smart Input**

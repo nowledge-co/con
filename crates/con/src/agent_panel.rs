@@ -1414,7 +1414,11 @@ fn render_result_block(
     connected: bool,
 ) -> AnyElement {
     let is_short = content.lines().count() <= 1 && content.len() < 80;
-    let nested_surface = theme.secondary.opacity(if connected { 0.88 } else { 0.62 });
+    let nested_surface = if connected {
+        trace_inner_surface(theme)
+    } else {
+        trace_step_surface(theme)
+    };
 
     if is_short && content != "(no output)" {
         if connected {
@@ -1488,7 +1492,7 @@ fn render_result_block(
                 .px(px(10.0))
                 .py(px(8.0))
                 .rounded(px(10.0))
-                .bg(theme.secondary.opacity(0.52))
+                .bg(trace_step_surface(theme))
                 .overflow_x_hidden()
                 .font_family(theme.mono_font_family.clone())
                 .text_size(px(10.5))
@@ -1513,6 +1517,18 @@ fn result_preview(formatted: &str, max_lines: usize) -> String {
 
 fn hidden_result_line_count(content: &str, max_lines: usize) -> usize {
     content.lines().count().saturating_sub(max_lines)
+}
+
+fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
+    theme.secondary
+}
+
+fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
+    theme.secondary_hover
+}
+
+fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
+    theme.secondary_active
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
@@ -2340,7 +2356,7 @@ impl Render for AgentPanel {
                     .px(px(12.0))
                     .py(px(11.0))
                     .rounded(px(14.0))
-                    .bg(theme.secondary.opacity(0.28))
+                    .bg(trace_group_surface(theme))
                     .flex()
                     .flex_col()
                     .gap(px(9.0));
@@ -2537,7 +2553,7 @@ impl Render for AgentPanel {
                             .flex()
                             .flex_col()
                             .rounded(px(10.0))
-                            .bg(theme.secondary.opacity(0.42));
+                            .bg(trace_step_surface(theme));
 
                         if has_detail {
                             step_shell = step_shell.child(
@@ -2657,7 +2673,7 @@ impl Render for AgentPanel {
                 .px(px(12.0))
                 .py(px(11.0))
                 .rounded(px(14.0))
-                .bg(theme.secondary.opacity(0.28))
+                .bg(trace_group_surface(theme))
                 .child(
                     div()
                         .flex()
@@ -2783,7 +2799,7 @@ impl Render for AgentPanel {
                     .flex()
                     .flex_col()
                     .rounded(px(10.0))
-                    .bg(theme.secondary.opacity(0.42))
+                    .bg(trace_step_surface(theme))
                     .child(tc_row);
 
                 // Result preview
