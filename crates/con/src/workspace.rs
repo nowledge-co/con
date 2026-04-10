@@ -86,6 +86,7 @@ pub struct ConWorkspace {
 /// A deferred create-pane request waiting for a window-aware context.
 struct PendingCreatePane {
     command: Option<String>,
+    location: con_agent::tools::PaneCreateLocation,
     response_tx: crossbeam_channel::Sender<con_agent::PaneResponse>,
 }
 
@@ -2132,11 +2133,12 @@ impl ConWorkspace {
                     return; // Response sent by spawned task
                 }
             }
-            PaneQuery::CreatePane { command } => {
+            PaneQuery::CreatePane { command, location } => {
                 // Creating a terminal requires a Window, which is not available
                 // in the poll loop. Defer to the next render cycle.
                 self.pending_create_pane_requests.push(PendingCreatePane {
                     command,
+                    location,
                     response_tx: req.response_tx,
                 });
                 cx.notify();
@@ -2657,9 +2659,13 @@ impl Render for ConWorkspace {
         let pending = std::mem::take(&mut self.pending_create_pane_requests);
         for req in pending {
             let terminal = self.create_terminal(None, window, cx);
+            let direction = match req.location {
+                con_agent::tools::PaneCreateLocation::Right => SplitDirection::Horizontal,
+                con_agent::tools::PaneCreateLocation::Down => SplitDirection::Vertical,
+            };
             self.tabs[self.active_tab]
                 .pane_tree
-                .split(SplitDirection::Horizontal, terminal.clone());
+                .split(direction, terminal.clone());
             terminal.focus(window, cx);
 
             if let Some(cmd) = &req.command {

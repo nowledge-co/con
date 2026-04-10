@@ -160,6 +160,7 @@ pub struct PaneActionRecord {
     pub sequence: u64,
     pub kind: PaneActionKind,
     pub summary: String,
+    pub command: Option<String>,
     pub source: PaneEvidenceSource,
     pub confidence: PaneConfidence,
     pub input_generation: Option<u64>,
@@ -369,6 +370,7 @@ impl PaneRuntimeTracker {
                     sequence,
                     kind: PaneActionKind::PaneCreated,
                     summary,
+                    command: startup_command.clone(),
                     source: PaneEvidenceSource::ActionHistory,
                     confidence: PaneConfidence::Advisory,
                     input_generation: None,
@@ -383,6 +385,7 @@ impl PaneRuntimeTracker {
                     sequence,
                     kind: PaneActionKind::VisibleShellExec,
                     summary: format!("con executed `{command}` in the visible shell"),
+                    command: Some(command.clone()),
                     source: PaneEvidenceSource::ActionHistory,
                     confidence: PaneConfidence::Advisory,
                     input_generation: Some(input_generation),
@@ -397,6 +400,7 @@ impl PaneRuntimeTracker {
                     sequence,
                     kind: PaneActionKind::RawInput,
                     summary: format!("con sent raw input `{}`", summarize_raw_input(&keys)),
+                    command: None,
                     source: PaneEvidenceSource::ActionHistory,
                     confidence: PaneConfidence::Advisory,
                     input_generation: Some(input_generation),
@@ -418,6 +422,7 @@ impl PaneRuntimeTracker {
                     sequence,
                     kind: PaneActionKind::ShellProbe,
                     summary: summarize_shell_probe(&result),
+                    command: None,
                     source: PaneEvidenceSource::ShellProbe,
                     confidence: PaneConfidence::Strong,
                     input_generation: Some(captured_input_generation),
@@ -433,6 +438,7 @@ impl PaneRuntimeTracker {
                     sequence,
                     kind: PaneActionKind::ProcessExited,
                     summary: "the pane process exited".to_string(),
+                    command: None,
                     source: PaneEvidenceSource::ActionHistory,
                     confidence: PaneConfidence::Strong,
                     input_generation: None,
@@ -1205,6 +1211,26 @@ fn focused_screen_assessment(
     Some(format!("{summary} {next_step}"))
 }
 
+fn canonical_agent_cli_name(name: &str) -> Option<&'static str> {
+    match name
+        .trim()
+        .to_ascii_lowercase()
+        .replace('_', "-")
+        .replace(' ', "-")
+        .as_str()
+    {
+        "codex" => Some("codex"),
+        "claude" | "claude-code" | "claudecode" => Some("claude"),
+        "opencode" | "open-code" | "open-code-cli" => Some("opencode"),
+        _ => None,
+    }
+}
+
+fn classify_tmux_agent_cli_command(command: &str) -> Option<&'static str> {
+    let basename = command.rsplit('/').next().unwrap_or(command);
+    canonical_agent_cli_name(basename)
+}
+
 fn has_tmux_scope(scopes: &[PaneRuntimeScope]) -> bool {
     scopes
         .iter()
@@ -1450,6 +1476,46 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
         });
     }
 
+    if let Some(snapshot) = &ctx.focused_tmux_snapshot {
+        let mut agent_targets = snapshot
+            .panes
+            .iter()
+            .filter_map(|pane| {
+                let agent = pane
+                    .pane_current_command
+                    .as_deref()
+                    .and_then(classify_tmux_agent_cli_command)?;
+                Some((agent, pane))
+            })
+            .collect::<Vec<_>>();
+        agent_targets.sort_by(|(agent_a, pane_a), (agent_b, pane_b)| {
+            pane_b
+                .pane_active
+                .cmp(&pane_a.pane_active)
+                .then_with(|| pane_b.window_active.cmp(&pane_a.window_active))
+                .then_with(|| agent_a.cmp(agent_b))
+                .then_with(|| pane_a.window_index.cmp(&pane_b.window_index))
+                .then_with(|| pane_a.pane_index.cmp(&pane_b.pane_index))
+        });
+
+        if let Some((agent, pane)) = agent_targets.first() {
+            hints.push(format!(
+                "Focused tmux workspace already has an `{agent}` target at `{}` (window `{}`, pane `{}`). Prefer tmux_capture_pane or tmux_send_keys there before creating another agent target.",
+                pane.target, pane.window_name, pane.pane_index
+            ));
+        } else if focused_has_native_tmux(ctx) {
+            hints.push(
+                "Focused tmux workspace has native tmux control but no known Codex, Claude Code, or OpenCode target yet. Use tmux_ensure_agent_target when you need one."
+                    .to_string(),
+            );
+        }
+    } else if focused_has_native_tmux(ctx) {
+        hints.push(
+            "Focused pane has native tmux control. Use tmux target helpers instead of raw outer-pane input for shell or agent work inside tmux."
+                .to_string(),
+        );
+    }
+
     hints
 }
 
@@ -1581,8 +1647,7 @@ impl TerminalContext {
              - TMUX NATIVE COMMAND LAUNCH on a pane with tmux native control → tmux_run_command to create a new tmux window or split for a shell, Codex CLI, Claude Code, OpenCode, or a long-running command.\n\
              - TMUX NATIVE INTERACTION on a pane with tmux native control → tmux_send_keys to a specific tmux pane target.\n\
              - TMUX WITHOUT native control → read_pane first, then outer-pane send_keys only as a fallback.\n\
-             - PARALLEL WORK across hosts → create_pane for each host (output shows connection state), \
-               then terminal_exec (if exec_visible_shell) or send_keys.\n\
+             - PARALLEL WORK across hosts → ensure_remote_shell_target for each host so existing SSH panes are reused across turns. Use create_pane only for low-level manual pane creation.\n\
              - SHELL COMMANDS on a pane WITHOUT `exec_visible_shell` → use read_pane first, then send_keys \"command\\n\" only if a shell prompt is visibly present.\n\
              - LONG-RUNNING commands → launch, then wait_for (not repeated read_pane).\n\
              - INTERACTIVE TUI (htop, menus, agent CLIs without a stronger attachment) → tmux_send_keys when a tmux target exists, otherwise send_keys + read_pane (follow playbooks).\n\
@@ -1601,7 +1666,7 @@ impl TerminalContext {
              - shell_exec: Run a command in a hidden LOCAL subprocess. Output not shown to user.\n\
                For local-only tasks: git, file searches, package lookups. Never for remote environments.\n\n\
              - create_pane: Create a new terminal pane (split in current tab). Optionally run a startup command \
-               (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it.\n\
+               (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it. Supports split placement via `location` (`right` or `down`).\n\
                Returns the pane index AND initial output (waits for output to settle). \
                Check the output to see what happened — no need for a separate read_pane.\n\n\
              - list_panes: List all panes with metadata, control state, capabilities, and addressing notes.\n\n\
@@ -1622,6 +1687,7 @@ impl TerminalContext {
              - tmux_list_targets: List tmux windows/panes through a proven same-session tmux shell anchor.\n\
              - tmux_find_targets: Find likely tmux shell panes, agent CLI panes, or other matching targets without hand-filtering tmux_list_targets.\n\
              - resolve_work_target: Choose the best con pane or tmux target for shell work, tmux work, or agent CLI interaction using the typed control plane.\n\
+             - ensure_remote_shell_target: Reuse an existing SSH pane for a host, or create one if needed. Prefer this over repeatedly creating duplicate SSH panes during multi-host work.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
              - tmux_ensure_shell_target: Reuse or create a tmux shell target through a proven same-session tmux shell anchor.\n\
              - tmux_ensure_agent_target: Reuse or create a tmux target for Codex CLI, Claude Code, or OpenCode. This stays in tmux control; it does not imply a native Codex/OpenCode attachment unless con explicitly proves one.\n\
@@ -2000,17 +2066,18 @@ impl TerminalContext {
                 prompt.push('\n');
             }
             prompt.push_str("</pane_layout_summary>\n");
-            let work_target_hints = preferred_work_target_hints(self);
-            if !work_target_hints.is_empty() {
-                prompt.push_str("<work_target_hints>\n");
-                for hint in work_target_hints {
-                    prompt.push_str(&xml_escape(&hint));
-                    prompt.push('\n');
-                }
-                prompt.push_str("</work_target_hints>\n");
-            }
         } else if let Some(cwd) = &self.cwd {
             prompt.push_str(&format!("<cwd>{}</cwd>\n", xml_escape(cwd)));
+        }
+
+        let work_target_hints = preferred_work_target_hints(self);
+        if !work_target_hints.is_empty() {
+            prompt.push_str("<work_target_hints>\n");
+            for hint in work_target_hints {
+                prompt.push_str(&xml_escape(&hint));
+                prompt.push('\n');
+            }
+            prompt.push_str("</work_target_hints>\n");
         }
 
         if let Some(branch) = &self.git_branch {
@@ -2209,7 +2276,7 @@ impl TerminalContext {
 
 #[cfg(test)]
 mod tests {
-    use crate::control::PaneControlState;
+    use crate::control::{PaneControlState, TmuxControlMode, TmuxControlState};
     use crate::shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
     use crate::tmux::{TmuxPaneInfo, TmuxSnapshot};
 
@@ -2963,5 +3030,37 @@ mod tests {
             prompt.contains("Best tmux workspace target")
                 || prompt.contains("tmux appears in pane 2")
         );
+    }
+
+    #[test]
+    fn prompt_emits_work_target_hints_for_single_native_tmux_pane() {
+        let mut ctx = make_shell_context();
+        ctx.focused_control.tmux = Some(TmuxControlState {
+            session_name: Some("work".to_string()),
+            mode: TmuxControlMode::Native,
+            front_target: None,
+            reason: "native".to_string(),
+        });
+        ctx.focused_tmux_snapshot = Some(TmuxSnapshot {
+            panes: vec![TmuxPaneInfo {
+                session_name: "work".to_string(),
+                window_id: "@1".to_string(),
+                window_index: "1".to_string(),
+                window_name: "agent".to_string(),
+                window_target: "work:1".to_string(),
+                pane_id: "%17".to_string(),
+                pane_index: "0".to_string(),
+                target: "work:1.0".to_string(),
+                pane_active: true,
+                window_active: true,
+                pane_current_command: Some("codex".to_string()),
+                pane_current_path: Some("/repo".to_string()),
+            }],
+        });
+
+        let prompt = ctx.to_system_prompt();
+        assert!(prompt.contains("<work_target_hints>"));
+        assert!(prompt.contains("Focused tmux workspace already has an `codex` target"));
+        assert!(prompt.contains("tmux_send_keys"));
     }
 }

@@ -107,6 +107,7 @@ pub const REMOTE_WORK: &str = "\
 ## Working on a remote host
 
 The focused pane is connected to a remote host. Remember:
+- When you need to connect to or reuse a host-specific SSH workspace across turns, prefer `ensure_remote_shell_target(host=\"...\")` instead of repeatedly creating new panes.
 - file_read, file_write, edit_file, list_files, search are LOCAL-ONLY — they CANNOT access this remote host.
 - To run remote commands: if the pane has `exec_visible_shell`, use terminal_exec. \
 Otherwise, send_keys \"command\\n\" in a remote shell prompt.

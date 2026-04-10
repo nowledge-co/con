@@ -79,6 +79,7 @@ That attachment currently supports:
 - tmux agent-target preparation for Codex CLI, Claude Code, and OpenCode
 - tmux-native command launch into a new window or split pane
 - tmux-native send-keys to a chosen tmux target
+- remote-shell target preparation for SSH workspaces, so con can reuse an existing host pane or create one with explicit split placement instead of duplicating remote panes across turns
 
 This is the right abstraction because it scales across:
 

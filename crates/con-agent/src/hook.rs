@@ -70,6 +70,7 @@ pub fn is_dangerous(tool_name: &str) -> bool {
             | "file_write"
             | "edit_file"
             | "send_keys"
+            | "ensure_remote_shell_target"
             | "tmux_run_command"
             | "tmux_ensure_shell_target"
             | "tmux_ensure_agent_target"

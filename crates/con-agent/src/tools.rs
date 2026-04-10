@@ -97,6 +97,22 @@ pub struct TerminalExecResponse {
     pub exit_code: Option<i32>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneCreateLocation {
+    Right,
+    Down,
+}
+
+impl PaneCreateLocation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Down => "down",
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct TerminalExecArgs {
     pub command: String,
@@ -815,7 +831,10 @@ pub enum PaneQuery {
         pattern: Option<String>,
     },
     /// Create a new terminal pane (tab), optionally running a command in it.
-    CreatePane { command: Option<String> },
+    CreatePane {
+        command: Option<String>,
+        location: PaneCreateLocation,
+    },
 }
 
 /// Response from the workspace to a pane tool.
@@ -886,6 +905,25 @@ pub struct TmuxEnsureAgentTargetResult {
     pub launch_command: Option<String>,
     pub native_attachment_state: AgentCliNativeAttachmentState,
     pub native_attachment_note: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteShellMatchSource {
+    ProvenHost,
+    ActionHistory,
+    Created,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnsureRemoteShellTargetResult {
+    pub host: String,
+    pub created: bool,
+    pub pane_index: usize,
+    pub match_source: RemoteShellMatchSource,
+    pub command: Option<String>,
+    pub output: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -1009,8 +1047,136 @@ fn pane_query_list(pane_tx: &Sender<PaneRequest>) -> Result<Vec<PaneInfo>, ToolE
     }
 }
 
+async fn wait_for_pane_initial_output(
+    pane_tx: &Sender<PaneRequest>,
+    pane_index: usize,
+) -> Result<String, ToolError> {
+    const POLL_MS: u64 = 500;
+    const SETTLE_POLLS: u32 = 3;
+    const MAX_POLLS: u32 = 30;
+
+    let mut initial_snapshot = String::new();
+    let mut last_snapshot = String::new();
+    let mut stable_count: u32 = 0;
+    let mut phase_changed = false;
+
+    for _ in 0..MAX_POLLS {
+        tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::ReadContent {
+                    pane_index,
+                    lines: 50,
+                },
+                response_tx: tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let content = match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(PaneResponse::Content(c)) => c,
+            Ok(PaneResponse::Error(e)) => return Err(ToolError::CommandFailed(e)),
+            _ => continue,
+        };
+
+        let normalized = content
+            .lines()
+            .map(|l| l.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if normalized.is_empty() {
+            continue;
+        }
+
+        if !phase_changed {
+            if initial_snapshot.is_empty() {
+                initial_snapshot = normalized.clone();
+                last_snapshot = normalized;
+                continue;
+            }
+            if normalized != initial_snapshot {
+                phase_changed = true;
+                last_snapshot = normalized;
+                stable_count = 0;
+                continue;
+            }
+            continue;
+        }
+
+        if normalized == last_snapshot {
+            stable_count += 1;
+            if stable_count >= SETTLE_POLLS {
+                return Ok(normalized);
+            }
+        } else {
+            last_snapshot = normalized;
+            stable_count = 0;
+        }
+    }
+
+    Ok(last_snapshot)
+}
+
 fn tmux_command_basename(command: &str) -> &str {
     command.rsplit('/').next().unwrap_or(command)
+}
+
+fn parse_ssh_target(command: &str) -> Option<String> {
+    let mut tokens = command.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        let token = token.trim_matches(&['"', '\''][..]);
+        if token.is_empty() {
+            continue;
+        }
+        if token.contains('=') && !token.starts_with('-') {
+            continue;
+        }
+        let basename = token.rsplit('/').next().unwrap_or(token);
+        if basename != "ssh" {
+            continue;
+        }
+        while let Some(arg) = tokens.next() {
+            let arg = arg.trim_matches(&['"', '\''][..]);
+            if arg.is_empty() {
+                continue;
+            }
+            if arg == "--" {
+                return tokens
+                    .next()
+                    .map(|target| target.trim_matches(&['"', '\''][..]).to_string());
+            }
+            if arg.starts_with('-') {
+                let takes_value = matches!(
+                    arg,
+                    "-b" | "-c"
+                        | "-D"
+                        | "-E"
+                        | "-e"
+                        | "-F"
+                        | "-I"
+                        | "-i"
+                        | "-J"
+                        | "-L"
+                        | "-l"
+                        | "-m"
+                        | "-O"
+                        | "-o"
+                        | "-p"
+                        | "-Q"
+                        | "-R"
+                        | "-S"
+                        | "-W"
+                        | "-w"
+                );
+                if takes_value && !arg.contains('=') {
+                    let _ = tokens.next();
+                }
+                continue;
+            }
+            return Some(arg.to_string());
+        }
+    }
+    None
 }
 
 fn canonical_agent_cli_name(name: &str) -> Option<&'static str> {
@@ -1144,6 +1310,26 @@ fn pane_has_remote_shell_context(pane: &PaneInfo) -> bool {
             .any(|scope| scope.kind == crate::context::PaneScopeKind::RemoteShell)
 }
 
+fn pane_recent_ssh_target(pane: &PaneInfo) -> Option<String> {
+    pane.recent_actions
+        .iter()
+        .rev()
+        .filter_map(|action| action.command.as_deref())
+        .find_map(parse_ssh_target)
+}
+
+fn pane_matches_remote_anchor(pane: &PaneInfo, host_contains: Option<&String>) -> bool {
+    let ssh_target = pane_recent_ssh_target(pane);
+    host_contains.is_none_or(|needle| {
+        pane.hostname
+            .as_ref()
+            .is_some_and(|host| host.to_ascii_lowercase().contains(needle))
+            || ssh_target
+                .as_ref()
+                .is_some_and(|target| target.to_ascii_lowercase().contains(needle))
+    })
+}
+
 fn pane_is_visible_agent_cli(pane: &PaneInfo, agent_name: Option<&String>) -> bool {
     pane.visible_target.kind == PaneVisibleTargetKind::AgentCli
         || pane.agent_cli.as_deref().is_some_and(|value| {
@@ -1269,12 +1455,16 @@ fn resolve_work_target_candidates(
             }
             WorkTargetIntent::RemoteShell => {
                 if !pane_has_capability(&pane, PaneControlCapability::ExecVisibleShell)
-                    || !pane_has_remote_shell_context(&pane)
                     || !pane_matches_cwd(&pane, cwd_contains.as_ref())
                 {
                     continue;
                 }
-                let mut score = 120;
+                let has_remote_fact = pane_has_remote_shell_context(&pane);
+                let has_remote_anchor = pane_matches_remote_anchor(&pane, host_contains.as_ref());
+                if !has_remote_fact && !has_remote_anchor {
+                    continue;
+                }
+                let mut score = if has_remote_fact { 120 } else { 95 };
                 if pane.is_focused {
                     score += 5;
                 }
@@ -1285,8 +1475,16 @@ fn resolve_work_target_candidates(
                     score,
                     make_visible_shell_candidate(
                         &pane,
-                        "This pane is a proven remote shell target with visible shell execution."
-                            .to_string(),
+                        if has_remote_fact {
+                            "This pane is a proven remote shell target with visible shell execution."
+                                .to_string()
+                        } else {
+                            let target = pane_recent_ssh_target(&pane)
+                                .unwrap_or_else(|| "unknown".to_string());
+                            format!(
+                                "This pane has visible shell execution and recent con action history showing SSH startup for `{target}`."
+                            )
+                        },
                     ),
                 ));
             }
@@ -3260,17 +3458,174 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 // ── create_pane tool ────────────────────────────────────────────────
 
 #[derive(Deserialize)]
+pub struct EnsureRemoteShellTargetArgs {
+    pub host: String,
+    pub pane_index: Option<usize>,
+    #[serde(default = "default_pane_create_location")]
+    pub location: PaneCreateLocation,
+    pub startup_command: Option<String>,
+}
+
+pub struct EnsureRemoteShellTargetTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl EnsureRemoteShellTargetTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for EnsureRemoteShellTargetTool {
+    const NAME: &'static str = "ensure_remote_shell_target";
+    type Error = ToolError;
+    type Args = EnsureRemoteShellTargetArgs;
+    type Output = EnsureRemoteShellTargetResult;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Reuse an existing SSH pane for a specific remote host when one is already available, or create a new pane and connect to that host when none exists. This is the preferred tool for multi-host remote orchestration so the agent does not keep creating duplicate SSH panes across turns.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "host": {
+                        "type": "string",
+                        "description": "SSH host or alias to target, such as haswell or user@host."
+                    },
+                    "pane_index": {
+                        "type": ["integer", "null"],
+                        "description": "Optional con pane index to constrain reuse checks to a specific pane."
+                    },
+                    "location": {
+                        "type": "string",
+                        "enum": ["right", "down"],
+                        "description": "Where to place a newly created pane if one is needed. Defaults to right."
+                    },
+                    "startup_command": {
+                        "type": ["string", "null"],
+                        "description": "Optional command to launch when a new pane is created. Defaults to `ssh <host>`."
+                    }
+                },
+                "required": ["host"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let host_lower = args.host.to_ascii_lowercase();
+        let panes = pane_query_list(&self.pane_tx)?;
+        let best_existing = panes
+            .into_iter()
+            .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
+            .filter(|pane| pane_has_capability(pane, PaneControlCapability::ExecVisibleShell))
+            .filter_map(|pane| {
+                if pane
+                    .hostname
+                    .as_ref()
+                    .is_some_and(|host| host.to_ascii_lowercase().contains(&host_lower))
+                {
+                    Some((
+                        20 + if pane.is_focused { 5 } else { 0 },
+                        pane.index,
+                        RemoteShellMatchSource::ProvenHost,
+                        format!(
+                            "Pane {} already has visible shell execution on proven host `{}`.",
+                            pane.index, args.host
+                        ),
+                    ))
+                } else if pane_recent_ssh_target(&pane)
+                    .is_some_and(|target| target.to_ascii_lowercase().contains(&host_lower))
+                {
+                    Some((
+                        10 + if pane.is_focused { 5 } else { 0 },
+                        pane.index,
+                        RemoteShellMatchSource::ActionHistory,
+                        format!(
+                            "Pane {} has visible shell execution and recent con action history showing SSH startup for `{}`.",
+                            pane.index, args.host
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|candidate| candidate.0);
+
+        if let Some((_, pane_index, match_source, reason)) = best_existing {
+            return Ok(EnsureRemoteShellTargetResult {
+                host: args.host,
+                created: false,
+                pane_index,
+                match_source,
+                command: None,
+                output: String::new(),
+                reason,
+            });
+        }
+
+        let command = args
+            .startup_command
+            .unwrap_or_else(|| format!("ssh {}", args.host));
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.pane_tx
+            .send(PaneRequest {
+                query: PaneQuery::CreatePane {
+                    command: Some(command.clone()),
+                    location: args.location,
+                },
+                response_tx,
+            })
+            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+        let response = tokio::task::block_in_place(|| {
+            response_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|_| ToolError::CommandFailed("Create pane request timed out".into()))
+        })?;
+
+        let pane_index = match response {
+            PaneResponse::PaneCreated { pane_index } => pane_index,
+            PaneResponse::Error(e) => return Err(ToolError::CommandFailed(e)),
+            _ => return Err(ToolError::CommandFailed("Unexpected response".into())),
+        };
+        let output = wait_for_pane_initial_output(&self.pane_tx, pane_index).await?;
+        Ok(EnsureRemoteShellTargetResult {
+            host: args.host.clone(),
+            created: true,
+            pane_index,
+            match_source: RemoteShellMatchSource::Created,
+            command: Some(command),
+            output,
+            reason: format!(
+                "No reusable SSH pane for `{}` was found, so con created a new pane to connect there.",
+                args.host
+            ),
+        })
+    }
+}
+
+// ── create_pane tool ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
 pub struct CreatePaneArgs {
     pub command: Option<String>,
+    #[serde(default = "default_pane_create_location")]
+    pub location: PaneCreateLocation,
 }
 
 #[derive(Serialize)]
 pub struct CreatePaneOutput {
     pub pane_index: usize,
     pub command: Option<String>,
+    pub location: PaneCreateLocation,
     /// Initial terminal output after pane creation and command execution.
     /// Gives the model immediate observability — no need for a follow-up read_pane.
     pub output: String,
+}
+
+fn default_pane_create_location() -> PaneCreateLocation {
+    PaneCreateLocation::Right
 }
 
 pub struct CreatePaneTool {
@@ -3399,13 +3754,18 @@ impl Tool for CreatePaneTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it via send_keys. Returns the pane index and the initial terminal output (waits for output to settle). Check the output to see what happened — e.g. SSH connected with prompt, or asking for a password.".to_string(),
+            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it via send_keys. You can choose split placement for better workspace layout. Returns the pane index and the initial terminal output (waits for output to settle). Check the output to see what happened — e.g. SSH connected with prompt, or asking for a password.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
                         "description": "Optional startup command executed automatically in the new pane. Do NOT re-send this command — it already ran."
+                    },
+                    "location": {
+                        "type": "string",
+                        "enum": ["right", "down"],
+                        "description": "Where to place the new pane relative to the focused pane. Defaults to right for peer workspaces."
                     }
                 }
             }),
@@ -3421,6 +3781,7 @@ impl Tool for CreatePaneTool {
             .send(PaneRequest {
                 query: PaneQuery::CreatePane {
                     command: args.command,
+                    location: args.location,
                 },
                 response_tx,
             })
@@ -3449,6 +3810,7 @@ impl Tool for CreatePaneTool {
                 Ok(CreatePaneOutput {
                     pane_index,
                     command: command_echo,
+                    location: args.location,
                     output,
                 })
             }
