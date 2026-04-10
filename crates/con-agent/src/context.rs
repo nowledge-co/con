@@ -293,6 +293,8 @@ pub struct PaneRuntimeState {
 pub enum PaneObservationHintKind {
     PromptLikeInput,
     HtopLikeScreen,
+    LoginBannerVisible,
+    SshConnectionClosed,
 }
 
 impl PaneObservationHintKind {
@@ -300,6 +302,8 @@ impl PaneObservationHintKind {
         match self {
             Self::PromptLikeInput => "prompt_like_input",
             Self::HtopLikeScreen => "htop_like_screen",
+            Self::LoginBannerVisible => "login_banner_visible",
+            Self::SshConnectionClosed => "ssh_connection_closed",
         }
     }
 }
@@ -309,6 +313,59 @@ pub struct PaneObservationHint {
     pub kind: PaneObservationHintKind,
     pub confidence: PaneConfidence,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TabWorkspaceKind {
+    LocalShell,
+    RemoteShell,
+    TmuxWorkspace,
+    Unknown,
+}
+
+impl TabWorkspaceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalShell => "local_shell",
+            Self::RemoteShell => "remote_shell",
+            Self::TmuxWorkspace => "tmux_workspace",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TabWorkspaceState {
+    Ready,
+    NeedsInspection,
+    Disconnected,
+    Interactive,
+    Unknown,
+}
+
+impl TabWorkspaceState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::NeedsInspection => "needs_inspection",
+            Self::Disconnected => "disconnected",
+            Self::Interactive => "interactive",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TabWorkspaceSummary {
+    pub pane_index: usize,
+    pub pane_id: usize,
+    pub host: Option<String>,
+    pub tmux_session: Option<String>,
+    pub kind: TabWorkspaceKind,
+    pub state: TabWorkspaceState,
+    pub note: String,
 }
 
 impl PaneRuntimeState {
@@ -983,6 +1040,8 @@ pub fn direct_terminal_exec_is_safe(runtime: &PaneRuntimeState) -> bool {
 pub struct TerminalContext {
     /// 1-based index of the focused pane
     pub focused_pane_index: usize,
+    /// Stable pane id for the focused pane within the current tab lifetime.
+    pub focused_pane_id: usize,
     /// Effective remote hostname of the focused pane when detected.
     pub focused_hostname: Option<String>,
     /// Confidence for the focused remote hostname, when known.
@@ -1064,6 +1123,7 @@ pub struct CommandBlockInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaneSummary {
     pub pane_index: usize,
+    pub pane_id: usize,
     /// Effective remote hostname when detected.
     pub hostname: Option<String>,
     pub hostname_confidence: Option<PaneConfidence>,
@@ -1260,6 +1320,30 @@ pub fn derive_screen_hints(lines: &[String]) -> Vec<PaneObservationHint> {
         });
     }
 
+    if lines.iter().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("Last login:") || trimmed == "System information as of"
+    }) {
+        hints.push(PaneObservationHint {
+            kind: PaneObservationHintKind::LoginBannerVisible,
+            confidence: PaneConfidence::Advisory,
+            detail: "The current visible screen includes a login banner or shell welcome text."
+                .to_string(),
+        });
+    }
+
+    if lines.iter().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("Connection to ") && trimmed.contains(" closed")
+    }) {
+        hints.push(PaneObservationHint {
+            kind: PaneObservationHintKind::SshConnectionClosed,
+            confidence: PaneConfidence::Advisory,
+            detail: "The current visible screen shows that an SSH connection was closed."
+                .to_string(),
+        });
+    }
+
     hints
 }
 
@@ -1299,8 +1383,20 @@ fn focused_screen_assessment(
     let has_htop = hints
         .iter()
         .any(|hint| hint.kind == PaneObservationHintKind::HtopLikeScreen);
+    let has_login_banner = hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::LoginBannerVisible);
+    let has_ssh_closed = hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
 
     let summary = match (has_prompt, has_htop) {
+        _ if has_ssh_closed => {
+            "The current visible screen shows an SSH connection that appears closed. Treat this pane as a disconnected remote workspace until a stronger fact source proves otherwise."
+        }
+        _ if has_login_banner && has_prompt => {
+            "The current visible screen looks like a logged-in shell with a recent login banner still visible."
+        }
         (true, true) => {
             "The current visible screen shows prompt-like input near the bottom while htop-like content is also visible above. Treat this as mixed current-screen evidence, not proof of the true foreground app."
         }
@@ -1369,7 +1465,15 @@ fn pane_screen_assessment_label(
             let htop_like = hints
                 .iter()
                 .any(|hint| hint.kind == PaneObservationHintKind::HtopLikeScreen);
+            let ssh_closed = hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
+            let login_banner = hints
+                .iter()
+                .any(|hint| hint.kind == PaneObservationHintKind::LoginBannerVisible);
             match (prompt_like, htop_like) {
+                _ if ssh_closed => "screen shows an SSH session that appears closed",
+                _ if login_banner && prompt_like => "screen looks like a logged-in remote shell",
                 (true, true) => {
                     "mixed current screen: prompt-like bottom with htop-like content above"
                 }
@@ -1381,8 +1485,110 @@ fn pane_screen_assessment_label(
     }
 }
 
+fn derive_workspace_kind(
+    host: Option<&str>,
+    tmux_session: Option<&str>,
+    runtime_stack: &[PaneRuntimeScope],
+    last_verified_runtime_stack: &[PaneRuntimeScope],
+) -> TabWorkspaceKind {
+    if tmux_session.is_some()
+        || has_tmux_scope(runtime_stack)
+        || has_tmux_scope(last_verified_runtime_stack)
+    {
+        TabWorkspaceKind::TmuxWorkspace
+    } else if host.is_some() {
+        TabWorkspaceKind::RemoteShell
+    } else if runtime_stack
+        .iter()
+        .any(|scope| scope.kind == PaneScopeKind::Shell)
+        || last_verified_runtime_stack
+            .iter()
+            .any(|scope| scope.kind == PaneScopeKind::Shell)
+    {
+        TabWorkspaceKind::LocalShell
+    } else {
+        TabWorkspaceKind::Unknown
+    }
+}
+
+fn derive_workspace_state(
+    kind: TabWorkspaceKind,
+    front_state: PaneFrontState,
+    screen_hints: &[PaneObservationHint],
+    has_visible_shell_exec: bool,
+    has_tmux_native: bool,
+) -> TabWorkspaceState {
+    if screen_hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed)
+    {
+        return TabWorkspaceState::Disconnected;
+    }
+    if matches!(front_state, PaneFrontState::InteractiveSurface) {
+        return TabWorkspaceState::Interactive;
+    }
+    let prompt_like = screen_hints
+        .iter()
+        .any(|hint| hint.kind == PaneObservationHintKind::PromptLikeInput);
+
+    match kind {
+        TabWorkspaceKind::TmuxWorkspace => {
+            if has_tmux_native {
+                TabWorkspaceState::Ready
+            } else {
+                TabWorkspaceState::NeedsInspection
+            }
+        }
+        TabWorkspaceKind::RemoteShell | TabWorkspaceKind::LocalShell => {
+            if has_visible_shell_exec || prompt_like {
+                TabWorkspaceState::Ready
+            } else {
+                TabWorkspaceState::NeedsInspection
+            }
+        }
+        TabWorkspaceKind::Unknown => TabWorkspaceState::Unknown,
+    }
+}
+
+fn workspace_note(
+    kind: TabWorkspaceKind,
+    state: TabWorkspaceState,
+    host: Option<&str>,
+    tmux_session: Option<&str>,
+) -> String {
+    match (kind, state, host, tmux_session) {
+        (_, TabWorkspaceState::Disconnected, Some(host), _) => {
+            format!("SSH workspace for `{host}` appears disconnected.")
+        }
+        (TabWorkspaceKind::TmuxWorkspace, TabWorkspaceState::Ready, Some(host), Some(session)) => {
+            format!("Remote tmux workspace on `{host}` session `{session}` is ready.")
+        }
+        (TabWorkspaceKind::TmuxWorkspace, _, Some(host), Some(session)) => {
+            format!(
+                "Remote tmux workspace on `{host}` session `{session}` exists, but needs inspection before control."
+            )
+        }
+        (TabWorkspaceKind::RemoteShell, TabWorkspaceState::Ready, Some(host), _) => {
+            format!("Remote shell workspace on `{host}` looks ready.")
+        }
+        (TabWorkspaceKind::RemoteShell, _, Some(host), _) => {
+            format!("Remote shell workspace on `{host}` exists, but needs inspection.")
+        }
+        (TabWorkspaceKind::LocalShell, TabWorkspaceState::Ready, _, _) => {
+            "Local shell workspace looks ready.".to_string()
+        }
+        (TabWorkspaceKind::TmuxWorkspace, TabWorkspaceState::Ready, None, Some(session)) => {
+            format!("tmux workspace `{session}` is ready.")
+        }
+        _ => "Workspace state is not yet proven.".to_string(),
+    }
+}
+
 fn summarize_focused_pane_layout(ctx: &TerminalContext) -> String {
-    let mut parts = vec![format!("pane {} is focused", ctx.focused_pane_index)];
+    let mut parts = vec![format!(
+        "pane {} (id {}) is focused",
+        ctx.focused_pane_index, ctx.focused_pane_id
+    )];
     if let Some(host) = &ctx.focused_hostname {
         parts.push(format!("host `{host}` is proven"));
     } else if let Some(anchor) = &ctx.focused_remote_workspace {
@@ -1427,6 +1633,17 @@ fn summarize_focused_pane_layout(ctx: &TerminalContext) -> String {
             .to_string(),
     );
 
+    if let Some(workspace) = tab_workspaces(ctx)
+        .into_iter()
+        .find(|workspace| workspace.pane_id == ctx.focused_pane_id)
+    {
+        parts.push(format!(
+            "workspace={} state={}",
+            workspace.kind.as_str(),
+            workspace.state.as_str()
+        ));
+    }
+
     if !ctx.focused_shell_metadata_fresh && !ctx.focused_last_verified_runtime_stack.is_empty() {
         parts.push(format!(
             "historical shell frame only: {}",
@@ -1438,7 +1655,7 @@ fn summarize_focused_pane_layout(ctx: &TerminalContext) -> String {
 }
 
 fn summarize_peer_pane_layout(pane: &PaneSummary) -> String {
-    let mut parts = vec![format!("pane {}", pane.pane_index)];
+    let mut parts = vec![format!("pane {} (id {})", pane.pane_index, pane.pane_id)];
     if let Some(host) = &pane.hostname {
         parts.push(format!("host `{host}` is proven"));
     } else if let Some(anchor) = &pane.remote_workspace {
@@ -1480,6 +1697,34 @@ fn summarize_peer_pane_layout(pane: &PaneSummary) -> String {
 
     parts.push(pane_screen_assessment_label(pane.front_state, &pane.screen_hints).to_string());
 
+    let host = pane.hostname.as_deref().or_else(|| {
+        pane.remote_workspace
+            .as_ref()
+            .map(|anchor| anchor.host.as_str())
+    });
+    let kind = derive_workspace_kind(
+        host,
+        pane.control
+            .tmux
+            .as_ref()
+            .and_then(|tmux| tmux.session_name.as_deref())
+            .or(pane.tmux_session.as_deref()),
+        &pane.runtime_stack,
+        &pane.last_verified_runtime_stack,
+    );
+    let state = derive_workspace_state(
+        kind,
+        pane.front_state,
+        &pane.screen_hints,
+        pane_supports_visible_shell(pane) || pane.remote_workspace.is_some(),
+        pane_has_native_tmux(pane),
+    );
+    parts.push(format!(
+        "workspace={} state={}",
+        kind.as_str(),
+        state.as_str()
+    ));
+
     if !pane.shell_metadata_fresh && !pane.last_verified_runtime_stack.is_empty() {
         parts.push(format!(
             "historical shell frame only: {}",
@@ -1516,6 +1761,101 @@ fn pane_has_native_tmux(pane: &PaneSummary) -> bool {
         .is_some_and(|tmux| tmux.mode == TmuxControlMode::Native)
 }
 
+fn tab_workspaces(ctx: &TerminalContext) -> Vec<TabWorkspaceSummary> {
+    let focused_host = ctx.focused_hostname.as_deref().or_else(|| {
+        ctx.focused_remote_workspace
+            .as_ref()
+            .map(|anchor| anchor.host.as_str())
+    });
+    let mut workspaces = vec![TabWorkspaceSummary {
+        pane_index: ctx.focused_pane_index,
+        pane_id: ctx.focused_pane_id,
+        host: focused_host.map(ToString::to_string),
+        tmux_session: ctx
+            .focused_control
+            .tmux
+            .as_ref()
+            .and_then(|tmux| tmux.session_name.clone())
+            .or_else(|| ctx.tmux_session.clone()),
+        kind: derive_workspace_kind(
+            focused_host,
+            ctx.focused_control
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.as_deref())
+                .or(ctx.tmux_session.as_deref()),
+            &ctx.focused_runtime_stack,
+            &ctx.focused_last_verified_runtime_stack,
+        ),
+        state: derive_workspace_state(
+            derive_workspace_kind(
+                focused_host,
+                ctx.focused_control
+                    .tmux
+                    .as_ref()
+                    .and_then(|tmux| tmux.session_name.as_deref())
+                    .or(ctx.tmux_session.as_deref()),
+                &ctx.focused_runtime_stack,
+                &ctx.focused_last_verified_runtime_stack,
+            ),
+            ctx.focused_front_state,
+            &ctx.focused_screen_hints,
+            focused_supports_visible_shell(ctx) || ctx.focused_remote_workspace.is_some(),
+            focused_has_native_tmux(ctx),
+        ),
+        note: String::new(),
+    }];
+    for pane in &ctx.other_panes {
+        let host = pane.hostname.as_deref().or_else(|| {
+            pane.remote_workspace
+                .as_ref()
+                .map(|anchor| anchor.host.as_str())
+        });
+        let kind = derive_workspace_kind(
+            host,
+            pane.control
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.as_deref())
+                .or(pane.tmux_session.as_deref()),
+            &pane.runtime_stack,
+            &pane.last_verified_runtime_stack,
+        );
+        let state = derive_workspace_state(
+            kind,
+            pane.front_state,
+            &pane.screen_hints,
+            pane_supports_visible_shell(pane) || pane.remote_workspace.is_some(),
+            pane_has_native_tmux(pane),
+        );
+        workspaces.push(TabWorkspaceSummary {
+            pane_index: pane.pane_index,
+            pane_id: pane.pane_id,
+            host: host.map(ToString::to_string),
+            tmux_session: pane
+                .control
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.clone())
+                .or_else(|| pane.tmux_session.clone()),
+            kind,
+            state,
+            note: String::new(),
+        });
+    }
+
+    for workspace in &mut workspaces {
+        workspace.note = workspace_note(
+            workspace.kind,
+            workspace.state,
+            workspace.host.as_deref(),
+            workspace.tmux_session.as_deref(),
+        );
+    }
+
+    workspaces
+}
+
 fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
     let mut hints = Vec::new();
 
@@ -1523,9 +1863,11 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
     if focused_supports_visible_shell(ctx) || ctx.focused_remote_workspace.is_some() {
         best_remote_shell = Some((
             ctx.focused_pane_index,
-            ctx.focused_hostname
-                .as_deref()
-                .or_else(|| ctx.focused_remote_workspace.as_ref().map(|anchor| anchor.host.as_str())),
+            ctx.focused_hostname.as_deref().or_else(|| {
+                ctx.focused_remote_workspace
+                    .as_ref()
+                    .map(|anchor| anchor.host.as_str())
+            }),
             ctx.focused_hostname.is_some(),
         ));
     }
@@ -1535,9 +1877,11 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
         }
         let candidate = (
             pane.pane_index,
-            pane.hostname
-                .as_deref()
-                .or_else(|| pane.remote_workspace.as_ref().map(|anchor| anchor.host.as_str())),
+            pane.hostname.as_deref().or_else(|| {
+                pane.remote_workspace
+                    .as_ref()
+                    .map(|anchor| anchor.host.as_str())
+            }),
             pane.hostname.is_some(),
         );
         match best_remote_shell {
@@ -1554,7 +1898,7 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
     if let Some((pane_index, host, _)) = best_remote_shell {
         hints.push(match host {
             Some(host) => format!(
-                "Best visible remote shell target right now: pane {pane_index} on host `{host}`."
+                "Best visible remote shell target right now: pane {pane_index} on host `{host}`. Re-run list_panes if the layout changes because pane_index is positional."
             ),
             None => format!(
                 "Best visible shell target right now: pane {pane_index}. Remote identity is not proven."
@@ -1714,6 +2058,7 @@ impl TerminalContext {
     pub fn empty() -> Self {
         Self {
             focused_pane_index: 1,
+            focused_pane_id: 0,
             focused_hostname: None,
             focused_hostname_confidence: None,
             focused_hostname_source: None,
@@ -1802,7 +2147,7 @@ impl TerminalContext {
              ### Choose the right tool\n\
              - SHELL COMMANDS on a pane with `exec_visible_shell` → terminal_exec / batch_exec.\n\
              - READ-ONLY SHELL INTROSPECTION on a pane with `probe_shell_context` → probe_shell_context.\n\
-             - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context` or `tmux_snapshot`. Only call list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
+             - CURRENT TERMINAL SITUATION questions (\"where am I?\", \"am I in tmux?\", \"what host is this?\") → use the provided focused-pane context first, including any `shell_context`, `tmux_snapshot`, or `<tab_workspaces>`. Only call list_tab_workspaces / list_panes / probe_shell_context / tmux_list_targets when a stronger fact source is still needed.\n\
              - MULTI-PANE TARGET SELECTION (\"which pane should you use?\", \"which pane is safer?\", \"where should you run this?\") → resolve_work_target.\n\
              - FOLLOW-UP REMOTE WORK on hosts that already exist in `<remote_workspaces>` → reuse those workspaces by default. Do not create duplicate SSH panes unless the user asks for a new host or the existing pane is no longer reusable.\n\
              - When `<work_target_hints>` is present, use those typed hints before improvising pane choice from raw metadata.\n\
@@ -1815,7 +2160,7 @@ impl TerminalContext {
              - TMUX NATIVE COMMAND LAUNCH on a pane with tmux native control → tmux_run_command to create a new tmux window or split for a shell, Codex CLI, Claude Code, OpenCode, or a long-running command.\n\
              - TMUX NATIVE INTERACTION on a pane with tmux native control → tmux_send_keys to a specific tmux pane target.\n\
              - TMUX WITHOUT native control → read_pane first, then outer-pane send_keys only as a fallback.\n\
-             - PARALLEL WORK across hosts → ensure_remote_shell_target for each host so existing SSH panes are reused across turns. Use create_pane only for low-level manual pane creation.\n\
+             - PARALLEL WORK across hosts → remote_exec or ensure_remote_shell_target for each host so existing SSH panes are reused across turns. Use create_pane only for low-level manual pane creation.\n\
              - SHELL COMMANDS on a pane WITHOUT `exec_visible_shell` → use read_pane first, then send_keys \"command\\n\" only if a shell prompt is visibly present.\n\
              - LONG-RUNNING commands → launch, then wait_for (not repeated read_pane).\n\
              - INTERACTIVE TUI (htop, menus, agent CLIs without a stronger attachment) → tmux_send_keys when a tmux target exists, otherwise send_keys + read_pane (follow playbooks).\n\
@@ -1837,7 +2182,8 @@ impl TerminalContext {
                (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it. Supports split placement via `location` (`right` or `down`).\n\
                Returns the pane index AND initial output (waits for output to settle). \
                Check the output to see what happened — no need for a separate read_pane.\n\n\
-             - list_panes: List all panes with metadata, control state, capabilities, and addressing notes.\n\n\
+             - list_panes: List all panes with metadata, stable pane ids, control state, capabilities, and addressing notes.\n\n\
+             - list_tab_workspaces: Summarize the current tab as typed workspaces such as remote shell, tmux workspace, disconnected SSH pane, or local shell.\n\n\
              - probe_shell_context: Run a read-only shell-scoped probe in a pane with a proven fresh shell prompt. \
                Use this to gather authoritative shell facts such as hostname, SSH env, tmux env, tmux session/window/pane ids, \
                and NVIM_LISTEN_ADDRESS. This is shell-scope truth, not foreground-app truth after control passes to a TUI.\n\n\
@@ -1856,6 +2202,7 @@ impl TerminalContext {
              - tmux_find_targets: Find likely tmux shell panes, agent CLI panes, or other matching targets without hand-filtering tmux_list_targets.\n\
              - resolve_work_target: Choose the best con pane or tmux target for shell work, tmux work, or agent CLI interaction using the typed control plane.\n\
              - ensure_remote_shell_target: Reuse an existing SSH pane for a host, or create one if needed. Prefer this over repeatedly creating duplicate SSH panes during multi-host work.\n\
+             - remote_exec: Reuse or create remote SSH workspaces for one or more hosts, then run the same command on them in parallel.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
              - tmux_ensure_shell_target: Reuse or create a tmux shell target through a proven same-session tmux shell anchor.\n\
              - tmux_ensure_agent_target: Reuse or create a tmux target for Codex CLI, Claude Code, or OpenCode. This stays in tmux control; it does not imply a native Codex/OpenCode attachment unless con explicitly proves one.\n\
@@ -1873,6 +2220,7 @@ impl TerminalContext {
              - Observation is not control. Pane title and visible screen text are raw observations, not typed runtime facts.\n\
              - Action history is causal evidence, not foreground truth. Use recent con actions to understand how a pane was reached, but rely on current probes and control capabilities before acting.\n\
              - `runtime_stack` is current-only. `last_verified_shell_stack` describes the most recent shell frame con verified, and may be historical.\n\
+             - `pane_index` is positional within the current pane layout snapshot and can change when panes are created or closed. `pane_id` is the stable pane identity within the lifetime of this tab.\n\
              - Prefer typed attachments and probes over inference. If `probe_shell_context` is available, use it before guessing about SSH, tmux, or editor context.\n\
              - `<remote_workspaces>` is not a guess. It is con's current host-workspace inventory for this tab, built from pane-local runtime facts and con-managed SSH continuity.\n\
              - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
@@ -1897,8 +2245,9 @@ impl TerminalContext {
 
         prompt.push_str("<terminal_context>\n");
         prompt.push_str(&format!(
-            "<focused_pane index=\"{}\" front_state=\"{}\" mode=\"{}\" shell_integration=\"{}\" shell_metadata_fresh=\"{}\" shell_context_fresh=\"{}\"",
+            "<focused_pane index=\"{}\" pane_id=\"{}\" front_state=\"{}\" mode=\"{}\" shell_integration=\"{}\" shell_metadata_fresh=\"{}\" shell_context_fresh=\"{}\"",
             self.focused_pane_index,
+            self.focused_pane_id,
             self.focused_front_state.as_str(),
             self.focused_pane_mode.as_str(),
             self.focused_has_shell_integration,
@@ -2096,8 +2445,9 @@ impl TerminalContext {
             // Focused pane
             let cwd_label = self.cwd.as_deref().unwrap_or("?");
             prompt.push_str(&format!(
-                "  <pane index=\"{}\" focused=\"true\" cwd=\"{}\" front_state=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\" runtime=\"{}\" last_verified_shell_stack=\"{}\" control_target=\"{}\" target_stack=\"{}\" control_attachments=\"{}\" control_channels=\"{}\" control_capabilities=\"{}\"",
+                "  <pane index=\"{}\" pane_id=\"{}\" focused=\"true\" cwd=\"{}\" front_state=\"{}\" mode=\"{}\" shell_metadata_fresh=\"{}\" runtime=\"{}\" last_verified_shell_stack=\"{}\" control_target=\"{}\" target_stack=\"{}\" control_attachments=\"{}\" control_channels=\"{}\" control_capabilities=\"{}\"",
                 self.focused_pane_index,
+                self.focused_pane_id,
                 xml_escape(cwd_label),
                 self.focused_front_state.as_str(),
                 self.focused_pane_mode.as_str(),
@@ -2214,8 +2564,9 @@ impl TerminalContext {
                     pane.observation_support.remote_host_identity,
                 );
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" cwd=\"{}\" front_state=\"{}\" mode=\"{}\" runtime=\"{}\" last_verified_shell_stack=\"{}\"{}{}{}{}{}{}{}{}{}{}{}{}{}{}/>\n",
+                    "  <pane index=\"{}\" pane_id=\"{}\" cwd=\"{}\" front_state=\"{}\" mode=\"{}\" runtime=\"{}\" last_verified_shell_stack=\"{}\"{}{}{}{}{}{}{}{}{}{}{}{}{}{}/>\n",
                     pane.pane_index,
+                    pane.pane_id,
                     xml_escape(cwd),
                     pane.front_state.as_str(),
                     pane.mode.as_str(),
@@ -2259,33 +2610,58 @@ impl TerminalContext {
 
         let mut remote_workspaces = Vec::new();
         if let Some(anchor) = &self.focused_remote_workspace {
-            remote_workspaces.push((self.focused_pane_index, anchor));
+            remote_workspaces.push((self.focused_pane_index, self.focused_pane_id, anchor));
         }
         for pane in &self.other_panes {
             if let Some(anchor) = &pane.remote_workspace {
-                remote_workspaces.push((pane.pane_index, anchor));
+                remote_workspaces.push((pane.pane_index, pane.pane_id, anchor));
             }
         }
-        remote_workspaces.sort_by(|(pane_a, anchor_a), (pane_b, anchor_b)| {
+        remote_workspaces.sort_by(|(pane_a, _, anchor_a), (pane_b, _, anchor_b)| {
             anchor_a
                 .host
                 .cmp(&anchor_b.host)
                 .then_with(|| pane_a.cmp(pane_b))
         });
-        remote_workspaces.dedup_by(|(_, a), (_, b)| a.host == b.host);
+        remote_workspaces.dedup_by(|(_, _, a), (_, _, b)| a.host == b.host);
         if !remote_workspaces.is_empty() {
             prompt.push_str("<remote_workspaces>\n");
-            for (pane_index, anchor) in remote_workspaces {
+            for (pane_index, pane_id, anchor) in remote_workspaces {
                 prompt.push_str(&format!(
-                    "  <workspace host=\"{}\" pane_index=\"{}\" source=\"{}\" confidence=\"{}\">{}</workspace>\n",
+                    "  <workspace host=\"{}\" pane_index=\"{}\" pane_id=\"{}\" source=\"{}\" confidence=\"{}\">{}</workspace>\n",
                     xml_escape(&anchor.host),
                     pane_index,
+                    pane_id,
                     anchor.source.as_str(),
                     anchor.confidence.as_str(),
                     xml_escape(&anchor.note)
                 ));
             }
             prompt.push_str("</remote_workspaces>\n");
+        }
+
+        let tab_workspaces = tab_workspaces(self);
+        if !tab_workspaces.is_empty() {
+            prompt.push_str("<tab_workspaces>\n");
+            for workspace in &tab_workspaces {
+                prompt.push_str(&format!(
+                    "  <workspace pane_index=\"{}\" pane_id=\"{}\" kind=\"{}\" state=\"{}\"",
+                    workspace.pane_index,
+                    workspace.pane_id,
+                    workspace.kind.as_str(),
+                    workspace.state.as_str()
+                ));
+                if let Some(host) = &workspace.host {
+                    prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
+                }
+                if let Some(session) = &workspace.tmux_session {
+                    prompt.push_str(&format!(" tmux_session=\"{}\"", xml_escape(session)));
+                }
+                prompt.push_str(">");
+                prompt.push_str(&xml_escape(&workspace.note));
+                prompt.push_str("</workspace>\n");
+            }
+            prompt.push_str("</tab_workspaces>\n");
         }
 
         let work_target_hints = preferred_work_target_hints(self);
@@ -2816,6 +3192,7 @@ mod tests {
         };
         let prompt = TerminalContext {
             focused_pane_index: 1,
+            focused_pane_id: 1,
             focused_hostname: None,
             focused_hostname_confidence: None,
             focused_hostname_source: None,
@@ -2928,6 +3305,7 @@ mod tests {
         };
         TerminalContext {
             focused_pane_index: 1,
+            focused_pane_id: 1,
             focused_hostname: None,
             focused_hostname_confidence: None,
             focused_hostname_source: None,
@@ -3161,6 +3539,7 @@ mod tests {
         }];
         ctx.other_panes.push(PaneSummary {
             pane_index: 2,
+            pane_id: 2,
             hostname: Some("haswell".to_string()),
             hostname_confidence: Some(PaneConfidence::Strong),
             hostname_source: Some(PaneEvidenceSource::ShellProbe),
@@ -3236,7 +3615,7 @@ mod tests {
         });
         let prompt = ctx.to_system_prompt();
         assert!(prompt.contains("<pane_layout_summary>"));
-        assert!(prompt.contains("pane 1 is focused"));
+        assert!(prompt.contains("pane 1 (id 1) is focused"));
         assert!(prompt.contains("pane 2"));
         assert!(prompt.contains("historical shell frame only"));
     }
@@ -3247,6 +3626,7 @@ mod tests {
         ctx.focused_hostname = Some("cinnamon".to_string());
         ctx.other_panes.push(PaneSummary {
             pane_index: 2,
+            pane_id: 2,
             hostname: Some("haswell".to_string()),
             hostname_confidence: Some(PaneConfidence::Strong),
             hostname_source: Some(PaneEvidenceSource::ShellProbe),

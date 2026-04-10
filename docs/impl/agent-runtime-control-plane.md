@@ -116,7 +116,9 @@ The control plane says what con can safely do.
 
 ### 2. Addressing is not identity
 
-`pane_index=1` is a con pane address.
+`pane_index=1` is a con pane address snapshot.
+
+`pane_id=17` is the stable con-pane identity for that pane while it exists in the tab.
 
 It is not:
 
@@ -126,6 +128,12 @@ It is not:
 - an editor buffer
 
 Every target layer needs its own address space.
+
+Product rule:
+
+- use `pane_index` for immediate, human-readable layout descriptions
+- use `pane_id` for follow-up control and reuse
+- if both are present and disagree, stop and re-run `list_panes`
 
 ### 3. Execution must match the runtime layer
 
@@ -544,6 +552,7 @@ The built-in agent should follow this sequence:
 Mandatory prompt rules:
 
 - `pane_index` always means a con pane
+- `pane_id` is the stable identity of that con pane for the life of the pane
 - tmux panes/windows use tmux-specific target ids
 - `shell_exec` is always local
 - do not substitute local execution for remote intent

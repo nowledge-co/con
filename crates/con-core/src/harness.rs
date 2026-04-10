@@ -241,6 +241,7 @@ impl AgentHarness {
     pub fn build_context_from_snapshot(
         &self,
         focused_pane_index: usize,
+        focused_pane_id: usize,
         focused_observation: &con_agent::context::PaneObservationFrame,
         focused_runtime: &con_agent::context::PaneRuntimeState,
         other_panes: Vec<con_agent::context::PaneSummary>,
@@ -254,6 +255,7 @@ impl AgentHarness {
 
         TerminalContext {
             focused_pane_index,
+            focused_pane_id,
             focused_hostname: focused_runtime.remote_host.clone(),
             focused_hostname_confidence: focused_runtime.remote_host_confidence,
             focused_hostname_source: focused_runtime.remote_host_source,
@@ -905,10 +907,13 @@ async fn auto_query_focused_tmux_snapshot(
     }
 
     let pane_index = context.focused_pane_index;
+    let pane_id = context.focused_pane_id;
     let (response_tx, response_rx) = crossbeam_channel::bounded(1);
     if pane_tx
         .send(PaneRequest {
-            query: con_agent::PaneQuery::TmuxList { pane_index },
+            query: con_agent::PaneQuery::TmuxList {
+                pane: con_agent::tools::PaneSelector::new(Some(pane_index), Some(pane_id)),
+            },
             response_tx,
         })
         .is_err()

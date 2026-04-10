@@ -52,6 +52,10 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - When multiple panes are open, the prompt now carries typed work-target hints too. The agent can see which pane is the best visible shell target and which pane is the best tmux workspace before it decides whether to call a resolver tool.
 - SSH workspaces are now tracked across the whole tab, not just the focused pane. con keeps a typed inventory of proven remote hosts and con-managed SSH continuity, so follow-up requests can reuse the right host panes instead of recreating them.
 - Follow-up remote work is now allowed to reuse con-created SSH panes even when fresh shell integration is not currently proven, as long as the pane still looks like a prompt and no tmux or TUI evidence contradicts that continuity.
+- Pane tools now expose both `pane_index` and stable `pane_id`. `pane_index` remains the current visible layout position, while `pane_id` stays stable for the life of that pane inside the tab. Follow-up agent work now prefers `pane_id`, so adding or closing a split does not silently retarget later actions.
+- con now summarizes the whole tab as typed workspaces. The agent can distinguish a ready remote shell, a tmux workspace, a disconnected SSH pane, or a pane that still needs inspection before it acts.
+- Multi-host remote work now has a higher-level `remote_exec` path. The agent can reuse or create SSH workspaces for multiple hosts and run the same command across them in parallel without manually stitching pane creation and batch execution together.
+- Current-screen SSH state is modeled more cleanly too. Login banners and closed-SSH screens are now captured as observations, which helps the agent tell the difference between a live remote shell and a pane whose remote session already ended.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

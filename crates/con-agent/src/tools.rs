@@ -88,7 +88,7 @@ fn validate_path_for_write(raw: &str, allowed_root: &Path) -> Result<PathBuf, To
 pub struct TerminalExecRequest {
     pub command: String,
     pub working_dir: Option<String>,
-    pub pane_index: Option<usize>,
+    pub target: PaneSelector,
     pub response_tx: Sender<TerminalExecResponse>,
 }
 
@@ -115,10 +115,52 @@ impl PaneCreateLocation {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PaneSelector {
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
+}
+
+impl PaneSelector {
+    pub const fn new(pane_index: Option<usize>, pane_id: Option<usize>) -> Self {
+        Self {
+            pane_index,
+            pane_id,
+        }
+    }
+
+    pub fn describe(self) -> String {
+        match (self.pane_index, self.pane_id) {
+            (Some(index), Some(id)) => format!("pane {index} (id {id})"),
+            (Some(index), None) => format!("pane {index}"),
+            (None, Some(id)) => format!("pane id {id}"),
+            (None, None) => "focused pane".to_string(),
+        }
+    }
+}
+
+fn selector_from(index: Option<usize>, id: Option<usize>) -> PaneSelector {
+    PaneSelector::new(index, id)
+}
+
+fn require_pane_target(
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    tool_name: &str,
+) -> Result<PaneSelector, ToolError> {
+    if pane_index.is_none() && pane_id.is_none() {
+        return Err(ToolError::CommandFailed(format!(
+            "{tool_name} requires pane_index or pane_id"
+        )));
+    }
+    Ok(PaneSelector::new(pane_index, pane_id))
+}
+
 #[derive(Deserialize)]
 pub struct TerminalExecArgs {
     pub command: String,
     pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
 }
 
 /// Tool that executes commands in the user's visible terminal.
@@ -152,7 +194,7 @@ impl Tool for TerminalExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute a command visibly in a con terminal pane only when that pane's control_capabilities include exec_visible_shell. pane_index refers to a con pane from list_panes, not a tmux pane/window/editor target. For tmux, vim, nvim, agent CLIs, and other TUIs, inspect first and use send_keys only when intentional.".to_string(),
+            description: "Execute a command visibly in a con terminal pane only when that pane's control_capabilities include exec_visible_shell. Use pane_id from list_panes for stable follow-up targeting; pane_index is only a positional snapshot. These selectors refer to a con pane, not a tmux pane/window/editor target. For tmux, agent CLIs, and other TUIs, inspect first and use tmux-native tools or send_keys intentionally.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -162,7 +204,11 @@ impl Tool for TerminalExecTool {
                     },
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target pane index (from list_panes). Omit to use the focused pane."
+                        "description": "Target pane index from the latest list_panes snapshot. Positional only; it can change when panes are added or removed."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
                     }
                 },
                 "required": ["command"]
@@ -177,7 +223,7 @@ impl Tool for TerminalExecTool {
             .send(TerminalExecRequest {
                 command: args.command,
                 working_dir: None,
-                pane_index: args.pane_index,
+                target: selector_from(args.pane_index, args.pane_id),
                 response_tx,
             })
             .map_err(|_| ToolError::CommandFailed("Terminal exec channel closed".into()))?;
@@ -701,6 +747,8 @@ impl Tool for SearchTool {
 #[derive(Debug, Clone, Serialize)]
 pub struct PaneInfo {
     pub index: usize,
+    /// Stable pane id within the current tab lifetime.
+    pub pane_id: usize,
     pub title: String,
     pub cwd: Option<String>,
     pub is_focused: bool,
@@ -786,28 +834,28 @@ pub enum PaneQuery {
     /// List all panes with metadata.
     List,
     /// Read recent output from a specific pane.
-    ReadContent { pane_index: usize, lines: usize },
+    ReadContent { target: PaneSelector, lines: usize },
     /// Send raw keystrokes to a specific pane (for TUI interaction, Ctrl-C, etc.).
-    SendKeys { pane_index: usize, keys: String },
+    SendKeys { target: PaneSelector, keys: String },
     /// Search scrollback + visible screen for a text pattern.
     SearchText {
-        pane_index: Option<usize>,
+        target: PaneSelector,
         pattern: String,
         max_matches: usize,
     },
     /// Return tmux adapter state for a pane whose target stack contains tmux.
-    InspectTmux { pane_index: usize },
+    InspectTmux { target: PaneSelector },
     /// Query tmux windows/panes through a same-session tmux control anchor.
-    TmuxList { pane_index: usize },
+    TmuxList { pane: PaneSelector },
     /// Capture pane content from a tmux pane target through a same-session tmux control anchor.
     TmuxCapture {
-        pane_index: usize,
+        pane: PaneSelector,
         target: Option<String>,
         lines: usize,
     },
     /// Send literal text or tmux key names to a tmux pane target through a same-session tmux control anchor.
     TmuxSendKeys {
-        pane_index: usize,
+        pane: PaneSelector,
         target: String,
         literal_text: Option<String>,
         key_names: Vec<String>,
@@ -815,7 +863,7 @@ pub enum PaneQuery {
     },
     /// Run a command through tmux itself by creating a new tmux target.
     TmuxRunCommand {
-        pane_index: usize,
+        pane: PaneSelector,
         target: Option<String>,
         location: TmuxExecLocation,
         command: String,
@@ -824,13 +872,13 @@ pub enum PaneQuery {
         detached: bool,
     },
     /// Run a read-only shell-scoped probe in a pane with a proven fresh shell prompt.
-    ProbeShellContext { pane_index: usize },
+    ProbeShellContext { target: PaneSelector },
     /// Lightweight busy check for a single pane (used by wait_for polling).
     /// Returns only is_busy + has_shell_integration, avoiding full List forensics.
-    CheckBusy { pane_index: usize },
+    CheckBusy { target: PaneSelector },
     /// Wait for a pane to become idle or match a pattern.
     WaitFor {
-        pane_index: usize,
+        target: PaneSelector,
         timeout_secs: Option<u64>,
         pattern: Option<String>,
     },
@@ -867,6 +915,7 @@ pub enum PaneResponse {
     /// A new pane was created successfully.
     PaneCreated {
         pane_index: usize,
+        pane_id: usize,
     },
     Error(String),
 }
@@ -924,6 +973,7 @@ pub struct EnsureRemoteShellTargetResult {
     pub host: String,
     pub created: bool,
     pub pane_index: usize,
+    pub pane_id: Option<usize>,
     pub match_source: RemoteShellMatchSource,
     pub command: Option<String>,
     pub output: String,
@@ -953,6 +1003,7 @@ pub enum WorkTargetControlPath {
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkTargetCandidate {
     pub pane_index: usize,
+    pub pane_id: usize,
     pub pane_title: String,
     pub host: Option<String>,
     pub control_path: WorkTargetControlPath,
@@ -985,12 +1036,12 @@ fn recv_pane_response(
 
 fn pane_query_tmux_list(
     pane_tx: &Sender<PaneRequest>,
-    pane_index: usize,
+    target: PaneSelector,
 ) -> Result<TmuxSnapshot, ToolError> {
     let (response_tx, response_rx) = crossbeam_channel::bounded(1);
     pane_tx
         .send(PaneRequest {
-            query: PaneQuery::TmuxList { pane_index },
+            query: PaneQuery::TmuxList { pane: target },
             response_tx,
         })
         .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
@@ -1004,7 +1055,7 @@ fn pane_query_tmux_list(
 
 fn pane_query_tmux_run_command(
     pane_tx: &Sender<PaneRequest>,
-    pane_index: usize,
+    pane: PaneSelector,
     target: Option<String>,
     location: TmuxExecLocation,
     command: String,
@@ -1016,7 +1067,7 @@ fn pane_query_tmux_run_command(
     pane_tx
         .send(PaneRequest {
             query: PaneQuery::TmuxRunCommand {
-                pane_index,
+                pane,
                 target,
                 location,
                 command,
@@ -1053,7 +1104,7 @@ fn pane_query_list(pane_tx: &Sender<PaneRequest>) -> Result<Vec<PaneInfo>, ToolE
 
 async fn wait_for_pane_initial_output(
     pane_tx: &Sender<PaneRequest>,
-    pane_index: usize,
+    target: PaneSelector,
 ) -> Result<String, ToolError> {
     const POLL_MS: u64 = 500;
     const SETTLE_POLLS: u32 = 3;
@@ -1069,10 +1120,7 @@ async fn wait_for_pane_initial_output(
         let (tx, rx) = crossbeam_channel::bounded(1);
         pane_tx
             .send(PaneRequest {
-                query: PaneQuery::ReadContent {
-                    pane_index,
-                    lines: 50,
-                },
+                query: PaneQuery::ReadContent { target, lines: 50 },
                 response_tx: tx,
             })
             .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
@@ -1291,6 +1339,153 @@ fn pane_is_visible_agent_cli(pane: &PaneInfo, agent_name: Option<&String>) -> bo
         })
 }
 
+fn pane_has_screen_hint(pane: &PaneInfo, kind: crate::context::PaneObservationHintKind) -> bool {
+    pane.screen_hints.iter().any(|hint| hint.kind == kind)
+}
+
+fn workspace_kind_for_pane(pane: &PaneInfo) -> crate::context::TabWorkspaceKind {
+    if pane.tmux_control.is_some()
+        || pane.tmux_session.is_some()
+        || pane
+            .runtime_stack
+            .iter()
+            .any(|scope| scope.kind == crate::context::PaneScopeKind::Multiplexer)
+        || pane
+            .last_verified_runtime_stack
+            .iter()
+            .any(|scope| scope.kind == crate::context::PaneScopeKind::Multiplexer)
+    {
+        crate::context::TabWorkspaceKind::TmuxWorkspace
+    } else if pane.hostname.is_some() || pane.remote_workspace.is_some() {
+        crate::context::TabWorkspaceKind::RemoteShell
+    } else if pane.mode == PaneMode::Shell {
+        crate::context::TabWorkspaceKind::LocalShell
+    } else {
+        crate::context::TabWorkspaceKind::Unknown
+    }
+}
+
+fn workspace_state_for_pane(
+    pane: &PaneInfo,
+    kind: crate::context::TabWorkspaceKind,
+) -> crate::context::TabWorkspaceState {
+    if pane_has_screen_hint(
+        pane,
+        crate::context::PaneObservationHintKind::SshConnectionClosed,
+    ) {
+        return crate::context::TabWorkspaceState::Disconnected;
+    }
+    if pane.front_state == crate::context::PaneFrontState::InteractiveSurface {
+        return crate::context::TabWorkspaceState::Interactive;
+    }
+    let prompt_like = pane_has_screen_hint(
+        pane,
+        crate::context::PaneObservationHintKind::PromptLikeInput,
+    );
+    match kind {
+        crate::context::TabWorkspaceKind::TmuxWorkspace => {
+            if pane_has_tmux_native(pane) {
+                crate::context::TabWorkspaceState::Ready
+            } else {
+                crate::context::TabWorkspaceState::NeedsInspection
+            }
+        }
+        crate::context::TabWorkspaceKind::RemoteShell
+        | crate::context::TabWorkspaceKind::LocalShell => {
+            if pane_has_capability(pane, PaneControlCapability::ExecVisibleShell)
+                || pane.remote_workspace.is_some()
+                || prompt_like
+            {
+                crate::context::TabWorkspaceState::Ready
+            } else {
+                crate::context::TabWorkspaceState::NeedsInspection
+            }
+        }
+        crate::context::TabWorkspaceKind::Unknown => crate::context::TabWorkspaceState::Unknown,
+    }
+}
+
+fn workspace_note_for_pane(
+    pane: &PaneInfo,
+    kind: crate::context::TabWorkspaceKind,
+    state: crate::context::TabWorkspaceState,
+    host: Option<&str>,
+) -> String {
+    match (kind, state, host) {
+        (_, crate::context::TabWorkspaceState::Disconnected, Some(host)) => {
+            format!("SSH workspace for `{host}` appears disconnected.")
+        }
+        (
+            crate::context::TabWorkspaceKind::TmuxWorkspace,
+            crate::context::TabWorkspaceState::Ready,
+            Some(host),
+        ) => {
+            let session = pane
+                .tmux_control
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.as_deref())
+                .or(pane.tmux_session.as_deref())
+                .unwrap_or("tmux");
+            format!("Remote tmux workspace on `{host}` session `{session}` is ready.")
+        }
+        (crate::context::TabWorkspaceKind::TmuxWorkspace, _, Some(host)) => {
+            let session = pane
+                .tmux_control
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.as_deref())
+                .or(pane.tmux_session.as_deref())
+                .unwrap_or("tmux");
+            format!(
+                "Remote tmux workspace on `{host}` session `{session}` exists, but needs inspection."
+            )
+        }
+        (
+            crate::context::TabWorkspaceKind::RemoteShell,
+            crate::context::TabWorkspaceState::Ready,
+            Some(host),
+        ) => {
+            format!("Remote shell workspace on `{host}` looks ready.")
+        }
+        (crate::context::TabWorkspaceKind::RemoteShell, _, Some(host)) => {
+            format!("Remote shell workspace on `{host}` exists, but needs inspection.")
+        }
+        (
+            crate::context::TabWorkspaceKind::LocalShell,
+            crate::context::TabWorkspaceState::Ready,
+            _,
+        ) => "Local shell workspace looks ready.".to_string(),
+        _ => "Workspace state is not yet proven.".to_string(),
+    }
+}
+
+fn tab_workspaces_from_panes(panes: &[PaneInfo]) -> Vec<crate::context::TabWorkspaceSummary> {
+    panes
+        .iter()
+        .map(|pane| {
+            let host = pane.hostname.as_deref().or_else(|| {
+                pane.remote_workspace
+                    .as_ref()
+                    .map(|anchor| anchor.host.as_str())
+            });
+            let kind = workspace_kind_for_pane(pane);
+            let state = workspace_state_for_pane(pane, kind);
+            crate::context::TabWorkspaceSummary {
+                pane_index: pane.index,
+                pane_id: pane.pane_id,
+                host: host.map(ToString::to_string),
+                tmux_session: pane
+                    .tmux_control
+                    .as_ref()
+                    .and_then(|tmux| tmux.session_name.clone())
+                    .or_else(|| pane.tmux_session.clone()),
+                kind,
+                state,
+                note: workspace_note_for_pane(pane, kind, state, host),
+            }
+        })
+        .collect()
+}
+
 fn sort_work_target_candidates(candidates: &mut [(i32, WorkTargetCandidate)]) {
     candidates.sort_by(|(score_a, cand_a), (score_b, cand_b)| {
         score_b
@@ -1303,6 +1498,7 @@ fn sort_work_target_candidates(candidates: &mut [(i32, WorkTargetCandidate)]) {
 fn make_visible_shell_candidate(pane: &PaneInfo, reason: String) -> WorkTargetCandidate {
     WorkTargetCandidate {
         pane_index: pane.index,
+        pane_id: pane.pane_id,
         pane_title: pane.title.clone(),
         host: pane.hostname.clone(),
         control_path: WorkTargetControlPath::VisibleShellExec,
@@ -1322,6 +1518,7 @@ fn make_tmux_workspace_candidate(
 ) -> WorkTargetCandidate {
     WorkTargetCandidate {
         pane_index: pane.index,
+        pane_id: pane.pane_id,
         pane_title: pane.title.clone(),
         host: pane.hostname.clone(),
         control_path: WorkTargetControlPath::TmuxQuery,
@@ -1344,6 +1541,7 @@ fn make_tmux_target_candidate(
 ) -> WorkTargetCandidate {
     WorkTargetCandidate {
         pane_index: pane.index,
+        pane_id: pane.pane_id,
         pane_title: pane.title.clone(),
         host: pane.hostname.clone(),
         control_path,
@@ -1361,6 +1559,7 @@ fn resolve_work_target_candidates(
     panes: Vec<PaneInfo>,
     intent: WorkTargetIntent,
     preferred_pane_index: Option<usize>,
+    preferred_pane_id: Option<usize>,
     host_contains: Option<String>,
     cwd_contains: Option<String>,
     agent_name: Option<String>,
@@ -1374,6 +1573,11 @@ fn resolve_work_target_candidates(
     for pane in panes {
         if let Some(preferred_index) = preferred_pane_index {
             if pane.index != preferred_index {
+                continue;
+            }
+        }
+        if let Some(preferred_id) = preferred_pane_id {
+            if pane.pane_id != preferred_id {
                 continue;
             }
         }
@@ -1418,14 +1622,14 @@ fn resolve_work_target_candidates(
                 if !can_exec {
                     continue;
                 }
-                let mut score = if pane_has_capability(&pane, PaneControlCapability::ExecVisibleShell)
-                {
-                    if has_remote_fact { 120 } else { 110 }
-                } else if has_remote_fact {
-                    105
-                } else {
-                    95
-                };
+                let mut score =
+                    if pane_has_capability(&pane, PaneControlCapability::ExecVisibleShell) {
+                        if has_remote_fact { 120 } else { 110 }
+                    } else if has_remote_fact {
+                        105
+                    } else {
+                        95
+                    };
                 if pane.is_focused {
                     score += 5;
                 }
@@ -1482,7 +1686,10 @@ fn resolve_work_target_candidates(
                     continue;
                 }
                 if pane_has_tmux_native(&pane) {
-                    let snapshot = pane_query_tmux_list(pane_tx, pane.index)?;
+                    let snapshot = pane_query_tmux_list(
+                        pane_tx,
+                        selector_from(Some(pane.index), Some(pane.pane_id)),
+                    )?;
                     let mut matches = snapshot
                         .panes
                         .into_iter()
@@ -1544,6 +1751,7 @@ fn resolve_work_target_candidates(
                         170 + if pane.is_focused { 1 } else { 0 },
                         WorkTargetCandidate {
                             pane_index: pane.index,
+                            pane_id: pane.pane_id,
                             pane_title: pane.title.clone(),
                             host: pane.hostname.clone(),
                             control_path: WorkTargetControlPath::VisibleAgentUi,
@@ -1558,7 +1766,10 @@ fn resolve_work_target_candidates(
                     continue;
                 }
                 if pane_has_tmux_native(&pane) {
-                    let snapshot = pane_query_tmux_list(pane_tx, pane.index)?;
+                    let snapshot = pane_query_tmux_list(
+                        pane_tx,
+                        selector_from(Some(pane.index), Some(pane.pane_id)),
+                    )?;
                     let mut matches = snapshot
                         .panes
                         .into_iter()
@@ -1685,11 +1896,51 @@ impl Tool for ListPanesTool {
     }
 }
 
+// ── list_tab_workspaces tool ───────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ListTabWorkspacesArgs {}
+
+pub struct ListTabWorkspacesTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl ListTabWorkspacesTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for ListTabWorkspacesTool {
+    const NAME: &'static str = "list_tab_workspaces";
+    type Error = ToolError;
+    type Args = ListTabWorkspacesArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Summarize the current tab as typed workspaces. Returns stable pane ids, current pane indices, hosts, tmux sessions, workspace kinds, and lifecycle states such as ready, needs_inspection, disconnected, or interactive. Use this for questions like 'what panes do you have?', 'which pane is the real remote shell?', or 'which SSH pane got disconnected?'.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let panes = pane_query_list(&self.pane_tx)?;
+        let workspaces = tab_workspaces_from_panes(&panes);
+        serde_json::to_value(&workspaces).map_err(|e| ToolError::CommandFailed(e.to_string()))
+    }
+}
+
 // ── tmux_inspect tool ──────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct TmuxInspectArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
 }
 
 pub struct TmuxInspectTool {
@@ -1717,21 +1968,24 @@ impl Tool for TmuxInspectTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target con pane index (from list_panes)"
+                        "description": "Target con pane index from list_panes. Positional only."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
                     }
                 },
-                "required": ["pane_index"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let target = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
         self.pane_tx
             .send(PaneRequest {
-                query: PaneQuery::InspectTmux {
-                    pane_index: args.pane_index,
-                },
+                query: PaneQuery::InspectTmux { target },
                 response_tx,
             })
             .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
@@ -1756,7 +2010,8 @@ impl Tool for TmuxInspectTool {
 
 #[derive(Deserialize)]
 pub struct TmuxListArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
 }
 
 pub struct TmuxListTool {
@@ -1784,21 +2039,24 @@ impl Tool for TmuxListTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                        "description": "Target con pane index from list_panes. Positional only; it can change."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
                     }
                 },
-                "required": ["pane_index"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let target = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
         self.pane_tx
             .send(PaneRequest {
-                query: PaneQuery::TmuxList {
-                    pane_index: args.pane_index,
-                },
+                query: PaneQuery::TmuxList { pane: target },
                 response_tx,
             })
             .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
@@ -1823,7 +2081,8 @@ impl Tool for TmuxListTool {
 
 #[derive(Deserialize)]
 pub struct TmuxCaptureArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     pub target: Option<String>,
     #[serde(default = "default_tmux_capture_lines")]
     pub lines: usize,
@@ -1858,7 +2117,11 @@ impl Tool for TmuxCaptureTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                        "description": "Target con pane index from list_panes. Positional only; it can change."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
                     },
                     "target": {
                         "type": ["string", "null"],
@@ -1869,17 +2132,18 @@ impl Tool for TmuxCaptureTool {
                         "description": "Number of recent lines to capture from the tmux pane (default: 120)."
                     }
                 },
-                "required": ["pane_index"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let pane = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
         self.pane_tx
             .send(PaneRequest {
                 query: PaneQuery::TmuxCapture {
-                    pane_index: args.pane_index,
+                    pane,
                     target: args.target,
                     lines: args.lines,
                 },
@@ -1907,7 +2171,8 @@ impl Tool for TmuxCaptureTool {
 
 #[derive(Deserialize)]
 pub struct TmuxSendKeysArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     pub target: String,
     pub literal_text: Option<String>,
     #[serde(default)]
@@ -1941,7 +2206,11 @@ impl Tool for TmuxSendKeysTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                        "description": "Target con pane index from list_panes. Positional only; it can change."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
                     },
                     "target": {
                         "type": "string",
@@ -1961,17 +2230,18 @@ impl Tool for TmuxSendKeysTool {
                         "description": "Whether to send Enter after literal_text and key_names. Defaults to false."
                     }
                 },
-                "required": ["pane_index", "target"]
+                "required": ["target"]
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let pane = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
         self.pane_tx
             .send(PaneRequest {
                 query: PaneQuery::TmuxSendKeys {
-                    pane_index: args.pane_index,
+                    pane,
                     target: args.target,
                     literal_text: args.literal_text,
                     key_names: args.key_names,
@@ -1999,7 +2269,8 @@ impl Tool for TmuxSendKeysTool {
 
 #[derive(Deserialize)]
 pub struct TmuxRunCommandArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     pub location: TmuxExecLocation,
     pub command: String,
     pub target: Option<String>,
@@ -2038,7 +2309,11 @@ impl Tool for TmuxRunCommandTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                        "description": "Target con pane index from list_panes. Positional only; it can change."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
                     },
                     "location": {
                         "type": "string",
@@ -2066,17 +2341,18 @@ impl Tool for TmuxRunCommandTool {
                         "description": "Whether the new tmux target should start detached. Defaults to true."
                     }
                 },
-                "required": ["pane_index", "location", "command"]
+                "required": ["location", "command"]
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let pane = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
         self.pane_tx
             .send(PaneRequest {
                 query: PaneQuery::TmuxRunCommand {
-                    pane_index: args.pane_index,
+                    pane,
                     target: args.target,
                     location: args.location,
                     command: args.command,
@@ -2108,7 +2384,8 @@ impl Tool for TmuxRunCommandTool {
 
 #[derive(Deserialize)]
 pub struct TmuxFindTargetsArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     #[serde(default)]
     pub kind: Option<TmuxTargetKindFilter>,
     pub command_contains: Option<String>,
@@ -2146,7 +2423,11 @@ impl Tool for TmuxFindTargetsTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                        "description": "Target con pane index from list_panes. Positional only; it can change."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
                     },
                     "kind": {
                         "type": ["string", "null"],
@@ -2166,13 +2447,14 @@ impl Tool for TmuxFindTargetsTool {
                         "description": "Maximum number of matches to return. Defaults to 8."
                     }
                 },
-                "required": ["pane_index"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let pane = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
+        let snapshot = pane_query_tmux_list(&self.pane_tx, pane)?;
         let kind = args.kind.unwrap_or(TmuxTargetKindFilter::Any);
         let command_contains = args
             .command_contains
@@ -2234,7 +2516,8 @@ impl Tool for TmuxFindTargetsTool {
 
 #[derive(Deserialize)]
 pub struct TmuxEnsureShellTargetArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     pub cwd: Option<String>,
     pub window_name: Option<String>,
     pub shell_command: Option<String>,
@@ -2273,7 +2556,11 @@ impl Tool for TmuxEnsureShellTargetTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                        "description": "Target con pane index from list_panes. Positional only; it can change."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
                     },
                     "cwd": {
                         "type": ["string", "null"],
@@ -2297,13 +2584,14 @@ impl Tool for TmuxEnsureShellTargetTool {
                         "description": "Whether a newly created target should start detached. Defaults to true."
                     }
                 },
-                "required": ["pane_index"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let pane = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
+        let snapshot = pane_query_tmux_list(&self.pane_tx, pane)?;
         let cwd_contains = args.cwd.as_ref().map(|v| v.to_ascii_lowercase());
 
         let mut shell_matches = snapshot
@@ -2339,7 +2627,7 @@ impl Tool for TmuxEnsureShellTargetTool {
             .unwrap_or_else(|| "exec \"${SHELL:-/bin/sh}\" -il".to_string());
         let creation = pane_query_tmux_run_command(
             &self.pane_tx,
-            args.pane_index,
+            pane,
             None,
             args.location,
             shell_command,
@@ -2348,7 +2636,7 @@ impl Tool for TmuxEnsureShellTargetTool {
             args.detached,
         )?;
 
-        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let snapshot = pane_query_tmux_list(&self.pane_tx, pane)?;
         let pane = snapshot
             .panes
             .into_iter()
@@ -2381,7 +2669,8 @@ impl Tool for TmuxEnsureShellTargetTool {
 
 #[derive(Deserialize)]
 pub struct TmuxEnsureAgentTargetArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     pub agent_name: String,
     pub cwd: Option<String>,
     pub window_name: Option<String>,
@@ -2417,7 +2706,11 @@ impl Tool for TmuxEnsureAgentTargetTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target con pane index (from list_panes). Requires tmux native control on that pane."
+                        "description": "Target con pane index from list_panes. Positional only; it can change."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
                     },
                     "agent_name": {
                         "type": "string",
@@ -2445,7 +2738,7 @@ impl Tool for TmuxEnsureAgentTargetTool {
                         "description": "Whether a newly created target should start detached. Defaults to true."
                     }
                 },
-                "required": ["pane_index", "agent_name"]
+                "required": ["agent_name"]
             }),
         }
     }
@@ -2458,7 +2751,8 @@ impl Tool for TmuxEnsureAgentTargetTool {
             )));
         };
         let cwd_contains = args.cwd.as_ref().map(|v| v.to_ascii_lowercase());
-        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let pane = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
+        let snapshot = pane_query_tmux_list(&self.pane_tx, pane)?;
         let mut matches = snapshot
             .panes
             .into_iter()
@@ -2506,7 +2800,7 @@ impl Tool for TmuxEnsureAgentTargetTool {
         };
         let creation = pane_query_tmux_run_command(
             &self.pane_tx,
-            args.pane_index,
+            pane,
             None,
             args.location,
             launch_command.clone(),
@@ -2516,7 +2810,7 @@ impl Tool for TmuxEnsureAgentTargetTool {
             args.cwd.clone(),
             args.detached,
         )?;
-        let snapshot = pane_query_tmux_list(&self.pane_tx, args.pane_index)?;
+        let snapshot = pane_query_tmux_list(&self.pane_tx, pane)?;
         let pane = snapshot
             .panes
             .into_iter()
@@ -2555,6 +2849,7 @@ impl Tool for TmuxEnsureAgentTargetTool {
 pub struct ResolveWorkTargetArgs {
     pub intent: WorkTargetIntent,
     pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     pub host_contains: Option<String>,
     pub cwd_contains: Option<String>,
     pub agent_name: Option<String>,
@@ -2592,7 +2887,11 @@ impl Tool for ResolveWorkTargetTool {
                     },
                     "pane_index": {
                         "type": ["integer", "null"],
-                        "description": "Optional con pane index to constrain resolution to a single pane."
+                        "description": "Optional con pane index to constrain resolution to a single pane. Positional only."
+                    },
+                    "pane_id": {
+                        "type": ["integer", "null"],
+                        "description": "Optional stable pane id to constrain resolution to a single pane."
                     },
                     "host_contains": {
                         "type": ["string", "null"],
@@ -2623,6 +2922,7 @@ impl Tool for ResolveWorkTargetTool {
             panes,
             args.intent,
             args.pane_index,
+            args.pane_id,
             args.host_contains,
             args.cwd_contains,
             args.agent_name,
@@ -2636,7 +2936,8 @@ impl Tool for ResolveWorkTargetTool {
 
 #[derive(Deserialize)]
 pub struct ProbeShellContextArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
 }
 
 pub struct ProbeShellContextTool {
@@ -2664,21 +2965,24 @@ impl Tool for ProbeShellContextTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target con pane index (from list_panes). Requires probe_shell_context capability."
+                        "description": "Target con pane index from list_panes. Positional only."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
                     }
                 },
-                "required": ["pane_index"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let target = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
         self.pane_tx
             .send(PaneRequest {
-                query: PaneQuery::ProbeShellContext {
-                    pane_index: args.pane_index,
-                },
+                query: PaneQuery::ProbeShellContext { target },
                 response_tx,
             })
             .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
@@ -2703,7 +3007,8 @@ impl Tool for ProbeShellContextTool {
 
 #[derive(Deserialize)]
 pub struct ReadPaneArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     #[serde(default = "default_pane_lines")]
     pub lines: usize,
 }
@@ -2731,30 +3036,35 @@ impl Tool for ReadPaneTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read the recent visible output from a specific terminal pane. Use list_panes first to discover available panes and their indices.".to_string(),
+            description: "Read the recent visible output from a specific terminal pane. Use list_panes first to discover available panes. Prefer stable pane_id for follow-up work; pane_index is only positional.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "The pane index (from list_panes)"
+                        "description": "The pane index from list_panes. Positional only."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable pane id from list_panes. Prefer this for follow-up work."
                     },
                     "lines": {
                         "type": "integer",
                         "description": "Number of recent lines to read (default: 50)"
                     }
                 },
-                "required": ["pane_index"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let target = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
         let (response_tx, response_rx) = crossbeam_channel::bounded(1);
         self.pane_tx
             .send(PaneRequest {
                 query: PaneQuery::ReadContent {
-                    pane_index: args.pane_index,
+                    target,
                     lines: args.lines,
                 },
                 response_tx,
@@ -2779,7 +3089,8 @@ impl Tool for ReadPaneTool {
 
 #[derive(Deserialize)]
 pub struct SendKeysArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     pub keys: String,
 }
 
@@ -2811,24 +3122,29 @@ impl Tool for SendKeysTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "The pane index (from list_panes)"
+                        "description": "The pane index from list_panes. Positional only."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable pane id from list_panes. Prefer this for follow-up work."
                     },
                     "keys": {
                         "type": "string",
                         "description": "Keystrokes to send. Supports escape sequences: \\n (Enter), \\t (Tab), \\x03 (Ctrl-C), \\x1b (Escape), \\x1b[A (Up arrow), etc."
                     }
                 },
-                "required": ["pane_index", "keys"]
+                "required": ["keys"]
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let target = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
         // Decode escape sequences in the keys string
         let decoded = decode_key_escapes(&args.keys);
         log::info!(
-            "[send_keys] pane={} raw={:?} decoded={:?} decoded_bytes={:?}",
-            args.pane_index,
+            "[send_keys] target={} raw={:?} decoded={:?} decoded_bytes={:?}",
+            target.describe(),
             args.keys,
             decoded,
             decoded.as_bytes()
@@ -2851,7 +3167,7 @@ impl Tool for SendKeysTool {
             self.pane_tx
                 .send(PaneRequest {
                     query: PaneQuery::SendKeys {
-                        pane_index: args.pane_index,
+                        target,
                         keys: segment.clone(),
                     },
                     response_tx,
@@ -2892,12 +3208,14 @@ pub struct BatchExecArgs {
 #[derive(Deserialize, Debug)]
 pub struct BatchCommand {
     pub command: String,
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
 }
 
 #[derive(Serialize)]
 struct BatchResult {
     pane_index: usize,
+    pane_id: Option<usize>,
     output: String,
     exit_code: Option<i32>,
     error: Option<String>,
@@ -2922,7 +3240,7 @@ impl Tool for BatchExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Execute commands across multiple con panes in PARALLEL, but only when each pane's control_capabilities include exec_visible_shell. pane_index values come from list_panes and do not refer to tmux panes/windows/editors.".to_string(),
+            description: "Execute commands across multiple con panes in PARALLEL, but only when each pane's control_capabilities include exec_visible_shell. Prefer stable pane_id values from list_panes for follow-up work; pane_index is only positional.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -2938,10 +3256,14 @@ impl Tool for BatchExecTool {
                                 },
                                 "pane_index": {
                                     "type": "integer",
-                                    "description": "Target pane index (from list_panes)"
+                                    "description": "Target pane index from list_panes. Positional only."
+                                },
+                                "pane_id": {
+                                    "type": "integer",
+                                    "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
                                 }
                             },
-                            "required": ["command", "pane_index"]
+                            "required": ["command"]
                         }
                     }
                 },
@@ -2963,38 +3285,41 @@ impl Tool for BatchExecTool {
         // Send all commands concurrently, collect response receivers
         let mut receivers = Vec::with_capacity(args.commands.len());
         for cmd in &args.commands {
+            let target = require_pane_target(cmd.pane_index, cmd.pane_id, Self::NAME)?;
             let (response_tx, response_rx) = crossbeam_channel::bounded(1);
             self.request_tx
                 .send(TerminalExecRequest {
                     command: cmd.command.clone(),
                     working_dir: None,
-                    pane_index: Some(cmd.pane_index),
+                    target,
                     response_tx,
                 })
                 .map_err(|_| ToolError::CommandFailed("Terminal exec channel closed".into()))?;
-            receivers.push((cmd.pane_index, response_rx));
+            receivers.push((cmd.pane_index.unwrap_or(0), cmd.pane_id, response_rx));
         }
 
         // Wait for all results concurrently with timeout
         let results: Vec<BatchResult> = tokio::task::block_in_place(|| {
             receivers
                 .into_iter()
-                .map(
-                    |(pane_index, rx)| match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+                .map(|(pane_index, pane_id, rx)| {
+                    match rx.recv_timeout(std::time::Duration::from_secs(60)) {
                         Ok(resp) => BatchResult {
                             pane_index,
+                            pane_id,
                             output: resp.output,
                             exit_code: resp.exit_code,
                             error: None,
                         },
                         Err(_) => BatchResult {
                             pane_index,
+                            pane_id,
                             output: String::new(),
                             exit_code: None,
                             error: Some("Timed out (60s)".into()),
                         },
-                    },
-                )
+                    }
+                })
                 .collect()
         });
 
@@ -3013,6 +3338,8 @@ pub struct SearchPanesArgs {
     pub pattern: String,
     #[serde(default)]
     pub pane_index: Option<usize>,
+    #[serde(default)]
+    pub pane_id: Option<usize>,
     #[serde(default = "default_max_matches")]
     pub max_matches: usize,
 }
@@ -3050,7 +3377,11 @@ impl Tool for SearchPanesTool {
                     },
                     "pane_index": {
                         "type": "integer",
-                        "description": "Optional: search only this pane (from list_panes). Omit to search all panes."
+                        "description": "Optional pane index from list_panes. Positional only."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Optional stable pane id from list_panes. Prefer this for follow-up work."
                     },
                     "max_matches": {
                         "type": "integer",
@@ -3067,7 +3398,7 @@ impl Tool for SearchPanesTool {
         self.pane_tx
             .send(PaneRequest {
                 query: PaneQuery::SearchText {
-                    pane_index: args.pane_index,
+                    target: selector_from(args.pane_index, args.pane_id),
                     pattern: args.pattern.clone(),
                     max_matches: args.max_matches,
                 },
@@ -3112,7 +3443,8 @@ impl Tool for SearchPanesTool {
 
 #[derive(Deserialize)]
 pub struct WaitForArgs {
-    pub pane_index: usize,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     pub timeout_secs: Option<u64>,
     pub pattern: Option<String>,
 }
@@ -3152,24 +3484,29 @@ impl Tool for WaitForTool {
                 "properties": {
                     "pane_index": {
                         "type": "integer",
-                        "description": "Target pane index (from list_panes)"
+                        "description": "Target pane index from list_panes. Positional only."
+                    },
+                    "pane_id": {
+                        "type": "integer",
+                        "description": "Stable pane id from list_panes. Prefer this for follow-up work."
                     },
                     "pattern": {
                         "type": "string",
                         "description": "Text to wait for in pane output. If omitted, waits for the pane to become idle — preferred."
                     }
                 },
-                "required": ["pane_index"]
+                "required": []
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let target = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
         let timeout_secs = args.timeout_secs.unwrap_or(30).min(120);
 
         log::info!(
-            "[wait_for] pane={} timeout={}s pattern={:?}",
-            args.pane_index,
+            "[wait_for] target={} timeout={}s pattern={:?}",
+            target.describe(),
             timeout_secs,
             args.pattern
         );
@@ -3180,7 +3517,7 @@ impl Tool for WaitForTool {
         self.pane_tx
             .send(PaneRequest {
                 query: PaneQuery::WaitFor {
-                    pane_index: args.pane_index,
+                    target,
                     timeout_secs: Some(timeout_secs),
                     pattern: args.pattern,
                 },
@@ -3428,6 +3765,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 pub struct EnsureRemoteShellTargetArgs {
     pub host: String,
     pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
     #[serde(default = "default_pane_create_location")]
     pub location: PaneCreateLocation,
     pub startup_command: Option<String>,
@@ -3441,6 +3779,128 @@ impl EnsureRemoteShellTargetTool {
     pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
         Self { pane_tx }
     }
+}
+
+fn ensure_remote_shell_target_impl(
+    pane_tx: &Sender<PaneRequest>,
+    args: EnsureRemoteShellTargetArgs,
+) -> Result<EnsureRemoteShellTargetResult, ToolError> {
+    let host_lower = args.host.to_ascii_lowercase();
+    let panes = pane_query_list(pane_tx)?;
+    let best_existing = panes
+        .into_iter()
+        .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
+        .filter(|pane| args.pane_id.is_none_or(|id| pane.pane_id == id))
+        .filter_map(|pane| {
+            if pane
+                .hostname
+                .as_ref()
+                .is_some_and(|host| host.to_ascii_lowercase().contains(&host_lower))
+            {
+                Some((
+                    30 + if pane.is_focused { 5 } else { 0 },
+                    pane.index,
+                    pane.pane_id,
+                    RemoteShellMatchSource::ProvenHost,
+                    format!(
+                        "Pane {} already has visible shell execution on proven host `{}`.",
+                        pane.index, args.host
+                    ),
+                ))
+            } else if pane
+                .remote_workspace
+                .as_ref()
+                .is_some_and(|anchor| anchor.host.to_ascii_lowercase().contains(&host_lower))
+            {
+                Some((
+                    20 + if pane.is_focused { 5 } else { 0 },
+                    pane.index,
+                    pane.pane_id,
+                    RemoteShellMatchSource::ActionHistory,
+                    format!(
+                        "Pane {} is a reusable remote SSH workspace for `{}` via {} continuity.",
+                        pane.index,
+                        args.host,
+                        pane.remote_workspace
+                            .as_ref()
+                            .map(|anchor| anchor.source.as_str())
+                            .unwrap_or("action_history")
+                    ),
+                ))
+            } else if pane_recent_ssh_target(&pane)
+                .is_some_and(|target| target.to_ascii_lowercase().contains(&host_lower))
+            {
+                Some((
+                    10 + if pane.is_focused { 5 } else { 0 },
+                    pane.index,
+                    pane.pane_id,
+                    RemoteShellMatchSource::ActionHistory,
+                    format!(
+                        "Pane {} has visible shell execution and recent con action history showing SSH startup for `{}`.",
+                        pane.index, args.host
+                    ),
+                ))
+            } else {
+                None
+            }
+        })
+        .max_by_key(|candidate| candidate.0);
+
+    if let Some((_, pane_index, pane_id, match_source, reason)) = best_existing {
+        return Ok(EnsureRemoteShellTargetResult {
+            host: args.host,
+            created: false,
+            pane_index,
+            pane_id: Some(pane_id),
+            match_source,
+            command: None,
+            output: String::new(),
+            reason,
+        });
+    }
+
+    let command = args
+        .startup_command
+        .unwrap_or_else(|| format!("ssh {}", args.host));
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    pane_tx
+        .send(PaneRequest {
+            query: PaneQuery::CreatePane {
+                command: Some(command.clone()),
+                location: args.location,
+            },
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+    let response = tokio::task::block_in_place(|| {
+        response_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|_| ToolError::CommandFailed("Create pane request timed out".into()))
+    })?;
+
+    let (pane_index, pane_id) = match response {
+        PaneResponse::PaneCreated {
+            pane_index,
+            pane_id,
+        } => (pane_index, pane_id),
+        PaneResponse::Error(e) => return Err(ToolError::CommandFailed(e)),
+        _ => return Err(ToolError::CommandFailed("Unexpected response".into())),
+    };
+
+    Ok(EnsureRemoteShellTargetResult {
+        host: args.host.clone(),
+        created: true,
+        pane_index,
+        pane_id: Some(pane_id),
+        match_source: RemoteShellMatchSource::Created,
+        command: Some(command),
+        output: String::new(),
+        reason: format!(
+            "No reusable SSH pane for `{}` was found, so con created a new pane to connect there.",
+            args.host
+        ),
+    })
 }
 
 impl Tool for EnsureRemoteShellTargetTool {
@@ -3462,7 +3922,11 @@ impl Tool for EnsureRemoteShellTargetTool {
                     },
                     "pane_index": {
                         "type": ["integer", "null"],
-                        "description": "Optional con pane index to constrain reuse checks to a specific pane."
+                        "description": "Optional con pane index to constrain reuse checks to a specific pane. Positional only."
+                    },
+                    "pane_id": {
+                        "type": ["integer", "null"],
+                        "description": "Optional stable pane id to constrain reuse checks to a specific pane."
                     },
                     "location": {
                         "type": "string",
@@ -3480,113 +3944,196 @@ impl Tool for EnsureRemoteShellTargetTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let host_lower = args.host.to_ascii_lowercase();
-        let panes = pane_query_list(&self.pane_tx)?;
-        let best_existing = panes
-            .into_iter()
-            .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
-            .filter_map(|pane| {
-                if pane
-                    .hostname
-                    .as_ref()
-                    .is_some_and(|host| host.to_ascii_lowercase().contains(&host_lower))
-                {
-                    Some((
-                        30 + if pane.is_focused { 5 } else { 0 },
-                        pane.index,
-                        RemoteShellMatchSource::ProvenHost,
-                        format!(
-                            "Pane {} already has visible shell execution on proven host `{}`.",
-                            pane.index, args.host
-                        ),
-                    ))
-                } else if pane
-                    .remote_workspace
-                    .as_ref()
-                    .is_some_and(|anchor| anchor.host.to_ascii_lowercase().contains(&host_lower))
-                {
-                    Some((
-                        20 + if pane.is_focused { 5 } else { 0 },
-                        pane.index,
-                        RemoteShellMatchSource::ActionHistory,
-                        format!(
-                            "Pane {} is a reusable remote SSH workspace for `{}` via {} continuity.",
-                            pane.index,
-                            args.host,
-                            pane.remote_workspace
-                                .as_ref()
-                                .map(|anchor| anchor.source.as_str())
-                                .unwrap_or("action_history")
-                        ),
-                    ))
-                } else if pane_recent_ssh_target(&pane)
-                    .is_some_and(|target| target.to_ascii_lowercase().contains(&host_lower))
-                {
-                    Some((
-                        10 + if pane.is_focused { 5 } else { 0 },
-                        pane.index,
-                        RemoteShellMatchSource::ActionHistory,
-                        format!(
-                            "Pane {} has visible shell execution and recent con action history showing SSH startup for `{}`.",
-                            pane.index, args.host
-                        ),
-                    ))
-                } else {
-                    None
-                }
-            })
-            .max_by_key(|candidate| candidate.0);
+        let result = ensure_remote_shell_target_impl(&self.pane_tx, args)?;
+        let output = if result.created {
+            wait_for_pane_initial_output(
+                &self.pane_tx,
+                selector_from(Some(result.pane_index), result.pane_id),
+            )
+            .await?
+        } else {
+            String::new()
+        };
+        Ok(EnsureRemoteShellTargetResult { output, ..result })
+    }
+}
 
-        if let Some((_, pane_index, match_source, reason)) = best_existing {
-            return Ok(EnsureRemoteShellTargetResult {
-                host: args.host,
-                created: false,
-                pane_index,
-                match_source,
-                command: None,
-                output: String::new(),
-                reason,
-            });
+// ── create_pane tool ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct RemoteExecArgs {
+    pub hosts: Vec<String>,
+    pub command: String,
+    #[serde(default = "default_pane_create_location")]
+    pub location: PaneCreateLocation,
+}
+
+#[derive(Serialize)]
+pub struct RemoteExecHostResult {
+    pub host: String,
+    pub pane_index: usize,
+    pub pane_id: Option<usize>,
+    pub created: bool,
+    pub match_source: RemoteShellMatchSource,
+    pub bootstrap_output: String,
+    pub output: String,
+    pub exit_code: Option<i32>,
+    pub error: Option<String>,
+}
+
+pub struct RemoteExecTool {
+    pane_tx: Sender<PaneRequest>,
+    request_tx: Sender<TerminalExecRequest>,
+}
+
+impl RemoteExecTool {
+    pub fn new(pane_tx: Sender<PaneRequest>, request_tx: Sender<TerminalExecRequest>) -> Self {
+        Self {
+            pane_tx,
+            request_tx,
+        }
+    }
+}
+
+impl Tool for RemoteExecTool {
+    const NAME: &'static str = "remote_exec";
+    type Error = ToolError;
+    type Args = RemoteExecArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Reuse or create SSH workspaces for one or more hosts, then execute the same shell command on all of them in parallel. This is the preferred high-level tool for routine multi-host checks so the model does not need to stitch ensure_remote_shell_target and batch_exec together manually.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "hosts": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "SSH hosts or aliases to target."
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command to run on each host."
+                    },
+                    "location": {
+                        "type": "string",
+                        "enum": ["right", "down"],
+                        "description": "Where to place a newly created pane if a host workspace does not exist yet. Defaults to right."
+                    }
+                },
+                "required": ["hosts", "command"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let mut hosts = Vec::new();
+        for host in args.hosts {
+            let trimmed = host.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !hosts.iter().any(|existing: &String| existing == trimmed) {
+                hosts.push(trimmed.to_string());
+            }
+        }
+        if hosts.is_empty() {
+            return Err(ToolError::CommandFailed(
+                "remote_exec requires at least one non-empty host".into(),
+            ));
         }
 
-        let command = args
-            .startup_command
-            .unwrap_or_else(|| format!("ssh {}", args.host));
-        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
-        self.pane_tx
-            .send(PaneRequest {
-                query: PaneQuery::CreatePane {
-                    command: Some(command.clone()),
+        let mut prepared = Vec::new();
+        for host in hosts {
+            let ensure = ensure_remote_shell_target_impl(
+                &self.pane_tx,
+                EnsureRemoteShellTargetArgs {
+                    host,
+                    pane_index: None,
+                    pane_id: None,
                     location: args.location,
+                    startup_command: None,
                 },
-                response_tx,
-            })
-            .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+            )?;
+            let bootstrap_output = if ensure.created {
+                wait_for_pane_initial_output(
+                    &self.pane_tx,
+                    selector_from(Some(ensure.pane_index), ensure.pane_id),
+                )
+                .await?
+            } else {
+                String::new()
+            };
+            prepared.push((ensure, bootstrap_output));
+        }
 
-        let response = tokio::task::block_in_place(|| {
-            response_rx
-                .recv_timeout(std::time::Duration::from_secs(10))
-                .map_err(|_| ToolError::CommandFailed("Create pane request timed out".into()))
-        })?;
+        let pane_snapshot = pane_query_list(&self.pane_tx)?;
+        let pane_ids = pane_snapshot
+            .into_iter()
+            .map(|pane| (pane.index, pane.pane_id))
+            .collect::<std::collections::HashMap<_, _>>();
 
-        let pane_index = match response {
-            PaneResponse::PaneCreated { pane_index } => pane_index,
-            PaneResponse::Error(e) => return Err(ToolError::CommandFailed(e)),
-            _ => return Err(ToolError::CommandFailed("Unexpected response".into())),
-        };
-        let output = wait_for_pane_initial_output(&self.pane_tx, pane_index).await?;
-        Ok(EnsureRemoteShellTargetResult {
-            host: args.host.clone(),
-            created: true,
-            pane_index,
-            match_source: RemoteShellMatchSource::Created,
-            command: Some(command),
-            output,
-            reason: format!(
-                "No reusable SSH pane for `{}` was found, so con created a new pane to connect there.",
-                args.host
-            ),
-        })
+        let mut receivers = Vec::with_capacity(prepared.len());
+        for (ensure, bootstrap_output) in &prepared {
+            let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+            self.request_tx
+                .send(TerminalExecRequest {
+                    command: args.command.clone(),
+                    working_dir: None,
+                    target: selector_from(Some(ensure.pane_index), ensure.pane_id),
+                    response_tx,
+                })
+                .map_err(|_| ToolError::CommandFailed("Terminal exec channel closed".into()))?;
+            receivers.push((
+                ensure.host.clone(),
+                ensure.pane_index,
+                ensure
+                    .pane_id
+                    .or_else(|| pane_ids.get(&ensure.pane_index).copied()),
+                ensure.created,
+                ensure.match_source,
+                bootstrap_output.clone(),
+                response_rx,
+            ));
+        }
+
+        let results = tokio::task::block_in_place(|| {
+            receivers
+                .into_iter()
+                .map(
+                    |(host, pane_index, pane_id, created, match_source, bootstrap_output, rx)| {
+                        match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+                            Ok(resp) => RemoteExecHostResult {
+                                host,
+                                pane_index,
+                                pane_id,
+                                created,
+                                match_source,
+                                bootstrap_output,
+                                output: resp.output,
+                                exit_code: resp.exit_code,
+                                error: None,
+                            },
+                            Err(_) => RemoteExecHostResult {
+                                host,
+                                pane_index,
+                                pane_id,
+                                created,
+                                match_source,
+                                bootstrap_output,
+                                output: String::new(),
+                                exit_code: None,
+                                error: Some("Timed out (60s)".into()),
+                            },
+                        }
+                    },
+                )
+                .collect::<Vec<_>>()
+        });
+
+        serde_json::to_value(&results).map_err(|e| ToolError::CommandFailed(e.to_string()))
     }
 }
 
@@ -3602,6 +4149,7 @@ pub struct CreatePaneArgs {
 #[derive(Serialize)]
 pub struct CreatePaneOutput {
     pub pane_index: usize,
+    pub pane_id: usize,
     pub command: Option<String>,
     pub location: PaneCreateLocation,
     /// Initial terminal output after pane creation and command execution.
@@ -3649,7 +4197,7 @@ impl CreatePaneTool {
             let (tx, rx) = crossbeam_channel::bounded(1);
             let sent = self.pane_tx.send(PaneRequest {
                 query: PaneQuery::ReadContent {
-                    pane_index,
+                    target: selector_from(Some(pane_index), None),
                     lines: 50,
                 },
                 response_tx: tx,
@@ -3739,7 +4287,7 @@ impl Tool for CreatePaneTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it via send_keys. You can choose split placement for better workspace layout. Returns the pane index and the initial terminal output (waits for output to settle). Check the output to see what happened — e.g. SSH connected with prompt, or asking for a password.".to_string(),
+            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it via send_keys. You can choose split placement for better workspace layout. Returns both pane_index and stable pane_id plus the initial terminal output (waits for output to settle). Prefer pane_id for follow-up targeting.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -3782,7 +4330,10 @@ impl Tool for CreatePaneTool {
         })?;
 
         match response {
-            PaneResponse::PaneCreated { pane_index } => {
+            PaneResponse::PaneCreated {
+                pane_index,
+                pane_id,
+            } => {
                 // If a command was provided (e.g. "ssh host"), wait for initial output
                 // to settle so the model can observe the result immediately.
                 // This eliminates the need for a follow-up read_pane/wait_for after SSH.
@@ -3794,6 +4345,7 @@ impl Tool for CreatePaneTool {
 
                 Ok(CreatePaneOutput {
                     pane_index,
+                    pane_id,
                     command: command_echo,
                     location: args.location,
                     output,
@@ -3941,6 +4493,7 @@ mod tests {
     fn test_pane(index: usize, title: &str) -> super::PaneInfo {
         super::PaneInfo {
             index,
+            pane_id: index,
             title: title.to_string(),
             cwd: None,
             is_focused: false,
@@ -4020,6 +4573,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             8,
         )
         .expect("resolve");
@@ -4049,6 +4603,7 @@ mod tests {
             &pane_tx,
             vec![remote],
             WorkTargetIntent::RemoteShell,
+            None,
             None,
             Some("haswell".to_string()),
             None,
@@ -4092,6 +4647,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             8,
         )
         .expect("resolve");
@@ -4113,6 +4669,7 @@ mod tests {
             &pane_tx,
             vec![agent],
             WorkTargetIntent::AgentCli,
+            None,
             None,
             None,
             None,

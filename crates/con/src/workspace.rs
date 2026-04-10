@@ -83,6 +83,13 @@ pub struct ConWorkspace {
     pending_create_pane_requests: Vec<PendingCreatePane>,
 }
 
+#[derive(Clone)]
+struct ResolvedPaneTarget {
+    pane: TerminalPane,
+    pane_index: usize,
+    pane_id: usize,
+}
+
 /// A deferred create-pane request waiting for a window-aware context.
 struct PendingCreatePane {
     command: Option<String>,
@@ -475,6 +482,89 @@ impl ConWorkspace {
         tracker.record_action(event);
     }
 
+    fn resolve_pane_target_for_tab(
+        &self,
+        tab_idx: usize,
+        selector: con_agent::tools::PaneSelector,
+    ) -> Result<ResolvedPaneTarget, String> {
+        let pane_tree = &self.tabs[tab_idx].pane_tree;
+        let all_terminals = pane_tree.all_terminals();
+        let focused_pane = pane_tree.focused_terminal().clone();
+        let focused_pane_id = pane_tree.focused_pane_id();
+        let focused_pane_index = all_terminals
+            .iter()
+            .enumerate()
+            .find(|(_, terminal)| pane_tree.pane_id_for_terminal(terminal) == Some(focused_pane_id))
+            .map(|(idx, _)| idx + 1)
+            .unwrap_or(1);
+
+        let by_index = match selector.pane_index {
+            Some(index) => {
+                if index == 0 || index > all_terminals.len() {
+                    return Err(format!(
+                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
+                        index,
+                        all_terminals.len()
+                    ));
+                }
+                let pane = all_terminals[index - 1].clone();
+                let pane_id = pane_tree
+                    .pane_id_for_terminal(&pane)
+                    .ok_or_else(|| format!("Pane {} is no longer available.", index))?;
+                Some(ResolvedPaneTarget {
+                    pane,
+                    pane_index: index,
+                    pane_id,
+                })
+            }
+            None => None,
+        };
+
+        let by_id = match selector.pane_id {
+            Some(pane_id) => {
+                let pane = all_terminals
+                    .iter()
+                    .enumerate()
+                    .find_map(|(idx, terminal)| {
+                        (pane_tree.pane_id_for_terminal(terminal) == Some(pane_id)).then(|| {
+                            ResolvedPaneTarget {
+                                pane: (*terminal).clone(),
+                                pane_index: idx + 1,
+                                pane_id,
+                            }
+                        })
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "Pane id {} is no longer available in this tab. Re-run list_panes.",
+                            pane_id
+                        )
+                    })?;
+                Some(pane)
+            }
+            None => None,
+        };
+
+        match (by_index, by_id) {
+            (Some(from_index), Some(from_id)) => {
+                if from_index.pane_id != from_id.pane_id {
+                    return Err(format!(
+                        "pane_index {} and pane_id {} refer to different panes. Re-run list_panes and use one consistent selector.",
+                        from_index.pane_index, from_id.pane_id
+                    ));
+                }
+                Ok(from_id)
+            }
+            (Some(target), None) => Ok(target),
+            (None, Some(target)) => Ok(target),
+            (None, None) => Ok(ResolvedPaneTarget {
+                pane: focused_pane,
+                pane_index: focused_pane_index,
+                pane_id: focused_pane_id,
+            }),
+        }
+    }
+
     fn spawn_shell_anchor_command<F>(
         &self,
         _tab_idx: usize,
@@ -581,6 +671,7 @@ impl ConWorkspace {
                         con_agent::context::remote_workspace_anchor(&runtime, &observation);
                     other_pane_summaries.push(con_agent::context::PaneSummary {
                         pane_index: idx + 1,
+                        pane_id: pid,
                         hostname: runtime.remote_host.clone(),
                         hostname_confidence: runtime.remote_host_confidence,
                         hostname_source: runtime.remote_host_source,
@@ -612,6 +703,7 @@ impl ConWorkspace {
 
         self.harness.build_context_from_snapshot(
             focused_pane_index,
+            focused_pid,
             &focused_observation,
             &focused_runtime,
             other_pane_summaries,
@@ -1207,33 +1299,18 @@ impl ConWorkspace {
         req: TerminalExecRequest,
         cx: &mut Context<Self>,
     ) {
-        // Use the specified pane, or fall back to the focused pane.
-        let (pane, target_pane_index) = if let Some(pane_index) = req.pane_index {
-            let pane_tree = &self.tabs[tab_idx].pane_tree;
-            let all_terminals = pane_tree.all_terminals();
-            if pane_index == 0 || pane_index > all_terminals.len() {
+        let resolved = match self.resolve_pane_target_for_tab(tab_idx, req.target) {
+            Ok(target) => target,
+            Err(err) => {
                 let _ = req.response_tx.send(TerminalExecResponse {
-                    output: format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ),
+                    output: err,
                     exit_code: Some(1),
                 });
                 return;
             }
-            (all_terminals[pane_index - 1].clone(), pane_index)
-        } else {
-            let pane_tree = &self.tabs[tab_idx].pane_tree;
-            let focused = pane_tree.focused_terminal().clone();
-            let focused_index = pane_tree
-                .all_terminals()
-                .iter()
-                .position(|terminal| terminal.entity_id() == focused.entity_id())
-                .map(|idx| idx + 1)
-                .unwrap_or(1);
-            (focused, focused_index)
         };
+        let pane = resolved.pane;
+        let target_pane_index = resolved.pane_index;
 
         // Safety: refuse to execute on a dead PTY.
         if !pane.is_alive(cx) {
@@ -1430,6 +1507,7 @@ impl ConWorkspace {
                         let (cols, rows) = terminal.grid_size(cx);
                         PaneInfo {
                             index: idx + 1,
+                            pane_id: pid,
                             title,
                             cwd: observation.cwd.clone(),
                             is_focused: pid == focused_pid,
@@ -1472,64 +1550,54 @@ impl ConWorkspace {
                     .collect();
                 PaneResponse::PaneList(panes)
             }
-            PaneQuery::ReadContent { pane_index, lines } => {
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let terminal = &all_terminals[pane_index - 1];
-                    let content = terminal.recent_lines(lines, cx).join("\n");
-                    PaneResponse::Content(content)
+            PaneQuery::ReadContent { target, lines } => {
+                match self.resolve_pane_target_for_tab(tab_idx, target) {
+                    Ok(resolved) => {
+                        let content = resolved.pane.recent_lines(lines, cx).join("\n");
+                        PaneResponse::Content(content)
+                    }
+                    Err(err) => PaneResponse::Error(err),
                 }
             }
-            PaneQuery::SendKeys { pane_index, keys } => {
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let terminal = &all_terminals[pane_index - 1];
-                    terminal.write(keys.as_bytes(), cx);
-                    self.record_runtime_event_for_terminal(
-                        tab_idx,
-                        terminal,
-                        con_agent::context::PaneRuntimeEvent::RawInput {
-                            keys: keys.clone(),
-                            input_generation: terminal.input_generation(cx),
-                        },
-                    );
-                    PaneResponse::KeysSent
+            PaneQuery::SendKeys { target, keys } => {
+                match self.resolve_pane_target_for_tab(tab_idx, target) {
+                    Ok(resolved) => {
+                        resolved.pane.write(keys.as_bytes(), cx);
+                        self.record_runtime_event_for_terminal(
+                            tab_idx,
+                            &resolved.pane,
+                            con_agent::context::PaneRuntimeEvent::RawInput {
+                                keys: keys.clone(),
+                                input_generation: resolved.pane.input_generation(cx),
+                            },
+                        );
+                        PaneResponse::KeysSent
+                    }
+                    Err(err) => PaneResponse::Error(err),
                 }
             }
             PaneQuery::SearchText {
-                pane_index,
+                target,
                 pattern,
                 max_matches,
             } => {
-                let targets: Vec<(usize, &TerminalPane)> = match pane_index {
-                    Some(idx) if idx >= 1 && idx <= all_terminals.len() => {
-                        vec![(idx, all_terminals[idx - 1])]
-                    }
-                    Some(idx) => {
-                        return {
-                            let _ = req.response_tx.send(PaneResponse::Error(format!(
-                                "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                                idx,
-                                all_terminals.len()
-                            )));
-                        };
-                    }
-                    None => all_terminals
-                        .iter()
-                        .enumerate()
-                        .map(|(i, t)| (i + 1, *t))
-                        .collect(),
-                };
+                let targets: Vec<(usize, TerminalPane)> =
+                    if target.pane_index.is_none() && target.pane_id.is_none() {
+                        all_terminals
+                            .iter()
+                            .enumerate()
+                            .map(|(i, t)| (i + 1, (*t).clone()))
+                            .collect()
+                    } else {
+                        match self.resolve_pane_target_for_tab(tab_idx, target) {
+                            Ok(resolved) => vec![(resolved.pane_index, resolved.pane)],
+                            Err(err) => {
+                                return {
+                                    let _ = req.response_tx.send(PaneResponse::Error(err));
+                                };
+                            }
+                        }
+                    };
 
                 let mut results = Vec::new();
                 let remaining = max_matches;
@@ -1544,39 +1612,30 @@ impl ConWorkspace {
                 }
                 PaneResponse::SearchResults(results)
             }
-            PaneQuery::InspectTmux { pane_index } => {
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let terminal = &all_terminals[pane_index - 1];
-                    let (_, runtime) =
-                        self.observe_terminal_runtime_for_tab(tab_idx, terminal, 20, cx);
-                    let control = con_agent::control::PaneControlState::from_runtime(&runtime);
-                    if let Some(tmux) = control.tmux {
-                        PaneResponse::TmuxInfo(tmux)
-                    } else {
-                        PaneResponse::Error(format!(
-                            "Pane {} is not currently in a tmux scope.",
-                            pane_index
-                        ))
+            PaneQuery::InspectTmux { target } => {
+                match self.resolve_pane_target_for_tab(tab_idx, target) {
+                    Ok(resolved) => {
+                        let (_, runtime) =
+                            self.observe_terminal_runtime_for_tab(tab_idx, &resolved.pane, 20, cx);
+                        let control = con_agent::control::PaneControlState::from_runtime(&runtime);
+                        if let Some(tmux) = control.tmux {
+                            PaneResponse::TmuxInfo(tmux)
+                        } else {
+                            PaneResponse::Error(format!(
+                                "Pane {} (id {}) is not currently in a tmux scope.",
+                                resolved.pane_index, resolved.pane_id
+                            ))
+                        }
                     }
+                    Err(err) => PaneResponse::Error(err),
                 }
             }
-            PaneQuery::TmuxList { pane_index } => {
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let pane = all_terminals[pane_index - 1].clone();
+            PaneQuery::TmuxList { pane: target } => match self
+                .resolve_pane_target_for_tab(tab_idx, target)
+            {
+                Ok(resolved) => {
                     let (_, runtime) =
-                        self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+                        self.observe_terminal_runtime_for_tab(tab_idx, &resolved.pane, 20, cx);
                     let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                     let tmux_mode = control.tmux.as_ref().map(|tmux| tmux.mode);
                     if !control
@@ -1584,8 +1643,9 @@ impl ConWorkspace {
                         .contains(&con_agent::PaneControlCapability::QueryTmux)
                     {
                         PaneResponse::Error(format!(
-                            "Pane {} does not currently expose tmux native query capability.\nvisible_target: {}\ntmux_mode: {}\ncontrol_attachments: {}\ncontrol_capabilities: {}",
-                            pane_index,
+                            "Pane {} (id {}) does not currently expose tmux native query capability.\nvisible_target: {}\ntmux_mode: {}\ncontrol_attachments: {}\ncontrol_capabilities: {}",
+                            resolved.pane_index,
+                            resolved.pane_id,
                             control.visible_target.summary(),
                             tmux_mode.map(|mode| mode.as_str()).unwrap_or("none"),
                             con_agent::control::format_control_attachments(&control.attachments),
@@ -1596,16 +1656,16 @@ impl ConWorkspace {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ))
-                    } else if pane.is_busy(cx) {
+                    } else if resolved.pane.is_busy(cx) {
                         PaneResponse::Error(format!(
-                            "Pane {} is busy. Wait for the current command to finish before running tmux-native queries from its shell anchor.",
-                            pane_index
+                            "Pane {} (id {}) is busy. Wait for the current command to finish before running tmux-native queries from its shell anchor.",
+                            resolved.pane_index, resolved.pane_id
                         ))
                     } else {
                         let response_tx = req.response_tx;
                         let nonce = format!(
                             "tmux-list-{}-{}",
-                            pane_index,
+                            resolved.pane_id,
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|duration| duration.as_nanos())
@@ -1614,8 +1674,8 @@ impl ConWorkspace {
                         let command = con_agent::tmux::build_tmux_list_command(&nonce);
                         self.spawn_shell_anchor_command(
                             tab_idx,
-                            pane,
-                            pane_index,
+                            resolved.pane,
+                            resolved.pane_index,
                             command,
                             10,
                             move |lines| {
@@ -1628,30 +1688,25 @@ impl ConWorkspace {
                         return;
                     }
                 }
-            }
+                Err(err) => PaneResponse::Error(err),
+            },
             PaneQuery::TmuxCapture {
-                pane_index,
+                pane: pane_target,
                 target,
                 lines,
-            } => {
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let pane = all_terminals[pane_index - 1].clone();
+            } => match self.resolve_pane_target_for_tab(tab_idx, pane_target) {
+                Ok(resolved) => {
                     let (_, runtime) =
-                        self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+                        self.observe_terminal_runtime_for_tab(tab_idx, &resolved.pane, 20, cx);
                     let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                     if !control
                         .capabilities
                         .contains(&con_agent::PaneControlCapability::QueryTmux)
                     {
                         PaneResponse::Error(format!(
-                            "Pane {} does not currently expose tmux native query capability for capture.\nvisible_target: {}\ncontrol_capabilities: {}",
-                            pane_index,
+                            "Pane {} (id {}) does not currently expose tmux native query capability for capture.\nvisible_target: {}\ncontrol_capabilities: {}",
+                            resolved.pane_index,
+                            resolved.pane_id,
                             control.visible_target.summary(),
                             control
                                 .capabilities
@@ -1660,16 +1715,16 @@ impl ConWorkspace {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ))
-                    } else if pane.is_busy(cx) {
+                    } else if resolved.pane.is_busy(cx) {
                         PaneResponse::Error(format!(
-                            "Pane {} is busy. Wait for the current command to finish before running tmux capture from its shell anchor.",
-                            pane_index
+                            "Pane {} (id {}) is busy. Wait for the current command to finish before running tmux capture from its shell anchor.",
+                            resolved.pane_index, resolved.pane_id
                         ))
                     } else {
                         let response_tx = req.response_tx;
                         let nonce = format!(
                             "tmux-capture-{}-{}",
-                            pane_index,
+                            resolved.pane_id,
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|duration| duration.as_nanos())
@@ -1682,8 +1737,8 @@ impl ConWorkspace {
                         );
                         self.spawn_shell_anchor_command(
                             tab_idx,
-                            pane,
-                            pane_index,
+                            resolved.pane,
+                            resolved.pane_index,
                             command,
                             10,
                             move |lines| {
@@ -1700,32 +1755,27 @@ impl ConWorkspace {
                         return;
                     }
                 }
-            }
+                Err(err) => PaneResponse::Error(err),
+            },
             PaneQuery::TmuxSendKeys {
-                pane_index,
+                pane: pane_target,
                 target,
                 literal_text,
                 key_names,
                 append_enter,
-            } => {
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let pane = all_terminals[pane_index - 1].clone();
+            } => match self.resolve_pane_target_for_tab(tab_idx, pane_target) {
+                Ok(resolved) => {
                     let (_, runtime) =
-                        self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+                        self.observe_terminal_runtime_for_tab(tab_idx, &resolved.pane, 20, cx);
                     let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                     if !control
                         .capabilities
                         .contains(&con_agent::PaneControlCapability::SendTmuxKeys)
                     {
                         PaneResponse::Error(format!(
-                            "Pane {} does not currently expose tmux native send-keys capability.\nvisible_target: {}\ncontrol_capabilities: {}",
-                            pane_index,
+                            "Pane {} (id {}) does not currently expose tmux native send-keys capability.\nvisible_target: {}\ncontrol_capabilities: {}",
+                            resolved.pane_index,
+                            resolved.pane_id,
                             control.visible_target.summary(),
                             control
                                 .capabilities
@@ -1734,10 +1784,10 @@ impl ConWorkspace {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ))
-                    } else if pane.is_busy(cx) {
+                    } else if resolved.pane.is_busy(cx) {
                         PaneResponse::Error(format!(
-                            "Pane {} is busy. Wait for the current command to finish before sending tmux-native keys from its shell anchor.",
-                            pane_index
+                            "Pane {} (id {}) is busy. Wait for the current command to finish before sending tmux-native keys from its shell anchor.",
+                            resolved.pane_index, resolved.pane_id
                         ))
                     } else {
                         match con_agent::tmux::build_tmux_send_keys_command(
@@ -1750,8 +1800,8 @@ impl ConWorkspace {
                                 let response_tx = req.response_tx;
                                 self.spawn_shell_anchor_command(
                                     tab_idx,
-                                    pane,
-                                    pane_index,
+                                    resolved.pane,
+                                    resolved.pane_index,
                                     command,
                                     10,
                                     move |_lines| {
@@ -1769,34 +1819,29 @@ impl ConWorkspace {
                         }
                     }
                 }
-            }
+                Err(err) => PaneResponse::Error(err),
+            },
             PaneQuery::TmuxRunCommand {
-                pane_index,
+                pane: pane_target,
                 target,
                 location,
                 command,
                 window_name,
                 cwd,
                 detached,
-            } => {
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let pane = all_terminals[pane_index - 1].clone();
+            } => match self.resolve_pane_target_for_tab(tab_idx, pane_target) {
+                Ok(resolved) => {
                     let (_, runtime) =
-                        self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
+                        self.observe_terminal_runtime_for_tab(tab_idx, &resolved.pane, 20, cx);
                     let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                     if !control
                         .capabilities
                         .contains(&con_agent::PaneControlCapability::ExecTmuxCommand)
                     {
                         PaneResponse::Error(format!(
-                            "Pane {} does not currently expose tmux native run-command capability.\nvisible_target: {}\ncontrol_capabilities: {}",
-                            pane_index,
+                            "Pane {} (id {}) does not currently expose tmux native run-command capability.\nvisible_target: {}\ncontrol_capabilities: {}",
+                            resolved.pane_index,
+                            resolved.pane_id,
                             control.visible_target.summary(),
                             control
                                 .capabilities
@@ -1805,16 +1850,16 @@ impl ConWorkspace {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ))
-                    } else if pane.is_busy(cx) {
+                    } else if resolved.pane.is_busy(cx) {
                         PaneResponse::Error(format!(
-                            "Pane {} is busy. Wait for the current command to finish before launching tmux-native commands from its shell anchor.",
-                            pane_index
+                            "Pane {} (id {}) is busy. Wait for the current command to finish before launching tmux-native commands from its shell anchor.",
+                            resolved.pane_index, resolved.pane_id
                         ))
                     } else {
                         let response_tx = req.response_tx;
                         let nonce = format!(
                             "tmux-exec-{}-{}",
-                            pane_index,
+                            resolved.pane_id,
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|duration| duration.as_nanos())
@@ -1831,8 +1876,8 @@ impl ConWorkspace {
                         );
                         self.spawn_shell_anchor_command(
                             tab_idx,
-                            pane,
-                            pane_index,
+                            resolved.pane,
+                            resolved.pane_index,
                             shell_command,
                             12,
                             move |lines| {
@@ -1847,25 +1892,25 @@ impl ConWorkspace {
                         return;
                     }
                 }
-            }
-            PaneQuery::ProbeShellContext { pane_index } => {
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let pane = all_terminals[pane_index - 1].clone();
+                Err(err) => PaneResponse::Error(err),
+            },
+            PaneQuery::ProbeShellContext { target } => match self
+                .resolve_pane_target_for_tab(tab_idx, target)
+            {
+                Ok(resolved) => {
+                    let pane_index = resolved.pane_index;
+                    let pane_id = resolved.pane_id;
+                    let pane = resolved.pane;
                     let (_, runtime) =
                         self.observe_terminal_runtime_for_tab(tab_idx, &pane, 20, cx);
                     let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                     if !control.allows_shell_probe() {
                         PaneResponse::Error(format!(
-                            "Pane {} does not currently expose the probe_shell_context capability. \
+                            "Pane {} (id {}) does not currently expose the probe_shell_context capability. \
                              It must be a proven fresh shell prompt before shell-scoped probing is allowed.\n\
                              visible_target: {}\ncontrol_attachments: {}\ncontrol_capabilities: {}",
                             pane_index,
+                            pane_id,
                             control.visible_target.summary(),
                             con_agent::control::format_control_attachments(&control.attachments),
                             control
@@ -1877,14 +1922,14 @@ impl ConWorkspace {
                         ))
                     } else if pane.is_busy(cx) {
                         PaneResponse::Error(format!(
-                            "Pane {} is busy. Wait for the current command to finish before running a shell probe.",
-                            pane_index
+                            "Pane {} (id {}) is busy. Wait for the current command to finish before running a shell probe.",
+                            pane_index, pane_id
                         ))
                     } else {
                         let response_tx = req.response_tx;
                         let nonce = format!(
                             "{}-{}",
-                            pane_index,
+                            pane_id,
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|duration| duration.as_nanos())
@@ -1905,8 +1950,8 @@ impl ConWorkspace {
 
                                 if std::time::Instant::now() >= deadline {
                                     let _ = response_tx.send(PaneResponse::Error(format!(
-                                        "Shell probe timed out in pane {} after 10s.",
-                                        pane_index
+                                        "Shell probe timed out in pane {} (id {}) after 10s.",
+                                        pane_index, pane_id
                                     )));
                                     return;
                                 }
@@ -1942,8 +1987,8 @@ impl ConWorkspace {
                                     Err(err) => {
                                         let excerpt = lines.join("\n");
                                         let _ = response_tx.send(PaneResponse::Error(format!(
-                                            "Shell probe finished in pane {} but the probe output could not be parsed: {}\nRecent output:\n{}",
-                                            pane_index, err, excerpt
+                                            "Shell probe finished in pane {} (id {}) but the probe output could not be parsed: {}\nRecent output:\n{}",
+                                            pane_index, pane_id, err, excerpt
                                         )));
                                     }
                                 }
@@ -1954,24 +1999,19 @@ impl ConWorkspace {
                         return;
                     }
                 }
-            }
-            PaneQuery::CheckBusy { pane_index } => {
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let terminal = &all_terminals[pane_index - 1];
-                    PaneResponse::BusyStatus {
-                        is_busy: terminal.is_busy(cx),
-                        has_shell_integration: terminal.has_shell_integration(cx),
-                    }
+                Err(err) => PaneResponse::Error(err),
+            },
+            PaneQuery::CheckBusy { target } => {
+                match self.resolve_pane_target_for_tab(tab_idx, target) {
+                    Ok(resolved) => PaneResponse::BusyStatus {
+                        is_busy: resolved.pane.is_busy(cx),
+                        has_shell_integration: resolved.pane.has_shell_integration(cx),
+                    },
+                    Err(err) => PaneResponse::Error(err),
                 }
             }
             PaneQuery::WaitFor {
-                pane_index,
+                target,
                 timeout_secs,
                 pattern,
             } => {
@@ -1980,51 +2020,46 @@ impl ConWorkspace {
                 let pattern = pattern.filter(|p| !p.is_empty());
 
                 log::info!(
-                    "[wait_for] pane={} timeout={:?} pattern={:?}",
-                    pane_index,
+                    "[wait_for] target={} timeout={:?} pattern={:?}",
+                    target.describe(),
                     timeout_secs,
                     pattern,
                 );
 
-                if pane_index == 0 || pane_index > all_terminals.len() {
-                    PaneResponse::Error(format!(
-                        "Invalid pane index {}. Use list_panes to see available panes (1-{}).",
-                        pane_index,
-                        all_terminals.len()
-                    ))
-                } else {
-                    let pane = all_terminals[pane_index - 1].clone();
-                    let has_si = pane.has_shell_integration(cx);
-                    let timeout = timeout_secs.unwrap_or(30).min(120);
-                    let response_tx = req.response_tx;
+                match self.resolve_pane_target_for_tab(tab_idx, target) {
+                    Ok(resolved) => {
+                        let pane = resolved.pane;
+                        let has_si = pane.has_shell_integration(cx);
+                        let timeout = timeout_secs.unwrap_or(30).min(120);
+                        let response_tx = req.response_tx;
 
-                    log::info!("[wait_for] has_si={} is_busy={}", has_si, pane.is_busy(cx),);
+                        log::info!("[wait_for] has_si={} is_busy={}", has_si, pane.is_busy(cx),);
 
-                    // Check if already in target state before spawning async task
-                    if pattern.is_none() && has_si && !pane.is_busy(cx) {
-                        log::info!("[wait_for] → early idle return");
-                        let output = pane.recent_lines(50, cx).join("\n");
-                        let _ = response_tx.send(PaneResponse::WaitComplete {
-                            status: "idle".into(),
-                            output,
-                        });
-                        return;
-                    }
-                    if let Some(ref pat) = pattern {
-                        let content = pane.recent_lines(50, cx).join("\n");
-                        if content.contains(pat.as_str()) {
+                        // Check if already in target state before spawning async task
+                        if pattern.is_none() && has_si && !pane.is_busy(cx) {
+                            log::info!("[wait_for] → early idle return");
+                            let output = pane.recent_lines(50, cx).join("\n");
                             let _ = response_tx.send(PaneResponse::WaitComplete {
-                                status: "matched".into(),
-                                output: content,
+                                status: "idle".into(),
+                                output,
                             });
                             return;
                         }
-                    }
+                        if let Some(ref pat) = pattern {
+                            let content = pane.recent_lines(50, cx).join("\n");
+                            if content.contains(pat.as_str()) {
+                                let _ = response_tx.send(PaneResponse::WaitComplete {
+                                    status: "matched".into(),
+                                    output: content,
+                                });
+                                return;
+                            }
+                        }
 
-                    let use_quiescence = !has_si && pattern.is_none();
+                        let use_quiescence = !has_si && pattern.is_none();
 
-                    // Spawn async task — direct terminal access, no channel overhead
-                    cx.spawn(async move |this, cx| {
+                        // Spawn async task — direct terminal access, no channel overhead
+                        cx.spawn(async move |this, cx| {
                         let deadline = std::time::Instant::now()
                             + std::time::Duration::from_secs(timeout as u64);
 
@@ -2138,7 +2173,9 @@ impl ConWorkspace {
                         }
                     })
                     .detach();
-                    return; // Response sent by spawned task
+                        return; // Response sent by spawned task
+                    }
+                    Err(err) => PaneResponse::Error(err),
                 }
             }
             PaneQuery::CreatePane { command, location } => {
@@ -2688,11 +2725,21 @@ impl Render for ConWorkspace {
                 },
             );
 
-            // Return the 1-indexed position of the new pane in the flat pane list
-            let pane_index = self.tabs[self.active_tab].pane_tree.pane_count();
-            let _ = req
-                .response_tx
-                .send(con_agent::PaneResponse::PaneCreated { pane_index });
+            let pane_tree = &self.tabs[self.active_tab].pane_tree;
+            let pane_index = pane_tree
+                .all_terminals()
+                .iter()
+                .enumerate()
+                .find(|(_, pane)| pane.entity_id() == terminal.entity_id())
+                .map(|(idx, _)| idx + 1)
+                .unwrap_or_else(|| pane_tree.pane_count());
+            let pane_id = pane_tree
+                .pane_id_for_terminal(&terminal)
+                .unwrap_or(pane_index);
+            let _ = req.response_tx.send(con_agent::PaneResponse::PaneCreated {
+                pane_index,
+                pane_id,
+            });
 
             cx.notify();
         }

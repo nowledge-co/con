@@ -268,7 +268,7 @@ When the focused pane is an SSH session, remote executables aren't on the local 
 
 The system prompt is built from a live pane snapshot, not process-wide environment variables. For the focused pane we derive host, title, pane mode (`shell`, `multiplexer`, `tui`, `unknown`), and whether shell metadata is fresh enough to trust for the visible app.
 
-When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with its index, hostname, cwd, mode, shell-metadata freshness, backend-support flags, and typed control state. That control state includes the pane's address space, front-most visible target, nested target stack, control channels, capabilities, and notes. This lets the agent target the right pane(s) immediately without confusing a con pane with a tmux pane or editor target.
+When multiple panes are open, the system prompt includes a `<panes>` block listing every pane with both its current `pane_index` and its stable `pane_id`, plus hostname, cwd, mode, shell-metadata freshness, backend-support flags, and typed control state. That control state includes the pane's address space, front-most visible target, nested target stack, control channels, capabilities, and notes. This lets the agent target the right pane immediately without confusing a con pane with a tmux pane or editor target, and without assuming pane position stays fixed after the layout changes.
 
 This matters for SSH, tmux, and full-screen TUIs:
 
@@ -283,6 +283,7 @@ con now keeps a per-pane runtime tracker for each tab. The tracker is reducer-ba
 On top of that tracker, con now derives a typed `PaneControlState` for each pane. This is the shared contract for prompt writing, `list_panes`, and visible-exec guards:
 
 - `address_space` says what `pane_index` actually refers to
+- `pane_id` is the stable identity for that con pane while it exists
 - `visible_target` says what app or runtime is currently in front
 - `target_stack` preserves nested layers when con can actually prove them
 - `control_attachments` say what protocol/session surfaces are actually attached right now
@@ -298,6 +299,8 @@ Before each agent turn, the harness now runs a deterministic read-only fact pass
 - if that refreshed pane now exposes tmux-native query, it auto-fetches tmux pane inventory too
 
 This is intentional. The preflight is driven by typed control capabilities, not by the wording of the user's message. con gathers the strongest safe facts first, then lets the model reason over them.
+
+For whole-tab situation questions, the harness and prompt now also carry a typed tab-workspace view. This lets the model describe things like "remote shell ready", "tmux workspace", or "SSH connection appears closed" at the pane level before it decides where to act.
 
 con also now exposes a tmux-specific inspect surface. `tmux_inspect` returns tmux adapter state when tmux has been authoritatively detected, including the explicit reason native tmux pane/window control is not yet available.
 
