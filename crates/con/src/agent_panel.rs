@@ -1524,23 +1524,23 @@ fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.07)
+    theme.muted.opacity(0.05)
 }
 
 fn trace_step_header_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.105)
-}
-
-fn trace_step_header_hover_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.125)
-}
-
-fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
     theme.secondary
 }
 
-fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
+fn trace_step_header_hover_surface(theme: &gpui_component::Theme) -> Hsla {
     theme.secondary_hover
+}
+
+fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
+    theme.muted.opacity(0.075)
+}
+
+fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
+    theme.secondary
 }
 
 fn trace_group_header_surface(theme: &gpui_component::Theme) -> Hsla {
@@ -2575,10 +2575,17 @@ impl Render for AgentPanel {
                             .bg(trace_step_surface(theme));
 
                         let step_header_shell = step_header
+                            .mx(px(4.0))
+                            .mt(px(4.0))
+                            .mb(px(if has_detail && !detail_collapsed {
+                                2.0
+                            } else {
+                                4.0
+                            }))
                             .px(px(2.0))
                             .py(px(2.0))
                             .bg(trace_step_header_surface(theme))
-                            .rounded(px(11.0));
+                            .rounded(px(9.0));
 
                         if has_detail {
                             step_shell = step_shell.child(
@@ -2615,9 +2622,9 @@ impl Render for AgentPanel {
                                 };
                                 step_shell = step_shell.child(
                                     div()
-                                        .mx(px(6.0))
+                                        .mx(px(4.0))
                                         .mt(px(2.0))
-                                        .mb(px(6.0))
+                                        .mb(px(4.0))
                                         .rounded(px(9.0))
                                         .bg(trace_detail_surface(theme))
                                         .overflow_hidden()
@@ -2636,7 +2643,7 @@ impl Render for AgentPanel {
                                     let expanded = step.detail_expanded;
                                     let button_label = result_toggle_label(detail, expanded);
                                     step_shell = step_shell.child(
-                                        div().pl(px(36.0)).pb(px(10.0)).child(
+                                        div().pl(px(38.0)).pb(px(10.0)).child(
                                             div()
                                                 .id(SharedString::from(format!(
                                                     "step-detail-expand-{msg_idx}-{step_idx}"
@@ -2843,10 +2850,13 @@ impl Render for AgentPanel {
                     .bg(trace_step_surface(theme))
                     .child(
                         tc_row
+                            .mx(px(4.0))
+                            .mt(px(4.0))
+                            .mb(px(if tc.result.is_some() { 2.0 } else { 4.0 }))
                             .px(px(2.0))
                             .py(px(2.0))
                             .bg(trace_step_header_surface(theme))
-                            .rounded(px(11.0)),
+                            .rounded(px(9.0)),
                     );
 
                 // Result preview
@@ -2860,9 +2870,9 @@ impl Render for AgentPanel {
                     };
                     tc_el = tc_el.child(
                         div()
-                            .mx(px(6.0))
+                            .mx(px(4.0))
                             .mt(px(2.0))
-                            .mb(px(6.0))
+                            .mb(px(4.0))
                             .rounded(px(9.0))
                             .bg(trace_detail_surface(theme))
                             .overflow_hidden()
@@ -2881,7 +2891,7 @@ impl Render for AgentPanel {
                         let expanded = tc.result_expanded;
                         let button_label = result_toggle_label(&formatted, expanded);
                         tc_el = tc_el.child(
-                            div().pl(px(36.0)).pb(px(10.0)).child(
+                            div().pl(px(38.0)).pb(px(10.0)).child(
                                 div()
                                     .id(SharedString::from(format!("tc-result-expand-{tc_idx}")))
                                     .cursor_pointer()
