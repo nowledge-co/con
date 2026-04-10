@@ -1524,11 +1524,15 @@ fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.07)
+    theme.secondary
+}
+
+fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
+    theme.secondary_hover
 }
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.13)
+    theme.secondary_active
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
@@ -2353,13 +2357,12 @@ impl Render for AgentPanel {
                     .ml(px(19.0))
                     .mr(px(4.0))
                     .mt(px(6.0))
-                    .px(px(12.0))
-                    .py(px(11.0))
-                    .rounded(px(14.0))
+                    .px(px(8.0))
+                    .py(px(8.0))
                     .bg(trace_group_surface(theme))
                     .flex()
                     .flex_col()
-                    .gap(px(9.0));
+                    .gap(px(8.0));
 
                 run_card = run_card.child(
                     div()
@@ -2562,7 +2565,7 @@ impl Render for AgentPanel {
                                         "step-detail-{msg_idx}-{step_idx}"
                                     )))
                                     .cursor_pointer()
-                                    .hover(|s| s.bg(theme.muted.opacity(0.03)))
+                                    .hover(|s| s.bg(theme.muted.opacity(0.035)))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
@@ -2588,25 +2591,35 @@ impl Render for AgentPanel {
                                 } else {
                                     result_preview(detail, TOOL_RESULT_PREVIEW_LINES)
                                 };
-                                step_shell = step_shell
-                                    .child(Divider::horizontal().color(theme.muted.opacity(0.08)))
-                                    .child(render_result_block(
-                                        &visible_detail,
-                                        &format!("step-result-{msg_idx}-{step_idx}"),
-                                        theme,
-                                        true,
-                                    ));
+                                step_shell = step_shell.child(
+                                    div()
+                                        .mx(px(6.0))
+                                        .mb(px(6.0))
+                                        .rounded(px(9.0))
+                                        .bg(trace_detail_surface(theme))
+                                        .overflow_hidden()
+                                        .child(
+                                            Divider::horizontal()
+                                                .color(theme.muted_foreground.opacity(0.06)),
+                                        )
+                                        .child(render_result_block(
+                                            &visible_detail,
+                                            &format!("step-result-{msg_idx}-{step_idx}"),
+                                            theme,
+                                            true,
+                                        )),
+                                );
                                 if is_expandable {
                                     let expanded = step.detail_expanded;
                                     let button_label = result_toggle_label(detail, expanded);
                                     step_shell = step_shell.child(
-                                        div().pl(px(28.0)).pb(px(8.0)).child(
+                                        div().pl(px(34.0)).pb(px(10.0)).child(
                                             div()
                                                 .id(SharedString::from(format!(
                                                     "step-detail-expand-{msg_idx}-{step_idx}"
                                                 )))
                                                 .cursor_pointer()
-                                                .hover(|s| s.bg(theme.muted.opacity(0.03)))
+                                                .hover(|s| s.bg(theme.muted.opacity(0.035)))
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(move |this, _, _, cx| {
@@ -2670,9 +2683,8 @@ impl Render for AgentPanel {
                 .ml(px(19.0))
                 .mr(px(4.0))
                 .gap(px(8.0))
-                .px(px(12.0))
-                .py(px(11.0))
-                .rounded(px(14.0))
+                .px(px(8.0))
+                .py(px(8.0))
                 .bg(trace_group_surface(theme))
                 .child(
                     div()
@@ -2811,23 +2823,33 @@ impl Render for AgentPanel {
                     } else {
                         result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES)
                     };
-                    tc_el = tc_el
-                        .child(Divider::horizontal().color(theme.muted.opacity(0.08)))
-                        .child(render_result_block(
-                            &visible,
-                            &format!("tc-result-{tc_idx}"),
-                            theme,
-                            true,
-                        ));
+                    tc_el = tc_el.child(
+                        div()
+                            .mx(px(6.0))
+                            .mb(px(6.0))
+                            .rounded(px(9.0))
+                            .bg(trace_detail_surface(theme))
+                            .overflow_hidden()
+                            .child(
+                                Divider::horizontal()
+                                    .color(theme.muted_foreground.opacity(0.06)),
+                            )
+                            .child(render_result_block(
+                                &visible,
+                                &format!("tc-result-{tc_idx}"),
+                                theme,
+                                true,
+                            )),
+                    );
                     if is_expandable {
                         let expanded = tc.result_expanded;
                         let button_label = result_toggle_label(&formatted, expanded);
                         tc_el = tc_el.child(
-                            div().pl(px(28.0)).pb(px(8.0)).child(
+                            div().pl(px(34.0)).pb(px(10.0)).child(
                                 div()
                                     .id(SharedString::from(format!("tc-result-expand-{tc_idx}")))
                                     .cursor_pointer()
-                                    .hover(|s| s.bg(theme.muted.opacity(0.03)))
+                                    .hover(|s| s.bg(theme.muted.opacity(0.035)))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
