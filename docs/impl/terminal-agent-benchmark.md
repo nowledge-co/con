@@ -73,6 +73,28 @@ These are scored against product criteria such as:
 - safety
 - honesty of uncertainty reporting
 
+### 4. Scored iteration loop
+
+Operator runs become comparable when they are judged against a stable rubric.
+
+Con now commits those rubrics under:
+
+- `benchmarks/terminal-agent/rubrics/`
+
+And ships two support tools:
+
+- `benchmarks/terminal-agent/score.py`
+- `benchmarks/terminal-agent/report.py`
+
+This gives the project a repeatable loop:
+
+1. run a profile
+2. score the resulting record
+3. capture lessons and next focus
+4. generate trend reports across many runs
+
+That is how the benchmark becomes a product-improvement system instead of only a demo script.
+
 ## Built-in profiles
 
 The benchmark now ships with two profile bands.
@@ -126,6 +148,8 @@ So the benchmark stays hybrid:
 ## Result discipline
 
 Strict runs write JSON records under `.context/benchmarks/`.
+
+Scored operator runs write comparable cards under `.context/benchmarks/scored/`.
 
 That gives the project:
 

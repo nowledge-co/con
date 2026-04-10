@@ -30,6 +30,10 @@ Primary references:
    - `python3 benchmarks/terminal-agent/run.py --profile operator-ssh-tmux-devloop --suite operator`
 6. For SSH/tmux changes, run the relevant playbook under `benchmarks/terminal-agent/playbooks/`.
 7. Save the JSON record under `.context/benchmarks/` and cite it in your report.
+8. If the run is an operator benchmark, score it with:
+   - `python3 benchmarks/terminal-agent/score.py --profile ... --record ... --score ...`
+9. Generate a trend report when comparing many runs:
+   - `python3 benchmarks/terminal-agent/report.py`
 
 ## Rules
 

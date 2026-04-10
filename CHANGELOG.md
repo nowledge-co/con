@@ -64,6 +64,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The agent panel now uses quieter run cards with calmer state labels, stronger alignment, and cleaner output blocks. Long tool results still expand inline, but the panel no longer relies on a loud “finished” banner to signal that a run is done.
 - The agent panel now uses stronger Phosphor fill and duotone icons, clearer section labels, and more deliberate spacing so tool traces feel like a composed operator timeline instead of a generic debug inspector.
 - The terminal-agent benchmark now includes richer operator playbooks and profiles for local Codex dev loops, dual-host SSH maintenance, and remote tmux edit/run/reuse workflows. It can now execute those operator prompt sequences directly and record the transcript instead of only printing a playbook path.
+- The terminal-agent benchmark now has stable scoring rubrics, a scoring tool, a trend-report generator, and a project-local improvement-loop skill so progress can be judged and compared over many iterations instead of living only in screenshots and memory.
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.

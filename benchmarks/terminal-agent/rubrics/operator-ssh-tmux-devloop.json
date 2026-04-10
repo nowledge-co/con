@@ -1,0 +1,39 @@
+{
+  "profile": "operator-ssh-tmux-devloop",
+  "title": "Remote tmux Dev Loop",
+  "release_floor": 9,
+  "target_score": 12,
+  "world_class_score": 14,
+  "dimensions": [
+    {
+      "id": "tmux_targeting",
+      "label": "tmux Targeting",
+      "max": 3,
+      "description": "Use tmux-native structure and target the correct inner workspace."
+    },
+    {
+      "id": "target_stability",
+      "label": "Target Stability",
+      "max": 3,
+      "description": "Keep file work and follow-up work tied to the intended tmux target."
+    },
+    {
+      "id": "execution_correctness",
+      "label": "Execution Correctness",
+      "max": 3,
+      "description": "Create, edit, and run code correctly inside the tmux workspace."
+    },
+    {
+      "id": "separation_of_work",
+      "label": "Separation of Work",
+      "max": 3,
+      "description": "Keep long-running work separate from the main file-work target."
+    },
+    {
+      "id": "truthfulness",
+      "label": "Truthfulness",
+      "max": 3,
+      "description": "Stay honest about what tmux, SSH, and agent-cli facts are actually proven."
+    }
+  ]
+}

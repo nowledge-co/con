@@ -97,6 +97,39 @@ They do not pretend to be fully machine-scored intelligence benchmarks. Instead,
 
 This is the practical bridge between the strict floor and the final public benchmark story.
 
+## Scoring and reports
+
+Operator runs become comparable when they are scored against a stable rubric.
+
+Rubrics live in [`rubrics/`](./rubrics/). Score a run with:
+
+```bash
+python3 benchmarks/terminal-agent/score.py \
+  --profile operator-local-codex-devloop \
+  --record .context/benchmarks/<run>.json \
+  --score target_preparation=2 \
+  --score target_reuse=3 \
+  --score workspace_correctness=3 \
+  --score execution_loop=3 \
+  --score follow_up_repair=2 \
+  --summary "Strong same-target continuity, still too much trust-prompt friction." \
+  --lesson "Trust prompts still interrupt the flow." \
+  --next-focus "Reduce special handling around coding-cli interstitial prompts."
+```
+
+This writes a scored record under `.context/benchmarks/scored/`.
+
+Generate a trend report with:
+
+```bash
+python3 benchmarks/terminal-agent/report.py
+python3 benchmarks/terminal-agent/report.py --profile operator-ssh-tmux-devloop
+```
+
+For repeated improvement work, use:
+
+- [`skills/terminal-agent-improvement-loop/SKILL.md`](../../skills/terminal-agent-improvement-loop/SKILL.md)
+
 ## Playbooks
 
 The playbooks in [`playbooks/`](./playbooks/) cover the product behaviors that still need structured scenario evaluation:
