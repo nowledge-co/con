@@ -3567,6 +3567,12 @@ impl Render for ConWorkspace {
         }
         self.modal_was_open = is_modal_open;
 
+        if !needs_ghostty_hidden {
+            for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
+                terminal.set_native_view_visible(true, cx);
+            }
+        }
+
         // Keep pane focus in sync with which terminal has window focus
         self.tabs[self.active_tab].pane_tree.sync_focus(window, cx);
         self.reconcile_runtime_trackers_for_tab(self.active_tab);

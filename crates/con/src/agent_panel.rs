@@ -1520,15 +1520,15 @@ fn hidden_result_line_count(content: &str, max_lines: usize) -> usize {
 }
 
 fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.04)
+    theme.background.opacity(0.0)
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary
+    theme.muted.opacity(0.07)
 }
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary_hover
+    theme.muted.opacity(0.13)
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
