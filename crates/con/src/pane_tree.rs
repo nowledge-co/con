@@ -443,14 +443,8 @@ impl PaneTree {
         let theme = cx.theme();
 
         match node {
-            PaneNode::Leaf { id, terminal } => {
-                let is_focused = *id == focused_id;
-                let mut pane_el = div().size_full().child(terminal.render_child());
-                // In multi-pane layouts, dim unfocused panes subtly
-                if has_splits && !is_focused {
-                    pane_el = pane_el.opacity(0.65);
-                }
-                pane_el.into_any_element()
+            PaneNode::Leaf { terminal, .. } => {
+                div().size_full().child(terminal.render_child()).into_any_element()
             }
             PaneNode::Split {
                 split_id,
@@ -480,14 +474,14 @@ impl PaneTree {
                         .cursor_col_resize()
                         .flex()
                         .justify_center()
-                        .bg(theme.secondary_hover)
+                        .bg(theme.muted.opacity(0.035))
                         .child(
                             div()
                                 .w(px(1.0))
                                 .h_full()
-                                .bg(theme.muted_foreground.opacity(0.16)),
+                                .bg(theme.muted_foreground.opacity(0.12)),
                         )
-                        .hover(|s| s.bg(theme.secondary_active))
+                        .hover(|s| s.bg(theme.muted.opacity(0.07)))
                         .on_mouse_down(
                             MouseButton::Left,
                             move |event: &MouseDownEvent, _window, _cx| {
@@ -502,14 +496,14 @@ impl PaneTree {
                         .cursor_row_resize()
                         .flex()
                         .items_center()
-                        .bg(theme.secondary_hover)
+                        .bg(theme.muted.opacity(0.035))
                         .child(
                             div()
                                 .h(px(1.0))
                                 .w_full()
-                                .bg(theme.muted_foreground.opacity(0.16)),
+                                .bg(theme.muted_foreground.opacity(0.12)),
                         )
-                        .hover(|s| s.bg(theme.secondary_active))
+                        .hover(|s| s.bg(theme.muted.opacity(0.07)))
                         .on_mouse_down(
                             MouseButton::Left,
                             move |event: &MouseDownEvent, _window, _cx| {
