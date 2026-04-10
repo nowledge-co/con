@@ -99,6 +99,33 @@ impl std::fmt::Display for ProviderKind {
     }
 }
 
+fn display_provider_model(kind: &ProviderKind, model: &str) -> String {
+    let provider = match kind {
+        ProviderKind::ChatGPT => "ChatGPT",
+        ProviderKind::OpenAI => "OpenAI",
+        ProviderKind::GitHubCopilot => "GitHub Copilot",
+        ProviderKind::OpenAICompatible => "OpenAI-compatible",
+        ProviderKind::MiniMax => "MiniMax",
+        ProviderKind::MiniMaxAnthropic => "MiniMax Anthropic",
+        ProviderKind::Moonshot => "Moonshot",
+        ProviderKind::MoonshotAnthropic => "Moonshot Anthropic",
+        ProviderKind::ZAI => "Z-AI",
+        ProviderKind::ZAIAnthropic => "Z-AI Anthropic",
+        ProviderKind::DeepSeek => "DeepSeek",
+        ProviderKind::Groq => "Groq",
+        ProviderKind::Cohere => "Cohere",
+        ProviderKind::Gemini => "Gemini",
+        ProviderKind::Ollama => "Ollama",
+        ProviderKind::OpenRouter => "OpenRouter",
+        ProviderKind::Perplexity => "Perplexity",
+        ProviderKind::Mistral => "Mistral",
+        ProviderKind::Together => "Together",
+        ProviderKind::XAI => "xAI",
+        ProviderKind::Anthropic => "Anthropic",
+    };
+    format!("{provider} · {model}")
+}
+
 impl ProviderKind {
     pub fn default_api_key_env(&self) -> &str {
         match self {
@@ -701,8 +728,8 @@ impl AgentProvider {
             kind, model, system_prompt.len(), chat_history.len(), last_user_msg.len(),
         );
         let _ = event_tx.send(AgentEvent::Step(AgentStep::Thinking(format!(
-            "{}:{}",
-            kind, model,
+            "Using {}",
+            display_provider_model(kind, model)
         ))));
 
         log::info!(

@@ -170,11 +170,7 @@ impl PanelState {
         self.messages.push(message);
     }
 
-    pub fn restore_last_assistant_trace(
-        &mut self,
-        thinking: Option<&str>,
-        steps: &[AgentStep],
-    ) {
+    pub fn restore_last_assistant_trace(&mut self, thinking: Option<&str>, steps: &[AgentStep]) {
         if let Some(last) = self.messages.last_mut() {
             if last.role == "assistant" {
                 last.thinking = thinking.map(ToOwned::to_owned);
@@ -342,12 +338,20 @@ impl PanelState {
                 self.update_thinking(&text);
             }
             HarnessEvent::Step(step) => {
-                // Format step as human-readable string, not Debug repr
-                let label = format!("{:?}", step);
-                // Clean up Thinking("model_name") → Thinking(model_name)
-                let label = label
-                    .replace("Thinking(\"", "Thinking(")
-                    .replace("\")", ")");
+                let label = match step {
+                    AgentStep::Thinking(text) => text,
+                    AgentStep::Text(text) => text,
+                    AgentStep::ToolCall { tool, .. } => {
+                        format!("Calling {}", humanize_tool_name(&tool))
+                    }
+                    AgentStep::ToolResult { tool, success, .. } => {
+                        if success {
+                            format!("Finished {}", humanize_tool_name(&tool))
+                        } else {
+                            format!("{} needs review", humanize_tool_name(&tool))
+                        }
+                    }
+                };
                 self.add_step(&label);
             }
             HarnessEvent::Token(token) => {
@@ -1420,23 +1424,38 @@ fn render_result_block(
     content: &str,
     _id_prefix: &str,
     theme: &gpui_component::Theme,
+    connected: bool,
 ) -> AnyElement {
     let is_short = content.lines().count() <= 1 && content.len() < 80;
 
     if is_short && content != "(no output)" {
-        // Short result — inline, no code block
-        div()
-            .ml(px(20.0))
-            .py(px(2.0))
-            .text_size(px(10.5))
-            .font_family(theme.mono_font_family.clone())
-            .text_color(theme.muted_foreground.opacity(0.54))
-            .overflow_x_hidden()
-            .whitespace_nowrap()
-            .child(content.to_string())
-            .into_any_element()
+        if connected {
+            div()
+                .pl(px(28.0))
+                .pr(px(10.0))
+                .pt(px(8.0))
+                .pb(px(7.0))
+                .text_size(px(10.5))
+                .font_family(theme.mono_font_family.clone())
+                .text_color(theme.muted_foreground.opacity(0.58))
+                .overflow_x_hidden()
+                .whitespace_nowrap()
+                .child(content.to_string())
+                .into_any_element()
+        } else {
+            // Short result — inline, no code block
+            div()
+                .ml(px(20.0))
+                .py(px(2.0))
+                .text_size(px(10.5))
+                .font_family(theme.mono_font_family.clone())
+                .text_color(theme.muted_foreground.opacity(0.54))
+                .overflow_x_hidden()
+                .whitespace_nowrap()
+                .child(content.to_string())
+                .into_any_element()
+        }
     } else {
-        // Multi-line result — direct monospace rendering, no markdown overhead
         let mut lines_el = div().flex().flex_col().gap(px(0.5));
         for line in content.lines() {
             lines_el = lines_el.child(
@@ -1445,22 +1464,37 @@ fn render_result_block(
                     .child(if line.is_empty() { " " } else { line }.to_string()),
             );
         }
-        div()
-            .ml(px(18.0))
-            .mr(px(2.0))
-            .mt(px(2.0))
-            .mb(px(2.0))
-            .px(px(10.0))
-            .py(px(8.0))
-            .rounded(px(10.0))
-            .bg(theme.background.opacity(0.58))
-            .overflow_x_hidden()
-            .font_family(theme.mono_font_family.clone())
-            .text_size(px(10.5))
-            .line_height(px(15.5))
-            .text_color(theme.muted_foreground.opacity(0.67))
-            .child(lines_el)
-            .into_any_element()
+        if connected {
+            div()
+                .pl(px(28.0))
+                .pr(px(10.0))
+                .pt(px(8.0))
+                .pb(px(8.0))
+                .overflow_x_hidden()
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(10.5))
+                .line_height(px(15.5))
+                .text_color(theme.muted_foreground.opacity(0.67))
+                .child(lines_el)
+                .into_any_element()
+        } else {
+            div()
+                .ml(px(18.0))
+                .mr(px(2.0))
+                .mt(px(2.0))
+                .mb(px(2.0))
+                .px(px(10.0))
+                .py(px(8.0))
+                .rounded(px(10.0))
+                .bg(theme.background.opacity(0.58))
+                .overflow_x_hidden()
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(10.5))
+                .line_height(px(15.5))
+                .text_color(theme.muted_foreground.opacity(0.67))
+                .child(lines_el)
+                .into_any_element()
+        }
     }
 }
 
@@ -1620,6 +1654,87 @@ fn render_inline_state(
         .into_any_element()
 }
 
+fn humanize_provider_name(name: &str) -> String {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "chatgpt" => "ChatGPT".to_string(),
+        "openai" => "OpenAI".to_string(),
+        "anthropic" => "Anthropic".to_string(),
+        "github-copilot" => "GitHub Copilot".to_string(),
+        "moonshot" => "Moonshot".to_string(),
+        "deepseek" => "DeepSeek".to_string(),
+        other if !other.is_empty() => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(c) => {
+                    let mut s = c.to_uppercase().to_string();
+                    s.extend(chars);
+                    s
+                }
+                None => "Con".to_string(),
+            }
+        }
+        _ => "Con".to_string(),
+    }
+}
+
+fn split_model_identity(model: &str) -> (Option<String>, String) {
+    if let Some((provider, inner_model)) = model.split_once(':') {
+        let provider = provider.trim();
+        let inner_model = inner_model.trim();
+        if !provider.is_empty() && !inner_model.is_empty() {
+            return (
+                Some(humanize_provider_name(provider)),
+                humanize_model_name(inner_model),
+            );
+        }
+    }
+    if model.is_empty() {
+        (None, "Con".to_string())
+    } else {
+        (None, humanize_model_name(model))
+    }
+}
+
+fn render_model_chips(
+    model: &str,
+    duration_ms: Option<u64>,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    let (provider, label) = split_model_identity(model);
+    let mut row = div().flex().items_center().gap(px(6.0));
+
+    if let Some(provider) = provider {
+        row = row.child(
+            Tag::secondary()
+                .outline()
+                .xsmall()
+                .rounded_full()
+                .child(provider),
+        );
+    }
+
+    row = row.child(Tag::secondary().xsmall().rounded_full().child(label));
+
+    if let Some(dur) = duration_ms {
+        row = row.child(
+            div()
+                .text_size(px(10.0))
+                .font_family(theme.mono_font_family.clone())
+                .text_color(theme.muted_foreground.opacity(0.34))
+                .child(format_duration_ms(dur)),
+        );
+    }
+
+    row.into_any_element()
+}
+
+fn format_model_identity_text(model: &str) -> String {
+    let (provider, label) = split_model_identity(model);
+    match provider {
+        Some(provider) => format!("{provider} · {label}"),
+        None => label,
+    }
+}
 
 fn render_section_kicker(label: &str, theme: &gpui_component::Theme) -> AnyElement {
     div()
@@ -2004,37 +2119,14 @@ impl Render for AgentPanel {
                 // Header row — oven icon + model name + duration
                 let msg_model = msg.model.as_deref().unwrap_or("");
                 let msg_duration_ms = msg.duration_ms;
-                let model_label = if msg_model.is_empty() {
-                    "Con".to_string()
-                } else {
-                    humanize_model_name(msg_model)
-                };
-                let mut header_row = div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .pb(px(3.0))
-                    .child(
-                        svg()
-                            .path("phosphor/oven-duotone.svg")
-                            .size(px(13.0))
-                            .text_color(theme.primary.opacity(0.65)),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.5))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground.opacity(0.60))
-                            .child(model_label),
-                    );
-                if let Some(dur) = msg_duration_ms {
-                    header_row = header_row.child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.28))
-                            .child(format!("· {}", format_duration_ms(dur))),
-                    );
-                }
+                let mut header_row = div().flex().items_center().gap(px(6.0)).pb(px(3.0)).child(
+                    svg()
+                        .path("phosphor/oven-duotone.svg")
+                        .size(px(13.0))
+                        .text_color(theme.primary.opacity(0.65)),
+                );
+                header_row =
+                    header_row.child(render_model_chips(msg_model, msg_duration_ms, theme));
                 msg_el = msg_el.child(header_row);
 
                 // Extended thinking (collapsible)
@@ -2382,8 +2474,6 @@ impl Render for AgentPanel {
                             .gap(px(2.0))
                             .px(px(10.0))
                             .py(px(9.0))
-                            .rounded(px(10.0))
-                            .bg(theme.background.opacity(0.34))
                             .child(top_line);
 
                         // Args on second line — consistent indent with approval card
@@ -2400,17 +2490,20 @@ impl Render for AgentPanel {
                             );
                         }
 
-                        let mut step_el = div().flex().flex_col();
+                        let mut step_shell = div()
+                            .flex()
+                            .flex_col()
+                            .rounded(px(10.0))
+                            .bg(theme.background.opacity(0.34));
 
                         if has_detail {
-                            step_el = step_el.child(
+                            step_shell = step_shell.child(
                                 step_header
                                     .id(SharedString::from(format!(
                                         "step-detail-{msg_idx}-{step_idx}"
                                     )))
                                     .cursor_pointer()
-                                    .rounded(px(10.0))
-                                    .hover(|s| s.bg(theme.muted.opacity(0.05)))
+                                    .hover(|s| s.bg(theme.muted.opacity(0.03)))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
@@ -2424,7 +2517,7 @@ impl Render for AgentPanel {
                                     ),
                             );
                         } else {
-                            step_el = step_el.child(step_header);
+                            step_shell = step_shell.child(step_header);
                         }
 
                         // Expanded detail
@@ -2436,16 +2529,19 @@ impl Render for AgentPanel {
                                 } else {
                                     result_preview(detail, TOOL_RESULT_PREVIEW_LINES)
                                 };
-                                step_el = step_el.child(render_result_block(
-                                    &visible_detail,
-                                    &format!("step-result-{msg_idx}-{step_idx}"),
-                                    theme,
-                                ));
+                                step_shell = step_shell
+                                    .child(Divider::horizontal().color(theme.muted.opacity(0.08)))
+                                    .child(render_result_block(
+                                        &visible_detail,
+                                        &format!("step-result-{msg_idx}-{step_idx}"),
+                                        theme,
+                                        true,
+                                    ));
                                 if is_expandable {
                                     let expanded = step.detail_expanded;
                                     let button_label = result_toggle_label(detail, expanded);
-                                    step_el = step_el.child(
-                                        div().ml(px(20.0)).child(
+                                    step_shell = step_shell.child(
+                                        div().pl(px(28.0)).pb(px(8.0)).child(
                                             Button::new(format!(
                                                 "step-detail-expand-{msg_idx}-{step_idx}"
                                             ))
@@ -2471,7 +2567,7 @@ impl Render for AgentPanel {
                             }
                         }
 
-                        steps_el = steps_el.child(step_el);
+                        steps_el = steps_el.child(step_shell);
                     }
 
                     run_card = run_card.child(steps_el);
@@ -2616,8 +2712,6 @@ impl Render for AgentPanel {
                     .gap(px(2.0))
                     .px(px(10.0))
                     .py(px(9.0))
-                    .rounded(px(10.0))
-                    .bg(theme.background.opacity(0.34))
                     .child(top_line);
 
                 // Args on second line
@@ -2634,7 +2728,12 @@ impl Render for AgentPanel {
                     );
                 }
 
-                let mut tc_el = div().flex().flex_col().child(tc_row);
+                let mut tc_el = div()
+                    .flex()
+                    .flex_col()
+                    .rounded(px(10.0))
+                    .bg(theme.background.opacity(0.34))
+                    .child(tc_row);
 
                 // Result preview
                 if let Some(result) = &tc.result {
@@ -2645,16 +2744,19 @@ impl Render for AgentPanel {
                     } else {
                         result_preview(&formatted, TOOL_RESULT_PREVIEW_LINES)
                     };
-                    tc_el = tc_el.child(render_result_block(
-                        &visible,
-                        &format!("tc-result-{tc_idx}"),
-                        theme,
-                    ));
+                    tc_el = tc_el
+                        .child(Divider::horizontal().color(theme.muted.opacity(0.08)))
+                        .child(render_result_block(
+                            &visible,
+                            &format!("tc-result-{tc_idx}"),
+                            theme,
+                            true,
+                        ));
                     if is_expandable {
                         let expanded = tc.result_expanded;
                         let button_label = result_toggle_label(&formatted, expanded);
                         tc_el = tc_el.child(
-                            div().ml(px(20.0)).child(
+                            div().pl(px(28.0)).pb(px(8.0)).child(
                                 Button::new(format!("tc-result-expand-{tc_idx}"))
                                     .label(button_label)
                                     .text()
@@ -2830,9 +2932,6 @@ impl Render for AgentPanel {
                 .into_any_element(),
         };
 
-        // Model label
-        let model_display = humanize_model_name(&self.model_name);
-
         let mut header_left = div()
             .flex()
             .items_center()
@@ -2843,13 +2942,7 @@ impl Render for AgentPanel {
                     .size(px(15.0))
                     .text_color(theme.primary),
             )
-            .child(
-                div()
-                    .text_size(px(12.25))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.foreground.opacity(0.75))
-                    .child(model_display),
-            )
+            .child(render_model_chips(&self.model_name, None, theme))
             .child(status_indicator);
 
         if let Some((_icon, label)) = self.status_text() {
@@ -3070,7 +3163,7 @@ impl Render for AgentPanel {
                         .model
                         .as_deref()
                         .filter(|m| !m.is_empty())
-                        .map(|m| format!(" · {}", humanize_model_name(m)))
+                        .map(|m| format!(" · {}", format_model_identity_text(m)))
                         .unwrap_or_default();
                     history_content = history_content.child(
                         div()
