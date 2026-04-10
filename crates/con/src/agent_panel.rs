@@ -1414,6 +1414,7 @@ fn render_result_block(
     connected: bool,
 ) -> AnyElement {
     let is_short = content.lines().count() <= 1 && content.len() < 80;
+    let nested_surface = theme.secondary.opacity(if connected { 0.72 } else { 0.52 });
 
     if is_short && content != "(no output)" {
         if connected {
@@ -1427,7 +1428,7 @@ fn render_result_block(
                         .px(px(9.0))
                         .py(px(7.0))
                         .rounded(px(8.0))
-                        .bg(theme.muted.opacity(0.05))
+                        .bg(nested_surface)
                         .text_size(px(10.5))
                         .font_family(theme.mono_font_family.clone())
                         .text_color(theme.muted_foreground.opacity(0.58))
@@ -1469,7 +1470,7 @@ fn render_result_block(
                         .px(px(9.0))
                         .py(px(8.0))
                         .rounded(px(8.0))
-                        .bg(theme.muted.opacity(0.05))
+                        .bg(nested_surface)
                         .overflow_x_hidden()
                         .font_family(theme.mono_font_family.clone())
                         .text_size(px(10.5))
@@ -1487,7 +1488,7 @@ fn render_result_block(
                 .px(px(10.0))
                 .py(px(8.0))
                 .rounded(px(10.0))
-                .bg(theme.background.opacity(0.58))
+                .bg(theme.secondary.opacity(0.52))
                 .overflow_x_hidden()
                 .font_family(theme.mono_font_family.clone())
                 .text_size(px(10.5))
@@ -1772,7 +1773,7 @@ fn render_result_toggle_chrome(
             div()
                 .text_size(px(10.0))
                 .font_family(theme.mono_font_family.clone())
-                .text_color(theme.muted_foreground.opacity(0.36))
+                .text_color(theme.muted_foreground.opacity(0.30))
                 .child(label),
         )
         .into_any_element()
@@ -2536,7 +2537,7 @@ impl Render for AgentPanel {
                             .flex()
                             .flex_col()
                             .rounded(px(10.0))
-                            .bg(theme.background.opacity(0.34));
+                            .bg(theme.muted.opacity(0.045));
 
                         if has_detail {
                             step_shell = step_shell.child(
@@ -2782,7 +2783,7 @@ impl Render for AgentPanel {
                     .flex()
                     .flex_col()
                     .rounded(px(10.0))
-                    .bg(theme.background.opacity(0.34))
+                    .bg(theme.muted.opacity(0.045))
                     .child(tc_row);
 
                 // Result preview
@@ -3462,7 +3463,11 @@ fn humanize_model_name(model: &str) -> String {
             if parts.len() >= 2 {
                 let family = parts[0];
                 let version = parts[1].replace('-', ".");
-                let family_cap = format!("{}{}", &family[..1].to_uppercase(), &family[1..]);
+                let family_cap = if let Some(first) = family.chars().next() {
+                    format!("{}{}", first.to_uppercase(), &family[first.len_utf8()..])
+                } else {
+                    String::new()
+                };
                 return format!("{} {}", family_cap, version);
             }
         }

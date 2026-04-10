@@ -65,6 +65,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The agent panel now uses stronger Phosphor fill and duotone icons, clearer section labels, and more deliberate spacing so tool traces feel like a composed operator timeline instead of a generic debug inspector.
 - The agent panel trace rows now expand as connected cards instead of detached header-and-output boxes, and model identity is shown as chips instead of awkward raw provider/model strings. That makes long tool traces and provider metadata read more like a composed operator surface and less like debug text.
 - The live agent panel now shows human-readable provider/model labels instead of Rust-style `Thinking("provider:model")` debug text, expanded outputs use quieter inline toggles with a dedicated mono sub-surface, and the default accent path now follows the theme's blue primary token instead of an unintended cyan bias.
+- Expanded agent trace output now reads as a clearer nested surface, with a stronger inner tone for code and log text so the card hierarchy stays legible in long tool runs.
 - The terminal-agent benchmark now includes richer operator playbooks and profiles for local Codex dev loops, dual-host SSH maintenance, and remote tmux edit/run/reuse workflows. It can now execute those operator prompt sequences directly and record the transcript instead of only printing a playbook path.
 - The terminal-agent benchmark now has stable scoring rubrics, a scoring tool, a trend-report generator, and a project-local improvement-loop skill so progress can be judged and compared over many iterations instead of living only in screenshots and memory.
 - `con-cli agent ask` and operator benchmark steps can now be bounded with explicit timeouts, so a stuck agent turn fails cleanly instead of hanging the entire automation loop.
@@ -92,6 +93,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 **AI Agent**
 - Fixed agent hanging after receiving a final response from certain providers
 - Fixed empty agent responses appearing as stuck/hanging when providers don't emit text items during streaming
+- Fixed a Unicode logging crash where long tool-result previews could be truncated at an invalid UTF-8 byte boundary
 
 **Terminal**
 - Full terminal emulation with 256-color and truecolor support
@@ -102,6 +104,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Cmd+K now clears the current Ghostty screen and scrollback using Ghostty's native action path
 - Fixed a Ghostty theme sync regression where the Settings panel could update con's chrome but leave the terminal on an old palette after a later runtime config update
 - Fixed a shutdown crash in the workspace mouse/resize path when the active tab index outlived the tab list during window teardown
+- Fixed another shutdown-time panic where late workspace renders or actions could still assume an active pane after the last tab was already gone
 - Tab management — Cmd+T to open, Cmd+W to close, Cmd+1–9 to switch, Cmd+Shift+[/] to cycle
 - Session restore — your tabs, layout, and panel state are preserved when you relaunch
 - Full compatibility with terminal applications like vim, htop, and tmux (alternate screen, application cursor keys, DEC private modes, Kitty keyboard protocol)

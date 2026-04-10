@@ -126,6 +126,20 @@ fn display_provider_model(kind: &ProviderKind, model: &str) -> String {
     format!("{provider} · {model}")
 }
 
+fn truncate_utf8_for_log(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+
+    let end = text
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .take_while(|idx| *idx <= max_bytes)
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &text[..end])
+}
+
 impl ProviderKind {
     pub fn default_api_key_env(&self) -> &str {
         match self {
@@ -1365,11 +1379,7 @@ async fn consume_stream<R: Send + 'static>(
             Ok(MultiTurnStreamItem::StreamUserItem(user_item)) => {
                 // Log the full tool result content for debugging provider compatibility
                 let result_preview = format!("{:?}", user_item);
-                let preview = if result_preview.len() > 500 {
-                    format!("{}...", &result_preview[..500])
-                } else {
-                    result_preview
-                };
+                let preview = truncate_utf8_for_log(&result_preview, 500);
                 log::info!(
                     target: "con_agent::flow",
                     "{{\"event\":\"tool_result\",\"elapsed_ms\":{},\"preview\":\"{}\"}}",

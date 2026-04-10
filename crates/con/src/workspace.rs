@@ -171,6 +171,10 @@ impl ConWorkspace {
         Self::clamp_ui_opacity(self.ui_opacity)
     }
 
+    fn has_active_tab(&self) -> bool {
+        self.active_tab < self.tabs.len()
+    }
+
     fn elevated_ui_surface_opacity(&self) -> f32 {
         (self.ui_surface_opacity() + 0.03).min(0.98)
     }
@@ -1699,10 +1703,14 @@ impl ConWorkspace {
                 self.split_pane(SplitDirection::Vertical, SplitPlacement::After, window, cx);
             }
             "clear-terminal" => {
-                self.active_terminal().clear_scrollback(cx);
+                if self.has_active_tab() {
+                    self.active_terminal().clear_scrollback(cx);
+                }
             }
             "focus-terminal" => {
-                self.active_terminal().focus(window, cx);
+                if self.has_active_tab() {
+                    self.active_terminal().focus(window, cx);
+                }
             }
             "toggle-input-bar" => {
                 self.toggle_input_bar(&crate::ToggleInputBar, window, cx);
@@ -1740,8 +1748,10 @@ impl ConWorkspace {
         // Apply updated skills paths (forces rescan on next cwd check)
         let skills_config = settings.read(cx).skills_config().clone();
         self.harness.update_skills_config(skills_config);
-        if let Some(cwd) = self.active_terminal().current_dir(cx) {
-            self.harness.scan_skills(&cwd);
+        if self.has_active_tab() {
+            if let Some(cwd) = self.active_terminal().current_dir(cx) {
+                self.harness.scan_skills(&cwd);
+            }
         }
 
         let term_config = settings.read(cx).terminal_config().clone();
@@ -3243,6 +3253,9 @@ impl ConWorkspace {
     }
 
     fn send_to_agent(&mut self, content: &str, cx: &mut Context<Self>) {
+        if !self.has_active_tab() {
+            return;
+        }
         if !self.agent_panel_open {
             self.agent_panel_open = true;
         }
@@ -3262,6 +3275,9 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.has_active_tab() {
+            return;
+        }
         let cwd = self.active_terminal().current_dir(cx);
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         self.tabs[self.active_tab].pane_tree.split_with_placement(
@@ -3283,14 +3299,18 @@ impl ConWorkspace {
 
     fn split_right(&mut self, _: &SplitRight, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
-        self.active_terminal()
-            .request_split(con_ghostty::GhosttySplitDirection::Right, cx);
+        if self.has_active_tab() {
+            self.active_terminal()
+                .request_split(con_ghostty::GhosttySplitDirection::Right, cx);
+        }
     }
 
     fn split_down(&mut self, _: &SplitDown, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
-        self.active_terminal()
-            .request_split(con_ghostty::GhosttySplitDirection::Down, cx);
+        if self.has_active_tab() {
+            self.active_terminal()
+                .request_split(con_ghostty::GhosttySplitDirection::Down, cx);
+        }
     }
 
     fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -3516,6 +3536,10 @@ impl Render for ConWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.flush_pending_create_pane_requests(window, cx);
 
+        if !self.has_active_tab() {
+            return div().size_full().into_any_element();
+        }
+
         let active_terminal = self.active_terminal().clone();
 
         // If a modal was dismissed internally (escape/backdrop), restore terminal focus
@@ -3703,8 +3727,8 @@ impl Render for ConWorkspace {
             let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
 
             // Truncate long titles
-            let display_title: String = if title.len() > 24 {
-                format!("{}…", &title[..22])
+            let display_title: String = if title.chars().count() > 24 {
+                format!("{}…", &title[..title.floor_char_boundary(22)])
             } else {
                 title
             };
@@ -4255,7 +4279,7 @@ impl Render for ConWorkspace {
             root = root.child(self.command_palette.clone());
         }
 
-        root
+        root.into_any_element()
     }
 }
 
