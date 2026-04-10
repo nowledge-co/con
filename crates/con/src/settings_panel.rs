@@ -304,7 +304,7 @@ impl SettingsPanel {
 
     fn protocol_switch_hint(provider: &ProviderKind) -> Option<&'static str> {
         Self::protocol_pair(provider)
-            .map(|_| "Switch between OpenAI-compatible and Anthropic-compatible transport for this provider family.")
+            .map(|_| "Switch between OpenAI and Anthropic API compatible transport")
     }
 
     fn sidebar_selection_target(
