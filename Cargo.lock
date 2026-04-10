@@ -5478,7 +5478,7 @@ dependencies = [
 [[package]]
 name = "rig-core"
 version = "0.34.0"
-source = "git+https://github.com/wey-gu/rig.git?rev=dca2285238a96bb1fe7e47dd4d8b1f9fdaef91af#dca2285238a96bb1fe7e47dd4d8b1f9fdaef91af"
+source = "git+https://github.com/wey-gu/rig.git?rev=ef3c745c9c334f3aa01c20bf1e637e1bde5f9758#ef3c745c9c334f3aa01c20bf1e637e1bde5f9758"
 dependencies = [
  "as-any",
  "async-stream",
