@@ -2445,7 +2445,7 @@ impl Render for AgentPanel {
                     .mt(px(6.0))
                     .px(px(10.0))
                     .py(px(10.0))
-                    .rounded(px(15.0))
+                    .rounded(px(12.0))
                     .bg(trace_group_surface(theme))
                     .flex()
                     .flex_col()
@@ -2787,7 +2787,7 @@ impl Render for AgentPanel {
                 .gap(px(10.0))
                 .px(px(10.0))
                 .py(px(10.0))
-                .rounded(px(15.0))
+                .rounded(px(12.0))
                 .bg(trace_group_surface(theme))
                 .child(
                     div()
