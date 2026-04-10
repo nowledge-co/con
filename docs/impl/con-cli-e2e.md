@@ -96,16 +96,20 @@ Current status as of April 10, 2026:
 
 - the request now returns promptly
 - the returned pane identity is stable
-- the new pane is not yet consistently Ghostty-ready for immediate follow-up shell control
+- the response now reports `surface_ready`, `is_alive`, and `has_shell_integration`
 
-So after creation, treat the new pane as provisional and inspect it:
+Treat startup-command panes as provisional until their foreground state settles, but a clean pane creation should now come back with a live initialized surface:
 
 ```bash
 con-cli --json panes list --tab 2
 con-cli --json panes read --tab 2 --pane-id <new_id> --lines 40
 ```
 
-Only proceed once the pane reports `is_alive: true` and exposes normal shell control capabilities.
+For follow-up shell control, wait until the pane reports:
+
+- `surface_ready: true`
+- `is_alive: true`
+- the expected shell control capabilities if you need visible shell execution
 
 ## 6. Automation guidance
 

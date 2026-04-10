@@ -754,6 +754,8 @@ pub struct PaneInfo {
     pub is_focused: bool,
     pub rows: usize,
     pub cols: usize,
+    /// Whether the embedded Ghostty surface has actually been initialized.
+    pub surface_ready: bool,
     /// Whether the PTY child process is still running.
     pub is_alive: bool,
     /// Proven hostname when the backend can actually supply one.
@@ -904,6 +906,8 @@ pub enum PaneResponse {
     SearchResults(Vec<(usize, usize, String)>),
     /// Lightweight busy-check response.
     BusyStatus {
+        surface_ready: bool,
+        is_alive: bool,
         is_busy: bool,
         has_shell_integration: bool,
     },
@@ -916,6 +920,9 @@ pub enum PaneResponse {
     PaneCreated {
         pane_index: usize,
         pane_id: usize,
+        surface_ready: bool,
+        is_alive: bool,
+        has_shell_integration: bool,
     },
     Error(String),
 }
@@ -3950,6 +3957,7 @@ fn ensure_remote_shell_target_impl(
         PaneResponse::PaneCreated {
             pane_index,
             pane_id,
+            ..
         } => (pane_index, pane_id),
         PaneResponse::Error(e) => return Err(ToolError::CommandFailed(e)),
         _ => return Err(ToolError::CommandFailed("Unexpected response".into())),
@@ -4219,6 +4227,9 @@ pub struct CreatePaneOutput {
     pub pane_id: usize,
     pub command: Option<String>,
     pub location: PaneCreateLocation,
+    pub surface_ready: bool,
+    pub is_alive: bool,
+    pub has_shell_integration: bool,
     /// Initial terminal output after pane creation and command execution.
     /// Gives the model immediate observability — no need for a follow-up read_pane.
     pub output: String,
@@ -4248,23 +4259,55 @@ impl CreatePaneTool {
     ///     The program's output (MOTD, prompt, error) streams in and eventually stops.
     ///
     /// Budget: 30 polls × 500ms = 15s total. Enough for SSH over slow networks.
-    async fn wait_for_initial_output(&self, pane_index: usize) -> String {
+    async fn wait_for_initial_output(
+        &self,
+        pane_id: usize,
+        initial_surface_ready: bool,
+        initial_is_alive: bool,
+        initial_has_shell_integration: bool,
+    ) -> (String, bool, bool, bool) {
         const POLL_MS: u64 = 500;
         const SETTLE_POLLS: u32 = 3; // 1.5s of stable output after change
         const MAX_POLLS: u32 = 30; // 15s total budget
+        const READY_POLLS: u32 = 3;
 
         let mut initial_snapshot = String::new();
         let mut last_snapshot = String::new();
         let mut stable_count: u32 = 0;
+        let mut ready_count: u32 = 0;
         let mut phase_changed = false;
+        let mut surface_ready = initial_surface_ready;
+        let mut is_alive = initial_is_alive;
+        let mut has_shell_integration = initial_has_shell_integration;
 
         for poll_num in 0..MAX_POLLS {
             tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
 
+            let (status_tx, status_rx) = crossbeam_channel::bounded(1);
+            let status_sent = self.pane_tx.send(PaneRequest {
+                query: PaneQuery::CheckBusy {
+                    target: selector_from(None, Some(pane_id)),
+                },
+                response_tx: status_tx,
+            });
+            if status_sent.is_ok() {
+                if let Ok(PaneResponse::BusyStatus {
+                    surface_ready: sr,
+                    is_alive: alive,
+                    is_busy: _,
+                    has_shell_integration: si,
+                }) = status_rx.recv_timeout(std::time::Duration::from_secs(2))
+                {
+                    surface_ready = sr;
+                    is_alive = alive;
+                    has_shell_integration = si;
+                }
+            }
+
             let (tx, rx) = crossbeam_channel::bounded(1);
             let sent = self.pane_tx.send(PaneRequest {
                 query: PaneQuery::ReadContent {
-                    target: selector_from(Some(pane_index), None),
+                    target: selector_from(None, Some(pane_id)),
                     lines: 50,
                 },
                 response_tx: tx,
@@ -4286,6 +4329,19 @@ impl CreatePaneTool {
                 .join("\n");
 
             if normalized.is_empty() {
+                if surface_ready && is_alive {
+                    ready_count += 1;
+                    if ready_count >= READY_POLLS {
+                        log::info!(
+                            "[create_pane] pane {} became live without immediate output at poll {}",
+                            pane_id,
+                            poll_num
+                        );
+                        return (String::new(), surface_ready, is_alive, has_shell_integration);
+                    }
+                } else {
+                    ready_count = 0;
+                }
                 continue;
             }
 
@@ -4328,7 +4384,7 @@ impl CreatePaneTool {
                         poll_num,
                         normalized.len()
                     );
-                    return normalized;
+                    return (normalized, surface_ready, is_alive, has_shell_integration);
                 }
             } else {
                 last_snapshot = normalized;
@@ -4341,7 +4397,7 @@ impl CreatePaneTool {
             phase_changed,
             last_snapshot.len()
         );
-        last_snapshot
+        (last_snapshot, surface_ready, is_alive, has_shell_integration)
     }
 }
 
@@ -4400,14 +4456,28 @@ impl Tool for CreatePaneTool {
             PaneResponse::PaneCreated {
                 pane_index,
                 pane_id,
+                surface_ready,
+                is_alive,
+                has_shell_integration,
             } => {
                 // If a command was provided (e.g. "ssh host"), wait for initial output
                 // to settle so the model can observe the result immediately.
                 // This eliminates the need for a follow-up read_pane/wait_for after SSH.
-                let output = if has_command {
-                    self.wait_for_initial_output(pane_index).await
+                let (output, surface_ready, is_alive, has_shell_integration) = if has_command {
+                    self.wait_for_initial_output(
+                        pane_id,
+                        surface_ready,
+                        is_alive,
+                        has_shell_integration,
+                    )
+                    .await
                 } else {
-                    String::new()
+                    (
+                        String::new(),
+                        surface_ready,
+                        is_alive,
+                        has_shell_integration,
+                    )
                 };
 
                 Ok(CreatePaneOutput {
@@ -4415,6 +4485,9 @@ impl Tool for CreatePaneTool {
                     pane_id,
                     command: command_echo,
                     location: args.location,
+                    surface_ready,
+                    is_alive,
+                    has_shell_integration,
                     output,
                 })
             }
@@ -4566,6 +4639,7 @@ mod tests {
             is_focused: false,
             rows: 24,
             cols: 80,
+            surface_ready: true,
             is_alive: true,
             hostname: None,
             hostname_confidence: None,

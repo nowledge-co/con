@@ -513,8 +513,10 @@ impl ConWorkspace {
             self.tabs[req.tab_idx]
                 .pane_tree
                 .split(direction, terminal.clone());
+            terminal.ensure_surface(window, cx);
             terminal.notify(cx);
             let should_focus = req.tab_idx == self.active_tab;
+            terminal.set_focus_state(should_focus, cx);
             if should_focus {
                 terminal.focus(window, cx);
             }
@@ -552,6 +554,9 @@ impl ConWorkspace {
             let _ = req.response_tx.send(con_agent::PaneResponse::PaneCreated {
                 pane_index,
                 pane_id,
+                surface_ready: terminal.surface_ready(cx),
+                is_alive: terminal.is_alive(cx),
+                has_shell_integration: terminal.has_shell_integration(cx),
             });
         }
 
@@ -906,9 +911,13 @@ impl ConWorkspace {
                 "matches": matches,
             })),
             con_agent::PaneResponse::BusyStatus {
+                surface_ready,
+                is_alive,
                 is_busy,
                 has_shell_integration,
             } => Ok(json!({
+                "surface_ready": surface_ready,
+                "is_alive": is_alive,
                 "is_busy": is_busy,
                 "has_shell_integration": has_shell_integration,
             })),
@@ -919,10 +928,16 @@ impl ConWorkspace {
             con_agent::PaneResponse::PaneCreated {
                 pane_index,
                 pane_id,
+                surface_ready,
+                is_alive,
+                has_shell_integration,
             } => Ok(json!({
                 "tab_index": tab_idx + 1,
                 "pane_index": pane_index,
                 "pane_id": pane_id,
+                "surface_ready": surface_ready,
+                "is_alive": is_alive,
+                "has_shell_integration": has_shell_integration,
             })),
             con_agent::PaneResponse::Error(err) => Err(ControlError::invalid_params(err)),
         }
@@ -2258,6 +2273,7 @@ impl ConWorkspace {
                             is_focused: pid == focused_pid,
                             rows,
                             cols,
+                            surface_ready: terminal.surface_ready(cx),
                             is_alive: terminal.is_alive(cx),
                             hostname: runtime.remote_host.clone(),
                             hostname_confidence: runtime.remote_host_confidence,
@@ -2749,6 +2765,8 @@ impl ConWorkspace {
             PaneQuery::CheckBusy { target } => {
                 match self.resolve_pane_target_for_tab(tab_idx, target) {
                     Ok(resolved) => PaneResponse::BusyStatus {
+                        surface_ready: resolved.pane.surface_ready(cx),
+                        is_alive: resolved.pane.is_alive(cx),
                         is_busy: resolved.pane.is_busy(cx),
                         has_shell_integration: resolved.pane.has_shell_integration(cx),
                     },
@@ -3063,6 +3081,7 @@ impl ConWorkspace {
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let terminal = self.create_terminal(None, window, cx);
+        terminal.ensure_surface(window, cx);
         let tab_number = self.tabs.len() + 1;
         let old_active = self.active_tab;
 
@@ -3215,7 +3234,9 @@ impl ConWorkspace {
             placement,
             terminal.clone(),
         );
+        terminal.ensure_surface(window, cx);
         terminal.notify(cx);
+        terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
         let mounted_terminal = terminal.clone();
         window.on_next_frame(move |window, cx| {
@@ -3434,7 +3455,9 @@ impl ConWorkspace {
             placement,
             terminal.clone(),
         );
+        terminal.ensure_surface(window, cx);
         terminal.notify(cx);
+        terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
         let mounted_terminal = terminal.clone();
         window.on_next_frame(move |window, cx| {

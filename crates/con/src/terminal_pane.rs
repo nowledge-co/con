@@ -30,6 +30,10 @@ impl TerminalPane {
         self.entity.read(cx).is_alive()
     }
 
+    pub fn surface_ready(&self, cx: &App) -> bool {
+        self.entity.read(cx).surface_ready()
+    }
+
     pub fn is_busy(&self, cx: &App) -> bool {
         self.entity
             .read(cx)
@@ -54,6 +58,11 @@ impl TerminalPane {
 
     pub fn write(&self, data: &[u8], cx: &mut App) {
         self.entity.update(cx, |view, _| view.write_or_queue(data));
+    }
+
+    pub fn ensure_surface(&self, window: &mut Window, cx: &mut App) {
+        self.entity
+            .update(cx, |view, _| view.ensure_initialized_for_control(window));
     }
 
     pub fn set_theme(

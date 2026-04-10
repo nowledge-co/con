@@ -13,6 +13,7 @@
 
 #[cfg(target_os = "macos")]
 use std::os::raw::c_void;
+use std::cell::Cell;
 use std::sync::Arc;
 
 use con_ghostty::ffi;
@@ -66,6 +67,11 @@ pub struct GhosttyView {
     /// Data queued for the PTY before the surface was created.
     /// Flushed once in `ensure_initialized()` after the terminal exists.
     pending_write: Option<Vec<u8>>,
+    /// Desired native view visibility, including before the NSView exists.
+    native_view_visible: Cell<bool>,
+    /// When a surface was created before a real layout pass, keep it hidden until
+    /// update_frame commits an actual pane geometry.
+    awaiting_first_layout_visibility: bool,
     /// Guard: emit GhosttyProcessExited exactly once, not every 8ms tick.
     process_exit_emitted: bool,
 }
@@ -141,6 +147,8 @@ impl GhosttyView {
             scale_factor: 1.0,
             last_title: None,
             pending_write: None,
+            native_view_visible: Cell::new(true),
+            awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
         }
     }
@@ -171,6 +179,10 @@ impl GhosttyView {
 
     pub fn is_alive(&self) -> bool {
         self.terminal.as_ref().is_some_and(|t| t.is_alive())
+    }
+
+    pub fn surface_ready(&self) -> bool {
+        self.terminal.is_some()
     }
 
     #[allow(dead_code)]
@@ -231,6 +243,9 @@ impl GhosttyView {
                 self.terminal = Some(Arc::new(terminal));
                 self.nsview = Some(nsview);
                 self.initialized = true;
+                self.set_visible(
+                    self.native_view_visible.get() && !self.awaiting_first_layout_visibility,
+                );
                 // Don't set last_bounds here — let update_frame() handle
                 // the coordinate flip and position the NSView correctly.
                 log::info!(
@@ -256,6 +271,19 @@ impl GhosttyView {
                 }
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn ensure_initialized_for_control(&mut self, window: &mut Window) {
+        let fallback_bounds = self.last_bounds.unwrap_or_else(|| {
+            let window_bounds = window.bounds();
+            let width = (window_bounds.size.width.as_f32() * 0.45).clamp(360.0, 900.0);
+            let height = (window_bounds.size.height.as_f32() * 0.7).clamp(240.0, 900.0);
+            Bounds::new(point(px(0.0), px(0.0)), size(px(width), px(height)))
+        });
+        self.awaiting_first_layout_visibility = self.last_bounds.is_none();
+        self.ensure_initialized(fallback_bounds, window);
+        self.update_frame(fallback_bounds);
     }
 
     #[cfg(target_os = "macos")]
@@ -289,6 +317,11 @@ impl GhosttyView {
             let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
             terminal.set_size(width_px, height_px);
         }
+
+        if self.awaiting_first_layout_visibility {
+            self.awaiting_first_layout_visibility = false;
+            self.set_visible(self.native_view_visible.get());
+        }
     }
 
     fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
@@ -303,6 +336,7 @@ impl GhosttyView {
     /// GPUI overlays (settings, command palette) need to appear on top.
     #[cfg(target_os = "macos")]
     pub fn set_visible(&self, visible: bool) {
+        self.native_view_visible.set(visible);
         if let Some(nsview) = self.nsview {
             unsafe {
                 let hidden = if visible { NO } else { YES };

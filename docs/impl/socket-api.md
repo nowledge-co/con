@@ -192,4 +192,4 @@ Verified behavior notes:
 
 Current known limitation from the same live run:
 
-- `panes.create` now returns promptly with `tab_index`, `pane_index`, and `pane_id`, but the freshly created pane is not yet consistently Ghostty-ready for immediate follow-up shell control. Treat pane creation as partially verified until the new pane reports `is_alive: true` and exposes normal shell control capabilities.
+- `panes.create` returns promptly with `tab_index`, `pane_index`, `pane_id`, `surface_ready`, `is_alive`, and `has_shell_integration`. Use `pane_id` for follow-up targeting, then confirm the created pane exposes the exact control capabilities you need before driving it further.

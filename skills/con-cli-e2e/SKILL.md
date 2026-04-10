@@ -29,4 +29,4 @@ Rules:
 
 Known current limit:
 
-- `panes create` returns promptly, but the new pane may not yet be ready for immediate shell control. Treat it as provisional until `panes list` shows `is_alive: true` and normal shell capabilities.
+- `panes create` now reports `surface_ready`, `is_alive`, and `has_shell_integration`, but startup-command panes can still be in a non-shell foreground state immediately after creation. Treat them as provisional until `panes list` confirms the capabilities you need for the next step.
