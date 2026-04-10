@@ -32,19 +32,23 @@
       "steps": [
         {
           "label": "prepare_codex_workspace",
-          "prompt": "Please prepare a Codex workspace in ~/dev/temp/con-bench-twosum"
+          "prompt": "Please prepare a Codex workspace in ~/dev/temp/con-bench-twosum",
+          "timeout_secs": 90
         },
         {
           "label": "create_code_and_tests",
-          "prompt": "In that workspace, create a small Python two_sum implementation and a test file, then run the tests."
+          "prompt": "In that workspace, create a small Python two_sum implementation and a test file, then run the tests.",
+          "timeout_secs": 120
         },
         {
           "label": "repair_without_new_target",
-          "prompt": "Now break one test on purpose. If Codex is waiting at a trust or continue prompt for this directory, accept it in the same target. Then ask Codex to fix the test without creating a new target."
+          "prompt": "Now break one test on purpose. If Codex is waiting at a trust or continue prompt for this directory, accept it in the same target. Then ask Codex to fix the test without creating a new target.",
+          "timeout_secs": 150
         },
         {
           "label": "summarize_target_reuse",
-          "prompt": "Summarize which pane or target you used for each step."
+          "prompt": "Summarize which pane or target you used for each step.",
+          "timeout_secs": 60
         }
       ]
     }

@@ -1354,6 +1354,7 @@ impl ConWorkspace {
                 tab_index,
                 prompt,
                 auto_approve_tools,
+                timeout_secs,
             } => match self.resolve_control_tab_index(tab_index) {
                 Ok(tab_idx) => {
                     if prompt.trim().is_empty() {
@@ -1394,11 +1395,39 @@ impl ConWorkspace {
                             response_tx,
                         },
                     );
+                    if let Some(timeout_secs) = timeout_secs.map(|secs| secs.clamp(5, 600)) {
+                        self.spawn_control_agent_request_timeout(tab_idx, timeout_secs, cx);
+                    }
                     self.harness.send_message(session, prompt, context);
                 }
                 Err(err) => Self::send_control_result(response_tx, Err(err)),
             },
         }
+    }
+
+    fn spawn_control_agent_request_timeout(
+        &self,
+        tab_idx: usize,
+        timeout_secs: u64,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(timeout_secs))
+                .await;
+
+            let _ = this.update(cx, |workspace, _| {
+                if let Some(pending) = workspace.pending_control_agent_requests.remove(&tab_idx) {
+                    Self::send_control_result(
+                        pending.response_tx,
+                        Err(ControlError::internal(format!(
+                            "agent.ask timed out after {timeout_secs}s"
+                        ))),
+                    );
+                }
+            });
+        })
+        .detach();
     }
 
     fn panel_state_from_conversation(&self, conv: &Conversation) -> PanelState {

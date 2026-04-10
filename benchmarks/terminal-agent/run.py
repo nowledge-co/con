@@ -132,6 +132,7 @@ class BenchmarkContext:
         tab_index: int,
         prompt: str,
         *,
+        request_timeout_secs: float | None = None,
         wait_for_turn_secs: float = 30.0,
         poll_interval_secs: float = 1.0,
     ) -> dict[str, Any]:
@@ -146,15 +147,26 @@ class BenchmarkContext:
                 "ask",
                 "--tab",
                 str(tab_index),
-                prompt,
             ]
-            proc = subprocess.run(
-                cmd,
-                cwd=REPO_ROOT,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            if request_timeout_secs is not None:
+                cmd.extend(["--timeout", str(int(request_timeout_secs))])
+            cmd.append(prompt)
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=REPO_ROOT,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=(request_timeout_secs + 5.0)
+                    if request_timeout_secs is not None
+                    else None,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise BenchError(
+                    "agent ask subprocess exceeded the benchmark timeout after "
+                    f"{request_timeout_secs:.0f}s: {prompt!r}"
+                ) from exc
             if proc.returncode == 0:
                 try:
                     return json.loads(proc.stdout)
@@ -497,7 +509,12 @@ def operator_case_for(
                 )
 
             label = step.get("label") or f"step_{idx}"
-            result = ctx.agent_ask(tab_index, prompt)
+            timeout_secs = step.get("timeout_secs")
+            result = ctx.agent_ask(
+                tab_index,
+                prompt,
+                request_timeout_secs=float(timeout_secs) if timeout_secs is not None else 90.0,
+            )
             message = result.get("message", {})
             content = str(message.get("content", "")).strip()
             if not content:
@@ -516,6 +533,7 @@ def operator_case_for(
                 {
                     "index": idx,
                     "label": label,
+                    "timeout_secs": timeout_secs,
                     "prompt": prompt,
                     "conversation_id": result.get("conversation_id"),
                     "message_id": message.get("id"),

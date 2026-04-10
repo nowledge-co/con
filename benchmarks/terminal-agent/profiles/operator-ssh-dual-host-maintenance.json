@@ -27,19 +27,23 @@
       "steps": [
         {
           "label": "healthcheck",
-          "prompt": "Please connect to haswell and cinnamon and collect uptime, memory, and disk summaries."
+          "prompt": "Please connect to haswell and cinnamon and collect uptime, memory, and disk summaries.",
+          "timeout_secs": 120
         },
         {
           "label": "package_manager_state",
-          "prompt": "Reuse the same host workspaces and check package-manager update state. If apt exists, do a safe read-only check first. Only run apt update if passwordless sudo is available and you explain that choice."
+          "prompt": "Reuse the same host workspaces and check package-manager update state. If apt exists, do a safe read-only check first. Only run apt update if passwordless sudo is available and you explain that choice.",
+          "timeout_secs": 120
         },
         {
           "label": "warning_logs",
-          "prompt": "Reuse the same host workspaces again and collect the last 20 lines of dmesg or an equivalent warning log on each host."
+          "prompt": "Reuse the same host workspaces again and collect the last 20 lines of dmesg or an equivalent warning log on each host.",
+          "timeout_secs": 120
         },
         {
           "label": "continuity_proof",
-          "prompt": "Start a short sleep on cinnamon, then prove you still know which workspace is haswell and which is cinnamon."
+          "prompt": "Start a short sleep on cinnamon, then prove you still know which workspace is haswell and which is cinnamon.",
+          "timeout_secs": 90
         }
       ]
     }

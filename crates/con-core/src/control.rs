@@ -210,6 +210,7 @@ pub enum ControlCommand {
         tab_index: Option<usize>,
         prompt: String,
         auto_approve_tools: bool,
+        timeout_secs: Option<u64>,
     },
     AgentNewConversation {
         tab_index: Option<usize>,
@@ -353,10 +354,12 @@ impl ControlCommand {
                 tab_index,
                 prompt,
                 auto_approve_tools,
+                timeout_secs,
             } => json!({
                 "tab_index": tab_index,
                 "prompt": prompt,
                 "auto_approve_tools": auto_approve_tools,
+                "timeout_secs": timeout_secs,
             }),
             Self::AgentNewConversation { tab_index } => json!({ "tab_index": tab_index }),
         }
@@ -474,6 +477,7 @@ impl ControlCommand {
                     tab_index: params.tab_index,
                     prompt: params.prompt,
                     auto_approve_tools: params.auto_approve_tools,
+                    timeout_secs: params.timeout_secs,
                 })
             }
             "agent.new_conversation" => {
@@ -982,6 +986,7 @@ struct AgentAskParams {
     tab_index: Option<usize>,
     prompt: String,
     auto_approve_tools: bool,
+    timeout_secs: Option<u64>,
 }
 
 fn decode_params<T>(params: Value) -> Result<T, ControlError>

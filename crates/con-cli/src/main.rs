@@ -221,6 +221,8 @@ struct AgentAskArgs {
     tab: TabArgs,
     #[arg(long)]
     auto_approve_tools: bool,
+    #[arg(long)]
+    timeout: Option<u64>,
     #[arg(required = true, trailing_var_arg = true)]
     prompt: Vec<String>,
 }
@@ -393,6 +395,7 @@ fn main() -> Result<()> {
                         tab_index: args.tab.tab,
                         prompt: join_words(args.prompt),
                         auto_approve_tools: args.auto_approve_tools,
+                        timeout_secs: args.timeout,
                     },
                 )?;
                 print_result(&result, cli.json, render_agent_ask)?;
