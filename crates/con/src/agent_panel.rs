@@ -1425,16 +1425,14 @@ fn render_result_block(
         if connected {
             div()
                 .px(px(10.0))
-                .py(px(9.0))
+                .py(px(8.0))
+                .rounded(px(8.0))
+                .bg(nested_surface)
                 .child(
                     div()
-                        .px(px(9.0))
-                        .py(px(7.0))
-                        .rounded(px(8.0))
-                        .bg(nested_surface)
                         .text_size(px(10.5))
                         .font_family(theme.mono_font_family.clone())
-                        .text_color(theme.muted_foreground.opacity(0.58))
+                        .text_color(theme.muted_foreground.opacity(0.62))
                         .overflow_x_hidden()
                         .whitespace_nowrap()
                         .child(content.to_string()),
@@ -1471,19 +1469,14 @@ fn render_result_block(
             div()
                 .px(px(10.0))
                 .py(px(9.0))
-                .child(
-                    div()
-                        .px(px(10.0))
-                        .py(px(9.0))
-                        .rounded(px(8.0))
-                        .bg(nested_surface)
-                        .overflow_x_hidden()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_size(px(10.5))
-                        .line_height(px(15.5))
-                        .text_color(theme.muted_foreground.opacity(0.67))
-                        .child(body),
-                )
+                .rounded(px(8.0))
+                .bg(nested_surface)
+                .overflow_x_hidden()
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(10.5))
+                .line_height(px(15.5))
+                .text_color(theme.muted_foreground.opacity(0.69))
+                .child(body)
                 .into_any_element()
         } else {
             div()
@@ -1537,24 +1530,24 @@ fn parse_key_value_rows(content: &str) -> Option<Vec<(String, String)>> {
 }
 
 fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Theme) -> Div {
-    let mut container = div().flex().flex_col().gap(px(5.0));
+    let mut container = div().flex().flex_col().gap(px(6.0));
     for (key, value) in rows {
         container = container.child(
             div()
                 .flex()
                 .items_start()
-                .gap(px(10.0))
+                .gap(px(12.0))
                 .child(
                     div()
-                        .w(px(102.0))
+                        .w(px(108.0))
                         .flex_shrink_0()
-                        .text_color(theme.muted_foreground.opacity(0.52))
+                        .text_color(theme.muted_foreground.opacity(0.48))
                         .child(key.clone()),
                 )
                 .child(
                     div()
                         .flex_1()
-                        .text_color(theme.foreground.opacity(0.78))
+                        .text_color(theme.foreground.opacity(0.75))
                         .child(value.clone()),
                 ),
         );
@@ -1579,15 +1572,11 @@ fn trace_step_header_hover_surface(theme: &gpui_component::Theme) -> Hsla {
 }
 
 fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.06)
+    theme.background
 }
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary_hover
-}
-
-fn trace_group_header_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary_hover
+    theme.secondary
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
@@ -2412,13 +2401,13 @@ impl Render for AgentPanel {
                     .ml(px(19.0))
                     .mr(px(4.0))
                     .mt(px(6.0))
-                    .px(px(8.0))
-                    .py(px(8.0))
-                    .rounded(px(14.0))
+                    .px(px(10.0))
+                    .py(px(10.0))
+                    .rounded(px(16.0))
                     .bg(trace_group_surface(theme))
                     .flex()
                     .flex_col()
-                    .gap(px(8.0));
+                    .gap(px(10.0));
 
                 run_card = run_card.child(
                     div()
@@ -2426,13 +2415,11 @@ impl Render for AgentPanel {
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .px(px(10.0))
-                        .py(px(9.0))
-                        .bg(trace_group_header_surface(theme))
+                        .px(px(4.0))
+                        .py(px(3.0))
                         .cursor_pointer()
                         .rounded(px(10.0))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.muted.opacity(0.07)))
+                        .hover(|s| s.bg(theme.muted.opacity(0.035)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, _, cx| {
@@ -2589,9 +2576,9 @@ impl Render for AgentPanel {
                         let mut step_header = div()
                             .flex()
                             .flex_col()
-                            .gap(px(2.0))
-                            .px(px(10.0))
-                            .py(px(9.0))
+                            .gap(px(3.0))
+                            .px(px(12.0))
+                            .py(px(10.0))
                             .child(top_line);
 
                         // Args on second line — consistent indent with approval card
@@ -2611,15 +2598,14 @@ impl Render for AgentPanel {
                         let mut step_shell = div()
                             .flex()
                             .flex_col()
-                            .rounded(px(11.0))
+                            .rounded(px(12.0))
                             .overflow_hidden()
                             .bg(trace_step_surface(theme))
-                            .p(px(4.0))
-                            .gap(px(4.0));
+                            .gap(px(0.0));
 
                         let step_header_shell = step_header
                             .bg(trace_step_header_surface(theme))
-                            .rounded(px(9.0));
+                            .min_h(px(44.0));
 
                         if has_detail {
                             step_shell = step_shell.child(
@@ -2656,13 +2642,9 @@ impl Render for AgentPanel {
                                 };
                                 step_shell = step_shell.child(
                                     div()
-                                        .rounded(px(9.0))
+                                        .px(px(12.0))
+                                        .pt(px(10.0))
                                         .bg(trace_detail_surface(theme))
-                                        .overflow_hidden()
-                                        .child(
-                                            Divider::horizontal()
-                                                .color(theme.muted_foreground.opacity(0.06)),
-                                        )
                                         .child(render_result_block(
                                             &visible_detail,
                                             &format!("step-result-{msg_idx}-{step_idx}"),
@@ -2674,35 +2656,52 @@ impl Render for AgentPanel {
                                     let expanded = step.detail_expanded;
                                     let button_label = result_toggle_label(detail, expanded);
                                     step_shell = step_shell.child(
-                                        div().pl(px(34.0)).pb(px(2.0)).child(
-                                            div()
-                                                .id(SharedString::from(format!(
-                                                    "step-detail-expand-{msg_idx}-{step_idx}"
-                                                )))
-                                                .cursor_pointer()
-                                                .hover(|s| s.bg(theme.muted.opacity(0.035)))
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(move |this, _, _, cx| {
-                                                        if let Some(message) =
-                                                            this.state.messages.get_mut(msg_idx)
-                                                        {
-                                                            if let Some(step) =
-                                                                message.steps.get_mut(step_idx)
+                                        div()
+                                            .px(px(12.0))
+                                            .pt(px(4.0))
+                                            .pb(px(10.0))
+                                            .bg(trace_detail_surface(theme))
+                                            .child(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "step-detail-expand-{msg_idx}-{step_idx}"
+                                                    )))
+                                                    .cursor_pointer()
+                                                    .hover(|s| {
+                                                        s.bg(theme.muted.opacity(0.03))
+                                                            .rounded(px(6.0))
+                                                    })
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |this, _, _, cx| {
+                                                            if let Some(message) =
+                                                                this.state.messages.get_mut(msg_idx)
                                                             {
-                                                                step.detail_expanded =
-                                                                    !step.detail_expanded;
+                                                                if let Some(step) =
+                                                                    message.steps.get_mut(step_idx)
+                                                                {
+                                                                    step.detail_expanded =
+                                                                        !step.detail_expanded;
+                                                                }
                                                             }
-                                                        }
-                                                        cx.notify();
-                                                    }),
-                                                )
-                                                .child(render_result_toggle_chrome(
-                                                    expanded,
-                                                    button_label,
-                                                    theme,
-                                                )),
-                                        ),
+                                                            cx.notify();
+                                                        }),
+                                                    )
+                                                    .child(div().px(px(2.0)).py(px(2.0)).child(
+                                                        render_result_toggle_chrome(
+                                                            expanded,
+                                                            button_label,
+                                                            theme,
+                                                        ),
+                                                    )),
+                                            ),
+                                    );
+                                } else {
+                                    step_shell = step_shell.child(
+                                        div()
+                                            .px(px(12.0))
+                                            .pb(px(10.0))
+                                            .bg(trace_detail_surface(theme)),
                                     );
                                 }
                             }
@@ -2743,20 +2742,18 @@ impl Render for AgentPanel {
                 .flex_col()
                 .ml(px(19.0))
                 .mr(px(4.0))
-                .gap(px(8.0))
-                .px(px(8.0))
-                .py(px(8.0))
-                .rounded(px(14.0))
+                .gap(px(10.0))
+                .px(px(10.0))
+                .py(px(10.0))
+                .rounded(px(16.0))
                 .bg(trace_group_surface(theme))
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .px(px(10.0))
-                        .py(px(9.0))
-                        .bg(trace_group_header_surface(theme))
-                        .rounded(px(10.0))
+                        .px(px(4.0))
+                        .py(px(3.0))
                         .child(
                             div()
                                 .flex()
@@ -2851,9 +2848,9 @@ impl Render for AgentPanel {
                 let mut tc_row = div()
                     .flex()
                     .flex_col()
-                    .gap(px(2.0))
-                    .px(px(10.0))
-                    .py(px(9.0))
+                    .gap(px(3.0))
+                    .px(px(12.0))
+                    .py(px(10.0))
                     .child(top_line);
 
                 // Args on second line
@@ -2873,16 +2870,11 @@ impl Render for AgentPanel {
                 let mut tc_el = div()
                     .flex()
                     .flex_col()
-                    .rounded(px(11.0))
+                    .rounded(px(12.0))
                     .overflow_hidden()
                     .bg(trace_step_surface(theme))
-                    .p(px(4.0))
-                    .gap(px(4.0))
-                    .child(
-                        tc_row
-                            .bg(trace_step_header_surface(theme))
-                            .rounded(px(9.0)),
-                    );
+                    .gap(px(0.0))
+                    .child(tc_row.bg(trace_step_header_surface(theme)).min_h(px(44.0)));
 
                 // Result preview
                 if let Some(result) = &tc.result {
@@ -2895,13 +2887,9 @@ impl Render for AgentPanel {
                     };
                     tc_el = tc_el.child(
                         div()
-                            .rounded(px(9.0))
+                            .px(px(12.0))
+                            .pt(px(10.0))
                             .bg(trace_detail_surface(theme))
-                            .overflow_hidden()
-                            .child(
-                                Divider::horizontal()
-                                    .color(theme.muted_foreground.opacity(0.06)),
-                            )
                             .child(render_result_block(
                                 &visible,
                                 &format!("tc-result-{tc_idx}"),
@@ -2913,11 +2901,11 @@ impl Render for AgentPanel {
                         let expanded = tc.result_expanded;
                         let button_label = result_toggle_label(&formatted, expanded);
                         tc_el = tc_el.child(
-                            div().pl(px(34.0)).pb(px(2.0)).child(
+                            div().px(px(12.0)).pt(px(4.0)).pb(px(10.0)).child(
                                 div()
                                     .id(SharedString::from(format!("tc-result-expand-{tc_idx}")))
                                     .cursor_pointer()
-                                    .hover(|s| s.bg(theme.muted.opacity(0.035)))
+                                    .hover(|s| s.bg(theme.muted.opacity(0.03)).rounded(px(6.0)))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
@@ -2930,12 +2918,17 @@ impl Render for AgentPanel {
                                             cx.notify();
                                         }),
                                     )
-                                    .child(render_result_toggle_chrome(
-                                        expanded,
-                                        button_label,
-                                        theme,
+                                    .child(div().px(px(2.0)).py(px(2.0)).child(
+                                        render_result_toggle_chrome(expanded, button_label, theme),
                                     )),
                             ),
+                        );
+                    } else {
+                        tc_el = tc_el.child(
+                            div()
+                                .px(px(12.0))
+                                .pb(px(10.0))
+                                .bg(trace_detail_surface(theme)),
                         );
                     }
                 }
