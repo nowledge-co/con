@@ -829,12 +829,12 @@ impl AgentPanel {
 /// Markdown style for chat messages — readable prose with breathing room.
 fn chat_markdown_style() -> TextViewStyle {
     TextViewStyle::default()
-        .paragraph_gap(rems(0.65))
+        .paragraph_gap(rems(0.72))
         .heading_font_size(|level, _base| match level {
-            1 => px(16.5),
-            2 => px(15.0),
-            3 => px(14.0),
-            _ => px(13.5),
+            1 => px(17.5),
+            2 => px(15.75),
+            3 => px(14.5),
+            _ => px(14.0),
         })
 }
 
@@ -1424,13 +1424,13 @@ fn render_result_block(
     if is_short && content != "(no output)" {
         if connected {
             div()
-                .px(px(8.0))
+                .pl(px(18.0))
+                .pr(px(12.0))
                 .py(px(8.0))
-                .rounded(px(10.0))
                 .bg(nested_surface)
                 .child(
                     div()
-                        .text_size(px(10.5))
+                        .text_size(px(10.75))
                         .font_family(theme.mono_font_family.clone())
                         .text_color(theme.muted_foreground.opacity(0.66))
                         .overflow_x_hidden()
@@ -1467,14 +1467,14 @@ fn render_result_block(
         };
         if connected {
             div()
-                .px(px(8.0))
+                .pl(px(18.0))
+                .pr(px(12.0))
                 .py(px(9.0))
-                .rounded(px(10.0))
                 .bg(nested_surface)
                 .overflow_x_hidden()
                 .font_family(theme.mono_font_family.clone())
-                .text_size(px(10.5))
-                .line_height(px(15.5))
+                .text_size(px(10.75))
+                .line_height(px(16.0))
                 .text_color(theme.muted_foreground.opacity(0.74))
                 .child(body)
                 .into_any_element()
@@ -1486,8 +1486,8 @@ fn render_result_block(
                 .bg(trace_step_surface(theme))
                 .overflow_x_hidden()
                 .font_family(theme.mono_font_family.clone())
-                .text_size(px(10.5))
-                .line_height(px(15.5))
+                .text_size(px(10.75))
+                .line_height(px(16.0))
                 .text_color(theme.muted_foreground.opacity(0.67))
                 .child(body)
                 .into_any_element()
@@ -1542,13 +1542,13 @@ fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Them
                     div()
                         .w(px(94.0))
                         .flex_shrink_0()
-                        .text_color(theme.muted_foreground.opacity(0.54))
+                        .text_color(theme.muted_foreground.opacity(0.58))
                         .child(key.clone()),
                 )
                 .child(
                     div()
                         .flex_1()
-                        .text_color(theme.foreground.opacity(0.82))
+                        .text_color(theme.foreground.opacity(0.84))
                         .child(value.clone()),
                 ),
         );
@@ -1807,22 +1807,29 @@ fn render_model_chips(
     theme: &gpui_component::Theme,
 ) -> AnyElement {
     let (provider, label) = split_model_identity(model);
-    let mut row = div().flex().items_center().gap(px(7.0));
+    let mut row = div().flex().items_center().gap(px(6.0));
 
     if let Some(provider) = provider {
-        row = row.child(
-            div()
-                .text_size(px(10.75))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.muted_foreground.opacity(0.50))
-                .child(provider),
-        );
+        row = row
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.muted_foreground.opacity(0.48))
+                    .child(provider),
+            )
+            .child(
+                div()
+                    .size(px(3.0))
+                    .rounded_full()
+                    .bg(theme.muted_foreground.opacity(0.18)),
+            );
     }
 
     row = row.child(render_meta_chip(
         label,
-        theme.secondary,
-        theme.foreground.opacity(0.64),
+        theme.secondary_hover,
+        theme.foreground.opacity(0.60),
         theme,
         true,
     ));
@@ -1880,9 +1887,9 @@ fn render_result_toggle_chrome(
 
 fn render_section_kicker(label: &str, theme: &gpui_component::Theme) -> AnyElement {
     div()
-        .text_size(px(8.75))
+        .text_size(px(8.5))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(theme.muted_foreground.opacity(0.34))
+        .text_color(theme.muted_foreground.opacity(0.32))
         .child(label.to_ascii_uppercase())
         .into_any_element()
 }
@@ -2349,14 +2356,14 @@ impl Render for AgentPanel {
                                     .mt(px(1.0))
                                     .mb(px(2.0))
                                     .px(px(10.0))
-                                    .py(px(6.0))
-                                    .rounded(px(6.0))
+                                    .py(px(7.0))
+                                    .rounded(px(8.0))
                                     .bg(theme.muted.opacity(0.04))
                                     .max_h(px(200.0))
                                     .overflow_y_hidden()
-                                    .text_xs()
-                                    .line_height(px(17.0))
-                                    .text_color(theme.muted_foreground.opacity(0.5))
+                                    .text_size(px(12.0))
+                                    .line_height(px(18.0))
+                                    .text_color(theme.muted_foreground.opacity(0.54))
                                     .child(
                                         TextView::markdown(
                                             ElementId::Name(
@@ -2366,7 +2373,7 @@ impl Render for AgentPanel {
                                         )
                                         .selectable(true)
                                         .style(chat_markdown_style())
-                                        .text_xs(),
+                                        .text_size(px(12.0)),
                                     ),
                             );
                         }
@@ -2380,9 +2387,9 @@ impl Render for AgentPanel {
                         div()
                             .ml(px(19.0))
                             .pr(px(4.0))
-                            .text_size(px(13.5))
-                            .line_height(px(22.0))
-                            .text_color(theme.foreground.opacity(0.90))
+                            .text_size(px(14.0))
+                            .line_height(px(23.0))
+                            .text_color(theme.foreground.opacity(0.88))
                             .child(
                                 TextView::markdown(
                                     ElementId::Name(format!("msg-md-{msg_idx}").into()),
@@ -2390,7 +2397,7 @@ impl Render for AgentPanel {
                                 )
                                 .selectable(true)
                                 .style(chat_markdown_style())
-                                .text_size(px(13.5)),
+                                .text_size(px(14.0)),
                             ),
                     );
 
@@ -2478,15 +2485,15 @@ impl Render for AgentPanel {
                                 .child(render_section_kicker(run_title, theme))
                                 .child(
                                     div()
-                                    .text_size(px(12.25))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.foreground.opacity(0.72))
-                                    .child("Actions, probes, and output"),
+                                        .text_size(px(12.75))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.foreground.opacity(0.74))
+                                        .child("Actions, probes, and output"),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(10.5))
-                                        .text_color(theme.muted_foreground.opacity(0.44))
+                                        .text_size(px(10.75))
+                                        .text_color(theme.muted_foreground.opacity(0.46))
                                         .child("A compact trace of what the agent actually did"),
                                 ),
                         )
@@ -2495,7 +2502,7 @@ impl Render for AgentPanel {
                             let mut summary = div().flex().items_center().gap(px(8.0)).child(
                                 div()
                                     .text_size(px(10.5))
-                                    .text_color(theme.muted_foreground.opacity(0.44))
+                                    .text_color(theme.muted_foreground.opacity(0.40))
                                     .child(run_status_summary(
                                         step_count,
                                         running_count,
@@ -2556,8 +2563,8 @@ impl Render for AgentPanel {
                             )
                             .child(
                                 div()
-                                    .text_size(px(12.0))
-                                    .text_color(theme.foreground.opacity(0.60))
+                                    .text_size(px(12.5))
+                                    .text_color(theme.foreground.opacity(0.66))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(step_name.to_string()),
                             )
@@ -2572,7 +2579,7 @@ impl Render for AgentPanel {
                                 div()
                                     .flex_shrink_0()
                                     .text_size(px(10.0))
-                                    .text_color(theme.muted_foreground.opacity(0.34))
+                                    .text_color(theme.muted_foreground.opacity(0.36))
                                     .child(format_step_duration(dur)),
                             );
                         }
@@ -2586,7 +2593,7 @@ impl Render for AgentPanel {
                                     .child(
                                         div()
                                             .text_size(px(10.0))
-                                            .text_color(theme.muted_foreground.opacity(0.38))
+                                            .text_color(theme.muted_foreground.opacity(0.34))
                                             .child(if detail_collapsed {
                                                 "Details"
                                             } else {
@@ -2621,7 +2628,7 @@ impl Render for AgentPanel {
                             step_header = step_header.child(
                                 div()
                                     .ml(px(18.0))
-                                    .text_size(px(11.0))
+                                    .text_size(px(10.75))
                                     .text_color(theme.muted_foreground.opacity(0.50))
                                     .font_family(theme.mono_font_family.clone())
                                     .overflow_x_hidden()
@@ -2677,7 +2684,7 @@ impl Render for AgentPanel {
                                 };
                                 step_shell = step_shell.child(
                                     div()
-                                        .px(px(10.0))
+                                        .px(px(12.0))
                                         .pt(px(10.0))
                                         .bg(trace_detail_surface(theme))
                                         .child(render_result_block(
@@ -2692,7 +2699,7 @@ impl Render for AgentPanel {
                                     let button_label = result_toggle_label(detail, expanded);
                                     step_shell = step_shell.child(
                                         div()
-                                            .px(px(10.0))
+                                            .px(px(12.0))
                                             .pt(px(4.0))
                                             .pb(px(10.0))
                                             .bg(trace_detail_surface(theme))
@@ -2797,15 +2804,15 @@ impl Render for AgentPanel {
                                 .child(render_section_kicker("Working now", theme))
                                 .child(
                                     div()
-                                        .text_size(px(12.25))
+                                        .text_size(px(12.75))
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground.opacity(0.72))
+                                        .text_color(theme.foreground.opacity(0.74))
                                         .child("Live tools for this reply"),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(10.5))
-                                        .text_color(theme.muted_foreground.opacity(0.44))
+                                        .text_size(px(10.75))
+                                        .text_color(theme.muted_foreground.opacity(0.46))
                                         .child("Commands and reads still in progress"),
                                 ),
                         )
@@ -2861,8 +2868,8 @@ impl Render for AgentPanel {
                     .child(icon_el)
                     .child(
                         div()
-                            .text_size(px(12.0))
-                            .text_color(theme.foreground.opacity(0.60))
+                            .text_size(px(12.5))
+                            .text_color(theme.foreground.opacity(0.66))
                             .font_weight(FontWeight::MEDIUM)
                             .child(human_name),
                     )
@@ -2871,7 +2878,7 @@ impl Render for AgentPanel {
                         div()
                             .flex_shrink_0()
                             .text_size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.34))
+                            .text_color(theme.muted_foreground.opacity(0.36))
                             .child(format_step_duration(dur)),
                     );
                 let top_line = if is_done {
@@ -2893,7 +2900,7 @@ impl Render for AgentPanel {
                     tc_row = tc_row.child(
                         div()
                             .ml(px(18.0))
-                            .text_size(px(11.0))
+                            .text_size(px(10.75))
                             .text_color(theme.muted_foreground.opacity(0.50))
                             .font_family(theme.mono_font_family.clone())
                             .overflow_x_hidden()
@@ -2922,7 +2929,7 @@ impl Render for AgentPanel {
                     };
                     tc_el = tc_el.child(
                         div()
-                            .px(px(10.0))
+                            .px(px(12.0))
                             .pt(px(10.0))
                             .bg(trace_detail_surface(theme))
                             .child(render_result_block(
@@ -2936,7 +2943,7 @@ impl Render for AgentPanel {
                         let expanded = tc.result_expanded;
                         let button_label = result_toggle_label(&formatted, expanded);
                         tc_el = tc_el.child(
-                            div().px(px(10.0)).pt(px(4.0)).pb(px(10.0)).child(
+                            div().px(px(12.0)).pt(px(4.0)).pb(px(10.0)).child(
                                 div()
                                     .id(SharedString::from(format!("tc-result-expand-{tc_idx}")))
                                     .cursor_pointer()
@@ -2961,7 +2968,7 @@ impl Render for AgentPanel {
                     } else {
                         tc_el = tc_el.child(
                             div()
-                                .px(px(10.0))
+                                .px(px(12.0))
                                 .pb(px(10.0))
                                 .bg(trace_detail_surface(theme)),
                         );
@@ -3227,9 +3234,9 @@ impl Render for AgentPanel {
                             ))
                             .child(
                                 div()
-                                    .text_size(px(10.5))
+                                    .text_size(px(10.75))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.52))
+                                    .text_color(theme.muted_foreground.opacity(0.56))
                                     .min_w_0()
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
@@ -3258,16 +3265,16 @@ impl Render for AgentPanel {
                             .child(Spinner::new().small().color(theme.warning))
                             .child(
                                 div()
-                                    .text_size(px(11.5))
+                                    .text_size(px(12.0))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.foreground.opacity(0.72))
+                                    .text_color(theme.foreground.opacity(0.74))
                                     .child(human_name),
                             )
                             .child(
                                 div()
-                                    .text_size(px(10.5))
+                                    .text_size(px(10.75))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.52))
+                                    .text_color(theme.muted_foreground.opacity(0.56))
                                     .min_w_0()
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
@@ -3298,8 +3305,8 @@ impl Render for AgentPanel {
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.5))
-                                    .text_color(theme.foreground.opacity(0.62))
+                                    .text_size(px(12.0))
+                                    .text_color(theme.foreground.opacity(0.66))
                                     .child(label),
                             ),
                     )
