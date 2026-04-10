@@ -111,18 +111,15 @@ pub struct SettingsPanel {
     recording_key: Option<String>,
 }
 
-const ALL_PROVIDERS: &[ProviderKind] = &[
+const SIDEBAR_PROVIDERS: &[ProviderKind] = &[
     ProviderKind::Anthropic,
     ProviderKind::OpenAI,
     ProviderKind::ChatGPT,
     ProviderKind::GitHubCopilot,
     ProviderKind::OpenAICompatible,
     ProviderKind::MiniMax,
-    ProviderKind::MiniMaxAnthropic,
     ProviderKind::Moonshot,
-    ProviderKind::MoonshotAnthropic,
     ProviderKind::ZAI,
-    ProviderKind::ZAIAnthropic,
     ProviderKind::DeepSeek,
     ProviderKind::Groq,
     ProviderKind::Gemini,
@@ -270,6 +267,70 @@ impl SettingsPanel {
             ProviderKind::GitHubCopilot => Some("Sign In with GitHub"),
             _ => None,
         }
+    }
+
+    fn sidebar_provider_kind(provider: &ProviderKind) -> ProviderKind {
+        match provider {
+            ProviderKind::MiniMaxAnthropic => ProviderKind::MiniMax,
+            ProviderKind::MoonshotAnthropic => ProviderKind::Moonshot,
+            ProviderKind::ZAIAnthropic => ProviderKind::ZAI,
+            _ => provider.clone(),
+        }
+    }
+
+    fn protocol_pair(provider: &ProviderKind) -> Option<(ProviderKind, ProviderKind)> {
+        match Self::sidebar_provider_kind(provider) {
+            ProviderKind::MiniMax => Some((ProviderKind::MiniMax, ProviderKind::MiniMaxAnthropic)),
+            ProviderKind::Moonshot => {
+                Some((ProviderKind::Moonshot, ProviderKind::MoonshotAnthropic))
+            }
+            ProviderKind::ZAI => Some((ProviderKind::ZAI, ProviderKind::ZAIAnthropic)),
+            _ => None,
+        }
+    }
+
+    fn uses_anthropic_protocol(provider: &ProviderKind) -> bool {
+        matches!(
+            provider,
+            ProviderKind::MiniMaxAnthropic
+                | ProviderKind::MoonshotAnthropic
+                | ProviderKind::ZAIAnthropic
+        )
+    }
+
+    fn protocol_switch_label(provider: &ProviderKind) -> Option<&'static str> {
+        Self::protocol_pair(provider).map(|_| "Anthropic API")
+    }
+
+    fn protocol_switch_hint(provider: &ProviderKind) -> Option<&'static str> {
+        Self::protocol_pair(provider)
+            .map(|_| "Switch between OpenAI-compatible and Anthropic-compatible transport for this provider family.")
+    }
+
+    fn sidebar_selection_target(
+        clicked_provider: &ProviderKind,
+        current_selected: &ProviderKind,
+    ) -> ProviderKind {
+        if Self::sidebar_provider_kind(current_selected) == *clicked_provider
+            && Self::uses_anthropic_protocol(current_selected)
+        {
+            current_selected.clone()
+        } else {
+            clicked_provider.clone()
+        }
+    }
+
+    fn protocol_toggled_provider(
+        provider: &ProviderKind,
+        use_anthropic: bool,
+    ) -> Option<ProviderKind> {
+        Self::protocol_pair(provider).map(|(openai_kind, anthropic_kind)| {
+            if use_anthropic {
+                anthropic_kind
+            } else {
+                openai_kind
+            }
+        })
     }
 
     fn oauth_state(&self, provider: &ProviderKind) -> Option<&ProviderOAuthState> {
@@ -1310,27 +1371,52 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Save current provider's inputs into the providers map
+        let provider = Self::sidebar_selection_target(&provider, &self.selected_provider);
+        self.transition_provider(provider, window, cx);
+    }
+
+    fn transition_provider(
+        &mut self,
+        provider: ProviderKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let current_pc = self.read_provider_inputs(cx);
         self.config
             .agent
             .providers
             .set(&self.selected_provider, current_pc);
 
-        // Switch to new provider
+        if provider == self.selected_provider {
+            cx.notify();
+            return;
+        }
+
         self.selected_provider = provider.clone();
 
-        // Load new provider's saved config (or defaults)
         let pc = self.config.agent.providers.get_or_default(&provider);
         self.load_provider_inputs(&pc, window, cx);
         self.sync_provider_placeholders(&provider, window, cx);
 
-        // Rebuild model select for new provider
         self.model_select =
             Self::make_model_select(&provider, &pc.model, &self.registry, window, cx);
         self.endpoint_preset_select =
             Self::make_endpoint_preset_select(&provider, &pc.base_url, window, cx);
         cx.notify();
+    }
+
+    fn toggle_selected_provider_protocol(
+        &mut self,
+        use_anthropic: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(provider) =
+            Self::protocol_toggled_provider(&self.selected_provider, use_anthropic)
+        else {
+            return;
+        };
+        self.transition_provider(provider, window, cx);
     }
 
     // ── Section content ──────────────────────────────────────────
@@ -2232,10 +2318,14 @@ impl SettingsPanel {
         let model_select = self.model_select.clone();
         let endpoint_preset_select = self.endpoint_preset_select.clone();
         let endpoint_presets = Self::provider_endpoint_presets(&self.selected_provider);
+        let protocol_switch_label = Self::protocol_switch_label(&self.selected_provider);
+        let protocol_switch_hint = Self::protocol_switch_hint(&self.selected_provider);
+        let anthropic_protocol_enabled = Self::uses_anthropic_protocol(&self.selected_provider);
 
         let mut provider_list = div().flex().flex_col();
-        for provider in ALL_PROVIDERS.iter() {
-            let is_selected = *provider == self.selected_provider;
+        let active_sidebar_provider = Self::sidebar_provider_kind(&self.selected_provider);
+        for provider in SIDEBAR_PROVIDERS.iter() {
+            let is_selected = *provider == active_sidebar_provider;
             let label = provider_label(provider);
             let provider_clone = provider.clone();
 
@@ -2389,6 +2479,49 @@ impl SettingsPanel {
                                 .font_weight(FontWeight::MEDIUM)
                                 .child("Connection"),
                         )
+                        .children(protocol_switch_label.map(|switch_label| {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap(px(12.0))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(2.0))
+                                                .child(div().text_sm().child("Protocol"))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.0))
+                                                        .text_color(theme.muted_foreground)
+                                                        .child(protocol_switch_hint.unwrap_or("Choose the provider transport.")),
+                                                ),
+                                        )
+                                        .child(
+                                            Switch::new(format!(
+                                                "provider-protocol-{}",
+                                                provider_label(&Self::sidebar_provider_kind(&self.selected_provider))
+                                            ))
+                                            .checked(anthropic_protocol_enabled)
+                                            .label(switch_label)
+                                            .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                                                this.toggle_selected_provider_protocol(*checked, window, cx);
+                                            })),
+                                        ),
+                                )
+                                .into_any_element()
+                        }))
+                        .children(if protocol_switch_label.is_some() {
+                            Some(div().child(row_separator(theme)))
+                        } else {
+                            None
+                        })
                         .children(Self::provider_oauth_label(&self.selected_provider).map(|provider_name| {
                             let oauth = oauth_state.clone().unwrap_or_default();
                             let provider_for_click = self.selected_provider.clone();

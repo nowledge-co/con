@@ -95,27 +95,39 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
     }
 }
 
-/// Maps models.dev provider IDs to our `ProviderKind`.
-fn models_dev_id_to_provider(id: &str) -> Option<ProviderKind> {
+/// Maps settings/runtime provider variants onto the canonical models.dev family.
+fn canonical_models_provider(provider: &ProviderKind) -> ProviderKind {
+    match provider {
+        ProviderKind::MiniMaxAnthropic => ProviderKind::MiniMax,
+        ProviderKind::MoonshotAnthropic => ProviderKind::Moonshot,
+        ProviderKind::ZAIAnthropic => ProviderKind::ZAI,
+        _ => provider.clone(),
+    }
+}
+
+/// Maps models.dev provider IDs onto one or more Con provider families.
+fn models_dev_id_to_providers(id: &str) -> &'static [ProviderKind] {
     match id {
-        "anthropic" => Some(ProviderKind::Anthropic),
-        "openai" => Some(ProviderKind::OpenAI),
-        "chatgpt" => Some(ProviderKind::ChatGPT),
-        "github-copilot" => Some(ProviderKind::GitHubCopilot),
-        "minimax" => Some(ProviderKind::MiniMax),
-        "moonshot" => Some(ProviderKind::Moonshot),
-        "z-ai" | "zai" => Some(ProviderKind::ZAI),
-        "deepseek" => Some(ProviderKind::DeepSeek),
-        "groq" => Some(ProviderKind::Groq),
-        "google" => Some(ProviderKind::Gemini),
-        "cohere" => Some(ProviderKind::Cohere),
-        "ollama" | "ollama-cloud" => Some(ProviderKind::Ollama),
-        "openrouter" => Some(ProviderKind::OpenRouter),
-        "perplexity" => Some(ProviderKind::Perplexity),
-        "mistral" => Some(ProviderKind::Mistral),
-        "togetherai" => Some(ProviderKind::Together),
-        "xai" => Some(ProviderKind::XAI),
-        _ => None,
+        "anthropic" => &[ProviderKind::Anthropic],
+        "openai" => &[ProviderKind::OpenAI],
+        "chatgpt" => &[ProviderKind::ChatGPT],
+        "github-copilot" => &[ProviderKind::GitHubCopilot],
+        "minimax" => &[ProviderKind::MiniMax, ProviderKind::MiniMaxAnthropic],
+        "moonshot" | "moonshotai" | "moonshotai-cn" | "kimi-for-coding" => {
+            &[ProviderKind::Moonshot, ProviderKind::MoonshotAnthropic]
+        }
+        "z-ai" | "zai" | "zai-coding-plan" => &[ProviderKind::ZAI, ProviderKind::ZAIAnthropic],
+        "deepseek" => &[ProviderKind::DeepSeek],
+        "groq" => &[ProviderKind::Groq],
+        "google" => &[ProviderKind::Gemini],
+        "cohere" => &[ProviderKind::Cohere],
+        "ollama" | "ollama-cloud" => &[ProviderKind::Ollama],
+        "openrouter" => &[ProviderKind::OpenRouter],
+        "perplexity" => &[ProviderKind::Perplexity],
+        "mistral" => &[ProviderKind::Mistral],
+        "togetherai" => &[ProviderKind::Together],
+        "xai" => &[ProviderKind::XAI],
+        _ => &[],
     }
 }
 
@@ -163,9 +175,10 @@ impl ModelRegistry {
     /// Returns the cached model list for a provider.
     /// Falls back to hardcoded defaults if the cache is empty.
     pub fn models_for(&self, provider: &ProviderKind) -> Vec<String> {
+        let canonical = canonical_models_provider(provider);
         let guard = self.inner.lock().unwrap();
         if let Some(entry) = guard.as_ref() {
-            if let Some(models) = entry.models.get(provider) {
+            if let Some(models) = entry.models.get(&canonical) {
                 if !models.is_empty() {
                     return models.clone();
                 }
@@ -198,33 +211,49 @@ impl ModelRegistry {
 
         let resp: HashMap<String, ApiProvider> = client.get(API_URL).send().await?.json().await?;
 
-        let mut models_map: HashMap<ProviderKind, Vec<String>> = HashMap::new();
+        let mut merged_models: HashMap<ProviderKind, HashMap<String, (bool, u64)>> = HashMap::new();
 
         for (provider_id, provider_data) in &resp {
-            let Some(kind) = models_dev_id_to_provider(provider_id) else {
+            let targets = models_dev_id_to_providers(provider_id);
+            if targets.is_empty() {
                 continue;
-            };
+            }
 
             let Some(models) = &provider_data.models else {
                 continue;
             };
 
-            // Collect model IDs, preferring models with tool_call support
-            // and larger context windows first.
-            let mut model_list: Vec<(String, bool, u64)> = models
-                .values()
-                .map(|m| {
-                    let ctx = m.limit.as_ref().and_then(|l| l.context).unwrap_or(0);
-                    (m.id.clone(), m.tool_call, ctx)
-                })
-                .collect();
-
-            // Sort: tool_call capable first, then by context window descending
-            model_list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
-
-            let ids: Vec<String> = model_list.into_iter().map(|(id, _, _)| id).collect();
-            models_map.insert(kind, ids);
+            for model in models.values() {
+                let ctx = model
+                    .limit
+                    .as_ref()
+                    .and_then(|limit| limit.context)
+                    .unwrap_or(0);
+                for target in targets {
+                    let entry = merged_models.entry(target.clone()).or_default();
+                    entry
+                        .entry(model.id.clone())
+                        .and_modify(|existing| {
+                            existing.0 |= model.tool_call;
+                            existing.1 = existing.1.max(ctx);
+                        })
+                        .or_insert((model.tool_call, ctx));
+                }
+            }
         }
+
+        let models_map: HashMap<ProviderKind, Vec<String>> = merged_models
+            .into_iter()
+            .map(|(kind, models)| {
+                let mut model_list: Vec<(String, bool, u64)> = models
+                    .into_iter()
+                    .map(|(id, (tool_call, ctx))| (id, tool_call, ctx))
+                    .collect();
+                model_list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
+                let ids = model_list.into_iter().map(|(id, _, _)| id).collect();
+                (kind, ids)
+            })
+            .collect();
 
         let entry = CacheEntry {
             models: models_map,
@@ -234,5 +263,47 @@ impl ModelRegistry {
         *self.inner.lock().unwrap() = Some(entry);
         log::info!("Model registry updated from models.dev");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{canonical_models_provider, models_dev_id_to_providers};
+    use con_agent::ProviderKind;
+
+    #[test]
+    fn anthropic_variants_share_canonical_models_family() {
+        assert_eq!(
+            canonical_models_provider(&ProviderKind::MiniMaxAnthropic),
+            ProviderKind::MiniMax
+        );
+        assert_eq!(
+            canonical_models_provider(&ProviderKind::MoonshotAnthropic),
+            ProviderKind::Moonshot
+        );
+        assert_eq!(
+            canonical_models_provider(&ProviderKind::ZAIAnthropic),
+            ProviderKind::ZAI
+        );
+    }
+
+    #[test]
+    fn models_dev_aliases_cover_live_provider_ids() {
+        assert_eq!(
+            models_dev_id_to_providers("minimax"),
+            &[ProviderKind::MiniMax, ProviderKind::MiniMaxAnthropic]
+        );
+        assert_eq!(
+            models_dev_id_to_providers("moonshotai"),
+            &[ProviderKind::Moonshot, ProviderKind::MoonshotAnthropic]
+        );
+        assert_eq!(
+            models_dev_id_to_providers("kimi-for-coding"),
+            &[ProviderKind::Moonshot, ProviderKind::MoonshotAnthropic]
+        );
+        assert_eq!(
+            models_dev_id_to_providers("zai-coding-plan"),
+            &[ProviderKind::ZAI, ProviderKind::ZAIAnthropic]
+        );
     }
 }
