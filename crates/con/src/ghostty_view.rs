@@ -313,34 +313,34 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn update_frame(&mut self, bounds: Bounds<Pixels>) {
-        if self.last_bounds.as_ref() == Some(&bounds) {
-            return;
-        }
-        self.last_bounds = Some(bounds);
+        let bounds_changed = self.last_bounds.as_ref() != Some(&bounds);
+        if bounds_changed {
+            self.last_bounds = Some(bounds);
 
-        if let Some(nsview) = self.nsview {
-            unsafe {
-                let superview: id = msg_send![nsview, superview];
-                let super_frame: NSRect = msg_send![superview, frame];
-                let flipped_y = super_frame.size.height
-                    - f64::from(bounds.origin.y)
-                    - f64::from(bounds.size.height);
+            if let Some(nsview) = self.nsview {
+                unsafe {
+                    let superview: id = msg_send![nsview, superview];
+                    let super_frame: NSRect = msg_send![superview, frame];
+                    let flipped_y = super_frame.size.height
+                        - f64::from(bounds.origin.y)
+                        - f64::from(bounds.size.height);
 
-                let frame = NSRect::new(
-                    cocoa::foundation::NSPoint::new(f64::from(bounds.origin.x), flipped_y),
-                    cocoa::foundation::NSSize::new(
-                        f64::from(bounds.size.width),
-                        f64::from(bounds.size.height),
-                    ),
-                );
-                let _: () = msg_send![nsview, setFrame:frame];
+                    let frame = NSRect::new(
+                        cocoa::foundation::NSPoint::new(f64::from(bounds.origin.x), flipped_y),
+                        cocoa::foundation::NSSize::new(
+                            f64::from(bounds.size.width),
+                            f64::from(bounds.size.height),
+                        ),
+                    );
+                    let _: () = msg_send![nsview, setFrame:frame];
+                }
             }
-        }
 
-        if let Some(ref terminal) = self.terminal {
-            let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
-            let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
-            terminal.set_size(width_px, height_px);
+            if let Some(ref terminal) = self.terminal {
+                let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
+                let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
+                terminal.set_size(width_px, height_px);
+            }
         }
 
         if self.awaiting_first_layout_visibility {
