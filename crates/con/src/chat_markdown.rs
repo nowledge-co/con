@@ -43,6 +43,7 @@ enum MarkdownInline {
         label: Vec<MarkdownInline>,
         destination: String,
     },
+    SoftBreak,
     LineBreak,
 }
 
@@ -317,7 +318,8 @@ fn parse_inlines<'a>(
         match event {
             Event::Text(text) => push_text(&mut inlines, text.as_ref()),
             Event::Code(text) => inlines.push(MarkdownInline::Code(text.to_string())),
-            Event::SoftBreak | Event::HardBreak => inlines.push(MarkdownInline::LineBreak),
+            Event::SoftBreak => inlines.push(MarkdownInline::SoftBreak),
+            Event::HardBreak => inlines.push(MarkdownInline::LineBreak),
             Event::TaskListMarker(checked) => {
                 push_text(&mut inlines, if checked { "[x] " } else { "[ ] " });
             }
@@ -410,6 +412,7 @@ fn flatten_inlines_to_plain_text(inlines: &[MarkdownInline]) -> String {
             MarkdownInline::Link { label, .. } => {
                 text.push_str(&flatten_inlines_to_plain_text(label));
             }
+            MarkdownInline::SoftBreak => text.push(' '),
             MarkdownInline::LineBreak => text.push('\n'),
         }
     }
@@ -452,12 +455,16 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
     match block {
         MarkdownBlock::Paragraph(inlines) => div()
             .w_full()
-            .child(render_inline_text(inlines, &style.base_text_style(), style))
+            .child(render_inline_content(
+                inlines,
+                &style.base_text_style(),
+                style,
+            ))
             .into_any_element(),
         MarkdownBlock::Heading { level, inlines } => div()
             .w_full()
             .pt(px(if *level <= 2 { 3.0 } else { 1.0 }))
-            .child(render_inline_text(
+            .child(render_inline_content(
                 inlines,
                 &style.heading_text_style(*level),
                 style,
@@ -622,6 +629,198 @@ fn render_inline_text(
         .into_any_element()
 }
 
+fn render_inline_content(
+    inlines: &[MarkdownInline],
+    base_style: &TextStyle,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    if contains_inline_code(inlines) {
+        render_inline_flow(inlines, base_style, style)
+    } else {
+        render_inline_text(inlines, base_style, style)
+    }
+}
+
+fn contains_inline_code(inlines: &[MarkdownInline]) -> bool {
+    inlines.iter().any(|inline| match inline {
+        MarkdownInline::Code(_) => true,
+        MarkdownInline::Emphasis(children)
+        | MarkdownInline::Strong(children)
+        | MarkdownInline::Strikethrough(children) => contains_inline_code(children),
+        MarkdownInline::Link { label, .. } => contains_inline_code(label),
+        MarkdownInline::Text(_) | MarkdownInline::SoftBreak | MarkdownInline::LineBreak => false,
+    })
+}
+
+fn render_inline_flow(
+    inlines: &[MarkdownInline],
+    base_style: &TextStyle,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let mut children = Vec::new();
+    append_inline_flow_segments(inlines, base_style.clone(), style, &mut children);
+
+    if children.is_empty() {
+        children.push(div().child("\u{200B}").into_any_element());
+    }
+
+    div()
+        .w_full()
+        .flex()
+        .flex_wrap()
+        .items_start()
+        .gap_y(px(4.0))
+        .children(children)
+        .into_any_element()
+}
+
+fn append_inline_flow_segments(
+    inlines: &[MarkdownInline],
+    current_style: TextStyle,
+    style: &ChatMarkdownStyle<'_>,
+    children: &mut Vec<AnyElement>,
+) {
+    for inline in inlines {
+        match inline {
+            MarkdownInline::Text(value) => {
+                append_text_flow_segments(value, &current_style, children);
+            }
+            MarkdownInline::Code(value) => {
+                children.push(render_inline_code_chip(value, &current_style, style));
+            }
+            MarkdownInline::Emphasis(children_inlines) => {
+                let mut emphasis = current_style.clone();
+                emphasis.font_style = FontStyle::Italic;
+                append_inline_flow_segments(children_inlines, emphasis, style, children);
+            }
+            MarkdownInline::Strong(children_inlines) => {
+                let mut strong = current_style.clone();
+                strong.font_weight = FontWeight::SEMIBOLD;
+                append_inline_flow_segments(children_inlines, strong, style, children);
+            }
+            MarkdownInline::Strikethrough(children_inlines) => {
+                let mut struck = current_style.clone();
+                struck.strikethrough = Some(gpui::StrikethroughStyle {
+                    thickness: px(1.0),
+                    color: Some(current_style.color.opacity(0.55)),
+                    ..Default::default()
+                });
+                append_inline_flow_segments(children_inlines, struck, style, children);
+            }
+            MarkdownInline::Link { label, .. } => {
+                let mut link_style = current_style.clone();
+                link_style.color = style.link_color;
+                link_style.underline = Some(UnderlineStyle {
+                    color: Some(style.link_color.opacity(0.48)),
+                    thickness: px(1.0),
+                    wavy: false,
+                });
+                append_inline_flow_segments(label, link_style, style, children);
+            }
+            MarkdownInline::SoftBreak => {
+                children.push(render_inline_text_segment(" ", &current_style));
+            }
+            MarkdownInline::LineBreak => {
+                children.push(div().w_full().h(px(0.0)).into_any_element());
+            }
+        }
+    }
+}
+
+fn append_text_flow_segments(value: &str, text_style: &TextStyle, children: &mut Vec<AnyElement>) {
+    let mut current = String::new();
+    let mut whitespace = false;
+
+    for ch in value.chars() {
+        if ch == '\n' {
+            if !current.is_empty() {
+                children.push(render_inline_text_segment(&current, text_style));
+                current.clear();
+            }
+            whitespace = false;
+            children.push(div().w_full().h(px(0.0)).into_any_element());
+            continue;
+        }
+
+        if ch.is_whitespace() {
+            if !current.is_empty() && !whitespace {
+                children.push(render_inline_text_segment(&current, text_style));
+                current.clear();
+            }
+            if !whitespace {
+                current.push(' ');
+                whitespace = true;
+            }
+        } else {
+            if whitespace && !current.is_empty() {
+                children.push(render_inline_text_segment(&current, text_style));
+                current.clear();
+            }
+            whitespace = false;
+            current.push(ch);
+        }
+    }
+
+    if !current.is_empty() {
+        children.push(render_inline_text_segment(&current, text_style));
+    }
+}
+
+fn render_inline_text_segment(content: &str, text_style: &TextStyle) -> AnyElement {
+    let font_size = text_style_font_size(text_style);
+    let line_height = text_style_line_height(text_style, font_size);
+    let mut segment = div()
+        .whitespace_nowrap()
+        .font_family(text_style.font_family.clone())
+        .text_size(font_size)
+        .line_height(line_height)
+        .text_color(text_style.color)
+        .child(content.to_string());
+
+    if text_style.font_weight != FontWeight::NORMAL {
+        segment = segment.font_weight(text_style.font_weight);
+    }
+    if text_style.font_style == FontStyle::Italic {
+        segment = segment.italic();
+    }
+    if let Some(underline) = &text_style.underline {
+        segment = segment
+            .underline()
+            .text_decoration_color(underline.color.unwrap_or(text_style.color));
+        segment = if underline.wavy {
+            segment.text_decoration_wavy()
+        } else {
+            segment.text_decoration_solid()
+        };
+    }
+    if text_style.strikethrough.is_some() {
+        segment = segment.line_through();
+    }
+
+    segment.into_any_element()
+}
+
+fn render_inline_code_chip(
+    value: &str,
+    text_style: &TextStyle,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let font_size = text_style_font_size(text_style);
+    let line_height = text_style_line_height(text_style, font_size);
+    div()
+        .whitespace_nowrap()
+        .px(px(4.0))
+        .py(px(1.0))
+        .bg(style.inline_code_background)
+        .font_family(style.theme.mono_font_family.clone())
+        .font_weight(FontWeight::MEDIUM)
+        .text_size(font_size)
+        .line_height(line_height)
+        .text_color(text_style.color)
+        .child(value.replace(' ', "\u{00A0}"))
+        .into_any_element()
+}
+
 fn text_style_font_size(text_style: &TextStyle) -> gpui::Pixels {
     match text_style.font_size {
         AbsoluteLength::Pixels(size) => size,
@@ -697,6 +896,7 @@ fn append_inline_runs(
                 });
                 append_inline_runs(label, link_style, style, text, runs);
             }
+            MarkdownInline::SoftBreak => push_run(text, runs, &current_style, " "),
             MarkdownInline::LineBreak => push_run(text, runs, &current_style, "\n"),
         }
     }
@@ -751,5 +951,25 @@ mod tests {
             Some(MarkdownBlock::Heading { .. })
         ));
         assert!(matches!(blocks.get(1), Some(MarkdownBlock::BlockQuote(_))));
+    }
+
+    #[test]
+    fn soft_breaks_do_not_become_hard_breaks() {
+        let blocks =
+            parse_markdown("Root filesystem\n`/`: `340G used / 559G avail` out of `937G` total");
+        let MarkdownBlock::Paragraph(inlines) = &blocks[0] else {
+            panic!("expected paragraph");
+        };
+
+        assert!(
+            inlines
+                .iter()
+                .any(|inline| matches!(inline, MarkdownInline::SoftBreak))
+        );
+        assert!(
+            !inlines
+                .iter()
+                .any(|inline| matches!(inline, MarkdownInline::LineBreak))
+        );
     }
 }
