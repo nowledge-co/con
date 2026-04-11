@@ -646,29 +646,42 @@ fn render_code_block(
     let mono_style = style.code_text_style();
     let preserved_lines: Vec<String> = code.lines().map(preserve_code_indentation).collect();
     let has_trailing_newline = code.ends_with('\n');
+    let header_label = language
+        .as_deref()
+        .filter(|lang| !lang.trim().is_empty())
+        .unwrap_or("code");
 
-    let mut block = div()
+    let block = div()
         .w_full()
         .flex()
         .flex_col()
         .overflow_hidden()
         .rounded(px(12.0))
-        .bg(style.code_block_background.opacity(0.98));
-
-    if let Some(language) = language {
-        block = block.child(
+        .bg(style.code_block_background.opacity(0.98))
+        .child(
             div()
-                .px(px(14.0))
+                .px(px(12.0))
                 .py(px(8.0))
                 .bg(style.code_block_language_background.opacity(0.98))
-                .font_family(style.theme.mono_font_family.clone())
-                .font_weight(FontWeight::MEDIUM)
-                .text_size(px(10.25))
-                .line_height(px(12.0))
-                .text_color(style.code_block_language_text_color.opacity(0.9))
-                .child(language.clone()),
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .px(px(7.0))
+                                .py(px(3.0))
+                                .rounded(px(7.0))
+                                .bg(style.theme.background.opacity(0.45))
+                                .font_family(style.theme.mono_font_family.clone())
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_size(px(10.0))
+                                .line_height(px(11.0))
+                                .text_color(style.code_block_language_text_color.opacity(0.92))
+                                .child(header_label.to_string()),
+                        ),
+                ),
         );
-    }
 
     let mut code_column = div().flex().flex_col().gap(px(2.0)).w_full();
 
@@ -698,7 +711,7 @@ fn render_code_block(
             div()
                 .px(px(14.0))
                 .py(px(13.0))
-                .bg(style.theme.background.opacity(0.72))
+                .bg(style.theme.background.opacity(0.76))
                 .child(code_column),
         )
         .into_any_element()
