@@ -33,7 +33,7 @@
       "id": "follow_up_repair",
       "label": "Follow-up Repair",
       "max": 3,
-      "description": "Handle the break-and-fix follow-up in the same target with clear continuity."
+      "description": "Handle the break-and-fix follow-up in the same workspace pair with clear continuity, including any interactive OpenCode interstitial if it blocks later work."
     }
   ]
 }

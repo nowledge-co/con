@@ -14,8 +14,8 @@ Verify that Con can prepare and reuse a local Claude Code workspace for a small 
 ## Prompt sequence
 
 1. `Please prepare a Claude Code workspace in ~/dev/temp/con-bench-claude-twosum`
-2. `Using that Claude Code target plus its paired local shell target, create a small Python two_sum implementation and a unittest-based test file, then run python3 -m unittest -q.`
-3. `Now break one unittest on purpose. If Claude Code is waiting at a trust or continue prompt for this directory, accept it in the same target. Then ask Claude Code to fix the failing test without creating a new target, and rerun python3 -m unittest -q.`
+2. `Keep the Claude Code target prepared, but use the paired local shell target to create a small Python two_sum implementation and a unittest-based test file, then run python3 -m unittest -q. Only touch the Claude Code pane if a blocking trust or continue prompt must be cleared first.`
+3. `Now break one unittest on purpose in the paired local shell. If the Claude Code pane is waiting at a trust, continue, or edit-approval prompt, clear it in the same target. Then repair the failing test in the same workspace pair without creating a new target, and rerun python3 -m unittest -q.`
 4. `Summarize which pane or target you used for each step.`
 
 ## Success looks like
@@ -24,6 +24,7 @@ Verify that Con can prepare and reuse a local Claude Code workspace for a small 
 - The workspace path stays exactly under `~/dev/temp/con-bench-claude-twosum`
 - The code, test, and run loop all happen in the same prepared workspace pair
 - Follow-up repair work stays on that pair instead of opening another pane
+- Any interactive Claude Code interstitial is handled without losing continuity
 - The final answer can name the reused pane or target clearly
 
 ## Failure looks like
@@ -31,7 +32,7 @@ Verify that Con can prepare and reuse a local Claude Code workspace for a small 
 - A new pane or target is created on each turn
 - The path drifts away from the requested project root
 - File edits and test execution happen in different workspaces without explanation
-- The agent loses track of whether it is talking to Claude Code or the outer shell
+- The agent loses track of whether it is using the shell lane or the Claude Code lane
 - The run claims success without actually running the tests
 
 ## Score
