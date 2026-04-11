@@ -67,8 +67,11 @@ enum InlineEnd {
 struct ChatMarkdownStyle<'a> {
     theme: &'a Theme,
     tone: ChatMarkdownTone,
+    content_width: gpui::Pixels,
     base_font_size: gpui::Pixels,
     base_line_height: gpui::Pixels,
+    code_font_size: gpui::Pixels,
+    code_line_height: gpui::Pixels,
     text_color: Hsla,
     muted_text_color: Hsla,
     inline_code_background: Hsla,
@@ -95,20 +98,23 @@ impl<'a> ChatMarkdownStyle<'a> {
             ChatMarkdownTone::Message => Self {
                 theme,
                 tone,
-                base_font_size: px(15.0),
-                base_line_height: px(24.0),
+                content_width: px(720.0),
+                base_font_size: px(14.5),
+                base_line_height: px(23.0),
+                code_font_size: px(13.0),
+                code_line_height: px(21.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
                 inline_code_background: theme.secondary_active.opacity(0.82),
                 inline_code_text_color: theme.foreground.opacity(0.92),
-                code_block_background: theme.secondary.opacity(0.96),
+                code_block_background: theme.secondary.opacity(0.92),
                 code_block_language_background: theme.secondary_hover.opacity(0.96),
                 code_block_language_text_color: theme.muted_foreground.opacity(0.78),
-                quote_background: theme.secondary.opacity(0.88),
+                quote_background: theme.secondary.opacity(0.84),
                 quote_tint: theme.primary.opacity(0.42),
                 rule_color: theme.muted_foreground.opacity(0.16),
                 link_color: theme.primary,
-                block_gap: px(12.0),
+                block_gap: px(13.0),
                 inner_gap: px(9.0),
                 inline_code_padding_x: px(6.0),
                 inline_code_padding_y: px(2.0),
@@ -119,16 +125,19 @@ impl<'a> ChatMarkdownStyle<'a> {
             ChatMarkdownTone::Thinking => Self {
                 theme,
                 tone,
+                content_width: px(640.0),
                 base_font_size: px(12.5),
-                base_line_height: px(19.0),
+                base_line_height: px(19.5),
+                code_font_size: px(12.0),
+                code_line_height: px(18.0),
                 text_color: theme.muted_foreground.opacity(0.66),
                 muted_text_color: theme.muted_foreground.opacity(0.58),
                 inline_code_background: theme.secondary_active.opacity(0.78),
                 inline_code_text_color: theme.foreground.opacity(0.78),
-                code_block_background: theme.secondary.opacity(0.78),
+                code_block_background: theme.secondary.opacity(0.72),
                 code_block_language_background: theme.secondary_hover.opacity(0.88),
                 code_block_language_text_color: theme.muted_foreground.opacity(0.66),
-                quote_background: theme.secondary.opacity(0.64),
+                quote_background: theme.secondary.opacity(0.58),
                 quote_tint: theme.primary.opacity(0.30),
                 rule_color: theme.muted_foreground.opacity(0.12),
                 link_color: theme.primary.opacity(0.82),
@@ -158,12 +167,12 @@ impl<'a> ChatMarkdownStyle<'a> {
 
     fn heading_text_style(&self, level: u8) -> TextStyle {
         let (font_size, line_height, weight) = match (self.tone, level) {
-            (ChatMarkdownTone::Message, 1) => (px(17.0), px(24.0), FontWeight::BOLD),
-            (ChatMarkdownTone::Message, 2) => (px(16.0), px(23.0), FontWeight::SEMIBOLD),
-            (ChatMarkdownTone::Message, 3) => (px(15.0), px(22.0), FontWeight::SEMIBOLD),
-            (ChatMarkdownTone::Thinking, 1) => (px(14.0), px(20.0), FontWeight::SEMIBOLD),
-            (ChatMarkdownTone::Thinking, 2) => (px(13.0), px(19.0), FontWeight::SEMIBOLD),
-            (ChatMarkdownTone::Thinking, _) => (px(12.5), px(18.0), FontWeight::MEDIUM),
+            (ChatMarkdownTone::Message, 1) => (px(19.0), px(27.0), FontWeight::BOLD),
+            (ChatMarkdownTone::Message, 2) => (px(17.0), px(25.0), FontWeight::SEMIBOLD),
+            (ChatMarkdownTone::Message, 3) => (px(15.5), px(23.0), FontWeight::SEMIBOLD),
+            (ChatMarkdownTone::Thinking, 1) => (px(14.5), px(21.0), FontWeight::SEMIBOLD),
+            (ChatMarkdownTone::Thinking, 2) => (px(13.5), px(20.0), FontWeight::SEMIBOLD),
+            (ChatMarkdownTone::Thinking, _) => (px(12.75), px(19.0), FontWeight::MEDIUM),
             (_, _) => (
                 self.base_font_size,
                 self.base_line_height,
@@ -179,12 +188,12 @@ impl<'a> ChatMarkdownStyle<'a> {
         }
     }
 
-    fn mono_text_style(&self) -> TextStyle {
+    fn code_text_style(&self) -> TextStyle {
         TextStyle {
             color: self.text_color,
             font_family: self.theme.mono_font_family.clone(),
-            font_size: self.base_font_size.into(),
-            line_height: self.base_line_height.into(),
+            font_size: self.code_font_size.into(),
+            line_height: self.code_line_height.into(),
             white_space: WhiteSpace::Normal,
             ..Default::default()
         }
@@ -204,6 +213,7 @@ pub fn render_chat_markdown(source: &str, tone: ChatMarkdownTone, theme: &Theme)
         .flex()
         .flex_col()
         .gap(style.block_gap)
+        .max_w(style.content_width)
         .children(
             blocks
                 .iter()
@@ -497,7 +507,8 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
         MarkdownBlock::BlockQuote(blocks) => div()
             .w_full()
             .px(px(10.0))
-            .py(px(9.0))
+            .py(px(10.0))
+            .rounded(px(8.0))
             .bg(style.quote_background)
             .child(
                 div()
@@ -579,7 +590,7 @@ fn render_code_block(
     code: &str,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
-    let mono_style = style.mono_text_style();
+    let mono_style = style.code_text_style();
     let preserved_lines: Vec<String> = code.lines().map(preserve_code_indentation).collect();
     let has_trailing_newline = code.ends_with('\n');
 
@@ -587,9 +598,9 @@ fn render_code_block(
         .w_full()
         .flex()
         .flex_col()
-        .gap(px(7.0))
-        .px(px(12.0))
-        .py(px(11.0))
+        .gap(px(8.0))
+        .px(px(13.0))
+        .py(px(12.0))
         .rounded(style.code_block_radius)
         .bg(style.code_block_background);
 
@@ -614,8 +625,8 @@ fn render_code_block(
         code_column = code_column.child(
             div()
                 .font_family(style.theme.mono_font_family.clone())
-                .text_size(style.base_font_size)
-                .line_height(style.base_line_height)
+                .text_size(style.code_font_size)
+                .line_height(style.code_line_height)
                 .text_color(style.text_color)
                 .child(
                     StyledText::new(line.clone()).with_runs(vec![mono_style.to_run(line.len())]),
@@ -626,7 +637,7 @@ fn render_code_block(
     if preserved_lines.is_empty() || has_trailing_newline {
         code_column = code_column.child(
             div()
-                .h(style.base_line_height)
+                .h(style.code_line_height)
                 .font_family(style.theme.mono_font_family.clone()),
         );
     }
