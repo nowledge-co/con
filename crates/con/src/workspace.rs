@@ -4053,6 +4053,7 @@ impl Render for ConWorkspace {
             .items_end()
             .pl(px(78.0)) // leave room for traffic lights
             .pr(px(6.0))
+            .bg(theme.title_bar.opacity(ui_surface_opacity))
             .on_click(|event, window, _cx| {
                 if event.click_count() == 2 {
                     window.titlebar_double_click();
@@ -4289,7 +4290,7 @@ impl Render for ConWorkspace {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.title_bar.opacity(ui_surface_opacity))
+            .bg(theme.transparent)
             .font_family(theme.mono_font_family.clone())
             .key_context("ConWorkspace")
             // Pane drag-to-resize: capture mouse move/up on root so it works
