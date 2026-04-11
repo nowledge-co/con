@@ -73,7 +73,6 @@ struct ChatMarkdownStyle<'a> {
     muted_text_color: Hsla,
     inline_code_background: Hsla,
     inline_code_text_color: Hsla,
-    code_block_body_background: Hsla,
     code_block_background: Hsla,
     code_block_language_background: Hsla,
     code_block_language_text_color: Hsla,
@@ -101,10 +100,9 @@ impl<'a> ChatMarkdownStyle<'a> {
                 code_line_height: px(20.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
-                inline_code_background: theme.secondary_hover.opacity(0.86),
+                inline_code_background: theme.secondary_active.opacity(0.72),
                 inline_code_text_color: theme.foreground.opacity(0.92),
-                code_block_body_background: theme.background.opacity(0.88),
-                code_block_background: theme.secondary.opacity(0.40),
+                code_block_background: theme.secondary.opacity(0.48),
                 code_block_language_background: theme.muted.opacity(0.16),
                 code_block_language_text_color: theme.muted_foreground.opacity(0.72),
                 quote_background: theme.secondary.opacity(0.68),
@@ -127,10 +125,9 @@ impl<'a> ChatMarkdownStyle<'a> {
                 code_line_height: px(18.0),
                 text_color: theme.muted_foreground.opacity(0.66),
                 muted_text_color: theme.muted_foreground.opacity(0.58),
-                inline_code_background: theme.secondary_hover.opacity(0.78),
+                inline_code_background: theme.secondary_active.opacity(0.64),
                 inline_code_text_color: theme.foreground.opacity(0.78),
-                code_block_body_background: theme.background.opacity(0.74),
-                code_block_background: theme.secondary.opacity(0.32),
+                code_block_background: theme.secondary.opacity(0.38),
                 code_block_language_background: theme.muted.opacity(0.14),
                 code_block_language_text_color: theme.muted_foreground.opacity(0.66),
                 quote_background: theme.secondary.opacity(0.46),
@@ -662,11 +659,11 @@ fn render_code_block(
         .flex_col()
         .overflow_hidden()
         .rounded(px(12.0))
-        .bg(style.code_block_background.opacity(0.98))
+        .bg(style.code_block_background.opacity(0.96))
         .child(
             div()
                 .px(px(14.0))
-                .py(px(9.0))
+                .py(px(8.0))
                 .bg(style.code_block_language_background.opacity(0.98))
                 .child(
                     div()
@@ -678,7 +675,7 @@ fn render_code_block(
                                 .px(px(7.0))
                                 .py(px(3.0))
                                 .rounded(px(7.0))
-                                .bg(style.theme.background.opacity(0.52))
+                                .bg(style.theme.background.opacity(0.38))
                                 .font_family(style.theme.mono_font_family.clone())
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_size(px(10.0))
@@ -690,10 +687,11 @@ fn render_code_block(
                             div()
                                 .h(px(1.0))
                                 .flex_1()
-                                .bg(style.rule_color.opacity(0.65)),
+                                .bg(style.rule_color.opacity(0.45)),
                         ),
                 ),
-        );
+        )
+        .child(div().h(px(1.0)).bg(style.rule_color.opacity(0.28)));
 
     let mut code_column = div().flex().flex_col().gap(px(2.0)).w_full();
     let syntax_runs = highlighted_code_runs(code, language, style);
@@ -727,8 +725,8 @@ fn render_code_block(
         .child(
             div()
                 .px(px(14.0))
-                .py(px(13.0))
-                .bg(style.code_block_body_background)
+                .py(px(12.0))
+                .bg(style.code_block_background.opacity(0.92))
                 .child(code_column),
         )
         .into_any_element()
@@ -996,20 +994,20 @@ fn render_inline_text_segment(content: &str, text_style: &TextStyle) -> AnyEleme
 
 fn render_inline_code_chip(
     value: &str,
-    text_style: &TextStyle,
+    _text_style: &TextStyle,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
-    let font_size = text_style_font_size(text_style) - px(1.0);
-    let line_height = text_style_line_height(text_style, font_size);
+    let font_size = style.code_font_size - px(0.25);
+    let line_height = style.code_line_height - px(1.0);
     div()
         .flex()
         .flex_none()
         .items_center()
         .mx(px(1.0))
         .my(px(1.0))
-        .px(px(6.5))
-        .py(px(2.5))
-        .rounded(px(8.0))
+        .px(px(6.0))
+        .py(px(2.0))
+        .rounded(px(7.0))
         .bg(style.inline_code_background)
         .font_family(style.theme.mono_font_family.clone())
         .font_weight(FontWeight::MEDIUM)
