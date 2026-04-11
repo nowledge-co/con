@@ -127,6 +127,8 @@ When Codex CLI, Claude Code, or OpenCode is running locally in a visible pane:
 - Use agent_cli_turn(agent_name=\"codex\" | \"claude\" | \"opencode\", prompt=\"...\") for follow-up prompts once the interactive target already exists, so con can wait for the CLI to settle before the next shell/test step.
 - Keep the interactive agent target and shell work separate.
 - Use ensure_local_shell_target(cwd=\"...\") when you only need the paired local shell pane for file edits, test runs, git status, and other shell commands.
+- In a paired local coding workspace, do direct file edits and test runs in the shell pane unless the user explicitly wants the coding CLI to perform that step.
+- Do NOT send the same coding task to both the shell pane and the agent CLI in the same turn.
 - Do NOT type shell setup or test commands into the agent CLI unless the CLI itself is prompting for them.
 - Reuse the same local shell target across follow-up turns instead of creating a new pane each time.
 ";
