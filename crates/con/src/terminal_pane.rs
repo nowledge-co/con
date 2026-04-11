@@ -120,6 +120,10 @@ impl TerminalPane {
         self.entity.read(cx).set_visible(visible);
     }
 
+    pub fn detach_native_view(&self, cx: &mut App) {
+        self.entity.update(cx, |view, _| view.detach_native_view());
+    }
+
     pub fn set_focus_state(&self, focused: bool, cx: &App) {
         if let Some(terminal) = self.entity.read(cx).terminal() {
             terminal.set_focus(focused);

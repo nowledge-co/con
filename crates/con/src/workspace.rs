@@ -3477,8 +3477,8 @@ impl ConWorkspace {
         if tab.pane_tree.pane_count() > 1 {
             // Hide the ghostty NSView of the pane being closed
             let closing = tab.pane_tree.focused_terminal();
-            closing.set_native_view_visible(false, cx);
             closing.set_focus_state(false, cx);
+            closing.detach_native_view(cx);
 
             tab.pane_tree.close_focused();
 
@@ -3507,8 +3507,8 @@ impl ConWorkspace {
         }
         // Hide closing tab's ghostty NSViews
         for t in self.tabs[index].pane_tree.all_terminals() {
-            t.set_native_view_visible(false, cx);
             t.set_focus_state(false, cx);
+            t.detach_native_view(cx);
         }
         let was_active = index == self.active_tab;
         self.reindex_pending_control_agent_requests_after_tab_close(index);
@@ -4113,7 +4113,7 @@ impl Render for ConWorkspace {
                         .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
-                        .bg(theme.muted_foreground.opacity(0.28))
+                        .bg(theme.muted_foreground.opacity(0.42))
                         .opacity(agent_panel_chrome_progress)
                         .child(
                             div()

@@ -208,6 +208,27 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
+    fn detach_host_view(&mut self) {
+        if let Some(host_view) = self.host_view.take() {
+            unsafe {
+                let superview: id = msg_send![host_view, superview];
+                if !superview.is_null() {
+                    let _: () = msg_send![host_view, removeFromSuperview];
+                }
+            }
+        }
+        self.nsview = None;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn detach_host_view(&mut self) {}
+
+    pub fn detach_native_view(&mut self) {
+        self.native_view_visible.set(false);
+        self.detach_host_view();
+    }
+
+    #[cfg(target_os = "macos")]
     fn ensure_initialized(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
         if self.initialized {
             return;
@@ -311,11 +332,9 @@ impl GhosttyView {
                 self.pending_write = None;
                 self.initialized = false;
                 self.next_surface_init_retry_at = Some(Instant::now() + Duration::from_millis(250));
-                unsafe {
-                    let _: () = msg_send![host_view, removeFromSuperview];
-                }
-                self.host_view = None;
-                self.nsview = None;
+                self.host_view = Some(host_view);
+                self.nsview = Some(nsview);
+                self.detach_host_view();
             }
         }
     }
@@ -654,12 +673,7 @@ fn gpui_key_to_keycode(key: &str) -> Option<u32> {
 
 impl Drop for GhosttyView {
     fn drop(&mut self) {
-        #[cfg(target_os = "macos")]
-        if let Some(host_view) = self.host_view.take() {
-            unsafe {
-                let _: () = msg_send![host_view, removeFromSuperview];
-            }
-        }
+        self.host_view = None;
         #[cfg(target_os = "macos")]
         {
             self.nsview = None;
