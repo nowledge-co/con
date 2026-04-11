@@ -1179,6 +1179,7 @@ dependencies = [
  "pulldown-cmark",
  "raw-window-handle",
  "reqwest 0.12.28",
+ "ropey",
  "rust-embed",
  "serde",
  "serde_json",
