@@ -3,8 +3,10 @@ use gpui::{
     ParentElement, SharedString, Styled, StyledText, TextStyle, UnderlineStyle, WhiteSpace, div,
     px,
 };
+use gpui_component::highlighter::SyntaxHighlighter;
 use gpui_component::Theme;
 use markdown::{ParseOptions, mdast};
+use ropey::Rope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatMarkdownTone {
@@ -684,17 +686,22 @@ fn render_code_block(
         );
 
     let mut code_column = div().flex().flex_col().gap(px(2.0)).w_full();
+    let syntax_runs = highlighted_code_runs(code, language, style);
 
-    for (_line_idx, line) in preserved_lines.iter().enumerate() {
+    for (line_idx, line) in preserved_lines.iter().enumerate() {
         code_column = code_column.child(
             div()
                 .font_family(style.theme.mono_font_family.clone())
                 .text_size(style.code_font_size)
                 .line_height(style.code_line_height)
                 .text_color(style.text_color)
-                .child(
-                    StyledText::new(line.clone()).with_runs(vec![mono_style.to_run(line.len())]),
-                ),
+                .child(match syntax_runs
+                    .as_ref()
+                    .and_then(|runs| runs.get(line_idx).cloned())
+                {
+                    Some(runs) => StyledText::new(line.clone()).with_runs(runs),
+                    None => StyledText::new(line.clone()).with_runs(vec![mono_style.to_run(line.len())]),
+                }),
         );
     }
 
@@ -715,6 +722,70 @@ fn render_code_block(
                 .child(code_column),
         )
         .into_any_element()
+}
+
+fn highlighted_code_runs(
+    code: &str,
+    language: &Option<String>,
+    style: &ChatMarkdownStyle<'_>,
+) -> Option<Vec<Vec<gpui::TextRun>>> {
+    let lang = language.as_deref()?.trim();
+    if lang.is_empty() {
+        return None;
+    }
+
+    let rope = Rope::from_str(code);
+    let mut highlighter = SyntaxHighlighter::new(lang);
+    highlighter.update(None, &rope, None);
+    let highlights = highlighter.styles(&(0..code.len()), &style.theme.highlight_theme);
+
+    let mut line_runs = Vec::new();
+    let mut line_start = 0usize;
+
+    for line in code.lines() {
+        let line_end = line_start + line.len();
+        let mut runs = Vec::new();
+        let mut cursor = line_start;
+
+        for (range, highlight) in &highlights {
+            let start = range.start.max(line_start);
+            let end = range.end.min(line_end);
+            if start >= end {
+                continue;
+            }
+
+            if start > cursor {
+                runs.push(mono_style_run(
+                    &style.code_text_style(),
+                    code[cursor..start].chars().count(),
+                ));
+            }
+
+            let highlighted_style = style.code_text_style().highlight(*highlight);
+            runs.push(highlighted_style.to_run(code[start..end].chars().count()));
+            cursor = end;
+        }
+
+        if cursor < line_end {
+            runs.push(mono_style_run(
+                &style.code_text_style(),
+                code[cursor..line_end].chars().count(),
+            ));
+        }
+
+        if runs.is_empty() {
+            runs.push(mono_style_run(&style.code_text_style(), line.chars().count()));
+        }
+
+        line_runs.push(runs);
+        line_start = line_end + 1;
+    }
+
+    Some(line_runs)
+}
+
+fn mono_style_run(text_style: &TextStyle, len: usize) -> gpui::TextRun {
+    text_style.to_run(len)
 }
 
 fn render_inline_text(

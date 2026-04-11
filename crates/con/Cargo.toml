@@ -34,6 +34,7 @@ chrono.workspace = true
 reqwest.workspace = true
 pulldown-cmark.workspace = true
 markdown = { version = "1.0.0", features = ["serde"] }
+ropey.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 con-ghostty.workspace = true
