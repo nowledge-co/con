@@ -9,6 +9,8 @@ use tokio::sync::oneshot;
 const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
+const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
+const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, InlineInputSubmit,
@@ -73,6 +75,7 @@ pub struct ConWorkspace {
     agent_panel_open: bool,
     agent_panel_motion: MotionValue,
     agent_panel_width: f32,
+    tab_strip_motion: MotionValue,
     input_bar_visible: bool,
     input_bar_motion: MotionValue,
     /// Tracks whether a modal was open on the last render, so we can
@@ -479,6 +482,8 @@ impl ConWorkspace {
             }
         }
 
+        let has_multiple_tabs = tabs.len() > 1;
+
         Self {
             sidebar,
             tabs,
@@ -501,6 +506,7 @@ impl ConWorkspace {
             agent_panel_open,
             agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
             agent_panel_width,
+            tab_strip_motion: MotionValue::new(if has_multiple_tabs { 1.0 } else { 0.0 }),
             input_bar_visible: session.input_bar_visible,
             input_bar_motion: MotionValue::new(if session.input_bar_visible { 1.0 } else { 0.0 }),
             modal_was_open: false,
@@ -528,6 +534,21 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) -> TerminalPane {
         make_ghostty_terminal(&self.ghostty_app, cwd, self.font_size, window, cx)
+    }
+
+    fn sync_tab_strip_motion(&mut self) {
+        self.tab_strip_motion.set_target(
+            if self.tabs.len() > 1 { 1.0 } else { 0.0 },
+            std::time::Duration::from_millis(180),
+        );
+    }
+
+    fn current_top_bar_height(&self) -> f32 {
+        if self.tabs.len() > 1 {
+            TOP_BAR_TABS_HEIGHT
+        } else {
+            TOP_BAR_COMPACT_HEIGHT
+        }
     }
 
     fn active_terminal(&self) -> &TerminalPane {
@@ -3415,6 +3436,7 @@ impl ConWorkspace {
             panel_state: PanelState::new(),
             runtime_trackers: RefCell::new(HashMap::new()),
         });
+        self.sync_tab_strip_motion();
         self.active_tab = self.tabs.len() - 1;
 
         // Swap panel state: stash old tab's state, load new tab's (empty) state
@@ -3487,6 +3509,7 @@ impl ConWorkspace {
         let was_active = index == self.active_tab;
         self.reindex_pending_control_agent_requests_after_tab_close(index);
         self.tabs.remove(index);
+        self.sync_tab_strip_motion();
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
         } else if self.active_tab > index {
@@ -4046,6 +4069,7 @@ impl Render for ConWorkspace {
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
         let agent_panel_progress = self.agent_panel_motion.value(window);
         let input_bar_progress = self.input_bar_motion.value(window);
+        let tab_strip_progress = self.tab_strip_motion.value(window);
         let agent_panel_chrome_progress = ((agent_panel_progress - 0.10) / 0.90)
             .clamp(0.0, 1.0)
             .powf(1.55);
@@ -4055,6 +4079,7 @@ impl Render for ConWorkspace {
         let input_bar_content_progress = ((input_bar_progress - 0.08) / 0.92)
             .clamp(0.0, 1.0)
             .powf(0.92);
+        let compact_titlebar_progress = 1.0 - tab_strip_progress;
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -4125,12 +4150,16 @@ impl Render for ConWorkspace {
                 );
         }
 
-        // Tab bar — full-width tabs fill available space
+        // Top bar — compact titlebar for one tab, full strip for many
         let tab_count = self.tabs.len();
-        let mut tab_bar = div()
+        let top_bar_height =
+            TOP_BAR_COMPACT_HEIGHT + ((TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT) * tab_strip_progress);
+        let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
+
+        let mut top_bar = div()
             .id("tab-bar")
             .flex()
-            .h(px(36.0))
+            .h(px(top_bar_height))
             .items_end()
             .pl(px(78.0)) // leave room for traffic lights
             .pr(px(6.0))
@@ -4141,27 +4170,24 @@ impl Render for ConWorkspace {
                 }
             });
 
-        // Tabs container — each tab takes equal share of available width
+        // Tabs container — appears only when there is real tab selection to do
         let mut tabs_container = div().flex().flex_1().min_w_0().items_end();
 
-        for (index, tab) in self.tabs.iter().enumerate() {
-            let is_active = index == self.active_tab;
-            let needs_attention = tab.needs_attention && !is_active;
-            let terminal = tab.pane_tree.focused_terminal();
-            let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
+        if tab_count > 1 {
+            for (index, tab) in self.tabs.iter().enumerate() {
+                let is_active = index == self.active_tab;
+                let needs_attention = tab.needs_attention && !is_active;
+                let terminal = tab.pane_tree.focused_terminal();
+                let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
 
-            // Truncate long titles
-            let display_title: String = if title.chars().count() > 24 {
-                format!("{}…", &title[..title.floor_char_boundary(22)])
-            } else {
-                title
-            };
+                let display_title: String = if title.chars().count() > 24 {
+                    format!("{}…", &title[..title.floor_char_boundary(22)])
+                } else {
+                    title
+                };
 
-            let close_id = ElementId::Name(format!("tab-close-{}", index).into());
+                let close_id = ElementId::Name(format!("tab-close-{}", index).into());
 
-            // Close button — visible on hover for inactive tabs, always for active
-            let show_close = tab_count > 1;
-            let close_button = if show_close {
                 let mut close_el = div()
                     .id(close_id)
                     .flex()
@@ -4172,124 +4198,130 @@ impl Render for ConWorkspace {
                     .rounded(px(4.0))
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.muted.opacity(0.15)));
-                // Only show on hover for inactive tabs
                 if !is_active {
                     close_el = close_el.invisible().group_hover("tab", |s| s.visible());
                 }
-                Some(
-                    close_el
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, window, cx| {
-                                this.close_tab_by_index(index, window, cx);
-                            }),
-                        )
-                        .child(
-                            svg()
-                                .path("phosphor/x.svg")
-                                .size(px(10.0))
-                                .text_color(theme.muted_foreground.opacity(0.5)),
-                        ),
-                )
-            } else {
-                None
-            };
+                let close_button = close_el
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.close_tab_by_index(index, window, cx);
+                        }),
+                    )
+                    .child(
+                        svg()
+                            .path("phosphor/x.svg")
+                            .size(px(10.0))
+                            .text_color(theme.muted_foreground.opacity(0.5)),
+                    );
 
-            let mut tab_el = div()
-                .id(ElementId::Name(format!("tab-{}", index).into()))
-                .group("tab")
-                .flex()
-                .flex_1()
-                .min_w_0()
-                .max_w(px(200.0))
-                .items_center()
-                .px(px(10.0))
-                .h(px(30.0))
-                .text_size(px(11.5))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.activate_tab(index, window, cx);
-                }))
-                // Middle-click to close tab (browser convention)
-                .on_mouse_down(
-                    MouseButton::Middle,
-                    cx.listener(move |this, _, window, cx| {
-                        this.close_tab_by_index(index, window, cx);
-                    }),
-                );
-
-            if is_active {
-                // Active tab — lifted surface, connects to content below
-                tab_el = tab_el
-                    .rounded_t(px(7.0))
-                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
-                    .text_color(theme.foreground)
-                    .font_weight(FontWeight::MEDIUM);
-            } else {
-                // Inactive tab — quiet, appears on hover
-                tab_el = tab_el
-                    .rounded_t(px(6.0))
-                    .mb(px(1.0))
-                    .text_color(theme.muted_foreground.opacity(0.45))
-                    .hover(|s| s.bg(theme.muted.opacity(0.06)));
-            }
-
-            let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
-
-            // Attention dot for tabs with pending agent activity
-            if needs_attention {
-                tab_content = tab_content.child(
-                    div()
-                        .size(px(5.0))
-                        .rounded_full()
-                        .flex_shrink_0()
-                        .bg(theme.primary),
-                );
-            }
-
-            // Terminal icon
-            tab_content = tab_content.child(
-                svg()
-                    .path("phosphor/terminal.svg")
-                    .size(px(12.0))
-                    .flex_shrink_0()
-                    .text_color(if is_active {
-                        theme.foreground.opacity(0.7)
-                    } else {
-                        theme.muted_foreground.opacity(0.4)
-                    }),
-            );
-
-            // Title — fills remaining space, pushes close button to right
-            tab_content = tab_content.child(
-                div()
+                let mut tab_el = div()
+                    .id(ElementId::Name(format!("tab-{}", index).into()))
+                    .group("tab")
+                    .flex()
                     .flex_1()
                     .min_w_0()
-                    .overflow_x_hidden()
-                    .whitespace_nowrap()
-                    .child(display_title),
-            );
+                    .max_w(px(200.0))
+                    .items_center()
+                    .px(px(10.0))
+                    .h(px(30.0))
+                    .text_size(px(11.5))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_tab(index, window, cx);
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, window, cx| {
+                            this.close_tab_by_index(index, window, cx);
+                        }),
+                    );
 
-            if let Some(close) = close_button {
-                tab_content = tab_content.child(close);
+                if is_active {
+                    tab_el = tab_el
+                        .rounded_t(px(7.0))
+                        .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                        .text_color(theme.foreground)
+                        .font_weight(FontWeight::MEDIUM);
+                } else {
+                    tab_el = tab_el
+                        .rounded_t(px(6.0))
+                        .mb(px(1.0))
+                        .text_color(theme.muted_foreground.opacity(0.45))
+                        .hover(|s| s.bg(theme.muted.opacity(0.06)));
+                }
+
+                let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
+
+                if needs_attention {
+                    tab_content = tab_content.child(
+                        div()
+                            .size(px(5.0))
+                            .rounded_full()
+                            .flex_shrink_0()
+                            .bg(theme.primary),
+                    );
+                }
+
+                tab_content = tab_content.child(
+                    svg()
+                        .path("phosphor/terminal.svg")
+                        .size(px(12.0))
+                        .flex_shrink_0()
+                        .text_color(if is_active {
+                            theme.foreground.opacity(0.7)
+                        } else {
+                            theme.muted_foreground.opacity(0.4)
+                        }),
+                );
+
+                tab_content = tab_content.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_x_hidden()
+                        .whitespace_nowrap()
+                        .child(display_title),
+                );
+
+                tab_content = tab_content.child(close_button);
+                tabs_container = tabs_container.child(tab_el.child(tab_content));
             }
-
-            tabs_container = tabs_container.child(tab_el.child(tab_content));
         }
 
-        // "+" button — right of last tab, inside tabs container
-        tabs_container = tabs_container.child(
+        let mut leading_chrome = div().flex().flex_1().min_w_0().items_end();
+        if tab_strip_progress > 0.01 {
+            leading_chrome = leading_chrome.child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .opacity(tab_strip_progress)
+                    .pb(vertical_reveal_offset(tab_strip_progress, 5.0))
+                    .child(tabs_container),
+            );
+        }
+
+        top_bar = top_bar.child(leading_chrome);
+
+        // Right-side controls — compact row
+        let mut tab_controls = div()
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .mb(px(top_bar_controls_offset))
+            .flex_shrink_0();
+
+        tab_controls = tab_controls.child(
             div()
                 .id("tab-new")
                 .flex()
                 .items_center()
                 .justify_center()
                 .size(px(22.0))
-                .mb(px(4.0))
-                .ml(px(2.0))
                 .rounded(px(5.0))
                 .cursor_pointer()
-                .flex_shrink_0()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
@@ -4298,19 +4330,11 @@ impl Render for ConWorkspace {
                     svg()
                         .path("phosphor/plus.svg")
                         .size(px(12.0))
-                        .text_color(theme.muted_foreground.opacity(0.45)),
+                        .text_color(theme.muted_foreground.opacity(
+                            0.45 + (0.08 * compact_titlebar_progress),
+                        )),
                 ),
         );
-
-        tab_bar = tab_bar.child(tabs_container);
-
-        // Right-side controls — compact row
-        let mut tab_controls = div()
-            .flex()
-            .items_center()
-            .gap(px(2.0))
-            .mb(px(4.0))
-            .flex_shrink_0();
 
         // Input bar toggle
         tab_controls = tab_controls.child(
@@ -4364,7 +4388,7 @@ impl Render for ConWorkspace {
                 ),
         );
 
-        tab_bar = tab_bar.child(tab_controls);
+        top_bar = top_bar.child(tab_controls);
 
         let mut root = div()
             .relative()
@@ -4403,6 +4427,8 @@ impl Render for ConWorkspace {
                         return;
                     }
 
+                    let top_bar_height = this.current_top_bar_height();
+                    let input_bar_height = if this.input_bar_visible { 42.0 } else { 0.0 };
                     let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
 
                     // Consume a pending drag initiation written by divider on_mouse_down
@@ -4432,7 +4458,10 @@ impl Render for ConWorkspace {
                                     (f32::from(event.position.x), win_w - panel_w)
                                 }
                                 SplitDirection::Vertical => {
-                                    (f32::from(event.position.y), win_h - 78.0) // tab bar + input bar
+                                    (
+                                        f32::from(event.position.y),
+                                        win_h - top_bar_height - input_bar_height,
+                                    )
                                 }
                             }
                         } else {
@@ -4520,7 +4549,7 @@ impl Render for ConWorkspace {
                     }
                 }
             }))
-            .child(tab_bar)
+            .child(top_bar)
             .child(main_area);
 
         if input_bar_progress > 0.01 {
