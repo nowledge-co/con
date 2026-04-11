@@ -68,6 +68,7 @@ Run a complex operator benchmark:
 ```bash
 python3 benchmarks/terminal-agent/run.py --profile operator-local-codex-devloop --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-ssh-dual-host-maintenance --suite operator
+python3 benchmarks/terminal-agent/run.py --profile operator-ssh-dual-host-recovery --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-ssh-tmux-devloop --suite operator
 ```
 
@@ -78,6 +79,7 @@ python3 benchmarks/terminal-agent/iterate.py \
   --suite operator \
   --profile operator-local-codex-devloop \
   --profile operator-ssh-dual-host-maintenance \
+  --profile operator-ssh-dual-host-recovery \
   --profile operator-ssh-tmux-devloop
 ```
 
@@ -167,6 +169,7 @@ The playbooks in [`playbooks/`](./playbooks/) cover the product behaviors that s
 - local Codex file-edit-test-repair loops
 - remote host reuse across follow-up turns
 - remote dual-host maintenance flows
+- remote dual-host recovery after one host disconnects
 - tmux session understanding
 - tmux agent-target preparation
 - remote tmux file-edit-run-reuse loops
@@ -206,6 +209,8 @@ These are the richer human-scored scenario tracks:
   - local Codex workspace setup, file creation, test execution, and repair loop
 - `operator-ssh-dual-host-maintenance`
   - multi-host SSH continuity for health, package-manager, and follow-up maintenance work
+- `operator-ssh-dual-host-recovery`
+  - selective recovery when one host workspace disconnects but the other should stay intact
 - `operator-ssh-tmux-devloop`
   - remote `ssh -> tmux` file work, long-running target separation, and agent-CLI orientation
 

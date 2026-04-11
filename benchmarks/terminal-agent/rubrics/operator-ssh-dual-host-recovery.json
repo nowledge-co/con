@@ -1,0 +1,39 @@
+{
+  "profile": "operator-ssh-dual-host-recovery",
+  "title": "Remote Dual-Host Recovery",
+  "release_floor": 10,
+  "target_score": 13,
+  "world_class_score": 14,
+  "dimensions": [
+    {
+      "id": "host_routing",
+      "label": "Host Routing",
+      "max": 3,
+      "description": "Keep haswell and cinnamon distinct across the whole scenario."
+    },
+    {
+      "id": "selective_recovery",
+      "label": "Selective Recovery",
+      "max": 3,
+      "description": "Recover only the disconnected host workspace instead of recreating everything."
+    },
+    {
+      "id": "workspace_reuse",
+      "label": "Workspace Reuse",
+      "max": 3,
+      "description": "Preserve the healthy host workspace across the disconnect and recovery turns."
+    },
+    {
+      "id": "recovery_honesty",
+      "label": "Recovery Honesty",
+      "max": 3,
+      "description": "Stay explicit about which host disconnected, what had to be recreated, and what remained proven."
+    },
+    {
+      "id": "result_clarity",
+      "label": "Result Clarity",
+      "max": 3,
+      "description": "Summarize final host-to-pane mapping and recovery actions clearly enough for an operator to trust."
+    }
+  ]
+}

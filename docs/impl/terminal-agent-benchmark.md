@@ -66,6 +66,7 @@ Current playbooks:
 - [`local-codex-two-sum-devloop.md`](../../benchmarks/terminal-agent/playbooks/local-codex-two-sum-devloop.md)
 - [`remote-host-reuse.md`](../../benchmarks/terminal-agent/playbooks/remote-host-reuse.md)
 - [`remote-dual-host-maintenance.md`](../../benchmarks/terminal-agent/playbooks/remote-dual-host-maintenance.md)
+- [`remote-dual-host-recovery.md`](../../benchmarks/terminal-agent/playbooks/remote-dual-host-recovery.md)
 - [`tmux-session-awareness.md`](../../benchmarks/terminal-agent/playbooks/tmux-session-awareness.md)
 - [`tmux-agent-target-preparation.md`](../../benchmarks/terminal-agent/playbooks/tmux-agent-target-preparation.md)
 - [`tmux-remote-devloop.md`](../../benchmarks/terminal-agent/playbooks/tmux-remote-devloop.md)
@@ -121,6 +122,7 @@ Operator profiles:
 
 - `operator-local-codex-devloop`
 - `operator-ssh-dual-host-maintenance`
+- `operator-ssh-dual-host-recovery`
 - `operator-ssh-tmux-devloop`
 
 Profiles combine:

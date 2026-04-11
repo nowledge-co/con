@@ -1,0 +1,52 @@
+{
+  "name": "operator-ssh-dual-host-recovery",
+  "description": "Operator-grade dual-host SSH workflow that deliberately disconnects one host workspace and verifies selective recovery.",
+  "recommended_suite": "all",
+  "fresh_conversation": true,
+  "env_checks": [
+    {
+      "name": "ssh_haswell",
+      "kind": "ssh_host",
+      "value": "haswell"
+    },
+    {
+      "name": "ssh_cinnamon",
+      "kind": "ssh_host",
+      "value": "cinnamon"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Remote Dual-Host Recovery",
+      "path": "benchmarks/terminal-agent/playbooks/remote-dual-host-recovery.md"
+    }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Remote Dual-Host Recovery",
+      "case_name": "operator_remote_dual_host_recovery",
+      "steps": [
+        {
+          "label": "establish_workspaces",
+          "prompt": "Please connect to haswell and cinnamon, confirm which pane belongs to which host, and collect a short hostname plus uptime summary from each.",
+          "timeout_secs": 120
+        },
+        {
+          "label": "disconnect_one_host",
+          "prompt": "Disconnect only the cinnamon workspace cleanly, keep haswell alive, and prove you still know which pane is which afterward.",
+          "timeout_secs": 120
+        },
+        {
+          "label": "recover_only_affected_host",
+          "prompt": "Recover cinnamon only, without recreating or disturbing the haswell workspace, then collect a short free-memory summary from both hosts.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "summarize_recovery",
+          "prompt": "Summarize the final host-to-pane mapping and exactly which workspace had to be recreated or reused during recovery.",
+          "timeout_secs": 90
+        }
+      ]
+    }
+  ]
+}
