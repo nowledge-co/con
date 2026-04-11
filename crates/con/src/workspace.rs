@@ -5,12 +5,6 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use serde_json::json;
 use tokio::sync::oneshot;
-#[cfg(target_os = "macos")]
-use raw_window_handle::RawWindowHandle;
-#[cfg(target_os = "macos")]
-use cocoa::base::id;
-#[cfg(target_os = "macos")]
-use objc::{msg_send, sel, sel_impl};
 
 const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
@@ -3567,7 +3561,8 @@ impl ConWorkspace {
 
     fn close_window_from_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.defer_in(window, |workspace, window, cx| {
-            workspace.request_native_window_close(window, cx);
+            workspace.prepare_window_close(cx);
+            window.remove_window();
         });
     }
 
@@ -3619,41 +3614,6 @@ impl ConWorkspace {
                 terminal.detach_native_view(cx);
             }
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn request_native_window_close(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        let raw_handle = match raw_window_handle::HasWindowHandle::window_handle(window) {
-            Ok(handle) => handle,
-            Err(err) => {
-                log::error!("Failed to obtain window handle for close: {}", err);
-                window.remove_window();
-                return;
-            }
-        };
-
-        let ns_view: id = match raw_handle.as_raw() {
-            RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr() as id,
-            other => {
-                log::error!("Unsupported window handle for native close: {:?}", other);
-                window.remove_window();
-                return;
-            }
-        };
-
-        unsafe {
-            let ns_window: id = msg_send![ns_view, window];
-            if ns_window.is_null() {
-                window.remove_window();
-                return;
-            }
-            let _: () = msg_send![ns_window, close];
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn request_native_window_close(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        window.remove_window();
     }
 
     fn reindex_pending_control_agent_requests_after_tab_close(&mut self, closed_tab_idx: usize) {
