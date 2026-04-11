@@ -3664,32 +3664,13 @@ impl Tool for AgentCliTurnTool {
                     keys.push('\n');
                 }
                 pane_query_send_keys(&self.pane_tx, target, keys)?;
-                let wait = {
-                    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
-                    self.pane_tx
-                        .send(PaneRequest {
-                            query: PaneQuery::WaitFor {
-                                target,
-                                timeout_secs: Some(timeout_secs),
-                                pattern: None,
-                            },
-                            response_tx,
-                        })
-                        .map_err(|_| {
-                            ToolError::CommandFailed("Pane query channel closed".into())
-                        })?;
-                    match recv_pane_response(response_rx, timeout_secs + 10, "agent cli wait")? {
-                        PaneResponse::WaitComplete { status, output } => {
-                            WaitForOutput { status, output }
-                        }
-                        PaneResponse::Error(e) => return Err(ToolError::CommandFailed(e)),
-                        _ => return Err(ToolError::CommandFailed("Unexpected response".into())),
-                    }
-                };
-                let output = if wait.output.trim().is_empty() {
+                let (wait_status, settled_output) =
+                    wait_for_visible_pane_settle(&self.pane_tx, target, lines, timeout_secs)
+                        .await?;
+                let output = if settled_output.trim().is_empty() {
                     pane_query_read_content(&self.pane_tx, target, lines)?
                 } else {
-                    wait.output
+                    settled_output
                 };
                 Ok(AgentCliTurnResult {
                     agent_name: agent_name.to_string(),
@@ -3697,9 +3678,9 @@ impl Tool for AgentCliTurnTool {
                     pane_id: best.pane_id,
                     control_path: best.control_path,
                     tmux_target: None,
-                    wait_status: wait.status,
+                    wait_status,
                     output,
-                    note: "Sent the prompt into the visible agent CLI pane, waited for output quiescence, and returned a fresh pane snapshot.".to_string(),
+                    note: "Sent the prompt into the visible agent CLI pane, waited for visible output to change and settle, and returned a fresh pane snapshot.".to_string(),
                 })
             }
             WorkTargetControlPath::TmuxAgentTarget => {
@@ -4141,6 +4122,60 @@ async fn wait_for_tmux_capture_settle(
         "no_output"
     };
     Ok((status.to_string(), last_snapshot))
+}
+
+async fn wait_for_visible_pane_settle(
+    pane_tx: &Sender<PaneRequest>,
+    target: PaneSelector,
+    lines: usize,
+    timeout_secs: u64,
+) -> Result<(String, String), ToolError> {
+    const POLL_MS: u64 = 700;
+    const STABLE_POLLS: u32 = 3;
+
+    let baseline = pane_query_read_content(pane_tx, target, lines)?
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let mut phase_changed = false;
+    let mut last_snapshot = baseline.clone();
+    let mut latest_snapshot = baseline;
+    let mut stable_count = 0u32;
+
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
+        let snapshot = pane_query_read_content(pane_tx, target, lines)?
+            .lines()
+            .map(|line| line.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n");
+        latest_snapshot = snapshot.clone();
+
+        if !phase_changed {
+            if snapshot != last_snapshot {
+                phase_changed = true;
+                last_snapshot = snapshot;
+                stable_count = 0;
+            }
+            continue;
+        }
+
+        if snapshot == last_snapshot {
+            stable_count += 1;
+            if stable_count >= STABLE_POLLS {
+                return Ok(("settled".to_string(), snapshot));
+            }
+        } else {
+            last_snapshot = snapshot;
+            stable_count = 0;
+        }
+    }
+
+    let status = if phase_changed { "timeout" } else { "no_change" };
+    Ok((status.to_string(), latest_snapshot))
 }
 
 pub struct ReadPaneTool {
