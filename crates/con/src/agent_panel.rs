@@ -1413,6 +1413,11 @@ fn render_result_block(
     } else {
         trace_step_surface(theme)
     };
+    let result_shell_surface = if connected {
+        theme.background.opacity(0.88)
+    } else {
+        trace_inner_surface(theme)
+    };
     let structured_rows = parse_key_value_rows(content);
 
     if is_short && content != "(no output)" {
@@ -1424,13 +1429,14 @@ fn render_result_block(
                 .bg(nested_surface)
                 .child(
                     div()
-                        .px(px(8.0))
+                        .px(px(9.0))
                         .py(px(6.0))
-                        .rounded(px(8.0))
-                        .bg(trace_inner_surface(theme))
-                        .text_size(px(10.75))
+                        .rounded(px(9.0))
+                        .bg(result_shell_surface)
+                        .text_size(px(10.5))
                         .font_family(theme.mono_font_family.clone())
-                        .text_color(theme.muted_foreground.opacity(0.66))
+                        .line_height(px(15.0))
+                        .text_color(theme.foreground.opacity(0.72))
                         .overflow_x_hidden()
                         .whitespace_normal()
                         .child(content.to_string()),
@@ -1440,10 +1446,14 @@ fn render_result_block(
             // Short result — inline, no code block
             div()
                 .ml(px(20.0))
-                .py(px(2.0))
+                .px(px(9.0))
+                .py(px(6.0))
+                .rounded(px(9.0))
+                .bg(result_shell_surface)
                 .text_size(px(10.5))
                 .font_family(theme.mono_font_family.clone())
-                .text_color(theme.muted_foreground.opacity(0.54))
+                .line_height(px(15.0))
+                .text_color(theme.foreground.opacity(0.68))
                 .overflow_x_hidden()
                 .whitespace_normal()
                 .child(content.to_string())
@@ -1469,24 +1479,31 @@ fn render_result_block(
                 .pr(px(12.0))
                 .py(px(9.0))
                 .bg(nested_surface)
-                .overflow_x_hidden()
-                .font_family(theme.mono_font_family.clone())
-                .text_size(px(10.75))
-                .line_height(px(16.0))
-                .text_color(theme.muted_foreground.opacity(0.74))
-                .child(body)
+                .child(
+                    div()
+                        .px(px(10.0))
+                        .py(px(9.0))
+                        .rounded(px(10.0))
+                        .bg(result_shell_surface)
+                        .overflow_x_hidden()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_size(px(10.75))
+                        .line_height(px(16.0))
+                        .text_color(theme.muted_foreground.opacity(0.72))
+                        .child(body),
+                )
                 .into_any_element()
         } else {
             div()
                 .px(px(10.0))
                 .py(px(9.0))
                 .rounded(px(10.0))
-                .bg(trace_step_surface(theme))
+                .bg(result_shell_surface)
                 .overflow_x_hidden()
                 .font_family(theme.mono_font_family.clone())
                 .text_size(px(10.75))
                 .line_height(px(16.0))
-                .text_color(theme.muted_foreground.opacity(0.67))
+                .text_color(theme.muted_foreground.opacity(0.69))
                 .child(body)
                 .into_any_element()
         }
@@ -1528,7 +1545,7 @@ fn parse_key_value_rows(content: &str) -> Option<Vec<(String, String)>> {
 }
 
 fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Theme) -> Div {
-    let mut container = div().flex().flex_col().gap(px(6.0));
+    let mut container = div().flex().flex_col().gap(px(7.0)).min_w_0();
     for (key, value) in rows {
         container = container.child(
             div()
@@ -1538,16 +1555,17 @@ fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Them
                 .font_family(theme.mono_font_family.clone())
                 .child(
                     div()
-                        .w(px(94.0))
+                        .w(px(90.0))
                         .flex_shrink_0()
-                        .text_color(theme.muted_foreground.opacity(0.58))
+                        .text_color(theme.muted_foreground.opacity(0.54))
                         .child(key.clone()),
                 )
                 .child(
                     div()
                         .flex_1()
+                        .min_w_0()
                         .whitespace_normal()
-                        .text_color(theme.foreground.opacity(0.84))
+                        .text_color(theme.foreground.opacity(0.80))
                         .child(value.clone()),
                 ),
         );
@@ -1556,38 +1574,38 @@ fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Them
 }
 
 fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary.opacity(0.56)
+    theme.secondary.opacity(0.42)
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.background.opacity(0.98)
+    theme.background.opacity(0.94)
 }
 
 fn trace_step_header_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.12)
+    theme.muted.opacity(0.09)
 }
 
 fn trace_step_header_hover_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.18)
+    theme.muted.opacity(0.13)
 }
 
 fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.background.opacity(0.96)
+    theme.secondary.opacity(0.18)
 }
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.muted.opacity(0.09)
+    theme.background.opacity(0.90)
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
     if expanded {
-        "collapse output".to_string()
+        "Show less".to_string()
     } else {
         let hidden = hidden_result_line_count(content, TOOL_RESULT_PREVIEW_LINES);
         if hidden > 0 {
-            format!("{} more line{}", hidden, if hidden == 1 { "" } else { "s" })
+            format!("Show {} more line{}", hidden, if hidden == 1 { "" } else { "s" })
         } else {
-            "expand output".to_string()
+            "Show full output".to_string()
         }
     }
 }
@@ -1878,7 +1896,7 @@ fn render_result_toggle_chrome(
             div()
                 .text_size(px(10.0))
                 .font_family(theme.mono_font_family.clone())
-                .text_color(theme.muted_foreground.opacity(0.34))
+                .text_color(theme.muted_foreground.opacity(0.40))
                 .child(label),
         )
         .into_any_element()
