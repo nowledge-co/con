@@ -641,3 +641,28 @@ Next focus:
 Notes:
 - Fresh live rerun on /tmp/con.sock reached 15/15. The final install/orientation step now proves command availability inside con-bench:1.1 instead of inferring from pane inventory alone.
 
+## 2026-04-11 04:30 UTC · operator-ssh-dual-host-maintenance · 14/15 · world_class
+
+The live dual-host maintenance run stayed on the correct hosts across all four turns, reused the same SSH workspaces, and handled apt boundaries safely. The only missing piece is a harder recovery exercise such as a disconnected-pane turn.
+
+Score breakdown:
+- Host Routing: 3/3
+- Workspace Reuse: 3/3
+- Privilege Handling: 3/3
+- Recovery: 2/3
+- Result Clarity: 3/3
+
+Product changes:
+- Benchmark live-socket operator runs now create and clean up a fresh tab automatically, and tabs.new bootstraps a live first pane instead of leaving automation on a dead surface.
+
+Lessons:
+- The remote workspace inventory is now strong enough to sustain a real four-step maintenance chain without falling back to local macOS or recreating panes.
+- The remaining gap in this profile is not first-turn routing anymore; it is explicit recovery behavior when a host pane disconnects or becomes stale.
+
+Next focus:
+- Add a scored dual-host recovery case that disconnects one host pane mid-scenario and verifies the agent reuses or recreates only the affected workspace.
+- Keep the current host-routing path stable while shifting benchmark pressure toward stale/disconnected SSH recovery.
+
+Notes:
+- Fresh isolated dual-host maintenance run on /tmp/con.sock completed on tab 4 and closed cleanly. This validates the new-tab benchmark path rather than only the product workflow itself.
+
