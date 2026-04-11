@@ -72,14 +72,21 @@ struct ChatMarkdownStyle<'a> {
     text_color: Hsla,
     muted_text_color: Hsla,
     inline_code_background: Hsla,
+    inline_code_text_color: Hsla,
     code_block_background: Hsla,
     code_block_language_background: Hsla,
+    code_block_language_text_color: Hsla,
     quote_background: Hsla,
     quote_tint: Hsla,
     rule_color: Hsla,
     link_color: Hsla,
     block_gap: gpui::Pixels,
     inner_gap: gpui::Pixels,
+    inline_code_padding_x: gpui::Pixels,
+    inline_code_padding_y: gpui::Pixels,
+    inline_code_radius: gpui::Pixels,
+    code_block_radius: gpui::Pixels,
+    code_block_language_radius: gpui::Pixels,
 }
 
 impl<'a> ChatMarkdownStyle<'a> {
@@ -88,36 +95,50 @@ impl<'a> ChatMarkdownStyle<'a> {
             ChatMarkdownTone::Message => Self {
                 theme,
                 tone,
-                base_font_size: px(14.0),
-                base_line_height: px(22.0),
+                base_font_size: px(15.0),
+                base_line_height: px(24.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
-                inline_code_background: theme.secondary_hover,
-                code_block_background: theme.secondary_active.opacity(0.82),
-                code_block_language_background: theme.secondary_hover.opacity(0.94),
+                inline_code_background: theme.secondary_active.opacity(0.82),
+                inline_code_text_color: theme.foreground.opacity(0.92),
+                code_block_background: theme.secondary.opacity(0.96),
+                code_block_language_background: theme.secondary_hover.opacity(0.96),
+                code_block_language_text_color: theme.muted_foreground.opacity(0.78),
                 quote_background: theme.secondary.opacity(0.88),
                 quote_tint: theme.primary.opacity(0.42),
                 rule_color: theme.muted_foreground.opacity(0.16),
                 link_color: theme.primary,
-                block_gap: px(11.0),
-                inner_gap: px(8.0),
+                block_gap: px(12.0),
+                inner_gap: px(9.0),
+                inline_code_padding_x: px(6.0),
+                inline_code_padding_y: px(2.0),
+                inline_code_radius: px(6.0),
+                code_block_radius: px(9.0),
+                code_block_language_radius: px(5.0),
             },
             ChatMarkdownTone::Thinking => Self {
                 theme,
                 tone,
-                base_font_size: px(12.0),
-                base_line_height: px(18.0),
+                base_font_size: px(12.5),
+                base_line_height: px(19.0),
                 text_color: theme.muted_foreground.opacity(0.66),
                 muted_text_color: theme.muted_foreground.opacity(0.58),
-                inline_code_background: theme.secondary_hover.opacity(0.92),
-                code_block_background: theme.secondary.opacity(0.70),
-                code_block_language_background: theme.secondary_hover.opacity(0.90),
+                inline_code_background: theme.secondary_active.opacity(0.78),
+                inline_code_text_color: theme.foreground.opacity(0.78),
+                code_block_background: theme.secondary.opacity(0.78),
+                code_block_language_background: theme.secondary_hover.opacity(0.88),
+                code_block_language_text_color: theme.muted_foreground.opacity(0.66),
                 quote_background: theme.secondary.opacity(0.64),
                 quote_tint: theme.primary.opacity(0.30),
                 rule_color: theme.muted_foreground.opacity(0.12),
                 link_color: theme.primary.opacity(0.82),
-                block_gap: px(9.0),
-                inner_gap: px(7.0),
+                block_gap: px(10.0),
+                inner_gap: px(8.0),
+                inline_code_padding_x: px(5.0),
+                inline_code_padding_y: px(1.0),
+                inline_code_radius: px(5.0),
+                code_block_radius: px(8.0),
+                code_block_language_radius: px(4.0),
             },
         }
     }
@@ -567,20 +588,22 @@ fn render_code_block(
         .flex()
         .flex_col()
         .gap(px(7.0))
-        .px(px(11.0))
-        .py(px(10.0))
+        .px(px(12.0))
+        .py(px(11.0))
+        .rounded(style.code_block_radius)
         .bg(style.code_block_background);
 
     if let Some(language) = language {
         block = block.child(
             div()
-                .px(px(6.0))
+                .px(px(7.0))
                 .py(px(3.0))
+                .rounded(style.code_block_language_radius)
                 .bg(style.code_block_language_background)
                 .font_family(style.theme.mono_font_family.clone())
                 .text_size(px(10.0))
-                .line_height(px(13.0))
-                .text_color(style.muted_text_color)
+                .line_height(px(12.0))
+                .text_color(style.code_block_language_text_color)
                 .child(language.clone()),
         );
     }
@@ -809,14 +832,16 @@ fn render_inline_code_chip(
     let line_height = text_style_line_height(text_style, font_size);
     div()
         .whitespace_nowrap()
-        .px(px(4.0))
-        .py(px(1.0))
+        .mx(px(1.0))
+        .px(style.inline_code_padding_x)
+        .py(style.inline_code_padding_y)
+        .rounded(style.inline_code_radius)
         .bg(style.inline_code_background)
         .font_family(style.theme.mono_font_family.clone())
         .font_weight(FontWeight::MEDIUM)
         .text_size(font_size)
         .line_height(line_height)
-        .text_color(text_style.color)
+        .text_color(style.inline_code_text_color)
         .child(value.replace(' ', "\u{00A0}"))
         .into_any_element()
 }
