@@ -1,7 +1,7 @@
 use gpui::{
-    AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, HighlightStyle, Hsla,
-    IntoElement, ParentElement, SharedString, Styled, StyledText, TextStyle, UnderlineStyle,
-    WhiteSpace, div, px,
+    AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, IntoElement,
+    ParentElement, SharedString, Styled, StyledText, TextStyle, UnderlineStyle, WhiteSpace, div,
+    px,
 };
 use gpui_component::highlighter::SyntaxHighlighter;
 use gpui_component::{Colorize, Theme};
@@ -97,7 +97,7 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(720.0),
                 base_font_size: px(15.0),
                 base_line_height: px(24.0),
-                code_font_size: theme.mono_font_size + px(0.5),
+                code_font_size: theme.mono_font_size,
                 code_line_height: px(21.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
@@ -697,7 +697,7 @@ fn render_code_block(
         );
 
     let mut code_column = div().flex().flex_col().gap(px(0.0)).w_full();
-    let syntax_highlights = highlighted_code_highlights(code, language, style);
+    let syntax_runs = highlighted_code_runs(code, language, style);
 
     for (line_idx, line) in lines.iter().enumerate() {
         let display_line = if line.is_empty() { "\u{200B}" } else { line };
@@ -710,14 +710,13 @@ fn render_code_block(
                 .line_height(style.code_line_height)
                 .text_color(style.text_color.opacity(0.96))
                 .child(
-                    match syntax_highlights
+                    match syntax_runs
                         .as_ref()
-                        .and_then(|highlights| highlights.get(line_idx).cloned())
+                        .and_then(|runs| runs.get(line_idx).cloned())
                     {
-                        Some(highlights) => StyledText::new(display_line.to_string())
-                            .with_default_highlights(&mono_style, highlights),
+                        Some(runs) => StyledText::new(display_line.to_string()).with_runs(runs),
                         None => StyledText::new(display_line.to_string())
-                            .with_default_highlights(&mono_style, std::iter::empty()),
+                            .with_runs(vec![mono_style.to_run(display_line.len())]),
                     },
                 ),
         );
@@ -745,11 +744,11 @@ fn render_code_block(
         .into_any_element()
 }
 
-fn highlighted_code_highlights(
+fn highlighted_code_runs(
     code: &str,
     language: &Option<String>,
     style: &ChatMarkdownStyle<'_>,
-) -> Option<Vec<Vec<(std::ops::Range<usize>, HighlightStyle)>>> {
+) -> Option<Vec<Vec<gpui::TextRun>>> {
     let lang = canonical_highlighter_language(language.as_deref()?);
     if lang.is_empty() || suppress_syntax_highlighting(lang) {
         return None;
@@ -760,12 +759,14 @@ fn highlighted_code_highlights(
     highlighter.update(None, &rope, None);
     let highlights = highlighter.styles(&(0..code.len()), &style.theme.highlight_theme);
 
-    let mut line_highlights = Vec::new();
+    let base_style = style.code_text_style();
+    let mut line_runs = Vec::new();
     let mut line_start = 0usize;
 
     for line in code.lines() {
         let line_end = line_start + line.len();
-        let mut per_line = Vec::new();
+        let mut runs = Vec::new();
+        let mut cursor = line_start;
 
         for (range, highlight) in &highlights {
             let start = range.start.max(line_start);
@@ -774,17 +775,29 @@ fn highlighted_code_highlights(
                 continue;
             }
 
-            per_line.push((
-                (start - line_start)..(end - line_start),
-                softened_code_highlight(*highlight, style),
-            ));
+            if start > cursor {
+                runs.push(base_style.to_run(start - cursor));
+            }
+
+            let mut highlighted_style = base_style.clone();
+            apply_code_highlight_style(&mut highlighted_style, *highlight, style);
+            runs.push(highlighted_style.to_run(end - start));
+            cursor = end;
         }
 
-        line_highlights.push(per_line);
+        if cursor < line_end {
+            runs.push(base_style.to_run(line_end - cursor));
+        }
+
+        if runs.is_empty() {
+            runs.push(base_style.to_run(line.len()));
+        }
+
+        line_runs.push(runs);
         line_start = line_end + 1;
     }
 
-    Some(line_highlights)
+    Some(line_runs)
 }
 
 fn canonical_highlighter_language(language: &str) -> &str {
@@ -804,24 +817,28 @@ fn suppress_syntax_highlighting(lang: &str) -> bool {
     matches!(lang.to_ascii_lowercase().as_str(), "text" | "txt" | "plain")
 }
 
-fn softened_code_highlight(
-    mut highlight: HighlightStyle,
+fn apply_code_highlight_style(
+    text_style: &mut TextStyle,
+    highlight: gpui::HighlightStyle,
     style: &ChatMarkdownStyle<'_>,
-) -> HighlightStyle {
+) {
     let base_color = if style.theme.is_dark() {
         style.text_color.opacity(0.96)
     } else {
         style.text_color.opacity(0.90)
     };
-    highlight.font_style = None;
-    highlight.font_weight = None;
-    highlight.background_color = None;
-    highlight.underline = None;
-    highlight.strikethrough = None;
-    highlight.color = highlight
+    text_style.font_family = style.theme.mono_font_family.clone();
+    text_style.font_size = style.code_font_size.into();
+    text_style.line_height = style.code_line_height.into();
+    text_style.font_style = FontStyle::Normal;
+    text_style.font_weight = FontWeight::NORMAL;
+    text_style.background_color = None;
+    text_style.underline = None;
+    text_style.strikethrough = None;
+    text_style.color = highlight
         .color
-        .map(|color| color.mix_oklab(base_color, 0.76).opacity(0.99));
-    highlight
+        .map(|color| color.mix_oklab(base_color, 0.76).opacity(0.99))
+        .unwrap_or(base_color);
 }
 
 fn render_inline_text(
