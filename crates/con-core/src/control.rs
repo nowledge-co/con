@@ -61,7 +61,10 @@ const CONTROL_METHODS: &[(&str, &str)] = &[
         "List tabs and their conversation/session metadata.",
     ),
     ("tabs.new", "Create a new active tab."),
-    ("tabs.close", "Close a tab by index or close the active tab."),
+    (
+        "tabs.close",
+        "Close a tab by index or close the active tab.",
+    ),
     (
         "panes.list",
         "List panes for a tab with control/runtime metadata.",

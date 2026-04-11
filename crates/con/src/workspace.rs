@@ -528,22 +528,21 @@ impl ConWorkspace {
                         let Some(workspace) = workspace_handle.upgrade() else {
                             return false;
                         };
-                        workspace
-                            .update(cx, |_workspace, cx| {
-                                terminal.ensure_surface(window, cx);
-                                terminal.notify(cx);
-                                terminal.set_native_view_visible(true, cx);
-                                terminal.set_focus_state(should_focus, cx);
-                                if should_focus {
-                                    terminal.focus(window, cx);
-                                }
-                                if terminal.surface_ready(cx) {
-                                    terminal.recover_shell_prompt_state(cx);
-                                    true
-                                } else {
-                                    false
-                                }
-                            })
+                        workspace.update(cx, |_workspace, cx| {
+                            terminal.ensure_surface(window, cx);
+                            terminal.notify(cx);
+                            terminal.set_native_view_visible(true, cx);
+                            terminal.set_focus_state(should_focus, cx);
+                            if should_focus {
+                                terminal.focus(window, cx);
+                            }
+                            if terminal.surface_ready(cx) {
+                                terminal.recover_shell_prompt_state(cx);
+                                true
+                            } else {
+                                false
+                            }
+                        })
                     })
                     .unwrap_or(false);
                 if ready {
@@ -595,7 +594,10 @@ impl ConWorkspace {
                     }));
                     Self::send_control_result(response_tx, result);
                 }
-                PendingWindowControlRequest::TabsClose { tab_idx, response_tx } => {
+                PendingWindowControlRequest::TabsClose {
+                    tab_idx,
+                    response_tx,
+                } => {
                     if self.tabs.len() <= 1 {
                         Self::send_control_result(
                             response_tx,
@@ -1284,7 +1286,10 @@ impl ConWorkspace {
                 match self.resolve_control_tab_index(tab_index) {
                     Ok(tab_idx) => {
                         self.pending_window_control_requests.push(
-                            PendingWindowControlRequest::TabsClose { tab_idx, response_tx },
+                            PendingWindowControlRequest::TabsClose {
+                                tab_idx,
+                                response_tx,
+                            },
                         );
                         self.schedule_pending_create_pane_flush(cx);
                     }
