@@ -666,3 +666,28 @@ Next focus:
 Notes:
 - Fresh isolated dual-host maintenance run on /tmp/con.sock completed on tab 4 and closed cleanly. This validates the new-tab benchmark path rather than only the product workflow itself.
 
+## 2026-04-11 09:56 UTC · operator-ssh-tmux-devloop · 14/15 · world_class · llm_judge
+
+The new LLM-assisted judge path worked on a real world-class tmux run and still found a concrete truthfulness defect that the manual score had previously missed.
+
+Score breakdown:
+- tmux Targeting: 3/3
+- Target Stability: 3/3
+- Execution Correctness: 3/3
+- Separation of Work: 3/3
+- Truthfulness: 2/3
+
+Product changes:
+- Added an LLM-judge workflow that consumes the rubric, raw benchmark record, and saved conversation transcript, then emits structured judgment JSON that `score.py` can turn into a scored card.
+
+Lessons:
+- A softened benchmark report is not enough evidence for judging. The judge needs the raw transcript and tool trace to catch subtle truthfulness gaps.
+- Even strong tmux runs can overstate what was proven. In this case, the assistant claimed a shell probe result when the evidence only showed a `tmux_shell_turn` install check.
+
+Next focus:
+- Use the new judge path on every world-class candidate run before treating it as a stable benchmark milestone.
+- Tighten assistant summary language so final answers describe only the checks directly evidenced by the tool trace.
+
+Notes:
+- Judge artifact: `.context/benchmarks/judged/20260411T095643Z-operator-ssh-tmux-devloop.json`
+- Scored card: `.context/benchmarks/scored/20260411T095650Z-operator-ssh-tmux-devloop.json`

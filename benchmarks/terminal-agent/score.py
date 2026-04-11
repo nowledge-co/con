@@ -24,6 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile", required=True, help="Benchmark profile/rubric id.")
     parser.add_argument("--record", required=True, type=Path, help="Benchmark run JSON record.")
     parser.add_argument(
+        "--judge-file",
+        type=Path,
+        help="Optional LLM judge JSON from judge_llm.py. When provided, dimension scores, summary, lessons, next_focus, and scored_by default from the judge output.",
+    )
+    parser.add_argument(
         "--score",
         action="append",
         default=[],
@@ -99,6 +104,7 @@ def main() -> int:
 
     rubric = load_json(rubric_path)
     record = load_json(args.record)
+    judge = load_json(args.judge_file) if args.judge_file else None
     record_profile = None
     if isinstance(record.get("profile"), dict):
         record_profile = record["profile"].get("name")
@@ -107,6 +113,10 @@ def main() -> int:
             f"record profile `{record_profile}` does not match requested rubric `{args.profile}`"
         )
     provided_scores = parse_scores(args.score)
+    if judge is not None:
+        judge_scores = judge.get("judgment", {}).get("dimension_scores", {})
+        for key, value in judge_scores.items():
+            provided_scores.setdefault(key, value)
 
     dimensions = []
     total = 0
@@ -144,10 +154,15 @@ def main() -> int:
         "record_path": str(args.record),
         "recorded_at": record.get("recorded_at"),
         "scored_at": utc_now(),
-        "scored_by": args.scored_by,
-        "summary": args.summary,
-        "lessons": args.lesson,
-        "next_focus": args.next_focus,
+        "scored_by": args.scored_by
+        if (args.scored_by != "codex" or judge is None)
+        else "con_agent_judge",
+        "summary": args.summary
+        or (judge.get("judgment", {}).get("summary", "") if judge else ""),
+        "lessons": args.lesson
+        or (judge.get("judgment", {}).get("lessons", []) if judge else []),
+        "next_focus": args.next_focus
+        or (judge.get("judgment", {}).get("next_focus", []) if judge else []),
         "total_score": total,
         "max_score": max_total,
         "percentage": round((total / max_total) * 100, 1) if max_total else 0.0,
@@ -162,6 +177,12 @@ def main() -> int:
         if isinstance(record.get("profile"), dict)
         else None,
     }
+    if judge is not None:
+        result["judge_file"] = str(args.judge_file)
+        result["judge_confidence"] = judge.get("judgment", {}).get("confidence")
+        result["judge_evidence_gaps"] = judge.get("judgment", {}).get("evidence_gaps", [])
+        result["judge_strengths"] = judge.get("judgment", {}).get("strengths", [])
+        result["judge_weaknesses"] = judge.get("judgment", {}).get("weaknesses", [])
 
     out = output_path(args)
     out.parent.mkdir(parents=True, exist_ok=True)

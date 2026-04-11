@@ -33,7 +33,7 @@ Optional live in-tab agent verification:
 CON_BENCH_ENABLE_AGENT=1 python3 benchmarks/terminal-agent/run.py --suite all
 ```
 
-Run benchmark suites sequentially against a given live app session. Do not point two benchmark runners at the same tab in parallel.
+Run benchmark suites sequentially against a given live app session. For live-socket operator runs without `--tab`, the runner now creates a fresh temporary tab automatically so one operator run does not collide with the active conversation or another benchmark tab.
 
 Defaults:
 
@@ -145,6 +145,32 @@ python3 benchmarks/terminal-agent/score.py \
 ```
 
 This writes a scored record under `.context/benchmarks/scored/`.
+
+For an LLM-assisted judgment pass, ask Con's built-in agent to judge the rubric against the raw benchmark record and saved conversation transcript:
+
+```bash
+python3 benchmarks/terminal-agent/judge_llm.py \
+  --profile operator-ssh-tmux-devloop \
+  --record .context/benchmarks/terminal-agent-<run>.json \
+  --socket /tmp/con.sock
+```
+
+That writes a judge artifact under `.context/benchmarks/judged/`.
+
+Then convert the judge output into a normal rubric scorecard:
+
+```bash
+python3 benchmarks/terminal-agent/score.py \
+  --profile operator-ssh-tmux-devloop \
+  --record .context/benchmarks/terminal-agent-<run>.json \
+  --judge-file .context/benchmarks/judged/<judge>.json
+```
+
+This is the intended shape:
+
+- hard invariants stay machine-checkable
+- the LLM judge reads the raw transcript, not just the summary
+- final scores still stay rubric-constrained and auditable
 
 Append that scored run to the tracked improvement log with:
 

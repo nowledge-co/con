@@ -92,6 +92,7 @@ Con now commits those rubrics under:
 And ships two support tools:
 
 - `benchmarks/terminal-agent/score.py`
+- `benchmarks/terminal-agent/judge_llm.py`
 - `benchmarks/terminal-agent/log_iteration.py`
 - `benchmarks/terminal-agent/report.py`
 
@@ -102,6 +103,14 @@ This gives the project a repeatable loop:
 3. append a tracked improvement-log entry
 4. capture lessons and next focus
 5. generate trend reports across many runs
+
+The LLM judge is intentionally a second layer, not the primary source of truth:
+
+- it reads the rubric, raw benchmark record, and saved conversation transcript
+- it returns structured dimension scores, lessons, and next-focus recommendations
+- `score.py` can consume that judge artifact directly with `--judge-file`
+
+That keeps the loop auditable. The judge does not replace the rubric; it helps inspect the detailed transcript without collapsing everything into a hand-written summary.
 
 For broader evaluation, `iterate.py` now launches a fresh Con app instance per iteration with an isolated socket, isolated XDG data/config homes, an isolated session file, and an isolated conversation directory. That keeps one operator run from polluting the next with restored session state on macOS too.
 
