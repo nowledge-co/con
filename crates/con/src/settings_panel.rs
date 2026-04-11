@@ -3202,22 +3202,24 @@ impl Render for SettingsPanel {
 // ── Reusable building blocks ──────────────────────────────────────
 
 fn section_content(title: &str, subtitle: &str, theme: &gpui_component::Theme) -> Div {
-    div().flex().flex_col().gap(px(18.0)).child(
+    div().flex().flex_col().gap(px(20.0)).child(
         div()
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .gap(px(6.0))
             .child(
                 div()
-                    .text_size(px(18.0))
+                    .text_size(px(19.0))
+                    .line_height(px(24.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(title.to_string()),
             )
             .child(
                 div()
-                    .text_size(px(11.5))
-                    .line_height(px(18.0))
-                    .text_color(theme.muted_foreground.opacity(0.72))
+                    .max_w(px(520.0))
+                    .text_size(px(12.0))
+                    .line_height(px(19.0))
+                    .text_color(theme.muted_foreground.opacity(0.68))
                     .child(subtitle.to_string()),
             ),
     )
@@ -3225,9 +3227,9 @@ fn section_content(title: &str, subtitle: &str, theme: &gpui_component::Theme) -
 
 fn group_label(text: &str, theme: &gpui_component::Theme) -> Div {
     div()
-        .text_size(px(10.5))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(theme.muted_foreground.opacity(0.52))
+        .text_size(px(10.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.muted_foreground.opacity(0.5))
         .px(px(2.0))
         .pb(px(2.0))
         .child(text.to_string())
@@ -3237,7 +3239,7 @@ fn card(theme: &gpui_component::Theme, opacity: f32) -> Div {
     div()
         .flex()
         .flex_col()
-        .rounded(px(10.0))
+        .rounded(px(12.0))
         .overflow_hidden()
         .bg(theme.background.opacity(opacity.clamp(0.35, 0.98)))
 }
@@ -3251,10 +3253,16 @@ fn row_field(label: &str, input: &Entity<InputState>) -> Div {
         .flex()
         .items_center()
         .justify_between()
-        .gap(px(12.0))
+        .gap(px(16.0))
         .px(px(16.0))
-        .h(px(44.0))
-        .child(div().text_sm().flex_shrink_0().child(label.to_string()))
+        .h(px(46.0))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .flex_shrink_0()
+                .child(label.to_string()),
+        )
         .child(div().flex_1().min_w(px(160.0)).child(Input::new(input)))
 }
 
@@ -3268,7 +3276,7 @@ fn slider_row(
     div()
         .flex()
         .flex_col()
-        .gap(px(10.0))
+        .gap(px(12.0))
         .px(px(16.0))
         .py(px(12.0))
         .child(
@@ -3281,9 +3289,9 @@ fn slider_row(
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(2.0))
+                        .gap(px(3.0))
                         .flex_1()
-                        .max_w(px(360.0))
+                        .max_w(px(380.0))
                         .child(
                             div()
                                 .text_sm()
@@ -3292,8 +3300,8 @@ fn slider_row(
                         )
                         .child(
                             div()
-                                .text_size(px(11.0))
-                                .line_height(px(16.0))
+                                .text_size(px(11.5))
+                                .line_height(px(17.0))
                                 .text_color(theme.muted_foreground.opacity(0.65))
                                 .child(hint.to_string()),
                         ),
@@ -3301,7 +3309,7 @@ fn slider_row(
                 .child(
                     div()
                         .flex_shrink_0()
-                        .min_w(px(52.0))
+                        .min_w(px(58.0))
                         .px(px(8.0))
                         .py(px(4.0))
                         .rounded(px(999.0))
@@ -3339,9 +3347,9 @@ fn searchable_select_row(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(2.0))
+                .gap(px(3.0))
                 .flex_1()
-                .max_w(px(320.0))
+                .max_w(px(340.0))
                 .child(
                     div()
                         .text_sm()
@@ -3350,15 +3358,15 @@ fn searchable_select_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.0))
-                        .line_height(px(16.0))
+                        .text_size(px(11.5))
+                        .line_height(px(17.0))
                         .text_color(theme.muted_foreground.opacity(0.65))
                         .child(hint.to_string()),
                 ),
         )
         .child(
             div()
-                .w(px(220.0))
+                .w(px(236.0))
                 .flex_shrink_0()
                 .child(Select::new(select).placeholder("Search fonts…").small()),
         )
@@ -3380,9 +3388,9 @@ fn select_row(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(2.0))
+                .gap(px(3.0))
                 .flex_1()
-                .max_w(px(300.0))
+                .max_w(px(320.0))
                 .child(
                     div()
                         .text_sm()
@@ -3391,15 +3399,15 @@ fn select_row(
                 )
                 .child(
                     div()
-                        .text_size(px(11.0))
-                        .line_height(px(16.0))
+                        .text_size(px(11.5))
+                        .line_height(px(17.0))
                         .text_color(theme.muted_foreground.opacity(0.65))
                         .child(hint.to_string()),
                 ),
         )
         .child(
             div()
-                .w(px(176.0))
+                .w(px(188.0))
                 .flex_shrink_0()
                 .child(Select::new(select).small()),
         )
@@ -3417,9 +3425,9 @@ fn toggle_row(label: &str, hint: &str, toggle: Switch, theme: &gpui_component::T
             div()
                 .flex()
                 .flex_col()
-                .gap(px(2.0))
+                .gap(px(3.0))
                 .flex_1()
-                .max_w(px(340.0))
+                .max_w(px(360.0))
                 .child(
                     div()
                         .text_sm()
@@ -3428,8 +3436,8 @@ fn toggle_row(label: &str, hint: &str, toggle: Switch, theme: &gpui_component::T
                 )
                 .child(
                     div()
-                        .text_size(px(11.0))
-                        .line_height(px(16.0))
+                        .text_size(px(11.5))
+                        .line_height(px(17.0))
                         .text_color(theme.muted_foreground.opacity(0.65))
                         .child(hint.to_string()),
                 ),
