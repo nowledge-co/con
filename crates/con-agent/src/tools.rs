@@ -1291,6 +1291,16 @@ fn normalize_cwd_lower(value: &Option<String>) -> Option<String> {
         .map(|v| expand_home_prefix(v).to_ascii_lowercase())
 }
 
+fn build_local_cwd_command_prefix(cwd: &str, create_if_missing: bool) -> String {
+    let expanded = expand_home_prefix(cwd);
+    let quoted = shell_quote_fragment(&expanded);
+    if create_if_missing {
+        format!("mkdir -p {quoted} && cd {quoted}")
+    } else {
+        format!("cd {quoted}")
+    }
+}
+
 fn pane_matches_host(pane: &PaneInfo, host_contains: Option<&String>) -> bool {
     host_contains.is_none_or(|needle| {
         pane.hostname
@@ -3034,6 +3044,8 @@ pub struct EnsureLocalAgentTargetArgs {
     pub pane_index: Option<usize>,
     pub pane_id: Option<usize>,
     pub launch_command: Option<String>,
+    #[serde(default)]
+    pub create_cwd_if_missing: bool,
     #[serde(default = "default_pane_create_location")]
     pub location: PaneCreateLocation,
 }
@@ -3100,8 +3112,8 @@ fn ensure_local_agent_target_impl(
 
     let command = if let Some(cwd) = args.cwd.as_ref() {
         format!(
-            "cd {} && {}",
-            shell_quote_fragment(&expand_home_prefix(cwd)),
+            "{} && {}",
+            build_local_cwd_command_prefix(cwd, args.create_cwd_if_missing),
             launch_command
         )
     } else {
@@ -3260,6 +3272,7 @@ fn ensure_local_coding_workspace_impl(
             pane_index: args.pane_index,
             pane_id: args.pane_id,
             launch_command: args.launch_command.clone(),
+            create_cwd_if_missing: true,
             location: args.location,
         },
     )?;
@@ -3270,6 +3283,7 @@ fn ensure_local_coding_workspace_impl(
             cwd: args.cwd.clone(),
             pane_index: None,
             pane_id: None,
+            create_cwd_if_missing: true,
             location: args.location,
         },
     )?;
@@ -4542,6 +4556,8 @@ pub struct EnsureLocalShellTargetArgs {
     pub cwd: Option<String>,
     pub pane_index: Option<usize>,
     pub pane_id: Option<usize>,
+    #[serde(default)]
+    pub create_cwd_if_missing: bool,
     #[serde(default = "default_pane_create_location")]
     pub location: PaneCreateLocation,
 }
@@ -4620,7 +4636,7 @@ fn ensure_local_shell_target_impl(
     let command = args
         .cwd
         .as_ref()
-        .map(|cwd| format!("cd {}", shell_quote_fragment(&expand_home_prefix(cwd))));
+        .map(|cwd| build_local_cwd_command_prefix(cwd, args.create_cwd_if_missing));
     let (response_tx, response_rx) = crossbeam_channel::bounded(1);
     pane_tx
         .send(PaneRequest {
@@ -5376,10 +5392,11 @@ mod tests {
     use super::{
         AgentCliNativeAttachmentState, ResolveWorkTargetResult, TmuxTargetKindFilter,
         WorkTargetControlPath, WorkTargetIntent, agent_cli_native_attachment,
-        canonical_agent_cli_name, decode_key_escapes, expand_home_prefix,
-        is_tmux_agent_cli_command, is_tmux_shell_command, resolve_work_target_candidates,
-        split_at_standalone_esc,
+        build_local_cwd_command_prefix, canonical_agent_cli_name, decode_key_escapes,
+        expand_home_prefix, is_tmux_agent_cli_command, is_tmux_shell_command,
+        resolve_work_target_candidates, split_at_standalone_esc,
     };
+    use crate::tools::shell_quote_fragment;
     use crate::context::{
         PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneObservationSupport,
         PaneRuntimeScope, PaneScopeKind, RemoteWorkspaceAnchor,
@@ -5876,6 +5893,20 @@ mod tests {
             home.join("dev/temp").to_string_lossy()
         );
         assert_eq!(expand_home_prefix("~"), home.to_string_lossy());
+    }
+
+    #[test]
+    fn build_local_cwd_command_prefix_can_create_missing_directory() {
+        let home = dirs::home_dir().expect("home");
+        let quoted = shell_quote_fragment(home.join("dev/temp").to_string_lossy().as_ref());
+        assert_eq!(
+            build_local_cwd_command_prefix("~/dev/temp", true),
+            format!("mkdir -p {quoted} && cd {quoted}")
+        );
+        assert_eq!(
+            build_local_cwd_command_prefix("~/dev/temp", false),
+            format!("cd {quoted}")
+        );
     }
 
     // ── split_at_standalone_esc tests ────────────────────────────────

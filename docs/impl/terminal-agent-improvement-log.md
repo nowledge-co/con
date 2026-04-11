@@ -276,6 +276,7 @@ Product changes:
 - Added `ensure_local_coding_workspace` so the agent can prepare or reuse the full local coding pair in one step instead of stitching `ensure_local_agent_target` and `ensure_local_shell_target` together ad hoc.
 - Prevented panes with recent local agent-cli continuity from being silently reused as generic local shell targets on follow-up turns.
 - Normalized `~` project paths before startup shell quoting so new local coding panes no longer fail with literal `cd '~/project'` commands.
+- Local coding workspace bootstrap can now create the requested local project directory before launching the agent-cli or shell pane into it.
 
 Lessons:
 - The local coding path needs its own first-class control concept. Treating CLI panes and shell panes as interchangeable creates avoidable ambiguity under pressure.
@@ -283,3 +284,31 @@ Lessons:
 
 Next focus:
 - Rerun the local Codex operator benchmark on a freshly launched Con build and verify that the paired-workspace path becomes the default, not the lucky case.
+## 2026-04-11 04:27 UTC · operator-local-codex-devloop · 11/15 · release_floor
+
+Paired local shell and Codex reuse were correct, but workspace bootstrap still burned one turn recovering from a missing directory and the repair loop did not close.
+
+Score breakdown:
+- Target Preparation: 2/3
+- Target Reuse: 3/3
+- Workspace Correctness: 2/3
+- Execution Loop: 3/3
+- Follow-up Repair: 1/3
+
+Product changes:
+- Ran a fresh live local Codex operator benchmark against the current /tmp/con.sock app on tab 4.
+- Confirmed the paired shell-plus-Codex structure works in practice: pane 1 for file/test work, pane 2 for Codex interaction.
+- Observed a remaining bootstrap gap: when the requested local project directory does not exist, the first Codex-launch turn burns time recovering from that missing path.
+
+Lessons:
+- A first-class paired local coding workspace is the right shape, but it still needs stronger bootstrap semantics for missing project directories.
+- Repair continuity is now good enough to reuse the same Codex target, but the benchmark still needs green completion, not just reuse.
+
+Next focus:
+- Make paired local coding workspace preparation create the requested project directory before launching the agent-cli or shell pane.
+- Keep the same shell-plus-CLI pairing, but close the repair loop to green tests more reliably.
+
+Notes:
+- Record: .context/benchmarks/terminal-agent-20260411T042439Z.json
+- Scored card: .context/benchmarks/scored/20260411T042722Z-operator-local-codex-devloop.json
+

@@ -23,6 +23,7 @@ There were two separate causes:
   - one separate shell pane for file/test/git work
 - Tightened local shell reuse so panes with recent local agent-cli continuity are no longer silently reused as generic shell targets.
 - Normalized `~` project paths before shell quoting for local agent and local shell startup commands.
+- When the paired local coding workspace is asked to prepare a project path, it now creates that local directory as part of bootstrap instead of spending the next turn recovering from a missing cwd.
 - Updated prompt/playbook guidance so the agent prefers the paired-workspace helper when it needs both the CLI and shell sides of a local coding workflow.
 
 ## What we learned
