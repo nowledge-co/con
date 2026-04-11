@@ -85,8 +85,6 @@ struct ChatMarkdownStyle<'a> {
     link_color: Hsla,
     block_gap: gpui::Pixels,
     inner_gap: gpui::Pixels,
-    code_block_radius: gpui::Pixels,
-    code_block_language_radius: gpui::Pixels,
 }
 
 impl<'a> ChatMarkdownStyle<'a> {
@@ -113,8 +111,6 @@ impl<'a> ChatMarkdownStyle<'a> {
                 link_color: theme.primary,
                 block_gap: px(13.0),
                 inner_gap: px(9.0),
-                code_block_radius: px(9.0),
-                code_block_language_radius: px(5.0),
             },
             ChatMarkdownTone::Thinking => Self {
                 theme,
@@ -137,8 +133,6 @@ impl<'a> ChatMarkdownStyle<'a> {
                 link_color: theme.primary.opacity(0.82),
                 block_gap: px(10.0),
                 inner_gap: px(8.0),
-                code_block_radius: px(8.0),
-                code_block_language_radius: px(4.0),
             },
         }
     }
@@ -590,22 +584,23 @@ fn render_code_block(
         .flex()
         .flex_col()
         .gap(px(8.0))
-        .px(px(13.0))
+        .px(px(14.0))
         .py(px(12.0))
-        .rounded(style.code_block_radius)
+        .rounded(px(10.0))
         .bg(style.code_block_background);
 
     if let Some(language) = language {
         block = block.child(
             div()
-                .px(px(7.0))
-                .py(px(3.0))
-                .rounded(style.code_block_language_radius)
-                .bg(style.code_block_language_background)
+                .px(px(8.0))
+                .py(px(4.0))
+                .rounded(px(6.0))
+                .bg(style.code_block_language_background.opacity(0.94))
                 .font_family(style.theme.mono_font_family.clone())
-                .text_size(px(10.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(10.5))
                 .line_height(px(12.0))
-                .text_color(style.code_block_language_text_color)
+                .text_color(style.code_block_language_text_color.opacity(0.94))
                 .child(language.clone()),
         );
     }
@@ -753,7 +748,21 @@ fn append_text_flow_segments(value: &str, text_style: &TextStyle, children: &mut
     let mut segments = value.split('\n').peekable();
     while let Some(segment) = segments.next() {
         if !segment.is_empty() {
-            children.push(render_inline_text_segment(segment, text_style));
+            let mut token = String::new();
+            let mut chars = segment.chars().peekable();
+            while let Some(ch) = chars.next() {
+                token.push(ch);
+                let next_is_whitespace = chars.peek().is_some_and(|next| next.is_whitespace());
+                let boundary = (ch.is_whitespace() && !next_is_whitespace)
+                    || (!ch.is_whitespace() && next_is_whitespace);
+                if boundary {
+                    children.push(render_inline_text_segment(&token, text_style));
+                    token.clear();
+                }
+            }
+            if !token.is_empty() {
+                children.push(render_inline_text_segment(&token, text_style));
+            }
         }
         if segments.peek().is_some() {
             children.push(div().w_full().h(px(0.0)).into_any_element());
@@ -765,8 +774,8 @@ fn render_inline_text_segment(content: &str, text_style: &TextStyle) -> AnyEleme
     let font_size = text_style_font_size(text_style);
     let line_height = text_style_line_height(text_style, font_size);
     let mut segment = div()
-        .whitespace_normal()
-        .min_w_0()
+        .whitespace_nowrap()
+        .flex_none()
         .font_family(text_style.font_family.clone())
         .text_size(font_size)
         .line_height(line_height)
@@ -805,6 +814,7 @@ fn render_inline_code_chip(
     let line_height = text_style_line_height(text_style, font_size);
     div()
         .flex()
+        .flex_none()
         .items_center()
         .my(px(1.0))
         .px(px(6.0))
