@@ -3819,6 +3819,9 @@ impl Render for ConWorkspace {
 
         if !needs_ghostty_hidden {
             for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
+                if !terminal.surface_ready(cx) && terminal.has_layout(cx) {
+                    terminal.ensure_surface(window, cx);
+                }
                 terminal.set_native_view_visible(true, cx);
             }
         }
