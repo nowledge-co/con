@@ -223,9 +223,22 @@ impl GhosttyView {
     #[cfg(not(target_os = "macos"))]
     fn detach_host_view(&mut self) {}
 
-    pub fn detach_native_view(&mut self) {
+    pub fn shutdown_surface(&mut self) {
         self.native_view_visible.set(false);
+
+        if let Some(ref terminal) = self.terminal {
+            terminal.set_focus(false);
+            terminal.set_occlusion(true);
+        }
+
         self.detach_host_view();
+        self.terminal = None;
+        self.initialized = false;
+        self.awaiting_first_layout_visibility = false;
+        self.last_bounds = None;
+        self.last_title = None;
+        self.pending_write = None;
+        self.next_surface_init_retry_at = None;
     }
 
     #[cfg(target_os = "macos")]
