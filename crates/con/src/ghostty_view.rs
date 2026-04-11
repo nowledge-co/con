@@ -390,13 +390,39 @@ impl GhosttyView {
     /// mode-dependent sequences (application cursor mode, kitty protocol, etc.)
     /// correctly. Falls back to `ghostty_surface_text` for composed/IME text
     /// when no keycode mapping exists.
-    fn handle_key_down(&self, event: &KeyDownEvent) {
+    fn handle_key_down(&self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let terminal = match self.terminal.as_ref() {
             Some(t) => t,
             None => return,
         };
 
         let keystroke = &event.keystroke;
+
+        if keystroke.modifiers.platform {
+            match keystroke.key.as_str() {
+                "c" => {
+                    if terminal.has_selection() {
+                        if let Some(selection) = terminal.selection_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(selection));
+                        }
+                    }
+                    return;
+                }
+                "v" => {
+                    if let Some(text) = cx
+                        .read_from_clipboard()
+                        .and_then(|item| item.text().map(|s| s.to_string()))
+                    {
+                        if !text.is_empty() {
+                            terminal.send_text(&text);
+                            cx.notify();
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
 
         // App-level shortcuts — skip forwarding so GPUI action dispatch handles them.
         // All other Cmd/Ctrl combos pass through to ghostty (e.g. cmd-k for clear screen).
@@ -717,7 +743,7 @@ impl Render for GhosttyView {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                this.handle_key_down(event);
+                this.handle_key_down(event, cx);
                 // Force repaint — some ghostty key bindings (e.g. cmd-k clear screen)
                 // modify the terminal without emitting GHOSTTY_ACTION_RENDER.
                 cx.notify();
