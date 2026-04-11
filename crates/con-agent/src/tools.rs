@@ -1408,9 +1408,13 @@ fn pane_matches_host(pane: &PaneInfo, host_contains: Option<&String>) -> bool {
     })
 }
 
+fn pane_workspace_cwd_hint(pane: &PaneInfo) -> Option<String> {
+    crate::context::workspace_cwd_hint(pane.cwd.as_deref(), &pane.recent_actions)
+}
+
 fn pane_matches_cwd(pane: &PaneInfo, cwd_contains: Option<&String>) -> bool {
     cwd_contains.is_none_or(|needle| {
-        pane.cwd
+        pane_workspace_cwd_hint(pane)
             .as_ref()
             .is_some_and(|cwd| cwd.to_ascii_lowercase().contains(needle))
     })
@@ -5789,6 +5793,7 @@ mod tests {
         WorkTargetControlPath, WorkTargetIntent, agent_cli_native_attachment,
         build_local_cwd_command_prefix, canonical_agent_cli_name, decode_key_escapes,
         expand_home_prefix, is_tmux_agent_cli_command, is_tmux_shell_command,
+        pane_matches_cwd,
         resolve_work_target_candidates, split_at_standalone_esc,
     };
     use crate::context::{
@@ -6282,6 +6287,33 @@ mod tests {
         assert_eq!(best.control_path, WorkTargetControlPath::LocalShellTarget);
         assert_eq!(best.suggested_tool, "ensure_local_shell_target");
         assert!(best.requires_preparation);
+    }
+
+    #[test]
+    fn pane_matches_cwd_uses_workspace_hint_when_live_cwd_is_stale() {
+        let mut pane = test_pane(2, "con-bench-twosum");
+        pane.cwd = Some("/Users/weyl/conductor/workspaces/con/kingston".to_string());
+        pane.recent_actions.push(crate::context::PaneActionRecord {
+            sequence: 1,
+            kind: crate::context::PaneActionKind::PaneCreated,
+            summary: "con created this pane with startup command".to_string(),
+            command: Some(
+                "mkdir -p /Users/weyl/dev/temp/con-bench-twosum && cd /Users/weyl/dev/temp/con-bench-twosum && codex"
+                    .to_string(),
+            ),
+            source: crate::context::PaneEvidenceSource::ActionHistory,
+            confidence: crate::context::PaneConfidence::Advisory,
+            input_generation: None,
+            note: None,
+        });
+
+        assert!(
+            pane_matches_cwd(
+                &pane,
+                Some(&"/users/weyl/dev/temp/con-bench-twosum".to_string())
+            ),
+            "workspace hint from action history should outrank stale live cwd"
+        );
     }
 
     #[test]

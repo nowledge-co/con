@@ -1221,21 +1221,23 @@ pub fn ssh_target_from_recent_actions(actions: &[PaneActionRecord]) -> Option<St
 }
 
 fn parse_workspace_cwd_from_command(command: &str) -> Option<String> {
-    let trimmed = command.trim();
-    let after_cd = trimmed.strip_prefix("cd ")?;
-    let mut cwd = String::new();
-    for ch in after_cd.chars() {
-        if matches!(ch, '&' | ';' | '\n' | '\r') {
-            break;
+    let mut search_end = command.len();
+    while let Some(idx) = command[..search_end].rfind("cd ") {
+        let after_cd = &command[idx + 3..];
+        let mut cwd = String::new();
+        for ch in after_cd.chars() {
+            if matches!(ch, '&' | ';' | '\n' | '\r') {
+                break;
+            }
+            cwd.push(ch);
         }
-        cwd.push(ch);
+        let cwd = cwd.trim().trim_matches(&['"', '\''][..]);
+        if !cwd.is_empty() {
+            return Some(cwd.to_string());
+        }
+        search_end = idx;
     }
-    let cwd = cwd.trim().trim_matches(&['"', '\''][..]);
-    if cwd.is_empty() {
-        None
-    } else {
-        Some(cwd.to_string())
-    }
+    None
 }
 
 pub fn workspace_cwd_hint(
@@ -3344,6 +3346,29 @@ mod tests {
     fn detects_tmux_from_new_session_name() {
         let session = detect_tmux_session(Some("tmux new-session -d -s con-bench"));
         assert_eq!(session.as_deref(), Some("con-bench"));
+    }
+
+    #[test]
+    fn workspace_cwd_hint_parses_cd_inside_startup_chain() {
+        let actions = vec![PaneActionRecord {
+            sequence: 1,
+            kind: PaneActionKind::PaneCreated,
+            summary: "startup".to_string(),
+            command: Some(
+                "mkdir -p /Users/weyl/dev/temp/con-bench-twosum && cd /Users/weyl/dev/temp/con-bench-twosum && codex"
+                    .to_string(),
+            ),
+            source: PaneEvidenceSource::ActionHistory,
+            confidence: PaneConfidence::Advisory,
+            input_generation: None,
+            note: None,
+        }];
+
+        let hint = super::workspace_cwd_hint(None, &actions);
+        assert_eq!(
+            hint.as_deref(),
+            Some("/Users/weyl/dev/temp/con-bench-twosum")
+        );
     }
 
     #[test]
