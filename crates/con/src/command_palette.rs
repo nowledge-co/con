@@ -19,6 +19,12 @@ struct PaletteAction {
 
 const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
+        id: "new-window",
+        label: "New Window",
+        shortcut: "cmd-n",
+        category: "App",
+    },
+    PaletteAction {
         id: "new-tab",
         label: "New Tab",
         shortcut: "cmd-t",

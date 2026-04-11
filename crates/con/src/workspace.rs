@@ -1955,6 +1955,9 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         match event.action_id.as_str() {
+            "new-window" => {
+                cx.dispatch_action(&crate::NewWindow);
+            }
             "toggle-agent" => {
                 self.toggle_agent_panel(&ToggleAgentPanel, window, cx);
             }
@@ -2068,6 +2071,7 @@ impl ConWorkspace {
         let kb = settings.read(cx).keybinding_config().clone();
         cx.bind_keys([
             KeyBinding::new(&kb.quit, crate::Quit, None),
+            KeyBinding::new(&kb.new_window, crate::NewWindow, None),
             KeyBinding::new(&kb.new_tab, crate::NewTab, None),
             KeyBinding::new(&kb.toggle_agent, crate::ToggleAgentPanel, None),
             KeyBinding::new(&kb.close_tab, crate::CloseTab, None),

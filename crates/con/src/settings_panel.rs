@@ -1310,6 +1310,7 @@ impl SettingsPanel {
 
         // Write directly into config
         match field.as_str() {
+            "new_window" => self.config.keybindings.new_window = binding,
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
             "settings" => self.config.keybindings.settings = binding,
@@ -1329,6 +1330,7 @@ impl SettingsPanel {
     /// Get the current value of a keybinding by field name.
     fn binding_value(&self, field: &str) -> &str {
         match field {
+            "new_window" => &self.config.keybindings.new_window,
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
             "settings" => &self.config.keybindings.settings,
@@ -2767,6 +2769,7 @@ impl SettingsPanel {
 
         // Editable keybinding definitions: (label, field_name)
         let general_keys: &[(&str, &str)] = &[
+            ("New Window", "new_window"),
             ("New Tab", "new_tab"),
             ("Close Tab", "close_tab"),
             ("Settings", "settings"),

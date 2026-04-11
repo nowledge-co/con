@@ -26,6 +26,7 @@ actions!(
     con,
     [
         Quit,
+        NewWindow,
         NewTab,
         ToggleAgentPanel,
         ToggleInputBar,
@@ -69,6 +70,37 @@ fn set_dock_icon() {}
 #[cfg(not(target_os = "macos"))]
 compile_error!("con currently requires macOS and the embedded Ghostty backend.");
 
+fn default_window_options(cx: &mut App) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::centered(size(px(1200.0), px(800.0)), cx)),
+        titlebar: Some(TitlebarOptions {
+            title: Some("con".into()),
+            appears_transparent: true,
+            ..Default::default()
+        }),
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    }
+}
+
+fn open_con_window(config: con_core::Config, exit_on_error: bool, cx: &mut App) {
+    let window_options = default_window_options(cx);
+    cx.spawn(async move |cx| {
+        if let Err(err) = cx.open_window(window_options, |window, cx| {
+            let view = cx.new(|cx| ConWorkspace::new(config.clone(), window, cx));
+            cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
+        }) {
+            if exit_on_error {
+                eprintln!("Fatal: failed to open window: {err}");
+                std::process::exit(1);
+            } else {
+                log::error!("Failed to open window: {err}");
+            }
+        }
+    })
+    .detach();
+}
+
 fn main() {
     env_logger::init();
 
@@ -98,6 +130,7 @@ fn main() {
         let kb = &config.keybindings;
         cx.bind_keys([
             KeyBinding::new(&kb.quit, Quit, None),
+            KeyBinding::new(&kb.new_window, NewWindow, None),
             KeyBinding::new(&kb.new_tab, NewTab, None),
             KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
             KeyBinding::new(&kb.close_tab, CloseTab, None),
@@ -113,8 +146,10 @@ fn main() {
             KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
         ]);
 
-        // Quit is handled by ConWorkspace::quit() which cancels sessions first.
-        // No global handler needed — the workspace root div has .on_action for Quit.
+        cx.on_action(|_: &NewWindow, cx: &mut App| {
+            let config = con_core::Config::load().unwrap_or_default();
+            open_con_window(config, false, cx);
+        });
 
         cx.set_menus(vec![
             Menu {
@@ -129,6 +164,7 @@ fn main() {
             Menu {
                 name: "File".into(),
                 items: vec![
+                    MenuItem::action("New Window", NewWindow),
                     MenuItem::action("New Tab", NewTab),
                     MenuItem::action("Close Tab", CloseTab),
                     MenuItem::separator(),
@@ -164,27 +200,6 @@ fn main() {
             },
         ]);
 
-        let window_options = WindowOptions {
-            window_bounds: Some(WindowBounds::centered(size(px(1200.0), px(800.0)), cx)),
-            titlebar: Some(TitlebarOptions {
-                title: Some("con".into()),
-                appears_transparent: true,
-                ..Default::default()
-            }),
-            window_background: WindowBackgroundAppearance::Transparent,
-            ..Default::default()
-        };
-
-        cx.spawn(async move |cx| {
-            cx.open_window(window_options, |window, cx| {
-                let view = cx.new(|cx| ConWorkspace::new(config.clone(), window, cx));
-                cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
-            })
-            .unwrap_or_else(|e| {
-                eprintln!("Fatal: failed to open window: {}", e);
-                std::process::exit(1);
-            });
-        })
-        .detach();
+        open_con_window(config.clone(), true, cx);
     });
 }

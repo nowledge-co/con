@@ -91,6 +91,9 @@ fn default_command_palette() -> String {
 fn default_new_tab() -> String {
     "cmd-t".into()
 }
+fn default_new_window() -> String {
+    "cmd-n".into()
+}
 fn default_close_tab() -> String {
     "cmd-w".into()
 }
@@ -118,6 +121,7 @@ fn default_toggle_input_bar() -> String {
 pub struct KeybindingConfig {
     pub toggle_agent: String,
     pub command_palette: String,
+    pub new_window: String,
     pub new_tab: String,
     pub close_tab: String,
     pub settings: String,
@@ -133,6 +137,7 @@ impl Default for KeybindingConfig {
         Self {
             toggle_agent: default_toggle_agent(),
             command_palette: default_command_palette(),
+            new_window: default_new_window(),
             new_tab: default_new_tab(),
             close_tab: default_close_tab(),
             settings: default_settings(),
