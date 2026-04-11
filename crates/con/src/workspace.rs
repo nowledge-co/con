@@ -3549,7 +3549,7 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    fn close_window_from_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn close_window_from_last_tab(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
         self.cancel_all_sessions();
 
         for request in std::mem::take(&mut self.pending_window_control_requests) {
@@ -3586,15 +3586,9 @@ impl ConWorkspace {
         for tab in &self.tabs {
             let conv = tab.session.conversation();
             let _ = conv.lock().save();
-            for terminal in tab.pane_tree.all_terminals() {
-                terminal.set_focus_state(false, cx);
-                terminal.set_native_view_visible(false, cx);
-            }
         }
 
-        window.defer(cx, |window, _cx| {
-            window.remove_window();
-        });
+        window.remove_window();
     }
 
     fn reindex_pending_control_agent_requests_after_tab_close(&mut self, closed_tab_idx: usize) {
@@ -4112,28 +4106,39 @@ impl Render for ConWorkspace {
                 .child(
                     div()
                         .id("agent-panel-divider")
-                        .w(px(5.0))
+                        .relative()
+                        .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
-                        .flex()
-                        .justify_center()
-                        .bg(theme.muted.opacity(0.035))
                         .opacity(agent_panel_chrome_progress)
-                        .cursor_col_resize()
                         .child(
                             div()
-                                .w(px(1.0))
-                                .h_full()
-                                .bg(theme.muted_foreground.opacity(0.20)),
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left(px(-2.0))
+                                .w(px(5.0))
+                                .cursor_col_resize()
+                                .bg(theme.transparent)
+                                .flex()
+                                .justify_center()
+                                .hover(|s| s.bg(theme.muted.opacity(0.05)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
+                                        this.agent_panel_drag = Some((
+                                            f32::from(event.position.x),
+                                            this.agent_panel_width,
+                                        ));
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(1.0))
+                                        .h_full()
+                                        .bg(theme.muted_foreground.opacity(0.20)),
+                                ),
                         )
-                        .hover(|s| s.bg(theme.muted.opacity(0.07)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
-                                this.agent_panel_drag =
-                                    Some((f32::from(event.position.x), this.agent_panel_width));
-                            }),
-                        ),
                 )
                 .child(
                     div()

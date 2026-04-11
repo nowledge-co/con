@@ -469,48 +469,66 @@ impl PaneTree {
                 let divider = match dir {
                     SplitDirection::Horizontal => div()
                         .id(divider_id)
-                        .w(px(5.0))
+                        .relative()
+                        .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
-                        .cursor_col_resize()
-                        .flex()
-                        .justify_center()
-                        .bg(theme.muted.opacity(0.035))
                         .child(
                             div()
-                                .w(px(1.0))
-                                .h_full()
-                                .bg(theme.muted_foreground.opacity(0.20)),
-                        )
-                        .hover(|s| s.bg(theme.muted.opacity(0.07)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            move |event: &MouseDownEvent, _window, _cx| {
-                                cb_divider(sid, f32::from(event.position.x));
-                            },
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left(px(-2.0))
+                                .w(px(5.0))
+                                .cursor_col_resize()
+                                .bg(theme.transparent)
+                                .flex()
+                                .justify_center()
+                                .hover(|s| s.bg(theme.muted.opacity(0.05)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    move |event: &MouseDownEvent, _window, _cx| {
+                                        cb_divider(sid, f32::from(event.position.x));
+                                    },
+                                )
+                                .child(
+                                    div()
+                                        .w(px(1.0))
+                                        .h_full()
+                                        .bg(theme.muted_foreground.opacity(0.20)),
+                                ),
                         ),
                     SplitDirection::Vertical => div()
                         .id(divider_id)
-                        .h(px(5.0))
+                        .relative()
+                        .h(px(1.0))
                         .w_full()
                         .flex_shrink_0()
-                        .cursor_row_resize()
-                        .flex()
-                        .items_center()
-                        .bg(theme.muted.opacity(0.035))
                         .child(
                             div()
-                                .h(px(1.0))
-                                .w_full()
-                                .bg(theme.muted_foreground.opacity(0.20)),
+                                .absolute()
+                                .left_0()
+                                .right_0()
+                                .top(px(-2.0))
+                                .h(px(5.0))
+                                .cursor_row_resize()
+                                .bg(theme.transparent)
+                                .flex()
+                                .items_center()
+                                .hover(|s| s.bg(theme.muted.opacity(0.05)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    move |event: &MouseDownEvent, _window, _cx| {
+                                        cb_divider(sid, f32::from(event.position.y));
+                                    },
+                                )
+                                .child(
+                                    div()
+                                        .h(px(1.0))
+                                        .w_full()
+                                        .bg(theme.muted_foreground.opacity(0.20)),
+                                ),
                         )
-                        .hover(|s| s.bg(theme.muted.opacity(0.07)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            move |event: &MouseDownEvent, _window, _cx| {
-                                cb_divider(sid, f32::from(event.position.y));
-                            },
-                        ),
                 };
 
                 let make_pane = |child: AnyElement, basis: f32| -> Div {
