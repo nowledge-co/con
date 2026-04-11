@@ -77,6 +77,9 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     /// Retry surface creation after transient libghostty initialization failures.
     next_surface_init_retry_at: Option<Instant>,
+    /// Ordinary pane startup should defer native surface creation until one frame
+    /// after the first layout so the host AppKit view hierarchy is settled.
+    deferred_initialization_pending: bool,
 }
 
 /// Register ghostty key bindings. Call once at startup.
@@ -183,6 +186,7 @@ impl GhosttyView {
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
             next_surface_init_retry_at: None,
+            deferred_initialization_pending: false,
         }
     }
 
@@ -368,10 +372,22 @@ impl GhosttyView {
         }
     }
 
-    fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
+    fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(target_os = "macos")]
         {
-            self.ensure_initialized(bounds, window);
+            if !self.initialized {
+                if !self.deferred_initialization_pending {
+                    self.deferred_initialization_pending = true;
+                    cx.on_next_frame(window, move |view, window, _cx| {
+                        view.deferred_initialization_pending = false;
+                        if !view.initialized {
+                            view.ensure_initialized(bounds, window);
+                        }
+                        view.update_frame(bounds);
+                    });
+                }
+                return;
+            }
             self.update_frame(bounds);
             let effective_visible =
                 self.native_view_visible.get() && !self.awaiting_first_layout_visibility;
@@ -794,7 +810,7 @@ impl Render for GhosttyView {
                         let entity = entity.clone();
                         move |bounds, window, cx| {
                             let _ = entity.update(cx, |view: &mut GhosttyView, _cx| {
-                                view.on_layout(bounds, window);
+                                view.on_layout(bounds, window, _cx);
                             });
                         }
                     },
