@@ -94,22 +94,22 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(720.0),
                 base_font_size: px(14.5),
                 base_line_height: px(23.0),
-                code_font_size: px(13.0),
-                code_line_height: px(21.0),
+                code_font_size: px(12.75),
+                code_line_height: px(20.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
-                inline_code_background: theme.secondary_active.opacity(0.82),
-                inline_code_text_color: theme.foreground.opacity(0.92),
-                code_block_background: theme.secondary.opacity(0.92),
-                code_block_language_background: theme.secondary_hover.opacity(0.96),
-                code_block_language_text_color: theme.muted_foreground.opacity(0.78),
-                quote_background: theme.secondary.opacity(0.84),
-                quote_tint: theme.primary.opacity(0.42),
+                inline_code_background: theme.secondary_active.opacity(0.52),
+                inline_code_text_color: theme.foreground.opacity(0.90),
+                code_block_background: theme.secondary.opacity(0.74),
+                code_block_language_background: theme.secondary_hover.opacity(0.84),
+                code_block_language_text_color: theme.muted_foreground.opacity(0.72),
+                quote_background: theme.secondary.opacity(0.68),
+                quote_tint: theme.primary.opacity(0.34),
                 rule_color: theme.muted_foreground.opacity(0.16),
                 link_color: theme.primary,
                 table_border: theme.muted_foreground.opacity(0.10),
-                table_header_background: theme.muted.opacity(0.12),
-                table_cell_background: theme.background.opacity(0.92),
+                table_header_background: theme.muted.opacity(0.10),
+                table_cell_background: theme.background.opacity(0.96),
                 block_gap: px(13.0),
                 inner_gap: px(9.0),
             },
@@ -119,22 +119,22 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(640.0),
                 base_font_size: px(12.5),
                 base_line_height: px(19.5),
-                code_font_size: px(12.0),
-                code_line_height: px(18.0),
+                code_font_size: px(11.75),
+                code_line_height: px(17.5),
                 text_color: theme.muted_foreground.opacity(0.66),
                 muted_text_color: theme.muted_foreground.opacity(0.58),
-                inline_code_background: theme.secondary_active.opacity(0.78),
+                inline_code_background: theme.secondary_active.opacity(0.46),
                 inline_code_text_color: theme.foreground.opacity(0.78),
-                code_block_background: theme.secondary.opacity(0.72),
-                code_block_language_background: theme.secondary_hover.opacity(0.88),
+                code_block_background: theme.secondary.opacity(0.62),
+                code_block_language_background: theme.secondary_hover.opacity(0.76),
                 code_block_language_text_color: theme.muted_foreground.opacity(0.66),
-                quote_background: theme.secondary.opacity(0.58),
-                quote_tint: theme.primary.opacity(0.30),
+                quote_background: theme.secondary.opacity(0.46),
+                quote_tint: theme.primary.opacity(0.24),
                 rule_color: theme.muted_foreground.opacity(0.12),
                 link_color: theme.primary.opacity(0.82),
                 table_border: theme.muted_foreground.opacity(0.08),
-                table_header_background: theme.muted.opacity(0.10),
-                table_cell_background: theme.background.opacity(0.78),
+                table_header_background: theme.muted.opacity(0.08),
+                table_cell_background: theme.background.opacity(0.82),
                 block_gap: px(10.0),
                 inner_gap: px(8.0),
             },
@@ -651,24 +651,21 @@ fn render_code_block(
         .w_full()
         .flex()
         .flex_col()
-        .gap(px(8.0))
-        .px(px(14.0))
-        .py(px(12.0))
-        .rounded(px(10.0))
-        .bg(style.code_block_background);
+        .overflow_hidden()
+        .rounded(px(11.0))
+        .bg(style.code_block_background.opacity(0.98));
 
     if let Some(language) = language {
         block = block.child(
             div()
-                .px(px(8.0))
-                .py(px(4.0))
-                .rounded(px(6.0))
-                .bg(style.code_block_language_background.opacity(0.94))
+                .px(px(14.0))
+                .py(px(7.0))
+                .bg(style.code_block_language_background.opacity(0.98))
                 .font_family(style.theme.mono_font_family.clone())
                 .font_weight(FontWeight::MEDIUM)
-                .text_size(px(10.5))
+                .text_size(px(10.0))
                 .line_height(px(12.0))
-                .text_color(style.code_block_language_text_color.opacity(0.94))
+                .text_color(style.code_block_language_text_color.opacity(0.9))
                 .child(language.clone()),
         );
     }
@@ -696,7 +693,15 @@ fn render_code_block(
         );
     }
 
-    block.child(code_column).into_any_element()
+    block
+        .child(
+            div()
+                .px(px(14.0))
+                .py(px(12.0))
+                .bg(style.code_block_background.opacity(0.98))
+                .child(code_column),
+        )
+        .into_any_element()
 }
 
 fn render_inline_text(
@@ -722,180 +727,7 @@ fn render_inline_content(
     base_style: &TextStyle,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
-    if contains_inline_code(inlines) {
-        render_inline_flow(inlines, base_style, style)
-    } else {
-        render_inline_text(inlines, base_style, style)
-    }
-}
-
-fn contains_inline_code(inlines: &[MarkdownInline]) -> bool {
-    inlines.iter().any(|inline| match inline {
-        MarkdownInline::Code(_) => true,
-        MarkdownInline::Emphasis(children)
-        | MarkdownInline::Strong(children)
-        | MarkdownInline::Strikethrough(children) => contains_inline_code(children),
-        MarkdownInline::Link { label, .. } => contains_inline_code(label),
-        MarkdownInline::Text(_) | MarkdownInline::SoftBreak | MarkdownInline::LineBreak => false,
-    })
-}
-
-fn render_inline_flow(
-    inlines: &[MarkdownInline],
-    base_style: &TextStyle,
-    style: &ChatMarkdownStyle<'_>,
-) -> AnyElement {
-    let mut children = Vec::new();
-    append_inline_flow_segments(inlines, base_style.clone(), style, &mut children);
-
-    if children.is_empty() {
-        children.push(div().child("\u{200B}").into_any_element());
-    }
-
-    div()
-        .w_full()
-        .flex()
-        .flex_wrap()
-        .items_baseline()
-        .gap_x(px(2.0))
-        .gap_y(px(4.0))
-        .children(children)
-        .into_any_element()
-}
-
-fn append_inline_flow_segments(
-    inlines: &[MarkdownInline],
-    current_style: TextStyle,
-    style: &ChatMarkdownStyle<'_>,
-    children: &mut Vec<AnyElement>,
-) {
-    for inline in inlines {
-        match inline {
-            MarkdownInline::Text(value) => append_text_flow_segments(value, &current_style, children),
-            MarkdownInline::Code(value) => {
-                children.push(render_inline_code_chip(value, &current_style, style));
-            }
-            MarkdownInline::Emphasis(children_inlines) => {
-                let mut emphasis = current_style.clone();
-                emphasis.font_style = FontStyle::Italic;
-                append_inline_flow_segments(children_inlines, emphasis, style, children);
-            }
-            MarkdownInline::Strong(children_inlines) => {
-                let mut strong = current_style.clone();
-                strong.font_weight = FontWeight::SEMIBOLD;
-                append_inline_flow_segments(children_inlines, strong, style, children);
-            }
-            MarkdownInline::Strikethrough(children_inlines) => {
-                let mut struck = current_style.clone();
-                struck.strikethrough = Some(gpui::StrikethroughStyle {
-                    thickness: px(1.0),
-                    color: Some(current_style.color.opacity(0.55)),
-                    ..Default::default()
-                });
-                append_inline_flow_segments(children_inlines, struck, style, children);
-            }
-            MarkdownInline::Link { label, .. } => {
-                let mut link_style = current_style.clone();
-                link_style.color = style.link_color;
-                link_style.underline = Some(UnderlineStyle {
-                    color: Some(style.link_color.opacity(0.48)),
-                    thickness: px(1.0),
-                    wavy: false,
-                });
-                append_inline_flow_segments(label, link_style, style, children);
-            }
-            MarkdownInline::SoftBreak => append_text_flow_segments(" ", &current_style, children),
-            MarkdownInline::LineBreak => {
-                children.push(div().w_full().h(px(0.0)).into_any_element());
-            }
-        }
-    }
-}
-
-fn append_text_flow_segments(value: &str, text_style: &TextStyle, children: &mut Vec<AnyElement>) {
-    let mut segments = value.split('\n').peekable();
-    while let Some(segment) = segments.next() {
-        if !segment.is_empty() {
-            let mut token = String::new();
-            let mut chars = segment.chars().peekable();
-            while let Some(ch) = chars.next() {
-                token.push(ch);
-                let next_is_whitespace = chars.peek().is_some_and(|next| next.is_whitespace());
-                let boundary = (ch.is_whitespace() && !next_is_whitespace)
-                    || (!ch.is_whitespace() && next_is_whitespace);
-                if boundary {
-                    children.push(render_inline_text_segment(&token, text_style));
-                    token.clear();
-                }
-            }
-            if !token.is_empty() {
-                children.push(render_inline_text_segment(&token, text_style));
-            }
-        }
-        if segments.peek().is_some() {
-            children.push(div().w_full().h(px(0.0)).into_any_element());
-        }
-    }
-}
-
-fn render_inline_text_segment(content: &str, text_style: &TextStyle) -> AnyElement {
-    let font_size = text_style_font_size(text_style);
-    let line_height = text_style_line_height(text_style, font_size);
-    let mut segment = div()
-        .whitespace_nowrap()
-        .flex_none()
-        .font_family(text_style.font_family.clone())
-        .text_size(font_size)
-        .line_height(line_height)
-        .text_color(text_style.color)
-        .child(content.to_string());
-
-    if text_style.font_weight != FontWeight::NORMAL {
-        segment = segment.font_weight(text_style.font_weight);
-    }
-    if text_style.font_style == FontStyle::Italic {
-        segment = segment.italic();
-    }
-    if let Some(underline) = &text_style.underline {
-        segment = segment
-            .underline()
-            .text_decoration_color(underline.color.unwrap_or(text_style.color));
-        segment = if underline.wavy {
-            segment.text_decoration_wavy()
-        } else {
-            segment.text_decoration_solid()
-        };
-    }
-    if text_style.strikethrough.is_some() {
-        segment = segment.line_through();
-    }
-
-    segment.into_any_element()
-}
-
-fn render_inline_code_chip(
-    value: &str,
-    text_style: &TextStyle,
-    style: &ChatMarkdownStyle<'_>,
-) -> AnyElement {
-    let font_size = text_style_font_size(text_style) - px(0.5);
-    let line_height = text_style_line_height(text_style, font_size);
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .my(px(1.0))
-        .px(px(6.0))
-        .py(px(2.0))
-        .rounded(px(7.0))
-        .bg(style.inline_code_background.opacity(0.88))
-        .font_family(style.theme.mono_font_family.clone())
-        .font_weight(FontWeight::MEDIUM)
-        .text_size(font_size)
-        .line_height(line_height)
-        .text_color(style.inline_code_text_color)
-        .child(value.replace(' ', "\u{00A0}"))
-        .into_any_element()
+    render_inline_text(inlines, base_style, style)
 }
 
 fn text_style_font_size(text_style: &TextStyle) -> gpui::Pixels {
