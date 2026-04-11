@@ -20,7 +20,7 @@ use crate::input_bar::{
     EscapeInput, InputBar, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
 };
 use crate::model_registry::ModelRegistry;
-use crate::motion::MotionValue;
+use crate::motion::{MotionValue, horizontal_reveal_offset};
 use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
@@ -3191,7 +3191,7 @@ impl ConWorkspace {
         self.agent_panel_open = !self.agent_panel_open;
         self.agent_panel_motion.set_target(
             if self.agent_panel_open { 1.0 } else { 0.0 },
-            std::time::Duration::from_millis(if self.agent_panel_open { 220 } else { 180 }),
+            std::time::Duration::from_millis(if self.agent_panel_open { 250 } else { 210 }),
         );
         if self.agent_panel_open {
             if self.input_bar_visible {
@@ -3872,6 +3872,7 @@ impl Render for ConWorkspace {
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
         let agent_panel_progress = self.agent_panel_motion.value(window);
         let input_bar_progress = self.input_bar_motion.value(window);
+        let agent_panel_chrome_progress = agent_panel_progress.powf(1.35);
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -3905,7 +3906,7 @@ impl Render for ConWorkspace {
                         .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
-                        .opacity(agent_panel_progress)
+                        .opacity(agent_panel_chrome_progress)
                         .cursor_col_resize()
                         .hover(|s| s.bg(theme.primary.opacity(0.15)))
                         .on_mouse_down(
@@ -3921,8 +3922,13 @@ impl Render for ConWorkspace {
                         .w(px(animated_panel_width))
                         .h_full()
                         .overflow_hidden()
-                        .opacity(agent_panel_progress)
-                        .child(self.agent_panel.clone()),
+                        .child(
+                            div()
+                                .h_full()
+                                .pl(horizontal_reveal_offset(agent_panel_progress, 18.0))
+                                .opacity(agent_panel_progress)
+                                .child(self.agent_panel.clone()),
+                        ),
                 );
         }
 
