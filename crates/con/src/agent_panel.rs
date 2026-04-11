@@ -21,6 +21,7 @@ use chrono::Utc;
 
 use crate::chat_markdown::{ChatMarkdownTone, render_chat_markdown};
 use crate::input_bar::SkillEntry;
+use crate::motion::{MotionValue, vertical_reveal_offset};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentStatus {
@@ -389,6 +390,7 @@ pub struct AgentPanel {
     conversation_list: Vec<ConversationSummary>,
     auto_approve: bool,
     model_name: String,
+    content_reveal: MotionValue,
     /// Index of user message currently being edited inline (None = not editing)
     editing_msg_idx: Option<usize>,
     /// Input state for the inline edit field
@@ -473,6 +475,7 @@ impl AgentPanel {
             conversation_list: Vec::new(),
             auto_approve: false,
             model_name: String::new(),
+            content_reveal: MotionValue::new(1.0),
             editing_msg_idx: None,
             edit_input_state: None,
             show_inline_input: false,
@@ -510,6 +513,7 @@ impl AgentPanel {
             conversation_list: Vec::new(),
             auto_approve: false,
             model_name: String::new(),
+            content_reveal: MotionValue::new(1.0),
             editing_msg_idx: None,
             edit_input_state: None,
             show_inline_input: false,
@@ -604,6 +608,8 @@ impl AgentPanel {
         if self.showing_history {
             self.conversation_list = con_agent::Conversation::list_all();
         }
+        self.content_reveal
+            .restart(0.0, 1.0, std::time::Duration::from_millis(180));
         cx.notify();
     }
 
@@ -2027,6 +2033,7 @@ impl Render for AgentPanel {
         }
 
         let theme = cx.theme();
+        let content_reveal = self.content_reveal.value(window);
 
         // ── Messages ──────────────────────────────────────────────
         let mut messages_content = div()
@@ -3420,7 +3427,11 @@ impl Render for AgentPanel {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(history_content)
+                    .child(
+                        history_content
+                            .opacity(content_reveal)
+                            .pt(vertical_reveal_offset(content_reveal, 10.0)),
+                    )
                     .vertical_scrollbar(&self.history_scroll_handle),
             );
         } else {
@@ -3430,7 +3441,11 @@ impl Render for AgentPanel {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(messages_content)
+                    .child(
+                        messages_content
+                            .opacity(content_reveal)
+                            .pt(vertical_reveal_offset(content_reveal, 10.0)),
+                    )
                     .vertical_scrollbar(&self.scroll_handle),
             );
         }

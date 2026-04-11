@@ -20,6 +20,7 @@ use crate::input_bar::{
     EscapeInput, InputBar, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
 };
 use crate::model_registry::ModelRegistry;
+use crate::motion::MotionValue;
 use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
@@ -70,8 +71,10 @@ pub struct ConWorkspace {
     command_palette: Entity<CommandPalette>,
     harness: AgentHarness,
     agent_panel_open: bool,
+    agent_panel_motion: MotionValue,
     agent_panel_width: f32,
     input_bar_visible: bool,
+    input_bar_motion: MotionValue,
     /// Tracks whether a modal was open on the last render, so we can
     /// restore terminal focus when a modal dismisses itself internally.
     modal_was_open: bool,
@@ -476,8 +479,10 @@ impl ConWorkspace {
             command_palette,
             harness,
             agent_panel_open,
+            agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
             agent_panel_width,
             input_bar_visible: session.input_bar_visible,
+            input_bar_motion: MotionValue::new(if session.input_bar_visible { 1.0 } else { 0.0 }),
             modal_was_open: false,
             ghostty_hidden: false,
             pending_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -3184,6 +3189,10 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.agent_panel_open = !self.agent_panel_open;
+        self.agent_panel_motion.set_target(
+            if self.agent_panel_open { 1.0 } else { 0.0 },
+            std::time::Duration::from_millis(if self.agent_panel_open { 220 } else { 180 }),
+        );
         if self.agent_panel_open {
             if self.input_bar_visible {
                 self.input_bar.focus_handle(cx).focus(window, cx);
@@ -3209,6 +3218,10 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.input_bar_visible = !self.input_bar_visible;
+        self.input_bar_motion.set_target(
+            if self.input_bar_visible { 1.0 } else { 0.0 },
+            std::time::Duration::from_millis(if self.input_bar_visible { 180 } else { 150 }),
+        );
         if self.input_bar_visible {
             self.input_bar.focus_handle(cx).focus(window, cx);
         } else if self.agent_panel_open {
@@ -3857,6 +3870,8 @@ impl Render for ConWorkspace {
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
+        let agent_panel_progress = self.agent_panel_motion.value(window);
+        let input_bar_progress = self.input_bar_motion.value(window);
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -3880,7 +3895,8 @@ impl Render for ConWorkspace {
 
         let mut main_area = div().flex().flex_1().min_h_0().child(terminal_area);
 
-        if self.agent_panel_open {
+        if agent_panel_progress > 0.01 {
+            let animated_panel_width = self.agent_panel_width * agent_panel_progress;
             // Draggable divider — invisible, only visible on hover
             main_area = main_area
                 .child(
@@ -3889,6 +3905,7 @@ impl Render for ConWorkspace {
                         .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
+                        .opacity(agent_panel_progress)
                         .cursor_col_resize()
                         .hover(|s| s.bg(theme.primary.opacity(0.15)))
                         .on_mouse_down(
@@ -3901,9 +3918,10 @@ impl Render for ConWorkspace {
                 )
                 .child(
                     div()
-                        .w(px(self.agent_panel_width))
+                        .w(px(animated_panel_width))
                         .h_full()
                         .overflow_hidden()
+                        .opacity(agent_panel_progress)
                         .child(self.agent_panel.clone()),
                 );
         }
@@ -4305,8 +4323,14 @@ impl Render for ConWorkspace {
             .child(tab_bar)
             .child(main_area);
 
-        if self.input_bar_visible {
-            root = root.child(self.input_bar.clone());
+        if input_bar_progress > 0.01 {
+            root = root.child(
+                div()
+                    .overflow_hidden()
+                    .max_h(px(160.0 * input_bar_progress))
+                    .opacity(input_bar_progress)
+                    .child(self.input_bar.clone()),
+            );
         }
 
         // Skill autocomplete popup — rendered at workspace level above ghostty

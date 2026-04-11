@@ -10,6 +10,7 @@ mod command_palette;
 mod ghostty_view;
 mod input_bar;
 mod model_registry;
+mod motion;
 mod pane_tree;
 mod settings_panel;
 mod sidebar;

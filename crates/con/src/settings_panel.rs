@@ -16,6 +16,7 @@ use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Disableable, Icon, IndexPath, Sizable as _, input::Input};
 
 use crate::model_registry::ModelRegistry;
+use crate::motion::{MotionValue, vertical_reveal_offset};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -75,6 +76,7 @@ pub struct SettingsPanel {
     oauth_runtime: Arc<tokio::runtime::Runtime>,
     focus_handle: FocusHandle,
     active_section: SettingsSection,
+    overlay_motion: MotionValue,
 
     selected_provider: ProviderKind,
     model_input: Entity<InputState>,
@@ -839,6 +841,7 @@ impl SettingsPanel {
             oauth_runtime,
             focus_handle: cx.focus_handle(),
             active_section: SettingsSection::General,
+            overlay_motion: MotionValue::new(0.0),
             selected_provider: config.agent.provider.clone(),
             model_input,
             model_select,
@@ -871,6 +874,10 @@ impl SettingsPanel {
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = !self.visible;
+        self.overlay_motion.set_target(
+            if self.visible { 1.0 } else { 0.0 },
+            std::time::Duration::from_millis(if self.visible { 220 } else { 180 }),
+        );
         if self.visible {
             let agent = &self.config.agent;
             self.selected_provider = agent.provider.clone();
@@ -1209,7 +1216,7 @@ impl SettingsPanel {
     }
 
     pub fn is_visible(&self) -> bool {
-        self.visible
+        self.visible || self.overlay_motion.is_animating()
     }
 
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1266,6 +1273,8 @@ impl SettingsPanel {
             Ok(()) => {
                 self.save_error = None;
                 self.visible = false;
+                self.overlay_motion
+                    .set_target(0.0, std::time::Duration::from_millis(180));
                 cx.emit(SaveSettings);
             }
             Err(e) => {
@@ -2891,7 +2900,8 @@ impl Focusable for SettingsPanel {
 
 impl Render for SettingsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.visible {
+        let overlay_progress = self.overlay_motion.value(window);
+        if overlay_progress <= 0.001 && !self.visible {
             return div().id("settings-overlay");
         }
 
@@ -3031,7 +3041,7 @@ impl Render for SettingsPanel {
             .occlude()
             .absolute()
             .size_full()
-            .bg(theme.background.opacity(0.6))
+            .bg(theme.background.opacity(0.6 * overlay_progress))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -3047,8 +3057,14 @@ impl Render for SettingsPanel {
             .flex()
             .items_center()
             .justify_center()
+            .opacity(overlay_progress)
             .child(
                 div()
+                    .pt(vertical_reveal_offset(overlay_progress, 18.0))
+                    .px(px(0.0))
+                    .opacity(overlay_progress)
+                    .child(
+                        div()
                     .w(card_width)
                     .h(card_height)
                     .rounded(px(12.0))
@@ -3169,6 +3185,7 @@ impl Render for SettingsPanel {
                             .min_h_0()
                             .child(sidebar)
                             .child(content_scroll),
+                    ),
                     ),
             );
 
