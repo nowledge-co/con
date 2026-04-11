@@ -1,0 +1,59 @@
+{
+  "name": "operator-local-codex-session-resume",
+  "description": "Operator-grade local coding workflow that resumes the same Codex pane after intervening shell work in ~/dev/temp.",
+  "recommended_suite": "all",
+  "fresh_conversation": true,
+  "setup_visible_shell_commands": [
+    "rm -rf ~/dev/temp/con-bench-codex-resume && mkdir -p ~/dev/temp"
+  ],
+  "env_checks": [
+    { "name": "codex_cli", "kind": "command", "value": "codex" },
+    { "name": "python3", "kind": "command", "value": "python3" },
+    { "name": "git", "kind": "command", "value": "git" },
+    { "name": "temp_project_root", "kind": "path_exists", "value": "~/dev/temp" }
+  ],
+  "playbooks": [
+    {
+      "name": "Local Codex Session Resume",
+      "path": "benchmarks/terminal-agent/playbooks/local-codex-session-resume.md"
+    }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Local Codex Session Resume",
+      "case_name": "operator_local_codex_session_resume",
+      "steps": [
+        {
+          "label": "prepare_codex_workspace",
+          "prompt": "Please prepare a Codex workspace in ~/dev/temp/con-bench-codex-resume by launching Codex there and preparing a paired local shell target for file, git, and test work.",
+          "timeout_secs": 90
+        },
+        {
+          "label": "bootstrap_project_and_commit",
+          "prompt": "Keep the Codex target prepared, but use its paired local shell target to create a tiny Python project in ~/dev/temp/con-bench-codex-resume with greet.py and test_greet.py, initialize git, make an initial commit, and run `python3 -m unittest -q`. Only touch the Codex pane if a blocking trust or continue prompt must be cleared first.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "first_codex_turn",
+          "prompt": "In the existing Codex pane, answer in exactly two bullets: one small repo-hygiene improvement you would make next, and one one-line commit message idea for the current initial project. Keep it concise and do not create a new target.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "shell_follow_up_change",
+          "prompt": "Back in the paired local shell target, add a greet_many helper to greet.py, update the tests, rerun `python3 -m unittest -q`, and show `git diff --stat`. Do not create a new target and do not ask Codex again yet.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "resumed_codex_turn",
+          "prompt": "Return to the same existing Codex pane and answer in exactly two bullets: whether the greet_many change looks consistent with the earlier structure, and a revised one-line commit message proposal. Do not create a new target.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "summarize_continuity",
+          "prompt": "Summarize which target handled shell work, which target handled the first Codex turn, which target handled the resumed Codex turn, and confirm the workspace path.",
+          "timeout_secs": 60
+        }
+      ]
+    }
+  ]
+}

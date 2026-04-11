@@ -69,6 +69,8 @@ Run a complex operator benchmark:
 python3 benchmarks/terminal-agent/run.py --profile operator-local-codex-devloop --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-local-claude-devloop --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-local-opencode-devloop --suite operator
+python3 benchmarks/terminal-agent/run.py --profile operator-local-codex-git-workflow --suite operator
+python3 benchmarks/terminal-agent/run.py --profile operator-local-codex-session-resume --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-ssh-dual-host-maintenance --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-ssh-dual-host-recovery --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-ssh-tmux-devloop --suite operator
@@ -197,8 +199,14 @@ The playbooks in [`playbooks/`](./playbooks/) cover the product behaviors that s
 
 - local Codex workspace preparation and reuse
 - local Codex file-edit-test-repair loops
+- local Codex git-backed coding and diff-review loops
+- local Codex session-resume after intervening shell work
 - local Claude Code workspace preparation and reuse
+- local Claude Code git-backed coding and diff-review loops
+- local Claude Code session-resume after intervening shell work
 - local OpenCode workspace preparation and reuse
+- local OpenCode git-backed coding and diff-review loops
+- local OpenCode session-resume after intervening shell work
 - remote host reuse across follow-up turns
 - remote dual-host maintenance flows
 - remote dual-host recovery after one host disconnects
@@ -243,6 +251,18 @@ These are the richer human-scored scenario tracks:
   - local Claude Code workspace setup, file creation, test execution, and repair loop
 - `operator-local-opencode-devloop`
   - local OpenCode workspace setup, file creation, test execution, and repair loop
+- `operator-local-codex-git-workflow`
+  - local Codex paired workspace with git init, diff evidence, and interactive review turn
+- `operator-local-claude-git-workflow`
+  - local Claude Code paired workspace with git init, diff evidence, and interactive review turn
+- `operator-local-opencode-git-workflow`
+  - local OpenCode paired workspace with git init, diff evidence, and interactive review turn
+- `operator-local-codex-session-resume`
+  - local Codex continuity after returning from shell-lane work back into the same interactive pane
+- `operator-local-claude-session-resume`
+  - local Claude Code continuity after returning from shell-lane work back into the same interactive pane
+- `operator-local-opencode-session-resume`
+  - local OpenCode continuity after returning from shell-lane work back into the same interactive pane
 - `operator-ssh-dual-host-maintenance`
   - multi-host SSH continuity for health, package-manager, and follow-up maintenance work
 - `operator-ssh-dual-host-recovery`

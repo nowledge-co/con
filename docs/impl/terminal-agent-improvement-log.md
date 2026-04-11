@@ -2,6 +2,35 @@
 
 Tracked benchmark-backed iteration notes for Con's terminal agent.
 
+## 2026-04-11 11:18 UTC · operator-local-codex-git-workflow · 15/15 · world_class
+
+Strong paired-workspace execution end to end: shell-lane git/test work stayed deterministic, the interactive Codex lane was reused only for the requested review turn, and the final summary made continuity auditable.
+
+Score breakdown:
+- Target Preparation: 3/3
+- Workspace Correctness: 3/3
+- Git Loop Execution: 3/3
+- Interactive Review Turn: 3/3
+- Continuity and Reuse: 3/3
+
+Product changes:
+- Added transcript-aware judging and scoring support directly into `iterate.py` so successful operator runs produce comparable artifacts automatically.
+- Promoted screen-observed local agent-lane detection and separated prompt text from submit keystrokes for interactive agent-CLI turns.
+- Hardened pane-read waiting so slow interactive review turns treat transient read timeouts as recoverable instead of immediate benchmark failure.
+
+Lessons:
+- The paired local workspace model is now strong enough for git-backed coding loops, not just toy edit/test cycles.
+- Interactive local agent turns need output-settle waiting, not shell-idle waiting.
+- Raw benchmark prompts must measure Con continuity, not third-party CLI wandering; narrow, evidence-seeking prompts are much more useful than open-ended “review the repo” asks.
+
+Next focus:
+- Add and stabilize session-resume benchmarks that return to the same interactive coding pane after intervening shell work.
+- Remove stale pending-request state when tabs are closed or reset so fresh benchmark tabs cannot inherit control-plane busy leaks.
+
+Notes:
+- Scorecard: `.context/benchmarks/scored/20260411T111845Z-operator-local-codex-git-workflow.json`
+- Judge artifact: `.context/benchmarks/judged/20260411T111844Z-operator-local-codex-git-workflow.json`
+
 ## 2026-04-10 11:01 UTC · operator-local-codex-devloop · 12/15 · release_floor
 
 Strong same-target continuity, but the Codex trust prompt and final repair completion still require extra handling.

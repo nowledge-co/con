@@ -1,0 +1,39 @@
+{
+  "profile": "operator-local-codex-session-resume",
+  "title": "Local Codex Session Resume",
+  "release_floor": 10,
+  "target_score": 13,
+  "world_class_score": 14,
+  "dimensions": [
+    {
+      "id": "target_preparation",
+      "label": "Target Preparation",
+      "max": 3,
+      "description": "Prepare one Codex target plus one paired local shell target cleanly, including any trust/interstitial prompt handling."
+    },
+    {
+      "id": "shell_lane_execution",
+      "label": "Shell Lane Execution",
+      "max": 3,
+      "description": "Bootstrap the project, run tests, make the shell-only follow-up change, and show current diff evidence from the paired shell lane."
+    },
+    {
+      "id": "first_interactive_turn",
+      "label": "First Interactive Turn",
+      "max": 3,
+      "description": "Use the existing Codex pane for a real first review/suggestion turn without duplicating or bypassing the interactive target."
+    },
+    {
+      "id": "resumed_interactive_turn",
+      "label": "Resumed Interactive Turn",
+      "max": 3,
+      "description": "Return to the same Codex pane after intervening shell work and complete a second review/message turn there."
+    },
+    {
+      "id": "continuity_and_reuse",
+      "label": "Continuity and Reuse",
+      "max": 3,
+      "description": "Preserve the same paired workspace and make the shell lane versus both Codex turns auditable in the final summary."
+    }
+  ]
+}

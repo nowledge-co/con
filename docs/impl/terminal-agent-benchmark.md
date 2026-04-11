@@ -66,6 +66,12 @@ Current playbooks:
 - [`local-codex-two-sum-devloop.md`](../../benchmarks/terminal-agent/playbooks/local-codex-two-sum-devloop.md)
 - [`local-claude-two-sum-devloop.md`](../../benchmarks/terminal-agent/playbooks/local-claude-two-sum-devloop.md)
 - [`local-opencode-two-sum-devloop.md`](../../benchmarks/terminal-agent/playbooks/local-opencode-two-sum-devloop.md)
+- [`local-codex-git-workflow.md`](../../benchmarks/terminal-agent/playbooks/local-codex-git-workflow.md)
+- [`local-claude-git-workflow.md`](../../benchmarks/terminal-agent/playbooks/local-claude-git-workflow.md)
+- [`local-opencode-git-workflow.md`](../../benchmarks/terminal-agent/playbooks/local-opencode-git-workflow.md)
+- [`local-codex-session-resume.md`](../../benchmarks/terminal-agent/playbooks/local-codex-session-resume.md)
+- [`local-claude-session-resume.md`](../../benchmarks/terminal-agent/playbooks/local-claude-session-resume.md)
+- [`local-opencode-session-resume.md`](../../benchmarks/terminal-agent/playbooks/local-opencode-session-resume.md)
 - [`remote-host-reuse.md`](../../benchmarks/terminal-agent/playbooks/remote-host-reuse.md)
 - [`remote-dual-host-maintenance.md`](../../benchmarks/terminal-agent/playbooks/remote-dual-host-maintenance.md)
 - [`remote-dual-host-recovery.md`](../../benchmarks/terminal-agent/playbooks/remote-dual-host-recovery.md)
@@ -134,6 +140,12 @@ Operator profiles:
 - `operator-local-codex-devloop`
 - `operator-local-claude-devloop`
 - `operator-local-opencode-devloop`
+- `operator-local-codex-git-workflow`
+- `operator-local-claude-git-workflow`
+- `operator-local-opencode-git-workflow`
+- `operator-local-codex-session-resume`
+- `operator-local-claude-session-resume`
+- `operator-local-opencode-session-resume`
 - `operator-ssh-dual-host-maintenance`
 - `operator-ssh-dual-host-recovery`
 - `operator-ssh-tmux-devloop`
