@@ -551,6 +551,11 @@ impl PaneRuntimeTracker {
             shell_context_fresh,
             remote_host.as_deref(),
         );
+        let action_tmux_session = self
+            .recent_actions
+            .iter()
+            .rev()
+            .find_map(tmux_session_from_action_record);
         let interactive_scope = if observation.support.alternate_screen && observation.is_alt_screen
         {
             Some(PaneRuntimeScope {
@@ -671,6 +676,27 @@ impl PaneRuntimeTracker {
             });
         }
 
+        if shell_metadata_fresh
+            && shell_context
+                .as_ref()
+                .and_then(|context| context.tmux.as_ref())
+                .is_none()
+        {
+            if let Some(session) = action_tmux_session.as_ref() {
+                evidence.push(PaneEvidence {
+                    subject: "tmux_shell_anchor".to_string(),
+                    value: Some(session.clone()),
+                    source: PaneEvidenceSource::ActionHistory,
+                    confidence: PaneConfidence::Advisory,
+                    generation,
+                    note: Some(
+                        "A recent con-executed tmux command targeted this session from the current fresh shell prompt. con can use that shell as a tmux control anchor while the prompt remains fresh."
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+
         let active_scope = front_scope;
         let tmux_session = current_scope_stack
             .iter()
@@ -679,7 +705,8 @@ impl PaneRuntimeTracker {
         let last_verified_tmux_session = last_verified_scope_stack
             .iter()
             .find(|scope| scope.kind == PaneScopeKind::Multiplexer)
-            .and_then(|scope| scope.label.clone());
+            .and_then(|scope| scope.label.clone())
+            .or(action_tmux_session);
         let agent_cli = None;
 
         let mut warnings = Vec::new();
@@ -976,10 +1003,15 @@ fn command_basename(command: &str) -> Option<String> {
 fn parse_tmux_target(command: &str) -> Option<String> {
     let tokens: Vec<&str> = command.split_whitespace().collect();
     for window in tokens.windows(2) {
-        if window[0] == "-t" {
+        if matches!(window[0], "-t" | "-s") {
             return Some(window[1].trim_matches(&['"', '\''][..]).to_string());
         }
         if let Some(rest) = window[0].strip_prefix("-t") {
+            if !rest.is_empty() {
+                return Some(rest.trim_matches(&['"', '\''][..]).to_string());
+            }
+        }
+        if let Some(rest) = window[0].strip_prefix("-s") {
             if !rest.is_empty() {
                 return Some(rest.trim_matches(&['"', '\''][..]).to_string());
             }
@@ -992,6 +1024,16 @@ pub fn detect_tmux_session(last_command: Option<&str>) -> Option<String> {
     last_command
         .filter(|command| looks_like_tmux_command(command))
         .and_then(parse_tmux_target)
+}
+
+pub(crate) fn tmux_session_from_action_record(action: &PaneActionRecord) -> Option<String> {
+    if !matches!(
+        action.kind,
+        PaneActionKind::PaneCreated | PaneActionKind::VisibleShellExec
+    ) {
+        return None;
+    }
+    detect_tmux_session(action.command.as_deref())
 }
 
 fn is_agent_cli_command(command: &str) -> bool {
@@ -3293,6 +3335,12 @@ mod tests {
     fn detects_tmux_from_command_target() {
         let session = detect_tmux_session(Some("tmux attach -t model-serving"));
         assert_eq!(session.as_deref(), Some("model-serving"));
+    }
+
+    #[test]
+    fn detects_tmux_from_new_session_name() {
+        let session = detect_tmux_session(Some("tmux new-session -d -s con-bench"));
+        assert_eq!(session.as_deref(), Some("con-bench"));
     }
 
     #[test]

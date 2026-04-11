@@ -5396,7 +5396,6 @@ mod tests {
         expand_home_prefix, is_tmux_agent_cli_command, is_tmux_shell_command,
         resolve_work_target_candidates, split_at_standalone_esc,
     };
-    use crate::tools::shell_quote_fragment;
     use crate::context::{
         PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneObservationSupport,
         PaneRuntimeScope, PaneScopeKind, RemoteWorkspaceAnchor,
@@ -5405,6 +5404,7 @@ mod tests {
         PaneAddressSpace, PaneControlCapability, PaneVisibleTarget, PaneVisibleTargetKind,
         TmuxControlMode, TmuxControlState,
     };
+    use crate::tools::shell_quote_fragment;
     use crossbeam_channel::unbounded;
 
     #[test]

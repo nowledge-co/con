@@ -312,3 +312,59 @@ Notes:
 - Record: .context/benchmarks/terminal-agent-20260411T042439Z.json
 - Scored card: .context/benchmarks/scored/20260411T042722Z-operator-local-codex-devloop.json
 
+## 2026-04-11 04:30 UTC · operator-ssh-dual-host-maintenance · 14/15 · world_class
+
+The live dual-host maintenance run stayed on the correct hosts across all four turns, reused the same SSH workspaces, and handled apt boundaries safely. The only missing piece is a harder recovery exercise such as a disconnected-pane turn.
+
+Score breakdown:
+- Host Routing: 3/3
+- Workspace Reuse: 3/3
+- Privilege Handling: 3/3
+- Recovery: 2/3
+- Result Clarity: 3/3
+
+Product changes:
+- Ran a fresh live dual-host operator benchmark against the current /tmp/con.sock app on tab 5.
+- Confirmed that the same SSH workspaces were reused across healthcheck, package-state, warning-log, and continuity-proof turns.
+- Raised the dual-host profile to a world-class score for the first time in the tracked loop.
+
+Lessons:
+- The remote workspace inventory is now strong enough to sustain a real four-step maintenance chain without falling back to local macOS or recreating panes.
+- The remaining gap in this profile is not first-turn routing anymore; it is explicit recovery behavior when a host pane disconnects or becomes stale.
+
+Next focus:
+- Add a scored dual-host recovery case that disconnects one host pane mid-scenario and verifies the agent reuses or recreates only the affected workspace.
+- Keep the current host-routing path stable while shifting benchmark pressure toward stale/disconnected SSH recovery.
+
+Notes:
+- Record: .context/benchmarks/terminal-agent-20260411T043036Z.json
+- Scored card: .context/benchmarks/scored/20260411T043059Z-operator-ssh-dual-host-maintenance.json
+
+## 2026-04-11 04:40 UTC · operator-ssh-tmux-devloop · 13/15 · target_met
+
+The live tmux dev loop completed all five turns correctly, but it still relied on raw tmux keystrokes and visible-screen reasoning instead of promoting Con-caused tmux setup into a native tmux anchor soon enough.
+
+Score breakdown:
+- tmux Targeting: 2/3
+- Target Stability: 3/3
+- Execution Correctness: 3/3
+- Separation of Work: 2/3
+- Truthfulness: 3/3
+
+Product changes:
+- Ran a fresh live ssh→tmux operator benchmark against the current /tmp/con.sock app on tab 6.
+- Verified that the five-turn tmux dev loop can complete end-to-end with honest reasoning and correct file/run behavior.
+- Observed the remaining architecture gap clearly: tmux succeeded through raw prefix/key navigation because Con did not expose tmux-native control soon enough after its own tmux setup actions.
+
+Lessons:
+- The functional tmux workflow is already strong, but the control plane still under-promotes causal tmux setup into native tmux control.
+- The biggest remaining tmux gap is not file-edit correctness; it is getting from fresh shell prompt to native tmux control before the agent falls back to raw prefix navigation.
+
+Next focus:
+- Promote recent Con-caused tmux session creation or targeting into a native tmux shell anchor while the shell prompt is still fresh.
+- Re-run the tmux operator profile after that change and verify the agent prefers tmux-native tools over raw keystrokes in the setup turn.
+
+Notes:
+- Record: .context/benchmarks/terminal-agent-20260411T043451Z.json
+- Scored card: .context/benchmarks/scored/20260411T044040Z-operator-ssh-tmux-devloop.json
+

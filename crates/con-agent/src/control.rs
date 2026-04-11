@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::context::{PaneFrontState, PaneMode, PaneRuntimeState, PaneScopeKind};
+use crate::context::{
+    PaneFrontState, PaneMode, PaneRuntimeState, PaneScopeKind, tmux_session_from_action_record,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +126,7 @@ pub enum PaneAttachmentAuthority {
     BackendFact,
     ProtocolFact,
     ShellProbe,
+    ActionHistory,
 }
 
 impl PaneAttachmentAuthority {
@@ -132,6 +135,7 @@ impl PaneAttachmentAuthority {
             Self::BackendFact => "backend_fact",
             Self::ProtocolFact => "protocol_fact",
             Self::ShellProbe => "shell_probe",
+            Self::ActionHistory => "action_history",
         }
     }
 }
@@ -258,18 +262,13 @@ impl PaneControlState {
             PaneControlCapability::SearchScrollback,
             PaneControlCapability::SendRawInput,
         ];
+        let has_native_tmux_anchor = runtime_has_native_tmux_anchor(runtime);
         if runtime.front_state == PaneFrontState::ShellPrompt && runtime.shell_metadata_fresh {
             channels.push(PaneControlChannel::ShellProbe);
             channels.push(PaneControlChannel::VisibleShellExec);
             capabilities.push(PaneControlCapability::ProbeShellContext);
             capabilities.push(PaneControlCapability::ExecVisibleShell);
-            if runtime.shell_context_fresh
-                && runtime
-                    .shell_context
-                    .as_ref()
-                    .and_then(|context| context.tmux.as_ref())
-                    .is_some()
-            {
+            if has_native_tmux_anchor {
                 channels.push(PaneControlChannel::TmuxQuery);
                 channels.push(PaneControlChannel::TmuxSendKeys);
                 channels.push(PaneControlChannel::TmuxExec);
@@ -314,6 +313,15 @@ impl PaneControlState {
                         .to_string(),
                 );
             }
+        } else if has_native_tmux_anchor {
+            let session = tmux_session_hint(runtime).unwrap_or_else(|| "tmux".to_string());
+            notes.push(format!(
+                "A recent con-executed tmux command targeted session `{session}` from the current fresh shell prompt."
+            ));
+            notes.push(
+                "This pane can use that fresh shell prompt as a tmux control anchor. Prefer tmux-native query/capture/run/send tools over raw outer-pane input while the prompt remains fresh."
+                    .to_string(),
+            );
         }
         if target_stack.len() > 1 {
             notes.push(format!(
@@ -462,27 +470,41 @@ fn attachments_from_runtime(
                     .to_string(),
             ),
         });
-        if runtime.shell_context_fresh {
-            if let Some(tmux) = runtime
-                .shell_context
-                .as_ref()
-                .and_then(|context| context.tmux.as_ref())
+        if let Some(session_name) = tmux_session_hint(runtime) {
+            let (authority, note) = if runtime.shell_context_fresh
+                && runtime
+                    .shell_context
+                    .as_ref()
+                    .and_then(|context| context.tmux.as_ref())
+                    .is_some()
             {
+                (
+                    PaneAttachmentAuthority::ShellProbe,
+                    "A fresh shell probe confirmed a same-session tmux shell anchor. con can query tmux state, create tmux targets, and send tmux-native keys through that shell."
+                        .to_string(),
+                )
+            } else if runtime_has_native_tmux_anchor(runtime) {
+                (
+                    PaneAttachmentAuthority::ActionHistory,
+                    "A recent con-executed tmux command and the current fresh shell prompt establish a tmux control anchor. con can query tmux state, create tmux targets, and send tmux-native keys through that shell while the prompt remains fresh."
+                        .to_string(),
+                )
+            } else {
+                (PaneAttachmentAuthority::ProtocolFact, String::new())
+            };
+            if !note.is_empty() {
                 attachments.push(PaneProtocolAttachment {
                     id: "tmux_control".to_string(),
                     kind: PaneAttachmentKind::TmuxControl,
-                    authority: PaneAttachmentAuthority::ShellProbe,
+                    authority,
                     transport: PaneAttachmentTransport::TmuxProtocol,
-                    label: tmux.session_name.clone().or_else(|| Some("tmux".to_string())),
+                    label: Some(session_name),
                     capabilities: vec![
                         PaneControlCapability::QueryTmux,
                         PaneControlCapability::SendTmuxKeys,
                         PaneControlCapability::ExecTmuxCommand,
                     ],
-                    note: Some(
-                        "A fresh shell probe confirmed a same-session tmux shell anchor. con can query tmux state, create tmux targets, and send tmux-native keys through that shell."
-                            .to_string(),
-                    ),
+                    note: Some(note),
                 });
             }
         }
@@ -495,6 +517,7 @@ fn tmux_control_from_runtime(
     runtime: &PaneRuntimeState,
     target_stack: &[PaneVisibleTarget],
 ) -> Option<TmuxControlState> {
+    let has_native_tmux_anchor = runtime_has_native_tmux_anchor(runtime);
     let has_current_tmux = target_stack
         .iter()
         .any(|target| target.kind == PaneVisibleTargetKind::TmuxSession);
@@ -503,7 +526,7 @@ fn tmux_control_from_runtime(
         .iter()
         .any(|target| target.kind == PaneVisibleTargetKind::TmuxSession);
 
-    if !has_current_tmux && !has_historical_tmux {
+    if !has_current_tmux && !has_historical_tmux && !has_native_tmux_anchor {
         return None;
     }
 
@@ -515,31 +538,18 @@ fn tmux_control_from_runtime(
 
     let tmux_index = tmux_stack
         .iter()
-        .position(|target| target.kind == PaneVisibleTargetKind::TmuxSession)?;
+        .position(|target| target.kind == PaneVisibleTargetKind::TmuxSession);
 
     Some(TmuxControlState {
-        session_name: runtime
-            .tmux_session
-            .clone()
-            .or_else(|| runtime.last_verified_tmux_session.clone())
-            .or_else(|| {
-                tmux_stack
-                    .get(tmux_index)
-                    .and_then(|target| target.label.clone())
-            }),
-        mode: if runtime.front_state == PaneFrontState::ShellPrompt
-            && runtime.shell_context_fresh
-            && runtime
-                .shell_context
-                .as_ref()
-                .and_then(|context| context.tmux.as_ref())
-                .is_some()
-        {
+        session_name: tmux_session_hint(runtime).or_else(|| {
+            tmux_index.and_then(|idx| tmux_stack.get(idx).and_then(|target| target.label.clone()))
+        }),
+        mode: if has_native_tmux_anchor {
             TmuxControlMode::Native
         } else {
             TmuxControlMode::InspectOnly
         },
-        front_target: tmux_stack.get(tmux_index + 1).cloned(),
+        front_target: tmux_index.and_then(|idx| tmux_stack.get(idx + 1).cloned()),
         reason: if has_current_tmux
             && runtime.shell_context_fresh
             && runtime
@@ -549,12 +559,54 @@ fn tmux_control_from_runtime(
                 .is_some()
         {
             "con has a typed same-session tmux shell anchor for this pane. Native tmux query, capture, run-command, and send-keys are available through that anchor.".to_string()
+        } else if has_native_tmux_anchor {
+            "A recent con-executed tmux command and the current fresh shell prompt give con a native tmux control anchor for this session, even though tmux is not yet the proven front-most target.".to_string()
         } else if has_current_tmux {
             "con can identify a current tmux layer in this pane, but it does not yet have a same-session tmux control channel. Native tmux pane/window targeting and tmux command execution are unavailable.".to_string()
         } else {
             "The last verified shell frame for this pane was inside tmux, but the current foreground target is not proven. Native tmux pane/window targeting and tmux command execution remain unavailable.".to_string()
         },
     })
+}
+
+fn tmux_session_hint(runtime: &PaneRuntimeState) -> Option<String> {
+    runtime
+        .shell_context
+        .as_ref()
+        .and_then(|context| context.tmux.as_ref())
+        .and_then(|tmux| tmux.session_name.clone())
+        .or_else(|| runtime.tmux_session.clone())
+        .or_else(|| runtime.last_verified_tmux_session.clone())
+        .or_else(|| {
+            runtime
+                .recent_actions
+                .iter()
+                .rev()
+                .find_map(tmux_session_from_action_record)
+        })
+}
+
+fn runtime_has_native_tmux_anchor(runtime: &PaneRuntimeState) -> bool {
+    if runtime.front_state != PaneFrontState::ShellPrompt || !runtime.shell_metadata_fresh {
+        return false;
+    }
+
+    if runtime.shell_context_fresh
+        && runtime
+            .shell_context
+            .as_ref()
+            .and_then(|context| context.tmux.as_ref())
+            .is_some()
+    {
+        return true;
+    }
+
+    runtime
+        .recent_actions
+        .iter()
+        .rev()
+        .find_map(tmux_session_from_action_record)
+        .is_some()
 }
 
 fn target_stack_from_runtime(runtime: &PaneRuntimeState) -> Vec<PaneVisibleTarget> {
@@ -719,8 +771,8 @@ mod tests {
         TmuxControlMode, fallback_visible_target, format_control_attachments, format_target_stack,
     };
     use crate::context::{
-        PaneEvidenceSource, PaneFrontState, PaneMode, PaneRuntimeScope, PaneRuntimeState,
-        PaneScopeKind,
+        PaneActionKind, PaneActionRecord, PaneConfidence, PaneEvidenceSource, PaneFrontState,
+        PaneMode, PaneRuntimeScope, PaneRuntimeState, PaneScopeKind,
     };
 
     #[test]
@@ -907,6 +959,83 @@ mod tests {
         assert_eq!(
             fallback_visible_target(&runtime).kind,
             PaneVisibleTargetKind::Unknown
+        );
+    }
+
+    #[test]
+    fn fresh_shell_with_recent_tmux_command_gets_native_tmux_anchor() {
+        let runtime = PaneRuntimeState {
+            front_state: PaneFrontState::ShellPrompt,
+            mode: PaneMode::Shell,
+            shell_metadata_fresh: true,
+            remote_host: Some("haswell".to_string()),
+            remote_host_confidence: Some(PaneConfidence::Advisory),
+            remote_host_source: Some(PaneEvidenceSource::ActionHistory),
+            agent_cli: None,
+            tmux_session: None,
+            last_verified_scope_stack: vec![PaneRuntimeScope {
+                kind: PaneScopeKind::RemoteShell,
+                label: None,
+                host: Some("haswell".to_string()),
+                confidence: PaneConfidence::Advisory,
+                evidence_source: PaneEvidenceSource::ActionHistory,
+            }],
+            last_verified_tmux_session: Some("con-bench".to_string()),
+            shell_context: None,
+            shell_context_fresh: false,
+            active_scope: Some(PaneRuntimeScope {
+                kind: PaneScopeKind::Shell,
+                label: None,
+                host: Some("haswell".to_string()),
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::ShellIntegration,
+            }),
+            evidence: Vec::new(),
+            scope_stack: vec![PaneRuntimeScope {
+                kind: PaneScopeKind::Shell,
+                label: None,
+                host: Some("haswell".to_string()),
+                confidence: PaneConfidence::Strong,
+                evidence_source: PaneEvidenceSource::ShellIntegration,
+            }],
+            recent_actions: vec![PaneActionRecord {
+                sequence: 1,
+                kind: PaneActionKind::VisibleShellExec,
+                summary: "con executed `tmux has-session -t con-bench 2>/dev/null || tmux new-session -d -s con-bench` in the visible shell".to_string(),
+                command: Some(
+                    "tmux has-session -t con-bench 2>/dev/null || tmux new-session -d -s con-bench"
+                        .to_string(),
+                ),
+                source: PaneEvidenceSource::ActionHistory,
+                confidence: PaneConfidence::Advisory,
+                input_generation: Some(4),
+                note: None,
+            }],
+            warnings: Vec::new(),
+        };
+
+        let control = PaneControlState::from_runtime(&runtime);
+        assert!(
+            control
+                .capabilities
+                .contains(&PaneControlCapability::QueryTmux)
+        );
+        assert_eq!(
+            control.tmux.as_ref().map(|tmux| tmux.mode),
+            Some(TmuxControlMode::Native)
+        );
+        assert_eq!(
+            control
+                .tmux
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.as_deref()),
+            Some("con-bench")
+        );
+        assert!(
+            control
+                .attachments
+                .iter()
+                .any(|attachment| attachment.kind == PaneAttachmentKind::TmuxControl)
         );
     }
 }

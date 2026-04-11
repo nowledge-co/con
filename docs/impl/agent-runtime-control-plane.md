@@ -74,6 +74,13 @@ con now also ships the first true protocol attachment beyond raw pane observatio
 
 then con can expose a native tmux control attachment for that pane.
 
+con now also accepts one more truthful tmux-anchor source:
+
+- if the visible shell prompt is still fresh
+- and con itself just created or targeted a tmux session from that same shell
+
+then that shell can become a tmux control anchor immediately, even before a later shell probe re-enters tmux.
+
 That attachment currently supports:
 
 - tmux target discovery
