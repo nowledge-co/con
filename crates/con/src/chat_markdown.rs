@@ -96,8 +96,8 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(720.0),
                 base_font_size: px(15.0),
                 base_line_height: px(24.0),
-                code_font_size: px(12.5),
-                code_line_height: px(19.0),
+                code_font_size: px(12.75),
+                code_line_height: px(20.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
                 inline_code_background: theme.secondary_hover.opacity(0.86),
@@ -121,8 +121,8 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(640.0),
                 base_font_size: px(12.75),
                 base_line_height: px(20.0),
-                code_font_size: px(11.5),
-                code_line_height: px(17.0),
+                code_font_size: px(11.75),
+                code_line_height: px(18.0),
                 text_color: theme.muted_foreground.opacity(0.66),
                 muted_text_color: theme.muted_foreground.opacity(0.58),
                 inline_code_background: theme.secondary_hover.opacity(0.78),
@@ -669,6 +669,7 @@ fn render_code_block(
                     div()
                         .flex()
                         .items_center()
+                        .gap(px(8.0))
                         .child(
                             div()
                                 .px(px(7.0))
@@ -681,6 +682,12 @@ fn render_code_block(
                                 .line_height(px(11.0))
                                 .text_color(style.code_block_language_text_color.opacity(0.92))
                                 .child(header_label.to_string()),
+                        )
+                        .child(
+                            div()
+                                .h(px(1.0))
+                                .flex_1()
+                                .bg(style.rule_color.opacity(0.85)),
                         ),
                 ),
         );
@@ -718,7 +725,7 @@ fn render_code_block(
             div()
                 .px(px(14.0))
                 .py(px(13.0))
-                .bg(style.theme.background.opacity(0.76))
+                .bg(style.theme.background.opacity(0.82))
                 .child(code_column),
         )
         .into_any_element()
@@ -762,7 +769,9 @@ fn highlighted_code_runs(
             }
 
             let highlighted_style = style.code_text_style().highlight(*highlight);
-            runs.push(highlighted_style.to_run(code[start..end].chars().count()));
+            runs.push(softened_code_highlight(highlighted_style, style).to_run(
+                code[start..end].chars().count(),
+            ));
             cursor = end;
         }
 
@@ -786,6 +795,15 @@ fn highlighted_code_runs(
 
 fn mono_style_run(text_style: &TextStyle, len: usize) -> gpui::TextRun {
     text_style.to_run(len)
+}
+
+fn softened_code_highlight(mut text_style: TextStyle, style: &ChatMarkdownStyle<'_>) -> TextStyle {
+    text_style.font_family = style.theme.mono_font_family.clone();
+    text_style.font_size = style.code_font_size.into();
+    text_style.line_height = style.code_line_height.into();
+    text_style.background_color = None;
+    text_style.color = text_style.color.opacity(0.90);
+    text_style
 }
 
 fn render_inline_text(
