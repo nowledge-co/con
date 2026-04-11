@@ -3497,7 +3497,7 @@ impl ConWorkspace {
             return;
         }
         if self.tabs.len() <= 1 {
-            self.reset_last_tab(window, cx);
+            self.close_window_from_last_tab(window, cx);
             return;
         }
         // Save the closing tab's conversation
@@ -3549,54 +3549,50 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    fn reset_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let active_idx = self.active_tab;
-        self.fail_pending_control_agent_request(
-            active_idx,
-            format!(
-                "Tab {} was reset while agent.ask was still pending",
-                active_idx + 1
-            ),
-        );
-        {
-            let conv = self.tabs[active_idx].session.conversation();
+    fn close_window_from_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_all_sessions();
+
+        for request in std::mem::take(&mut self.pending_window_control_requests) {
+            match request {
+                PendingWindowControlRequest::TabsNew { response_tx } => {
+                    Self::send_control_result(
+                        response_tx,
+                        Err(ControlError::internal(
+                            "window closed while tabs.new was pending".to_string(),
+                        )),
+                    );
+                }
+                PendingWindowControlRequest::TabsClose { response_tx, .. } => {
+                    Self::send_control_result(
+                        response_tx,
+                        Err(ControlError::internal(
+                            "window closed while tabs.close was pending".to_string(),
+                        )),
+                    );
+                }
+            }
+        }
+
+        for (tab_idx, pending) in std::mem::take(&mut self.pending_control_agent_requests) {
+            Self::send_control_result(
+                pending.response_tx,
+                Err(ControlError::internal(format!(
+                    "window closed while agent.ask was still pending for tab {}",
+                    tab_idx + 1
+                ))),
+            );
+        }
+
+        for tab in &self.tabs {
+            let conv = tab.session.conversation();
             let _ = conv.lock().save();
-        }
-        for terminal in self.tabs[active_idx].pane_tree.all_terminals() {
-            terminal.set_focus_state(false, cx);
-            terminal.set_native_view_visible(false, cx);
+            for terminal in tab.pane_tree.all_terminals() {
+                terminal.set_focus_state(false, cx);
+                terminal.set_native_view_visible(false, cx);
+            }
         }
 
-        let terminal = self.create_terminal(None, window, cx);
-        self.tabs[active_idx] = Tab {
-            pane_tree: PaneTree::new(terminal.clone()),
-            title: "Terminal".to_string(),
-            needs_attention: false,
-            session: AgentSession::new(),
-            panel_state: PanelState::new(),
-            runtime_trackers: RefCell::new(HashMap::new()),
-        };
-        self.agent_panel.update(cx, |panel, cx| {
-            panel.swap_state(PanelState::new(), cx);
-        });
-        terminal.set_focus_state(true, cx);
-        terminal.focus(window, cx);
-        Self::schedule_terminal_bootstrap_reassert(
-            &terminal,
-            true,
-            self.window_handle,
-            self.workspace_handle.clone(),
-            cx,
-        );
-        self.sync_sidebar(cx);
-        self.save_session(cx);
-        cx.notify();
-    }
-
-    fn fail_pending_control_agent_request(&mut self, tab_idx: usize, message: String) {
-        if let Some(pending) = self.pending_control_agent_requests.remove(&tab_idx) {
-            Self::send_control_result(pending.response_tx, Err(ControlError::internal(message)));
-        }
+        window.remove_window();
     }
 
     fn reindex_pending_control_agent_requests_after_tab_close(&mut self, closed_tab_idx: usize) {
