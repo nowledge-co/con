@@ -4,6 +4,8 @@ use gpui_component::kbd::Kbd;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, input::Input};
 
+use crate::motion::{MotionValue, vertical_reveal_offset};
+
 actions!(command_palette, [ToggleCommandPalette]);
 
 /// A command palette action entry
@@ -93,6 +95,7 @@ pub struct CommandPalette {
     focus_handle: FocusHandle,
     scroll_handle: ScrollHandle,
     ui_opacity: f32,
+    overlay_motion: MotionValue,
 }
 
 /// Emitted when the user selects an action
@@ -118,12 +121,15 @@ impl CommandPalette {
             focus_handle: cx.focus_handle(),
             scroll_handle: ScrollHandle::new(),
             ui_opacity: 0.90,
+            overlay_motion: MotionValue::new(0.0),
         }
     }
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = !self.visible;
         if self.visible {
+            self.overlay_motion
+                .set_target(1.0, std::time::Duration::from_millis(180));
             self.query_text.clear();
             self.selected_index = 0;
             self.query.update(cx, |s, cx| {
@@ -131,12 +137,15 @@ impl CommandPalette {
                 // Focus the input directly so the user can type immediately
                 s.focus(window, cx);
             });
+        } else {
+            self.overlay_motion
+                .set_target(0.0, std::time::Duration::from_millis(150));
         }
         cx.notify();
     }
 
     pub fn is_visible(&self) -> bool {
-        self.visible
+        self.visible || self.overlay_motion.is_animating()
     }
 
     pub fn set_ui_opacity(&mut self, opacity: f32) {
@@ -163,6 +172,8 @@ impl CommandPalette {
         if let Some(action) = actions.get(self.selected_index) {
             let id = action.id.to_string();
             self.visible = false;
+            self.overlay_motion
+                .set_target(0.0, std::time::Duration::from_millis(150));
             cx.emit(PaletteSelect { action_id: id });
             cx.notify();
         }
@@ -176,8 +187,9 @@ impl Focusable for CommandPalette {
 }
 
 impl Render for CommandPalette {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.visible {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let overlay_progress = self.overlay_motion.value(window);
+        if !self.visible && overlay_progress <= 0.001 {
             return div().id("palette-overlay");
         }
 
@@ -302,11 +314,13 @@ impl Render for CommandPalette {
             .occlude()
             .absolute()
             .size_full()
-            .bg(theme.background.opacity(0.7))
+            .bg(theme.background.opacity(0.72 * overlay_progress))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     this.visible = false;
+                    this.overlay_motion
+                        .set_target(0.0, std::time::Duration::from_millis(150));
                     cx.notify();
                 }),
             );
@@ -320,10 +334,12 @@ impl Render for CommandPalette {
             .w(px(520.0))
             .rounded(px(12.0))
             .bg(theme.title_bar.opacity(self.ui_opacity))
+            .opacity(overlay_progress)
             .flex()
             .flex_col()
             .overflow_hidden()
             .occlude()
+            .pt(vertical_reveal_offset(overlay_progress, 16.0))
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 let actions = this.filtered_actions();
@@ -331,6 +347,8 @@ impl Render for CommandPalette {
                 match event.keystroke.key.as_str() {
                     "escape" => {
                         this.visible = false;
+                        this.overlay_motion
+                            .set_target(0.0, std::time::Duration::from_millis(150));
                         cx.notify();
                     }
                     "enter" => {
