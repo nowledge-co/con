@@ -60,6 +60,8 @@ pub struct GhosttyView {
     initial_cwd: Option<String>,
     initial_font_size: f32,
     #[cfg(target_os = "macos")]
+    host_view: Option<id>,
+    #[cfg(target_os = "macos")]
     nsview: Option<id>,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
@@ -151,6 +153,8 @@ impl GhosttyView {
             initial_cwd: cwd,
             initial_font_size: font_size,
             #[cfg(target_os = "macos")]
+            host_view: None,
+            #[cfg(target_os = "macos")]
             nsview: None,
             initialized: false,
             last_bounds: None,
@@ -228,7 +232,7 @@ impl GhosttyView {
 
         // Create with a zero-origin frame — update_frame() will set the
         // correct flipped position immediately after initialization.
-        let nsview: id = unsafe {
+        let (host_view, nsview): (id, id) = unsafe {
             let frame = NSRect::new(
                 cocoa::foundation::NSPoint::new(0.0, 0.0),
                 cocoa::foundation::NSSize::new(
@@ -236,12 +240,18 @@ impl GhosttyView {
                     f64::from(bounds.size.height),
                 ),
             );
-            let view: id = msg_send![class!(NSView), alloc];
-            let view: id = msg_send![view, initWithFrame:frame];
-            let _: () = msg_send![view, setWantsLayer:YES];
-            let _: () = msg_send![view, setAutoresizesSubviews:NO];
-            let _: () = msg_send![parent_nsview, addSubview:view];
-            view
+            let host: id = msg_send![class!(NSView), alloc];
+            let host: id = msg_send![host, initWithFrame:frame];
+            let _: () = msg_send![host, setWantsLayer:YES];
+            let _: () = msg_send![host, setAutoresizesSubviews:NO];
+            let _: () = msg_send![parent_nsview, addSubview:host];
+
+            let surface: id = msg_send![class!(NSView), alloc];
+            let surface: id = msg_send![surface, initWithFrame:frame];
+            let _: () = msg_send![surface, setWantsLayer:YES];
+            let _: () = msg_send![surface, setAutoresizesSubviews:NO];
+            let _: () = msg_send![host, addSubview:surface];
+            (host, surface)
         };
 
         let scale = self.scale_factor as f64;
@@ -258,6 +268,7 @@ impl GhosttyView {
                 terminal.set_content_scale(scale);
                 terminal.set_focus(true);
                 self.terminal = Some(Arc::new(terminal));
+                self.host_view = Some(host_view);
                 self.nsview = Some(nsview);
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
@@ -285,8 +296,9 @@ impl GhosttyView {
                 self.initialized = false;
                 self.next_surface_init_retry_at = Some(Instant::now() + Duration::from_millis(250));
                 unsafe {
-                    let _: () = msg_send![nsview, removeFromSuperview];
+                    let _: () = msg_send![host_view, removeFromSuperview];
                 }
+                self.host_view = None;
                 self.nsview = None;
             }
         }
@@ -318,9 +330,9 @@ impl GhosttyView {
         }
         self.last_bounds = Some(bounds);
 
-        if let Some(nsview) = self.nsview {
+        if let Some(host_view) = self.host_view {
             unsafe {
-                let superview: id = msg_send![nsview, superview];
+                let superview: id = msg_send![host_view, superview];
                 let super_frame: NSRect = msg_send![superview, frame];
                 let flipped_y = super_frame.size.height
                     - f64::from(bounds.origin.y)
@@ -333,7 +345,17 @@ impl GhosttyView {
                         f64::from(bounds.size.height),
                     ),
                 );
-                let _: () = msg_send![nsview, setFrame:frame];
+                let _: () = msg_send![host_view, setFrame:frame];
+                if let Some(nsview) = self.nsview {
+                    let surface_frame = NSRect::new(
+                        cocoa::foundation::NSPoint::new(0.0, 0.0),
+                        cocoa::foundation::NSSize::new(
+                            f64::from(bounds.size.width),
+                            f64::from(bounds.size.height),
+                        ),
+                    );
+                    let _: () = msg_send![nsview, setFrame:surface_frame];
+                }
             }
         }
 
@@ -362,11 +384,11 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     pub fn set_visible(&self, visible: bool) {
         self.native_view_visible.set(visible);
-        if let Some(nsview) = self.nsview {
+        if let Some(host_view) = self.host_view {
             unsafe {
                 let effective_visible = visible && !self.awaiting_first_layout_visibility;
                 let hidden = if effective_visible { NO } else { YES };
-                let _: () = msg_send![nsview, setHidden:hidden];
+                let _: () = msg_send![host_view, setHidden:hidden];
             }
         }
     }
@@ -617,10 +639,14 @@ fn gpui_key_to_keycode(key: &str) -> Option<u32> {
 impl Drop for GhosttyView {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
-        if let Some(nsview) = self.nsview.take() {
+        if let Some(host_view) = self.host_view.take() {
             unsafe {
-                let _: () = msg_send![nsview, removeFromSuperview];
+                let _: () = msg_send![host_view, removeFromSuperview];
             }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.nsview = None;
         }
     }
 }
