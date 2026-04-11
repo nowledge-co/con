@@ -2510,6 +2510,7 @@ impl Render for AgentPanel {
                             let mut summary = div().flex().items_center().gap(px(8.0)).child(
                                 div()
                                     .text_size(px(10.5))
+                                    .font_family(theme.mono_font_family.clone())
                                     .text_color(theme.muted_foreground.opacity(0.40))
                                     .child(run_status_summary(
                                         step_count,
@@ -2587,6 +2588,7 @@ impl Render for AgentPanel {
                                 div()
                                     .flex_shrink_0()
                                     .text_size(px(10.0))
+                                    .font_family(theme.mono_font_family.clone())
                                     .text_color(theme.muted_foreground.opacity(0.36))
                                     .child(format_step_duration(dur)),
                             );
@@ -2601,6 +2603,7 @@ impl Render for AgentPanel {
                                     .child(
                                         div()
                                             .text_size(px(10.0))
+                                            .font_family(theme.mono_font_family.clone())
                                             .text_color(theme.muted_foreground.opacity(0.34))
                                             .child(if detail_collapsed {
                                                 "Details"
@@ -2636,8 +2639,9 @@ impl Render for AgentPanel {
                             step_header = step_header.child(
                                 div()
                                     .ml(px(18.0))
-                                    .text_size(px(10.75))
-                                    .text_color(theme.muted_foreground.opacity(0.50))
+                                    .text_size(px(10.5))
+                                    .line_height(px(15.0))
+                                    .text_color(theme.muted_foreground.opacity(0.56))
                                     .font_family(theme.mono_font_family.clone())
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
@@ -3269,9 +3273,10 @@ impl Render for AgentPanel {
                             ))
                             .child(
                                 div()
-                                    .text_size(px(10.75))
+                                    .text_size(px(10.5))
+                                    .line_height(px(15.0))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.56))
+                                    .text_color(theme.muted_foreground.opacity(0.60))
                                     .min_w_0()
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
@@ -3307,9 +3312,10 @@ impl Render for AgentPanel {
                             )
                             .child(
                                 div()
-                                    .text_size(px(10.75))
+                                    .text_size(px(10.5))
+                                    .line_height(px(15.0))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.56))
+                                    .text_color(theme.muted_foreground.opacity(0.60))
                                     .min_w_0()
                                     .overflow_x_hidden()
                                     .whitespace_nowrap()
