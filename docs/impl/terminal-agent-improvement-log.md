@@ -480,3 +480,63 @@ Next focus:
 - Promote remote tmux session preparation into a durable native control anchor that survives beyond the first setup turn.
 - Drive the new ensure_remote_tmux_workspace tool harder in the prompt and benchmark path so ssh->tmux bootstrap stops being reconstructed ad hoc.
 
+## 2026-04-11 06:38 UTC · operator-local-opencode-devloop · 15/15 · world_class
+
+Local OpenCode workspace pair completed the full deterministic create-break-repair loop cleanly.
+
+Score breakdown:
+- Target Preparation: 3/3
+- Target Reuse: 3/3
+- Workspace Correctness: 3/3
+- Execution Loop: 3/3
+- Follow-up Repair: 3/3
+
+Product changes:
+- Replaced visible agent-cli shell-idle waiting with output-settle semantics and refocused the local coding benchmark on Con-owned paired workspaces instead of third-party CLI approval UX.
+
+Lessons:
+- The paired shell lane keeps OpenCode available without forcing Con to depend on OpenCode's own interactive approval flow.
+
+Next focus:
+- Carry the same target clarity into multi-pane and restored-session summaries.
+
+## 2026-04-11 06:38 UTC · operator-local-claude-devloop · 14/15 · world_class
+
+Local Claude Code workspace pair completed the loop, but the preparation summary still blurred which pane was the interactive target versus the shell companion.
+
+Score breakdown:
+- Target Preparation: 2/3
+- Target Reuse: 3/3
+- Workspace Correctness: 3/3
+- Execution Loop: 3/3
+- Follow-up Repair: 3/3
+
+Product changes:
+- Replaced visible agent-cli shell-idle waiting with output-settle semantics and refocused the local coding benchmark on Con-owned paired workspaces instead of third-party CLI approval UX.
+
+Lessons:
+- The paired workspace can execute cleanly even when the assistant's target summary is still sloppy.
+
+Next focus:
+- Tighten local target naming and summary generation so Claude-like runs report the pair crisply.
+
+## 2026-04-11 06:38 UTC · operator-local-codex-devloop · 15/15 · world_class
+
+Local Codex workspace pair completed the full deterministic create-break-repair loop cleanly.
+
+Score breakdown:
+- Target Preparation: 3/3
+- Target Reuse: 3/3
+- Workspace Correctness: 3/3
+- Execution Loop: 3/3
+- Follow-up Repair: 3/3
+
+Product changes:
+- Replaced visible agent-cli shell-idle waiting with output-settle semantics and refocused the local coding benchmark on Con-owned paired workspaces instead of third-party CLI approval UX.
+
+Lessons:
+- When the benchmark keeps deterministic work in the shell lane, Con can keep the interactive Codex target reusable without stalling the turn.
+
+Next focus:
+- Retain the same paired-workspace discipline in tmux and remote coding flows.
+
