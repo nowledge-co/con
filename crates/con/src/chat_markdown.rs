@@ -765,6 +765,11 @@ fn highlighted_code_runs(
 
     for line in code.lines() {
         let line_end = line_start + line.len();
+        let display_len = if line.is_empty() {
+            "\u{200B}".len()
+        } else {
+            line.len()
+        };
         let mut runs = Vec::new();
         let mut cursor = line_start;
 
@@ -790,7 +795,7 @@ fn highlighted_code_runs(
         }
 
         if runs.is_empty() {
-            runs.push(base_style.to_run(line.len()));
+            runs.push(base_style.to_run(display_len));
         }
 
         line_runs.push(runs);
@@ -1192,5 +1197,19 @@ mod tests {
         assert_eq!(aligns.len(), 2);
         assert_eq!(rows.len(), 2);
         assert!(matches!(aligns[1], MarkdownTableAlign::Right));
+    }
+
+    #[test]
+    fn highlighted_code_runs_cover_empty_lines() {
+        let theme = Theme::default();
+        let style = ChatMarkdownStyle::new(&theme, ChatMarkdownTone::Message);
+        let runs = highlighted_code_runs("print(1)\n\nprint(2)", &Some("python".into()), &style)
+            .expect("expected syntax runs");
+
+        assert_eq!(runs.len(), 3);
+        assert_eq!(
+            runs[1].iter().map(|run| run.len).sum::<usize>(),
+            "\u{200B}".len()
+        );
     }
 }
