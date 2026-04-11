@@ -106,7 +106,9 @@ fn main() {
 
     let config = con_core::Config::load().unwrap_or_default();
 
-    let app = gpui_platform::application().with_assets(assets::ConAssets);
+    let app = gpui_platform::application()
+        .with_quit_mode(QuitMode::Explicit)
+        .with_assets(assets::ConAssets);
     app.run(move |cx: &mut App| {
         // Set dock icon for development (cargo run)
         set_dock_icon();
@@ -149,6 +151,12 @@ fn main() {
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             let config = con_core::Config::load().unwrap_or_default();
             open_con_window(config, false, cx);
+        });
+        cx.on_action(|_: &NewTab, cx: &mut App| {
+            if cx.active_window().is_none() {
+                let config = con_core::Config::load().unwrap_or_default();
+                open_con_window(config, false, cx);
+            }
         });
 
         cx.set_menus(vec![
