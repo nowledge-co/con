@@ -34,6 +34,10 @@ impl TerminalPane {
         self.entity.read(cx).surface_ready()
     }
 
+    pub fn has_layout(&self, cx: &App) -> bool {
+        self.entity.read(cx).has_layout()
+    }
+
     pub fn is_busy(&self, cx: &App) -> bool {
         self.entity
             .read(cx)

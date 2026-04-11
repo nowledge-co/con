@@ -196,6 +196,10 @@ impl GhosttyView {
         self.terminal.is_some()
     }
 
+    pub fn has_layout(&self) -> bool {
+        self.last_bounds.is_some()
+    }
+
     #[allow(dead_code)]
     pub fn selection_text(&self) -> Option<String> {
         self.terminal.as_ref().and_then(|t| t.selection_text())

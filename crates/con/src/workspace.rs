@@ -534,7 +534,9 @@ impl ConWorkspace {
                             return false;
                         };
                         workspace.update(cx, |_workspace, cx| {
-                            terminal.ensure_surface(window, cx);
+                            if !terminal.surface_ready(cx) && terminal.has_layout(cx) {
+                                terminal.ensure_surface(window, cx);
+                            }
                             terminal.notify(cx);
                             terminal.set_native_view_visible(true, cx);
                             terminal.set_focus_state(should_focus, cx);
@@ -3405,8 +3407,7 @@ impl ConWorkspace {
             return;
         }
         if self.tabs.len() <= 1 {
-            // Last tab — quit the app (matches terminal process exit behavior)
-            self.quit(&Quit, window, cx);
+            self.close_window(window, cx);
             return;
         }
         // Save the closing tab's conversation
@@ -3454,6 +3455,19 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_all_sessions();
+        self.save_session(cx);
+        for tab in &self.tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                terminal.set_focus_state(false, cx);
+                terminal.set_native_view_visible(false, cx);
+            }
+        }
+        self.tabs.clear();
+        window.remove_window();
     }
 
     fn execute_shell(&self, cmd: &str, window: &mut Window, cx: &mut Context<Self>) {
