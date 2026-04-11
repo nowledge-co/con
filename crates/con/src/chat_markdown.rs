@@ -3,6 +3,7 @@ use gpui::{
     ParentElement, SharedString, Styled, StyledText, TextStyle, UnderlineStyle, WhiteSpace, div,
     px,
 };
+use gpui_component::clipboard::Clipboard;
 use gpui_component::highlighter::SyntaxHighlighter;
 use gpui_component::{Colorize, Theme};
 use markdown::{ParseOptions, mdast};
@@ -657,6 +658,29 @@ fn render_code_block(
         .filter(|lang| !lang.trim().is_empty())
         .unwrap_or("code");
 
+    let header_row = div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .child(
+            div()
+                .px(px(8.0))
+                .py(px(4.0))
+                .rounded(px(8.0))
+                .bg(style.code_block_language_background)
+                .font_family(style.theme.mono_font_family.clone())
+                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(10.5))
+                .line_height(px(11.0))
+                .text_color(style.code_block_language_text_color)
+                .child(header_label.to_string()),
+        )
+        .child(div().h(px(1.0)).flex_1().bg(style.rule_color.opacity(0.36)))
+        .child(
+            Clipboard::new(format!("copy-code-block-{_index}"))
+                .value(SharedString::from(code.to_string())),
+        );
+
     let block = div()
         .w_full()
         .flex()
@@ -673,26 +697,11 @@ fn render_code_block(
                     .code_block_background
                     .mix_oklab(style.code_block_body_background, 0.82))
                 .child(
-                    div().px(px(14.0)).pt(px(10.0)).pb(px(8.0)).child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                div()
-                                    .px(px(8.0))
-                                    .py(px(4.0))
-                                    .rounded(px(8.0))
-                                    .bg(style.code_block_language_background)
-                                    .font_family(style.theme.mono_font_family.clone())
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_size(px(10.5))
-                                    .line_height(px(11.0))
-                                    .text_color(style.code_block_language_text_color)
-                                    .child(header_label.to_string()),
-                            )
-                            .child(div().h(px(1.0)).flex_1().bg(style.rule_color.opacity(0.36))),
-                    ),
+                    div()
+                        .px(px(14.0))
+                        .pt(px(10.0))
+                        .pb(px(8.0))
+                        .child(header_row),
                 ),
         );
 

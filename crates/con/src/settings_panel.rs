@@ -1431,9 +1431,6 @@ impl SettingsPanel {
     // ── Section content ──────────────────────────────────────────
 
     fn render_general(&mut self, cx: &mut Context<Self>) -> Div {
-        let terminal_font_select = self.terminal_font_select.clone();
-        let ui_font_select = self.ui_font_select.clone();
-        let font_size_input = self.font_size_input.clone();
         let card_opacity = self.card_opacity();
 
         // Auto-approve toggle
@@ -1476,42 +1473,25 @@ impl SettingsPanel {
         let theme = cx.theme();
         section_content(
             "General",
-            "Fonts, terminal defaults, and agent behavior.",
+            "Terminal defaults, agent behavior, and skills.",
             theme,
         )
         .child(
-            card(theme, card_opacity)
-                .child(searchable_select_row(
-                    "Terminal Font",
-                    "Used for terminal text and terminal-style chrome across Con.",
-                    &terminal_font_select,
-                    theme,
-                ))
-                .child(row_separator(theme))
-                .child(searchable_select_row(
-                    "UI Font",
-                    "Used for settings, agent prose, and the rest of the non-terminal interface.",
-                    &ui_font_select,
-                    theme,
-                ))
-                .child(row_separator(theme))
-                .child(row_field("Font Size", &font_size_input))
-                .child(row_separator(theme))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .px(px(16.0))
-                        .h(px(44.0))
-                        .child(div().text_sm().child("Scrollback"))
-                        .child(
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(theme.muted_foreground)
-                                .child("Managed by Ghostty"),
-                        ),
-                ),
+            card(theme, card_opacity).child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(px(16.0))
+                    .h(px(44.0))
+                    .child(div().text_sm().child("Scrollback"))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground)
+                            .child("Managed by Ghostty"),
+                    ),
+            ),
         )
         .child(
             div()
@@ -1759,6 +1739,9 @@ impl SettingsPanel {
 
     fn render_appearance(&self, cx: &mut Context<Self>) -> Div {
         let current_theme = self.config.terminal.theme.clone();
+        let terminal_font_select = self.terminal_font_select.clone();
+        let ui_font_select = self.ui_font_select.clone();
+        let font_size_input = self.font_size_input.clone();
         let terminal_opacity_slider = self.terminal_opacity_slider.clone();
         let ui_opacity_slider = self.ui_opacity_slider.clone();
         let background_image_input = self.background_image_input.clone();
@@ -1948,6 +1931,32 @@ impl SettingsPanel {
             "Appearance",
             "Shape the terminal theme and how much of the desktop shows through.",
             theme,
+        );
+
+        content = content.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Fonts", &theme))
+                .child(
+                    card(theme, card_opacity)
+                        .child(searchable_select_row(
+                            "Terminal Font",
+                            "Used for terminal text and mono UI surfaces such as code blocks.",
+                            &terminal_font_select,
+                            theme,
+                        ))
+                        .child(row_separator(theme))
+                        .child(searchable_select_row(
+                            "UI Font",
+                            "Used for settings, prose, and the rest of the non-terminal interface.",
+                            &ui_font_select,
+                            theme,
+                        ))
+                        .child(row_separator(theme))
+                        .child(row_field("Terminal Size", &font_size_input)),
+                ),
         );
 
         content = content.child(
