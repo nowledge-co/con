@@ -30,7 +30,7 @@ pub use tmux::{TmuxCapture, TmuxExecLocation, TmuxExecResult, TmuxPaneInfo, Tmux
 pub use tools::{
     AgentCliTurnTool, BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalAgentTargetTool,
     EnsureLocalCodingWorkspaceTool, EnsureLocalShellTargetTool, EnsureRemoteShellTargetTool,
-    EnsureRemoteTmuxWorkspaceTool,
+    EnsureRemoteTmuxShellTargetTool, EnsureRemoteTmuxWorkspaceTool,
     FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool, ListTabWorkspacesTool,
     PaneCreateLocation, PaneInfo, PaneQuery, PaneRequest, PaneResponse, ProbeShellContextTool,
     ReadPaneTool, RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool, SearchTool, SendKeysTool,

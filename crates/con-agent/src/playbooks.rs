@@ -25,12 +25,13 @@ pub const TMUX_PLAYBOOK: &str = "\
 
 Preferred path: if list_panes shows `query_tmux`, `exec_tmux_command`, or `send_tmux_keys`, use tmux-native tools first.
 1. resolve_work_target when you need con to choose the best pane or tmux workspace first
-2. tmux_find_targets or tmux_list_targets to discover exact tmux windows and panes
-3. tmux_capture_pane to inspect the chosen tmux pane without confusing it with the outer con pane
-4. tmux_ensure_shell_target when you need a safe shell pane for work
-5. tmux_ensure_agent_target when you want to reuse or create a Codex CLI, Claude Code, or OpenCode tmux target
-6. tmux_run_command when you need a fresh shell, a dedicated work window, or another long-running target
-7. tmux_send_keys to a specific tmux pane target
+2. ensure_remote_tmux_shell_target when you need the whole ssh->tmux->shell path prepared cleanly from a remote host
+3. tmux_find_targets or tmux_list_targets to discover exact tmux windows and panes
+4. tmux_capture_pane to inspect the chosen tmux pane without confusing it with the outer con pane
+5. tmux_ensure_shell_target when you need a safe shell pane for work
+6. tmux_ensure_agent_target when you want to reuse or create a Codex CLI, Claude Code, or OpenCode tmux target
+7. tmux_run_command when you need a fresh shell, a dedicated work window, or another long-running target
+8. tmux_send_keys to a specific tmux pane target
 
 Use outer-pane send_keys for tmux only as a fallback when tmux native control is unavailable.
 tmux intercepts its prefix key from the PTY stream. Sending \\x02 (Ctrl-B) via send_keys \
@@ -46,6 +47,8 @@ Before any tmux operation, read_pane to see:
 Parse the status bar to know which window you are on and what other windows exist.
 
 ### Native tmux workflow
+- Prepare the whole remote tmux shell path in one step when needed: ensure_remote_tmux_shell_target(host=\"haswell\", session_name=\"work\", cwd=\"/repo\")
+- If that succeeds, use its tmux snapshot and chosen shell target to orient yourself. Do not attach tmux in the outer pane just to inspect the workspace unless the user explicitly asks to enter the attached tmux UI.
 - Resolve best pane first: resolve_work_target(intent=\"tmux_shell\") or resolve_work_target(intent=\"agent_cli\", agent_name=\"codex\")
 - Discover targets: tmux_list_targets(pane_index=...)
 - Find a likely shell/agent pane: tmux_find_targets(pane_index=..., kind=\"shell\")

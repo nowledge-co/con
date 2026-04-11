@@ -272,6 +272,9 @@ pub struct PaneRuntimeState {
     pub front_state: PaneFrontState,
     pub mode: PaneMode,
     pub shell_metadata_fresh: bool,
+    pub screen_prompt_like: bool,
+    pub screen_tmux_like: bool,
+    pub screen_ssh_disconnected: bool,
     pub remote_host: Option<String>,
     pub remote_host_confidence: Option<PaneConfidence>,
     pub remote_host_source: Option<PaneEvidenceSource>,
@@ -534,6 +537,18 @@ impl PaneRuntimeTracker {
             shell_metadata_fresh
                 && observation.input_generation == context.captured_input_generation
         });
+        let screen_prompt_like = observation
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::PromptLikeInput);
+        let screen_tmux_like = observation
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::TmuxLikeScreen);
+        let screen_ssh_disconnected = observation
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
 
         let (
             remote_host,
@@ -734,6 +749,9 @@ impl PaneRuntimeTracker {
             front_state,
             mode,
             shell_metadata_fresh,
+            screen_prompt_like,
+            screen_tmux_like,
+            screen_ssh_disconnected,
             remote_host,
             remote_host_confidence,
             remote_host_source,
@@ -2515,7 +2533,9 @@ impl TerminalContext {
              - MULTI-PANE TARGET SELECTION (\"which pane should you use?\", \"which pane is safer?\", \"where should you run this?\") → resolve_work_target.\n\
              - FOLLOW-UP REMOTE WORK on hosts that already exist in `<remote_workspaces>` → reuse those workspaces by default. Do not create duplicate SSH panes unless the user asks for a new host or the existing pane is no longer reusable.\n\
              - DISCONNECTED SSH WORKSPACES → recover only the affected host with ensure_remote_shell_target. Do not recreate healthy remote panes when one host disconnects.\n\
-             - REMOTE TMUX WORKSPACE PREPARATION (\"connect to haswell and prepare tmux\", \"ensure tmux session con-bench on host X\") → ensure_remote_tmux_workspace. Prefer this over manually chaining ensure_remote_shell_target + terminal_exec + tmux_list_targets when you need a reusable ssh->tmux starting point.\n\
+             - REMOTE TMUX WORKSPACE PREPARATION (\"connect to haswell and prepare tmux\", \"ensure tmux session con-bench on host X\") → ensure_remote_tmux_workspace. Prefer this over manually chaining ensure_remote_shell_target + terminal_exec + tmux_list_targets when you only need the tmux session/bootstrap fact.\n\
+             - REMOTE TMUX SHELL-WORK PREPARATION (\"connect to haswell, prepare tmux, and give me a clean shell target\", \"operate inside tmux on host X\") → ensure_remote_tmux_shell_target. Prefer this over manually attaching tmux in the visible pane when the user needs a reusable tmux shell target for file work.\n\
+             - If ensure_remote_tmux_shell_target succeeds, describe the tmux workspace from its `tmux_snapshot` and `shell_target`. Do NOT attach tmux in the outer visible pane just to orient yourself unless the user explicitly wants to enter the attached tmux UI.\n\
              - FOLLOW-UP LOCAL CODING WORK in `<local_workspaces>` → reuse those local Codex / Claude / OpenCode / shell workspaces by default. Do not create duplicate local panes when a reusable workspace already exists for the same project path.\n\
              - When `<work_target_hints>` is present, use those typed hints before improvising pane choice from raw metadata.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
@@ -2578,7 +2598,8 @@ impl TerminalContext {
              - ensure_local_agent_target: Reuse an existing LOCAL Codex / Claude Code / OpenCode pane, or create one if needed. Use this when you only need the interactive agent side.\n\
              - ensure_local_shell_target: Reuse an existing LOCAL shell pane, or create one if needed. Use this when you only need the shell companion for local coding workflows so shell work stays out of the interactive agent UI.\n\
              - ensure_remote_shell_target: Reuse an existing SSH pane for a host, or create one if needed. Prefer this over repeatedly creating duplicate SSH panes during multi-host work. Carry the returned `pane_id` into follow-up work.\n\
-             - ensure_remote_tmux_workspace: Reuse or create a remote SSH shell pane for a host, ensure a named tmux session exists there, and report whether tmux-native control is immediately available from that same pane.\n\
+             - ensure_remote_tmux_shell_target: Reuse or create a remote SSH shell pane for a host, ensure a named tmux session exists there, verify tmux-native control on that pane, and then reuse or create a clean tmux shell target for file work. The result already contains `tmux_snapshot` plus the chosen shell target, so you usually do not need to attach tmux in the outer pane.\n\
+             - ensure_remote_tmux_workspace: Reuse or create a remote SSH shell pane for a host, ensure a named tmux session exists there, and report whether tmux-native control is immediately available from that same pane. Use this when you only need tmux bootstrap, not a shell target.\n\
              - remote_exec: Reuse or create remote SSH workspaces for one or more hosts, then run the same command on them in parallel. Its per-host results include stable `pane_id` values for follow-up work.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
              - tmux_ensure_shell_target: Reuse or create a tmux shell target through a proven same-session tmux shell anchor.\n\
@@ -3662,6 +3683,9 @@ mod tests {
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Shell,
             shell_metadata_fresh: false,
+            screen_prompt_like: false,
+            screen_tmux_like: false,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -3725,6 +3749,9 @@ mod tests {
             front_state: PaneFrontState::ShellPrompt,
             mode: PaneMode::Shell,
             shell_metadata_fresh: true,
+            screen_prompt_like: true,
+            screen_tmux_like: false,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -3744,6 +3771,9 @@ mod tests {
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
             shell_metadata_fresh: false,
+            screen_prompt_like: false,
+            screen_tmux_like: true,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -3775,6 +3805,9 @@ mod tests {
             front_state: PaneFrontState::ShellPrompt,
             mode: PaneMode::Shell,
             shell_metadata_fresh: true,
+            screen_prompt_like: true,
+            screen_tmux_like: false,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -3846,6 +3879,9 @@ mod tests {
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
             shell_metadata_fresh: false,
+            screen_prompt_like: false,
+            screen_tmux_like: true,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -3959,6 +3995,9 @@ mod tests {
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
             shell_metadata_fresh: false,
+            screen_prompt_like: true,
+            screen_tmux_like: false,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -4059,6 +4098,9 @@ mod tests {
                 front_state: PaneFrontState::Unknown,
                 mode: PaneMode::Unknown,
                 shell_metadata_fresh: false,
+                screen_prompt_like: false,
+                screen_tmux_like: true,
+                screen_ssh_disconnected: false,
                 remote_host: Some("haswell".to_string()),
                 remote_host_confidence: Some(PaneConfidence::Strong),
                 remote_host_source: Some(PaneEvidenceSource::ShellProbe),
@@ -4148,6 +4190,9 @@ mod tests {
                 front_state: PaneFrontState::Unknown,
                 mode: PaneMode::Unknown,
                 shell_metadata_fresh: false,
+                screen_prompt_like: true,
+                screen_tmux_like: true,
+                screen_ssh_disconnected: false,
                 remote_host: Some("haswell".to_string()),
                 remote_host_confidence: Some(PaneConfidence::Strong),
                 remote_host_source: Some(PaneEvidenceSource::ShellProbe),

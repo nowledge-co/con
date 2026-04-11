@@ -81,12 +81,21 @@ con now also accepts one more truthful tmux-anchor source:
 
 then that shell can become a tmux control anchor immediately, even before a later shell probe re-enters tmux.
 
+con now retains one more honest tmux-anchor state too:
+
+- if con recently prepared or targeted a tmux session from this pane
+- and the visible screen still looks like a prompt inside that tmux workspace
+- and the pane does not currently look disconnected
+
+then tmux-native query/send/run can remain available through that prompt-like tmux shell, even though Ghostty no longer proves a fresh outer shell-integrated prompt.
+
 That attachment currently supports:
 
 - tmux target discovery
 - tmux target discovery helpers for likely shell and agent-cli panes
 - tmux pane capture
 - tmux shell-target preparation
+- remote `ssh -> tmux -> shell-target` preparation in one typed step
 - tmux agent-target preparation for Codex CLI, Claude Code, and OpenCode
 - tmux-native command launch into a new window or split pane
 - tmux-native send-keys to a chosen tmux target

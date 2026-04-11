@@ -21,7 +21,7 @@ use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{
     AgentCliTurnTool, BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalAgentTargetTool,
     EnsureLocalCodingWorkspaceTool, EnsureLocalShellTargetTool, EnsureRemoteShellTargetTool,
-    EnsureRemoteTmuxWorkspaceTool,
+    EnsureRemoteTmuxShellTargetTool, EnsureRemoteTmuxWorkspaceTool,
     FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool, ListTabWorkspacesTool, PaneRequest,
     ProbeShellContextTool, ReadPaneTool, RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool,
     SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecTool,
@@ -628,6 +628,10 @@ macro_rules! build_and_stream {
             .tool(EnsureLocalAgentTargetTool::new($pane_tx.clone()))
             .tool(EnsureLocalShellTargetTool::new($pane_tx.clone()))
             .tool(EnsureRemoteShellTargetTool::new($pane_tx.clone()))
+            .tool(EnsureRemoteTmuxShellTargetTool::new(
+                $pane_tx.clone(),
+                $terminal_exec_tx.clone(),
+            ))
             .tool(EnsureRemoteTmuxWorkspaceTool::new(
                 $pane_tx.clone(),
                 $terminal_exec_tx.clone(),
@@ -821,6 +825,10 @@ impl AgentProvider {
                     .tool(EnsureLocalAgentTargetTool::new(pane_tx.clone()))
                     .tool(EnsureLocalShellTargetTool::new(pane_tx.clone()))
                     .tool(EnsureRemoteShellTargetTool::new(pane_tx.clone()))
+                    .tool(EnsureRemoteTmuxShellTargetTool::new(
+                        pane_tx.clone(),
+                        terminal_exec_tx.clone(),
+                    ))
                     .tool(EnsureRemoteTmuxWorkspaceTool::new(
                         pane_tx.clone(),
                         terminal_exec_tx.clone(),

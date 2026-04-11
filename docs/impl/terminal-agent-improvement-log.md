@@ -540,3 +540,27 @@ Lessons:
 Next focus:
 - Retain the same paired-workspace discipline in tmux and remote coding flows.
 
+## 2026-04-11 07:25 UTC · operator-ssh-tmux-devloop · 14/15 · world_class
+
+The tmux workflow now stays on a clean remote shell target and separates long-running work correctly, but the control plane still falls back to shell-driven tmux commands because native tmux attachment is not retained strongly enough.
+
+Score breakdown:
+- tmux Targeting: 2/3
+- Target Stability: 3/3
+- Execution Correctness: 3/3
+- Separation of Work: 3/3
+- Truthfulness: 3/3
+
+Product changes:
+- Added ensure_remote_tmux_shell_target so ssh->tmux->shell preparation is one typed control-plane step instead of ad hoc tool composition.
+- Retained durable tmux shell anchors across prompt-like tmux screens after recent Con-caused tmux setup, and exposed tmux-native capabilities through that retained anchor.
+
+Lessons:
+- A typed remote tmux shell-target tool plus a no-attach policy materially improves behavior even before native tmux attachment is fully retained.
+
+Next focus:
+- Retain or promote native tmux attachment after remote tmux bootstrap so later turns prefer tmux-native query/send/run over shell-driven tmux commands.
+
+Notes:
+- The isolated 20260411T072159Z tmux run no longer attached the outer pane to tmux and cleanly separated the file-work target from the long-running sleep target.
+

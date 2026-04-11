@@ -268,14 +268,14 @@ impl PaneControlState {
             channels.push(PaneControlChannel::VisibleShellExec);
             capabilities.push(PaneControlCapability::ProbeShellContext);
             capabilities.push(PaneControlCapability::ExecVisibleShell);
-            if has_native_tmux_anchor {
-                channels.push(PaneControlChannel::TmuxQuery);
-                channels.push(PaneControlChannel::TmuxSendKeys);
-                channels.push(PaneControlChannel::TmuxExec);
-                capabilities.push(PaneControlCapability::QueryTmux);
-                capabilities.push(PaneControlCapability::SendTmuxKeys);
-                capabilities.push(PaneControlCapability::ExecTmuxCommand);
-            }
+        }
+        if has_native_tmux_anchor {
+            channels.push(PaneControlChannel::TmuxQuery);
+            channels.push(PaneControlChannel::TmuxSendKeys);
+            channels.push(PaneControlChannel::TmuxExec);
+            capabilities.push(PaneControlCapability::QueryTmux);
+            capabilities.push(PaneControlCapability::SendTmuxKeys);
+            capabilities.push(PaneControlCapability::ExecTmuxCommand);
         }
 
         let mut notes = Vec::new();
@@ -313,6 +313,15 @@ impl PaneControlState {
                         .to_string(),
                 );
             }
+        } else if has_native_tmux_anchor && runtime.screen_tmux_like && runtime.screen_prompt_like {
+            let session = tmux_session_hint(runtime).unwrap_or_else(|| "tmux".to_string());
+            notes.push(format!(
+                "The current screen still looks like a prompt inside tmux session `{session}`, and recent con-caused tmux setup keeps a durable same-session tmux shell anchor alive."
+            ));
+            notes.push(
+                "Prefer tmux-native query/capture/run/send tools over raw tmux shell commands or outer-pane keystrokes while that prompt-like tmux shell remains visible."
+                    .to_string(),
+            );
         } else if has_native_tmux_anchor {
             let session = tmux_session_hint(runtime).unwrap_or_else(|| "tmux".to_string());
             notes.push(format!(
@@ -559,6 +568,8 @@ fn tmux_control_from_runtime(
                 .is_some()
         {
             "con has a typed same-session tmux shell anchor for this pane. Native tmux query, capture, run-command, and send-keys are available through that anchor.".to_string()
+        } else if has_native_tmux_anchor && runtime.screen_tmux_like && runtime.screen_prompt_like {
+            "The current screen still looks like a prompt inside tmux, and recent Con-caused tmux setup from this pane keeps a durable same-session tmux shell anchor alive. Native tmux query, capture, run-command, and send-keys remain available through that prompt-like tmux shell.".to_string()
         } else if has_native_tmux_anchor {
             "A recent con-executed tmux command and the current fresh shell prompt give con a native tmux control anchor for this session, even though tmux is not yet the proven front-most target.".to_string()
         } else if has_current_tmux {
@@ -587,10 +598,6 @@ fn tmux_session_hint(runtime: &PaneRuntimeState) -> Option<String> {
 }
 
 fn runtime_has_native_tmux_anchor(runtime: &PaneRuntimeState) -> bool {
-    if runtime.front_state != PaneFrontState::ShellPrompt || !runtime.shell_metadata_fresh {
-        return false;
-    }
-
     if runtime.shell_context_fresh
         && runtime
             .shell_context
@@ -601,12 +608,25 @@ fn runtime_has_native_tmux_anchor(runtime: &PaneRuntimeState) -> bool {
         return true;
     }
 
-    runtime
+    let recent_tmux_session = runtime
         .recent_actions
         .iter()
         .rev()
         .find_map(tmux_session_from_action_record)
-        .is_some()
+        .is_some();
+
+    if runtime.front_state == PaneFrontState::ShellPrompt && runtime.shell_metadata_fresh {
+        return recent_tmux_session;
+    }
+
+    if runtime.screen_ssh_disconnected || !runtime.screen_prompt_like {
+        return false;
+    }
+
+    runtime.screen_tmux_like
+        && (recent_tmux_session
+            || runtime.tmux_session.is_some()
+            || runtime.last_verified_tmux_session.is_some())
 }
 
 fn target_stack_from_runtime(runtime: &PaneRuntimeState) -> Vec<PaneVisibleTarget> {
@@ -781,6 +801,9 @@ mod tests {
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
             shell_metadata_fresh: false,
+            screen_prompt_like: false,
+            screen_tmux_like: true,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -819,6 +842,9 @@ mod tests {
             front_state: PaneFrontState::ShellPrompt,
             mode: PaneMode::Shell,
             shell_metadata_fresh: true,
+            screen_prompt_like: true,
+            screen_tmux_like: false,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -873,6 +899,9 @@ mod tests {
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
             shell_metadata_fresh: false,
+            screen_prompt_like: false,
+            screen_tmux_like: true,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -937,6 +966,9 @@ mod tests {
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
             shell_metadata_fresh: false,
+            screen_prompt_like: false,
+            screen_tmux_like: false,
+            screen_ssh_disconnected: false,
             remote_host: None,
             remote_host_confidence: None,
             remote_host_source: None,
@@ -968,6 +1000,9 @@ mod tests {
             front_state: PaneFrontState::ShellPrompt,
             mode: PaneMode::Shell,
             shell_metadata_fresh: true,
+            screen_prompt_like: true,
+            screen_tmux_like: false,
+            screen_ssh_disconnected: false,
             remote_host: Some("haswell".to_string()),
             remote_host_confidence: Some(PaneConfidence::Advisory),
             remote_host_source: Some(PaneEvidenceSource::ActionHistory),
@@ -1036,6 +1071,61 @@ mod tests {
                 .attachments
                 .iter()
                 .any(|attachment| attachment.kind == PaneAttachmentKind::TmuxControl)
+        );
+    }
+
+    #[test]
+    fn prompt_like_tmux_screen_retains_native_tmux_anchor_after_setup() {
+        let runtime = PaneRuntimeState {
+            front_state: PaneFrontState::Unknown,
+            mode: PaneMode::Unknown,
+            shell_metadata_fresh: false,
+            screen_prompt_like: true,
+            screen_tmux_like: true,
+            screen_ssh_disconnected: false,
+            remote_host: Some("haswell".to_string()),
+            remote_host_confidence: Some(PaneConfidence::Advisory),
+            remote_host_source: Some(PaneEvidenceSource::ActionHistory),
+            agent_cli: None,
+            tmux_session: None,
+            last_verified_scope_stack: Vec::new(),
+            last_verified_tmux_session: Some("con-bench".to_string()),
+            shell_context: None,
+            shell_context_fresh: false,
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: Vec::new(),
+            recent_actions: vec![PaneActionRecord {
+                sequence: 1,
+                kind: PaneActionKind::VisibleShellExec,
+                summary: "con executed `tmux has-session -t con-bench 2>/dev/null || tmux new-session -d -s con-bench` in the visible shell".to_string(),
+                command: Some(
+                    "tmux has-session -t con-bench 2>/dev/null || tmux new-session -d -s con-bench"
+                        .to_string(),
+                ),
+                source: PaneEvidenceSource::ActionHistory,
+                confidence: PaneConfidence::Advisory,
+                input_generation: Some(4),
+                note: None,
+            }],
+            warnings: Vec::new(),
+        };
+
+        let control = PaneControlState::from_runtime(&runtime);
+        assert_eq!(
+            control.tmux.as_ref().map(|tmux| tmux.mode),
+            Some(TmuxControlMode::Native)
+        );
+        assert!(
+            control
+                .capabilities
+                .contains(&PaneControlCapability::QueryTmux)
+        );
+        assert!(
+            control
+                .notes
+                .iter()
+                .any(|note| note.contains("prompt inside tmux"))
         );
     }
 }

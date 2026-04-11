@@ -15,7 +15,7 @@ use crate::control::{
     PaneVisibleTarget, PaneVisibleTargetKind, TmuxControlMode, TmuxControlState,
 };
 use crate::shell_probe::ShellProbeResult;
-use crate::tmux::{TmuxCapture, TmuxExecLocation, TmuxExecResult, TmuxSnapshot};
+use crate::tmux::{TmuxCapture, TmuxExecLocation, TmuxExecResult, TmuxPaneInfo, TmuxSnapshot};
 
 /// Error type for agent tool execution
 #[derive(Debug, thiserror::Error)]
@@ -4968,12 +4968,62 @@ pub struct EnsureRemoteTmuxWorkspaceArgs {
     pub startup_command: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct EnsureRemoteTmuxShellTargetResult {
+    pub host: String,
+    pub session_name: String,
+    pub pane_index: usize,
+    pub pane_id: Option<usize>,
+    pub created_remote_pane: bool,
+    pub remote_match_source: RemoteShellMatchSource,
+    pub bootstrap_output: String,
+    pub tmux_bootstrap_output: String,
+    pub tmux_native_ready: bool,
+    pub tmux_snapshot: TmuxSnapshot,
+    pub shell_target_created: bool,
+    pub shell_target: TmuxPaneInfo,
+    pub shell_target_creation: Option<TmuxExecResult>,
+    pub reason: String,
+}
+
+#[derive(Deserialize)]
+pub struct EnsureRemoteTmuxShellTargetArgs {
+    pub host: String,
+    pub session_name: String,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
+    #[serde(default = "default_pane_create_location")]
+    pub location: PaneCreateLocation,
+    pub startup_command: Option<String>,
+    pub cwd: Option<String>,
+    pub window_name: Option<String>,
+    pub shell_command: Option<String>,
+    #[serde(default = "default_tmux_shell_location")]
+    pub tmux_location: TmuxExecLocation,
+    #[serde(default = "default_true")]
+    pub detached: bool,
+}
+
 pub struct EnsureRemoteTmuxWorkspaceTool {
     pane_tx: Sender<PaneRequest>,
     request_tx: Sender<TerminalExecRequest>,
 }
 
 impl EnsureRemoteTmuxWorkspaceTool {
+    pub fn new(pane_tx: Sender<PaneRequest>, request_tx: Sender<TerminalExecRequest>) -> Self {
+        Self {
+            pane_tx,
+            request_tx,
+        }
+    }
+}
+
+pub struct EnsureRemoteTmuxShellTargetTool {
+    pane_tx: Sender<PaneRequest>,
+    request_tx: Sender<TerminalExecRequest>,
+}
+
+impl EnsureRemoteTmuxShellTargetTool {
     pub fn new(pane_tx: Sender<PaneRequest>, request_tx: Sender<TerminalExecRequest>) -> Self {
         Self {
             pane_tx,
@@ -5332,6 +5382,132 @@ fn ensure_remote_shell_target_impl(
     })
 }
 
+async fn ensure_remote_tmux_workspace_impl(
+    pane_tx: &Sender<PaneRequest>,
+    request_tx: &Sender<TerminalExecRequest>,
+    args: EnsureRemoteTmuxWorkspaceArgs,
+) -> Result<EnsureRemoteTmuxWorkspaceResult, ToolError> {
+    let session_name = args.session_name.trim().to_string();
+    if session_name.is_empty() {
+        return Err(ToolError::CommandFailed(
+            "ensure_remote_tmux_workspace requires a non-empty session_name".into(),
+        ));
+    }
+
+    let ensure = ensure_remote_shell_target_impl(
+        pane_tx,
+        EnsureRemoteShellTargetArgs {
+            host: args.host.clone(),
+            pane_index: args.pane_index,
+            pane_id: args.pane_id,
+            location: args.location,
+            startup_command: args.startup_command,
+        },
+    )?;
+
+    let pane = selector_from(Some(ensure.pane_index), ensure.pane_id);
+    let bootstrap_output = if ensure.created {
+        wait_for_pane_initial_output(pane_tx, pane).await?
+    } else {
+        String::new()
+    };
+
+    let panes = pane_query_list(pane_tx)?;
+    let anchor = panes
+        .iter()
+        .find(|candidate| candidate.pane_id == ensure.pane_id.unwrap_or(usize::MAX))
+        .or_else(|| panes.iter().find(|candidate| candidate.index == ensure.pane_index))
+        .ok_or_else(|| {
+            ToolError::CommandFailed(format!(
+                "Remote pane {} disappeared before tmux workspace preparation could continue.",
+                ensure.pane_index
+            ))
+        })?;
+
+    if !pane_has_capability(anchor, PaneControlCapability::ExecVisibleShell) {
+        return Err(ToolError::CommandFailed(format!(
+            "Pane {} is routed to host `{}` but does not currently expose visible shell execution. Wait for a proven remote shell prompt before preparing tmux there.",
+            ensure.pane_index, ensure.host
+        )));
+    }
+
+    let tmux_command = format!(
+        "tmux has-session -t {} 2>/dev/null || tmux new-session -d -s {}",
+        shell_quote_fragment(&session_name),
+        shell_quote_fragment(&session_name)
+    );
+
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    request_tx
+        .send(TerminalExecRequest {
+            command: tmux_command,
+            working_dir: None,
+            target: pane,
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Terminal exec channel closed".into()))?;
+
+    let tmux_bootstrap = tokio::task::block_in_place(|| {
+        response_rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .map_err(|_| {
+                ToolError::CommandFailed("Remote tmux workspace bootstrap timed out (60s)".into())
+            })
+    })?;
+
+    if tmux_bootstrap.exit_code.is_some_and(|code| code != 0) {
+        return Err(ToolError::CommandFailed(format!(
+            "Failed to prepare tmux session `{}` on host `{}`.\n{}",
+            session_name, ensure.host, tmux_bootstrap.output
+        )));
+    }
+
+    let panes = pane_query_list(pane_tx)?;
+    let updated = panes
+        .iter()
+        .find(|candidate| candidate.pane_id == ensure.pane_id.unwrap_or(usize::MAX))
+        .or_else(|| panes.iter().find(|candidate| candidate.index == ensure.pane_index))
+        .ok_or_else(|| {
+            ToolError::CommandFailed(format!(
+                "Remote pane {} disappeared after tmux workspace preparation.",
+                ensure.pane_index
+            ))
+        })?;
+
+    let tmux_native_ready = pane_has_capability(updated, PaneControlCapability::QueryTmux);
+    let tmux_snapshot = if tmux_native_ready {
+        Some(pane_query_tmux_list(pane_tx, pane)?)
+    } else {
+        None
+    };
+
+    let reason = if tmux_native_ready {
+        format!(
+            "Prepared tmux session `{}` on host `{}` and established a tmux-native control anchor on pane {}.",
+            session_name, ensure.host, ensure.pane_index
+        )
+    } else {
+        format!(
+            "Prepared tmux session `{}` on host `{}` from pane {}, but tmux-native control is not yet established on that pane. Inspect or probe the pane before relying on tmux-native tools.",
+            session_name, ensure.host, ensure.pane_index
+        )
+    };
+
+    Ok(EnsureRemoteTmuxWorkspaceResult {
+        host: ensure.host,
+        session_name,
+        pane_index: ensure.pane_index,
+        pane_id: ensure.pane_id,
+        created_remote_pane: ensure.created,
+        remote_match_source: ensure.match_source,
+        bootstrap_output,
+        tmux_bootstrap_output: tmux_bootstrap.output,
+        tmux_native_ready,
+        tmux_snapshot,
+        reason,
+    })
+}
+
 impl Tool for EnsureRemoteShellTargetTool {
     const NAME: &'static str = "ensure_remote_shell_target";
     type Error = ToolError;
@@ -5396,7 +5572,7 @@ impl Tool for EnsureRemoteTmuxWorkspaceTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Prepare a reusable REMOTE tmux workspace from a host shell anchor. con reuses or creates an SSH shell pane for the host, ensures the requested tmux session exists, and then returns whether tmux-native control is immediately available from that same pane. Prefer this over hand-composing ensure_remote_shell_target + terminal_exec + tmux_list_targets when you need to enter or prepare ssh->tmux work cleanly.".to_string(),
+            description: "Prepare a reusable REMOTE tmux session from a host shell anchor. con reuses or creates an SSH shell pane for the host, ensures the requested tmux session exists, and returns whether tmux-native control is immediately available from that same pane. Use this when you only need the tmux session/bootstrap fact. If you also need a clean tmux shell target for file work, prefer ensure_remote_tmux_shell_target instead of attaching tmux in the visible pane.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -5432,125 +5608,194 @@ impl Tool for EnsureRemoteTmuxWorkspaceTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let session_name = args.session_name.trim().to_string();
-        if session_name.is_empty() {
-            return Err(ToolError::CommandFailed(
-                "ensure_remote_tmux_workspace requires a non-empty session_name".into(),
-            ));
-        }
+        ensure_remote_tmux_workspace_impl(&self.pane_tx, &self.request_tx, args).await
+    }
+}
 
-        let ensure = ensure_remote_shell_target_impl(
+impl Tool for EnsureRemoteTmuxShellTargetTool {
+    const NAME: &'static str = "ensure_remote_tmux_shell_target";
+    type Error = ToolError;
+    type Args = EnsureRemoteTmuxShellTargetArgs;
+    type Output = EnsureRemoteTmuxShellTargetResult;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Prepare the full REMOTE ssh->tmux shell-work path in one step. con reuses or creates an SSH pane for the host, ensures the requested tmux session exists there, verifies tmux-native control on that same pane, and then reuses or creates a clean tmux shell target for file work. The result includes both a tmux snapshot and the selected shell target, so you can describe the tmux workspace and continue file work without attaching tmux in the visible outer pane unless the user explicitly asks to enter it.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "host": {
+                        "type": "string",
+                        "description": "SSH host or alias to target, such as haswell or user@host."
+                    },
+                    "session_name": {
+                        "type": "string",
+                        "description": "tmux session name to ensure on that host."
+                    },
+                    "pane_index": {
+                        "type": ["integer", "null"],
+                        "description": "Optional con pane index to constrain SSH reuse checks. Positional only."
+                    },
+                    "pane_id": {
+                        "type": ["integer", "null"],
+                        "description": "Optional stable con pane id to constrain SSH reuse checks."
+                    },
+                    "location": {
+                        "type": "string",
+                        "enum": ["right", "down"],
+                        "description": "Where to place a newly created SSH pane if one is needed. Defaults to right."
+                    },
+                    "startup_command": {
+                        "type": ["string", "null"],
+                        "description": "Optional startup command for a newly created remote pane. Defaults to `ssh <host>`."
+                    },
+                    "cwd": {
+                        "type": ["string", "null"],
+                        "description": "Optional path hint for the tmux shell target. Existing shell panes whose tmux cwd contains this value are preferred, and new targets inherit it when created."
+                    },
+                    "window_name": {
+                        "type": ["string", "null"],
+                        "description": "Optional tmux window name for a newly created shell target."
+                    },
+                    "shell_command": {
+                        "type": ["string", "null"],
+                        "description": "Optional command for a newly created tmux shell target. Defaults to an interactive login shell."
+                    },
+                    "tmux_location": {
+                        "type": "string",
+                        "enum": ["new_window", "split_horizontal", "split_vertical"],
+                        "description": "Where to create a new tmux shell target if none already exists."
+                    },
+                    "detached": {
+                        "type": "boolean",
+                        "description": "Whether a newly created tmux shell target should start detached. Defaults to true."
+                    }
+                },
+                "required": ["host", "session_name"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let workspace = ensure_remote_tmux_workspace_impl(
             &self.pane_tx,
-            EnsureRemoteShellTargetArgs {
-                host: args.host.clone(),
+            &self.request_tx,
+            EnsureRemoteTmuxWorkspaceArgs {
+                host: args.host,
+                session_name: args.session_name,
                 pane_index: args.pane_index,
                 pane_id: args.pane_id,
                 location: args.location,
                 startup_command: args.startup_command,
             },
-        )?;
+        )
+        .await?;
 
-        let pane = selector_from(Some(ensure.pane_index), ensure.pane_id);
-        let bootstrap_output = if ensure.created {
-            wait_for_pane_initial_output(&self.pane_tx, pane).await?
-        } else {
-            String::new()
-        };
-
-        let panes = pane_query_list(&self.pane_tx)?;
-        let anchor = panes
-            .iter()
-            .find(|candidate| candidate.pane_id == ensure.pane_id.unwrap_or(usize::MAX))
-            .or_else(|| panes.iter().find(|candidate| candidate.index == ensure.pane_index))
-            .ok_or_else(|| {
-                ToolError::CommandFailed(format!(
-                    "Remote pane {} disappeared before tmux workspace preparation could continue.",
-                    ensure.pane_index
-                ))
-            })?;
-
-        if !pane_has_capability(anchor, PaneControlCapability::ExecVisibleShell) {
+        if !workspace.tmux_native_ready {
             return Err(ToolError::CommandFailed(format!(
-                "Pane {} is routed to host `{}` but does not currently expose visible shell execution. Wait for a proven remote shell prompt before preparing tmux there.",
-                ensure.pane_index, ensure.host
+                "{} A tmux-native shell target cannot be prepared yet because the same pane does not currently expose tmux query capability.",
+                workspace.reason
             )));
         }
 
-        let tmux_command = format!(
-            "tmux has-session -t {} 2>/dev/null || tmux new-session -d -s {}",
-            shell_quote_fragment(&session_name),
-            shell_quote_fragment(&session_name)
-        );
-
-        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
-        self.request_tx
-            .send(TerminalExecRequest {
-                command: tmux_command,
-                working_dir: None,
-                target: pane,
-                response_tx,
-            })
-            .map_err(|_| ToolError::CommandFailed("Terminal exec channel closed".into()))?;
-
-        let tmux_bootstrap = tokio::task::block_in_place(|| {
-            response_rx
-                .recv_timeout(std::time::Duration::from_secs(60))
-                .map_err(|_| {
-                    ToolError::CommandFailed(
-                        "Remote tmux workspace bootstrap timed out (60s)".into(),
-                    )
-                })
+        let pane = selector_from(Some(workspace.pane_index), workspace.pane_id);
+        let snapshot = workspace.tmux_snapshot.clone().ok_or_else(|| {
+            ToolError::CommandFailed(
+                "tmux-native control was reported ready, but no tmux snapshot was returned."
+                    .to_string(),
+            )
         })?;
-
-        if tmux_bootstrap.exit_code.is_some_and(|code| code != 0) {
-            return Err(ToolError::CommandFailed(format!(
-                "Failed to prepare tmux session `{}` on host `{}`.\n{}",
-                session_name, ensure.host, tmux_bootstrap.output
-            )));
-        }
-
-        let panes = pane_query_list(&self.pane_tx)?;
-        let updated = panes
+        let cwd_contains = args.cwd.as_ref().map(|v| v.to_ascii_lowercase());
+        let mut shell_matches = snapshot
+            .panes
             .iter()
-            .find(|candidate| candidate.pane_id == ensure.pane_id.unwrap_or(usize::MAX))
-            .or_else(|| panes.iter().find(|candidate| candidate.index == ensure.pane_index))
-            .ok_or_else(|| {
-                ToolError::CommandFailed(format!(
-                    "Remote pane {} disappeared after tmux workspace preparation.",
-                    ensure.pane_index
-                ))
-            })?;
+            .filter(|tmux_pane| {
+                tmux_pane
+                    .pane_current_command
+                    .as_deref()
+                    .is_some_and(is_tmux_shell_command)
+                    && cwd_contains.as_ref().is_none_or(|needle| {
+                        tmux_pane
+                            .pane_current_path
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase()
+                            .contains(needle)
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        sort_tmux_matches(&mut shell_matches);
 
-        let tmux_native_ready = pane_has_capability(updated, PaneControlCapability::QueryTmux);
-        let tmux_snapshot = if tmux_native_ready {
-            Some(pane_query_tmux_list(&self.pane_tx, pane)?)
-        } else {
-            None
-        };
+        let (shell_target_created, shell_target, shell_target_creation, tmux_snapshot) =
+            if let Some(shell_target) = shell_matches.into_iter().next() {
+                (false, shell_target, None, snapshot)
+            } else {
+                let shell_command = args
+                    .shell_command
+                    .unwrap_or_else(|| "exec \"${SHELL:-/bin/sh}\" -il".to_string());
+                let creation = pane_query_tmux_run_command(
+                    &self.pane_tx,
+                    pane,
+                    None,
+                    args.tmux_location,
+                    shell_command,
+                    args.window_name.clone(),
+                    args.cwd.clone(),
+                    args.detached,
+                )?;
+                let tmux_snapshot = pane_query_tmux_list(&self.pane_tx, pane)?;
+                let shell_target = tmux_snapshot
+                    .panes
+                    .iter()
+                    .find(|tmux_pane| {
+                        tmux_pane.target == creation.target || tmux_pane.pane_id == creation.pane_id
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| TmuxPaneInfo {
+                        session_name: creation.session_name.clone(),
+                        window_id: creation.window_id.clone(),
+                        window_index: creation.window_index.clone(),
+                        window_name: creation.window_name.clone(),
+                        window_target: creation.window_target.clone(),
+                        pane_id: creation.pane_id.clone(),
+                        pane_index: creation.pane_index.clone(),
+                        target: creation.target.clone(),
+                        pane_active: !creation.detached,
+                        window_active: !creation.detached,
+                        pane_current_command: None,
+                        pane_current_path: args.cwd.clone(),
+                    });
+                (true, shell_target, Some(creation), tmux_snapshot)
+            };
 
-        let reason = if tmux_native_ready {
+        let reason = if shell_target_created {
             format!(
-                "Prepared tmux session `{}` on host `{}` and established a tmux-native control anchor on pane {}.",
-                session_name, ensure.host, ensure.pane_index
+                "{} con then created a dedicated tmux shell target `{}` for remote file work.",
+                workspace.reason, shell_target.target
             )
         } else {
             format!(
-                "Prepared tmux session `{}` on host `{}` from pane {}, but tmux-native control is not yet established on that pane. Inspect or probe the pane before relying on tmux-native tools.",
-                session_name, ensure.host, ensure.pane_index
+                "{} con reused the existing tmux shell target `{}` for remote file work.",
+                workspace.reason, shell_target.target
             )
         };
 
-        Ok(EnsureRemoteTmuxWorkspaceResult {
-            host: ensure.host,
-            session_name,
-            pane_index: ensure.pane_index,
-            pane_id: ensure.pane_id,
-            created_remote_pane: ensure.created,
-            remote_match_source: ensure.match_source,
-            bootstrap_output,
-            tmux_bootstrap_output: tmux_bootstrap.output,
-            tmux_native_ready,
+        Ok(EnsureRemoteTmuxShellTargetResult {
+            host: workspace.host,
+            session_name: workspace.session_name,
+            pane_index: workspace.pane_index,
+            pane_id: workspace.pane_id,
+            created_remote_pane: workspace.created_remote_pane,
+            remote_match_source: workspace.remote_match_source,
+            bootstrap_output: workspace.bootstrap_output,
+            tmux_bootstrap_output: workspace.tmux_bootstrap_output,
+            tmux_native_ready: true,
             tmux_snapshot,
+            shell_target_created,
+            shell_target,
+            shell_target_creation,
             reason,
         })
     }
