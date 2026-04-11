@@ -1001,6 +1001,7 @@ pub enum WorkTargetIntent {
 #[serde(rename_all = "snake_case")]
 pub enum WorkTargetControlPath {
     VisibleShellExec,
+    RemoteShellTarget,
     LocalShellTarget,
     LocalAgentTarget,
     TmuxQuery,
@@ -1453,6 +1454,13 @@ fn pane_recent_ssh_target(pane: &PaneInfo) -> Option<String> {
     ssh_target_from_recent_actions(&pane.recent_actions)
 }
 
+fn pane_remote_host_hint(pane: &PaneInfo) -> Option<String> {
+    pane.hostname
+        .clone()
+        .or_else(|| pane.remote_workspace.as_ref().map(|anchor| anchor.host.clone()))
+        .or_else(|| pane_recent_ssh_target(pane))
+}
+
 fn pane_is_disconnected_workspace(pane: &PaneInfo) -> bool {
     pane_has_screen_hint(
         pane,
@@ -1810,6 +1818,25 @@ fn make_local_shell_preparation_candidate(pane: &PaneInfo, reason: String) -> Wo
     }
 }
 
+fn make_remote_shell_preparation_candidate(
+    pane: &PaneInfo,
+    reason: String,
+) -> WorkTargetCandidate {
+    WorkTargetCandidate {
+        pane_index: pane.index,
+        pane_id: pane.pane_id,
+        pane_title: pane.title.clone(),
+        host: pane_remote_host_hint(pane),
+        control_path: WorkTargetControlPath::RemoteShellTarget,
+        visible_target: pane.visible_target.clone(),
+        tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
+        tmux_target: None,
+        requires_preparation: true,
+        suggested_tool: "ensure_remote_shell_target".to_string(),
+        reason,
+    }
+}
+
 fn make_local_agent_preparation_candidate(pane: &PaneInfo, reason: String) -> WorkTargetCandidate {
     WorkTargetCandidate {
         pane_index: pane.index,
@@ -1991,11 +2018,29 @@ fn resolve_work_target_candidates(
                 if !pane_matches_cwd(&pane, cwd_contains.as_ref()) {
                     continue;
                 }
-                if pane_is_disconnected_workspace(&pane) || pane_has_tmux_observation(&pane) {
+                if pane_has_tmux_observation(&pane) {
                     continue;
                 }
                 let has_remote_fact = pane_has_remote_shell_context(&pane);
                 let has_remote_anchor = pane_matches_remote_anchor(&pane, host_contains.as_ref());
+                if pane_is_disconnected_workspace(&pane) {
+                    if let Some(host) = pane_remote_host_hint(&pane).filter(|host| {
+                        host_contains
+                            .as_ref()
+                            .is_none_or(|needle| host.to_ascii_lowercase().contains(needle))
+                    }) {
+                        candidates.push((
+                            85 + if pane.is_focused { 5 } else { 0 },
+                            make_remote_shell_preparation_candidate(
+                                &pane,
+                                format!(
+                                    "The SSH workspace for `{host}` appears disconnected. Recover only this host with ensure_remote_shell_target instead of recreating healthy remote panes."
+                                ),
+                            ),
+                        ));
+                    }
+                    continue;
+                }
                 if !has_remote_fact && !has_remote_anchor {
                     continue;
                 }
@@ -6076,7 +6121,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_work_target_does_not_reuse_disconnected_remote_workspace() {
+    fn resolve_work_target_surfaces_disconnected_remote_workspace_for_recovery() {
         let (pane_tx, _pane_rx) = unbounded();
         let mut disconnected = test_pane(2, "disconnected");
         disconnected.remote_workspace = Some(RemoteWorkspaceAnchor {
@@ -6104,7 +6149,11 @@ mod tests {
         )
         .expect("resolve");
 
-        assert!(result.best_match.is_none());
+        let best = result.best_match.expect("best");
+        assert_eq!(best.pane_index, 2);
+        assert_eq!(best.control_path, WorkTargetControlPath::RemoteShellTarget);
+        assert_eq!(best.suggested_tool, "ensure_remote_shell_target");
+        assert!(best.requires_preparation);
     }
 
     #[test]

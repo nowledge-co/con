@@ -91,6 +91,7 @@ That attachment currently supports:
 - tmux-native command launch into a new window or split pane
 - tmux-native send-keys to a chosen tmux target
 - remote-shell target preparation for SSH workspaces, so con can reuse an existing host pane or create one with explicit split placement instead of duplicating remote panes across turns
+- disconnected remote-shell recovery hints, so typed target resolution can preserve host identity and point the agent at selective recovery for only the affected SSH workspace
 - local paired-workspace preparation for local coding-agent workflows, so con can reuse or create the full local coding pair in one step: one interactive Codex / Claude Code / OpenCode pane plus one separate shell pane
 - local-shell target preparation for local coding-agent workflows, so Codex / Claude Code / OpenCode can stay in one pane while shell-oriented file/test work happens in a separate reusable local shell pane
 - local agent-target preparation for local coding-agent workflows, so Codex / Claude Code / OpenCode can be reused or launched intentionally instead of being inferred only from the visible pane
