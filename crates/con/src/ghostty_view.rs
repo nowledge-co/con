@@ -90,6 +90,28 @@ pub fn init(cx: &mut App) {
 }
 
 impl GhosttyView {
+    #[cfg(target_os = "macos")]
+    fn apply_nsview_frame(nsview: id, bounds: Bounds<Pixels>) {
+        unsafe {
+            let superview: id = msg_send![nsview, superview];
+            if superview.is_null() {
+                return;
+            }
+            let super_frame: NSRect = msg_send![superview, frame];
+            let flipped_y =
+                super_frame.size.height - f64::from(bounds.origin.y) - f64::from(bounds.size.height);
+
+            let frame = NSRect::new(
+                cocoa::foundation::NSPoint::new(f64::from(bounds.origin.x), flipped_y),
+                cocoa::foundation::NSSize::new(
+                    f64::from(bounds.size.width),
+                    f64::from(bounds.size.height),
+                ),
+            );
+            let _: () = msg_send![nsview, setFrame:frame];
+        }
+    }
+
     pub fn new(
         app: Arc<GhosttyApp>,
         cwd: Option<String>,
@@ -328,22 +350,7 @@ impl GhosttyView {
         }
 
         if let Some(nsview) = self.nsview {
-            unsafe {
-                let superview: id = msg_send![nsview, superview];
-                let super_frame: NSRect = msg_send![superview, frame];
-                let flipped_y = super_frame.size.height
-                    - f64::from(bounds.origin.y)
-                    - f64::from(bounds.size.height);
-
-                let frame = NSRect::new(
-                    cocoa::foundation::NSPoint::new(f64::from(bounds.origin.x), flipped_y),
-                    cocoa::foundation::NSSize::new(
-                        f64::from(bounds.size.width),
-                        f64::from(bounds.size.height),
-                    ),
-                );
-                let _: () = msg_send![nsview, setFrame:frame];
-            }
+            Self::apply_nsview_frame(nsview, bounds);
         }
 
         if let Some(terminal) = &self.terminal {
@@ -370,7 +377,11 @@ impl GhosttyView {
                 self.native_view_visible.get() && !self.awaiting_first_layout_visibility;
             if effective_visible {
                 if let Some(terminal) = self.terminal.clone() {
+                    let maybe_nsview = self.nsview;
                     window.on_next_frame(move |_window, _cx| {
+                        if let Some(nsview) = maybe_nsview {
+                            Self::apply_nsview_frame(nsview, bounds);
+                        }
                         terminal.set_occlusion(false);
                         terminal.refresh();
                     });
