@@ -3858,7 +3858,7 @@ impl Render for ConWorkspace {
                 .read(cx)
                 .filtered_inline_skills(cx)
                 .is_empty();
-        let needs_ghostty_hidden = is_modal_open || has_skill_popup || has_inline_skill_popup;
+        let needs_ghostty_hidden = false;
 
         if self.modal_was_open && !is_modal_open {
             self.focus_terminal(window, cx);

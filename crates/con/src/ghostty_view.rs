@@ -27,6 +27,8 @@ use gpui::*;
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[cfg(target_os = "macos")]
+use cocoa::appkit::NSWindowOrderingMode;
+#[cfg(target_os = "macos")]
 use cocoa::base::{NO, YES, id};
 #[cfg(target_os = "macos")]
 use cocoa::foundation::NSRect;
@@ -225,9 +227,18 @@ impl GhosttyView {
                 Err(_) => return,
             };
 
-        let parent_nsview = match raw_handle.as_raw() {
+        let gpui_nsview = match raw_handle.as_raw() {
             raw_window_handle::RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr() as id,
             _ => return,
+        };
+
+        let parent_nsview: id = unsafe {
+            let superview: id = msg_send![gpui_nsview, superview];
+            if superview.is_null() {
+                gpui_nsview
+            } else {
+                superview
+            }
         };
 
         // Create with a zero-origin frame — update_frame() will set the
@@ -244,7 +255,12 @@ impl GhosttyView {
             let host: id = msg_send![host, initWithFrame:frame];
             let _: () = msg_send![host, setWantsLayer:YES];
             let _: () = msg_send![host, setAutoresizesSubviews:NO];
-            let _: () = msg_send![parent_nsview, addSubview:host];
+            let _: () = msg_send![
+                parent_nsview,
+                addSubview: host
+                positioned: NSWindowOrderingMode::NSWindowBelow
+                relativeTo: gpui_nsview
+            ];
 
             let surface: id = msg_send![class!(NSView), alloc];
             let surface: id = msg_send![surface, initWithFrame:frame];
