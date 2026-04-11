@@ -127,6 +127,12 @@ impl TerminalPane {
         }
     }
 
+    pub fn refresh_surface(&self, cx: &App) {
+        if let Some(terminal) = self.entity.read(cx).terminal() {
+            terminal.refresh();
+        }
+    }
+
     pub fn entity_id(&self) -> EntityId {
         self.entity.entity_id()
     }

@@ -3870,6 +3870,17 @@ impl Render for ConWorkspace {
         } else if !needs_ghostty_hidden && self.ghostty_hidden {
             self.set_ghostty_views_visible(true, cx);
             self.ghostty_hidden = false;
+            let terminals: Vec<TerminalPane> = self.tabs[self.active_tab]
+                .pane_tree
+                .all_terminals()
+                .into_iter()
+                .cloned()
+                .collect();
+            cx.on_next_frame(window, move |_workspace, _window, cx| {
+                for terminal in &terminals {
+                    terminal.refresh_surface(cx);
+                }
+            });
         }
         self.modal_was_open = is_modal_open;
 
