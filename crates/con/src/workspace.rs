@@ -20,7 +20,7 @@ use crate::input_bar::{
     EscapeInput, InputBar, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
 };
 use crate::model_registry::ModelRegistry;
-use crate::motion::{MotionValue, horizontal_reveal_offset};
+use crate::motion::{MotionValue, horizontal_reveal_offset, vertical_reveal_offset};
 use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
@@ -3191,7 +3191,7 @@ impl ConWorkspace {
         self.agent_panel_open = !self.agent_panel_open;
         self.agent_panel_motion.set_target(
             if self.agent_panel_open { 1.0 } else { 0.0 },
-            std::time::Duration::from_millis(if self.agent_panel_open { 250 } else { 210 }),
+            std::time::Duration::from_millis(if self.agent_panel_open { 290 } else { 220 }),
         );
         if self.agent_panel_open {
             if self.input_bar_visible {
@@ -3220,7 +3220,7 @@ impl ConWorkspace {
         self.input_bar_visible = !self.input_bar_visible;
         self.input_bar_motion.set_target(
             if self.input_bar_visible { 1.0 } else { 0.0 },
-            std::time::Duration::from_millis(if self.input_bar_visible { 180 } else { 150 }),
+            std::time::Duration::from_millis(if self.input_bar_visible { 210 } else { 160 }),
         );
         if self.input_bar_visible {
             self.input_bar.focus_handle(cx).focus(window, cx);
@@ -3872,7 +3872,15 @@ impl Render for ConWorkspace {
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
         let agent_panel_progress = self.agent_panel_motion.value(window);
         let input_bar_progress = self.input_bar_motion.value(window);
-        let agent_panel_chrome_progress = agent_panel_progress.powf(1.35);
+        let agent_panel_chrome_progress = ((agent_panel_progress - 0.10) / 0.90)
+            .clamp(0.0, 1.0)
+            .powf(1.55);
+        let agent_panel_content_progress = ((agent_panel_progress - 0.16) / 0.84)
+            .clamp(0.0, 1.0)
+            .powf(0.9);
+        let input_bar_content_progress = ((input_bar_progress - 0.08) / 0.92)
+            .clamp(0.0, 1.0)
+            .powf(0.92);
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -3925,8 +3933,8 @@ impl Render for ConWorkspace {
                         .child(
                             div()
                                 .h_full()
-                                .pl(horizontal_reveal_offset(agent_panel_progress, 18.0))
-                                .opacity(agent_panel_progress)
+                                .pl(horizontal_reveal_offset(agent_panel_content_progress, 22.0))
+                                .opacity(agent_panel_content_progress)
                                 .child(self.agent_panel.clone()),
                         ),
                 );
@@ -4334,7 +4342,8 @@ impl Render for ConWorkspace {
                 div()
                     .overflow_hidden()
                     .max_h(px(160.0 * input_bar_progress))
-                    .opacity(input_bar_progress)
+                    .opacity(input_bar_content_progress)
+                    .pt(vertical_reveal_offset(input_bar_content_progress, 10.0))
                     .child(self.input_bar.clone()),
             );
         }
