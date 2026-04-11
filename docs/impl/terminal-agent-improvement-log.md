@@ -457,3 +457,26 @@ Next focus:
 - Improve same-target Codex repair completion without regressing the shell-lane separation.
 - Investigate whether a stronger local Codex attachment or a smarter post-turn wait/check path can close the repair loop.
 
+## 2026-04-11 05:55 UTC · operator-ssh-tmux-devloop · 13/15 · target_met
+
+tmux setup is cleaner now: the shell-compat wrapper failure is gone and the workflow completes end to end, but native tmux control still drops out after initial setup so later turns fall back to observed tmux interaction.
+
+Score breakdown:
+- tmux Targeting: 2/3
+- Target Stability: 3/3
+- Execution Correctness: 3/3
+- Separation of Work: 2/3
+- Truthfulness: 3/3
+
+Product changes:
+- Use non-login shells for tmux wrappers
+- Add remote tmux workspace preparation tool
+
+Lessons:
+- Switching tmux and shell-probe wrappers to non-login shells removed the remote shell-compat leak without changing the control contract.
+- The next tmux bottleneck is explicit: native control is still not being retained or promoted through the attached-session workflow, so later turns fall back to raw tmux UI interaction.
+
+Next focus:
+- Promote remote tmux session preparation into a durable native control anchor that survives beyond the first setup turn.
+- Drive the new ensure_remote_tmux_workspace tool harder in the prompt and benchmark path so ssh->tmux bootstrap stops being reconstructed ad hoc.
+
