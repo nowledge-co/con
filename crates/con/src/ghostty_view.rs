@@ -362,15 +362,9 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     pub fn set_visible(&self, visible: bool) {
         self.native_view_visible.set(visible);
-        let effective_visible = visible && !self.awaiting_first_layout_visibility;
-        if let Some(terminal) = &self.terminal {
-            terminal.set_occlusion(!effective_visible);
-            if effective_visible {
-                terminal.refresh();
-            }
-        }
         if let Some(nsview) = self.nsview {
             unsafe {
+                let effective_visible = visible && !self.awaiting_first_layout_visibility;
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![nsview, setHidden:hidden];
             }
