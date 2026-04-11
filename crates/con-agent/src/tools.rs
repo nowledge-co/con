@@ -1095,6 +1095,100 @@ fn pane_query_tmux_run_command(
     }
 }
 
+fn pane_query_tmux_capture(
+    pane_tx: &Sender<PaneRequest>,
+    pane: PaneSelector,
+    target: Option<String>,
+    lines: usize,
+) -> Result<TmuxCapture, ToolError> {
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    pane_tx
+        .send(PaneRequest {
+            query: PaneQuery::TmuxCapture {
+                pane,
+                target,
+                lines,
+            },
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+    match recv_pane_response(response_rx, 12, "tmux capture")? {
+        PaneResponse::TmuxCapture(capture) => Ok(capture),
+        PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+        _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+    }
+}
+
+fn pane_query_read_content(
+    pane_tx: &Sender<PaneRequest>,
+    target: PaneSelector,
+    lines: usize,
+) -> Result<String, ToolError> {
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    pane_tx
+        .send(PaneRequest {
+            query: PaneQuery::ReadContent { target, lines },
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+    match recv_pane_response(response_rx, 5, "pane read")? {
+        PaneResponse::Content(content) => Ok(content),
+        PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+        _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+    }
+}
+
+fn pane_query_send_keys(
+    pane_tx: &Sender<PaneRequest>,
+    target: PaneSelector,
+    keys: String,
+) -> Result<(), ToolError> {
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    pane_tx
+        .send(PaneRequest {
+            query: PaneQuery::SendKeys { target, keys },
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+    match recv_pane_response(response_rx, 5, "send keys")? {
+        PaneResponse::KeysSent => Ok(()),
+        PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+        _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+    }
+}
+
+fn pane_query_tmux_send_keys(
+    pane_tx: &Sender<PaneRequest>,
+    pane: PaneSelector,
+    target: String,
+    literal_text: Option<String>,
+    key_names: Vec<String>,
+    append_enter: bool,
+) -> Result<String, ToolError> {
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    pane_tx
+        .send(PaneRequest {
+            query: PaneQuery::TmuxSendKeys {
+                pane,
+                target,
+                literal_text,
+                key_names,
+                append_enter,
+            },
+            response_tx,
+        })
+        .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+    match recv_pane_response(response_rx, 12, "tmux send-keys")? {
+        PaneResponse::Content(content) => Ok(content),
+        PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
+        _ => Err(ToolError::CommandFailed("Unexpected response".into())),
+    }
+}
+
 fn pane_query_list(pane_tx: &Sender<PaneRequest>) -> Result<Vec<PaneInfo>, ToolError> {
     let (response_tx, response_rx) = crossbeam_channel::bounded(1);
     pane_tx
@@ -2053,8 +2147,8 @@ fn resolve_work_target_candidates(
                             tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
                             tmux_target: None,
                             requires_preparation: false,
-                            suggested_tool: "send_keys".to_string(),
-                            reason: "The visible foreground target already appears to be the requested agent CLI.".to_string(),
+                            suggested_tool: "agent_cli_turn".to_string(),
+                            reason: "The visible foreground target already appears to be the requested agent CLI, so continue it with a typed agent_cli_turn instead of raw keystrokes.".to_string(),
                         },
                     ));
                     continue;
@@ -2085,8 +2179,8 @@ fn resolve_work_target_candidates(
                                 Some(target),
                                 WorkTargetControlPath::TmuxAgentTarget,
                                 false,
-                                "tmux_send_keys",
-                                "This pane has native tmux control and already contains a matching agent CLI target.".to_string(),
+                                "agent_cli_turn",
+                                "This pane has native tmux control and already contains a matching agent CLI target, so use a typed agent_cli_turn instead of raw tmux keystrokes.".to_string(),
                             ),
                         ));
                     } else {
@@ -2142,9 +2236,9 @@ fn resolve_work_target_candidates(
                             tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
                             tmux_target: None,
                             requires_preparation: false,
-                            suggested_tool: "send_keys".to_string(),
+                            suggested_tool: "agent_cli_turn".to_string(),
                             reason: format!(
-                                "This pane was previously created for local {label} work and still looks like the same local agent target."
+                                "This pane was previously created for local {label} work and still looks like the same local agent target. Continue it with a typed agent_cli_turn."
                             ),
                         },
                     ));
@@ -3392,6 +3486,216 @@ impl Tool for EnsureLocalCodingWorkspaceTool {
     }
 }
 
+// ── agent_cli_turn tool ───────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct AgentCliTurnArgs {
+    pub agent_name: String,
+    pub prompt: String,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
+    pub cwd_contains: Option<String>,
+    #[serde(default = "default_agent_cli_turn_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_pane_lines")]
+    pub lines: usize,
+}
+
+#[derive(Serialize)]
+pub struct AgentCliTurnResult {
+    pub agent_name: String,
+    pub pane_index: usize,
+    pub pane_id: usize,
+    pub control_path: WorkTargetControlPath,
+    pub tmux_target: Option<crate::tmux::TmuxPaneInfo>,
+    pub wait_status: String,
+    pub output: String,
+    pub note: String,
+}
+
+pub struct AgentCliTurnTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl AgentCliTurnTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for AgentCliTurnTool {
+    const NAME: &'static str = "agent_cli_turn";
+    type Error = ToolError;
+    type Args = AgentCliTurnArgs;
+    type Output = AgentCliTurnResult;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Send one natural-language turn to an already prepared interactive agent CLI target such as Codex, Claude Code, or OpenCode, then wait for the target to settle and return a fresh screen snapshot. This is the preferred tool for continuing work inside a known local agent pane or tmux agent target. It does not prepare missing targets; use ensure_local_agent_target, ensure_local_coding_workspace, or tmux_ensure_agent_target first when preparation is still required.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Agent CLI family to target, such as codex, claude, or opencode."
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Natural-language turn to send into the existing agent CLI target."
+                    },
+                    "pane_index": {
+                        "type": ["integer", "null"],
+                        "description": "Optional con pane index to constrain target selection. Positional only."
+                    },
+                    "pane_id": {
+                        "type": ["integer", "null"],
+                        "description": "Optional stable con pane id to constrain target selection."
+                    },
+                    "cwd_contains": {
+                        "type": ["string", "null"],
+                        "description": "Optional project-path hint used to prefer a matching existing target."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": "How long to wait for the agent target to settle after sending the prompt. Defaults to 90 seconds."
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "description": "How many recent lines to read or capture after the turn settles. Defaults to 50."
+                    }
+                },
+                "required": ["agent_name", "prompt"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let Some(agent_name) = canonical_agent_cli_name(&args.agent_name) else {
+            return Err(ToolError::CommandFailed(format!(
+                "Unsupported agent_name `{}`. Expected codex, claude, or opencode.",
+                args.agent_name
+            )));
+        };
+
+        let panes = pane_query_list(&self.pane_tx)?;
+        let resolved = resolve_work_target_candidates(
+            &self.pane_tx,
+            panes,
+            WorkTargetIntent::AgentCli,
+            args.pane_index,
+            args.pane_id,
+            None,
+            args.cwd_contains.clone(),
+            Some(agent_name.to_string()),
+            1,
+        )?;
+
+        let best = resolved.best_match.ok_or_else(|| {
+            ToolError::CommandFailed(format!(
+                "No existing {agent_name} target is currently available. Prepare one first with ensure_local_agent_target, ensure_local_coding_workspace, or tmux_ensure_agent_target."
+            ))
+        })?;
+
+        if best.requires_preparation {
+            return Err(ToolError::CommandFailed(format!(
+                "{} Use {} first.",
+                best.reason, best.suggested_tool
+            )));
+        }
+
+        let timeout_secs = args.timeout_secs.clamp(5, 180);
+        let lines = args.lines.clamp(10, 200);
+
+        match best.control_path {
+            WorkTargetControlPath::VisibleAgentUi => {
+                let target = selector_from(Some(best.pane_index), Some(best.pane_id));
+                let mut keys = args.prompt;
+                if !keys.ends_with('\n') {
+                    keys.push('\n');
+                }
+                pane_query_send_keys(&self.pane_tx, target, keys)?;
+                let wait = {
+                    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+                    self.pane_tx
+                        .send(PaneRequest {
+                            query: PaneQuery::WaitFor {
+                                target,
+                                timeout_secs: Some(timeout_secs),
+                                pattern: None,
+                            },
+                            response_tx,
+                        })
+                        .map_err(|_| {
+                            ToolError::CommandFailed("Pane query channel closed".into())
+                        })?;
+                    match recv_pane_response(response_rx, timeout_secs + 10, "agent cli wait")? {
+                        PaneResponse::WaitComplete { status, output } => {
+                            WaitForOutput { status, output }
+                        }
+                        PaneResponse::Error(e) => return Err(ToolError::CommandFailed(e)),
+                        _ => return Err(ToolError::CommandFailed("Unexpected response".into())),
+                    }
+                };
+                let output = if wait.output.trim().is_empty() {
+                    pane_query_read_content(&self.pane_tx, target, lines)?
+                } else {
+                    wait.output
+                };
+                Ok(AgentCliTurnResult {
+                    agent_name: agent_name.to_string(),
+                    pane_index: best.pane_index,
+                    pane_id: best.pane_id,
+                    control_path: best.control_path,
+                    tmux_target: None,
+                    wait_status: wait.status,
+                    output,
+                    note: "Sent the prompt into the visible agent CLI pane, waited for output quiescence, and returned a fresh pane snapshot.".to_string(),
+                })
+            }
+            WorkTargetControlPath::TmuxAgentTarget => {
+                let tmux_target = best.tmux_target.clone().ok_or_else(|| {
+                    ToolError::CommandFailed(
+                        "Resolved tmux agent target is missing its tmux pane identity.".to_string(),
+                    )
+                })?;
+                let pane = selector_from(Some(best.pane_index), Some(best.pane_id));
+                pane_query_tmux_send_keys(
+                    &self.pane_tx,
+                    pane,
+                    tmux_target.target.clone(),
+                    Some(args.prompt),
+                    Vec::new(),
+                    true,
+                )?;
+                let (wait_status, output) = wait_for_tmux_capture_settle(
+                    &self.pane_tx,
+                    pane,
+                    tmux_target.target.clone(),
+                    lines,
+                    timeout_secs,
+                )
+                .await?;
+                Ok(AgentCliTurnResult {
+                    agent_name: agent_name.to_string(),
+                    pane_index: best.pane_index,
+                    pane_id: best.pane_id,
+                    control_path: best.control_path,
+                    tmux_target: Some(tmux_target),
+                    wait_status,
+                    output,
+                    note: "Sent the prompt into the tmux agent target, waited for captured output to settle, and returned a fresh tmux capture.".to_string(),
+                })
+            }
+            _ => Err(ToolError::CommandFailed(format!(
+                "Resolved target uses control path `{}`. Use {} instead.",
+                serde_json::to_string(&best.control_path).unwrap_or_else(|_| "unknown".to_string()),
+                best.suggested_tool
+            ))),
+        }
+    }
+}
+
 // ── resolve_work_target tool ─────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -3742,6 +4046,52 @@ pub struct ReadPaneArgs {
 
 fn default_pane_lines() -> usize {
     50
+}
+
+fn default_agent_cli_turn_timeout_secs() -> u64 {
+    90
+}
+
+async fn wait_for_tmux_capture_settle(
+    pane_tx: &Sender<PaneRequest>,
+    pane: PaneSelector,
+    target: String,
+    lines: usize,
+    timeout_secs: u64,
+) -> Result<(String, String), ToolError> {
+    const POLL_MS: u64 = 700;
+    const STABLE_POLLS: u32 = 3;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let mut last_snapshot = String::new();
+    let mut stable_count = 0u32;
+    let mut saw_non_empty = false;
+
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
+        let capture = pane_query_tmux_capture(pane_tx, pane, Some(target.clone()), lines)?;
+        let snapshot = capture.content.trim_end().to_string();
+        if snapshot.is_empty() {
+            continue;
+        }
+        saw_non_empty = true;
+        if snapshot == last_snapshot {
+            stable_count += 1;
+            if stable_count >= STABLE_POLLS {
+                return Ok(("settled".to_string(), snapshot));
+            }
+        } else {
+            last_snapshot = snapshot;
+            stable_count = 0;
+        }
+    }
+
+    let status = if saw_non_empty {
+        "timeout"
+    } else {
+        "no_output"
+    };
+    Ok((status.to_string(), last_snapshot))
 }
 
 pub struct ReadPaneTool {
@@ -5780,7 +6130,7 @@ mod tests {
         let best = result.best_match.expect("best");
         assert_eq!(best.pane_index, 3);
         assert_eq!(best.control_path, WorkTargetControlPath::VisibleAgentUi);
-        assert_eq!(best.suggested_tool, "send_keys");
+        assert_eq!(best.suggested_tool, "agent_cli_turn");
     }
 
     #[test]

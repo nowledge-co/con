@@ -28,7 +28,7 @@ pub use shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
 pub use skills::{Skill, SkillRegistry};
 pub use tmux::{TmuxCapture, TmuxExecLocation, TmuxExecResult, TmuxPaneInfo, TmuxSnapshot};
 pub use tools::{
-    BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalAgentTargetTool,
+    AgentCliTurnTool, BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalAgentTargetTool,
     EnsureLocalCodingWorkspaceTool, EnsureLocalShellTargetTool, EnsureRemoteShellTargetTool,
     FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool, ListTabWorkspacesTool,
     PaneCreateLocation, PaneInfo, PaneQuery, PaneRequest, PaneResponse, ProbeShellContextTool,

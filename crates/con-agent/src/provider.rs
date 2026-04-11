@@ -19,7 +19,7 @@ use crate::context::TerminalContext;
 use crate::conversation::{AgentStep, Conversation, Message};
 use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{
-    BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalAgentTargetTool,
+    AgentCliTurnTool, BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalAgentTargetTool,
     EnsureLocalCodingWorkspaceTool, EnsureLocalShellTargetTool, EnsureRemoteShellTargetTool,
     FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool, ListTabWorkspacesTool, PaneRequest,
     ProbeShellContextTool, ReadPaneTool, RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool,
@@ -623,6 +623,7 @@ macro_rules! build_and_stream {
             .tool(TmuxFindTargetsTool::new($pane_tx.clone()))
             .tool(ResolveWorkTargetTool::new($pane_tx.clone()))
             .tool(EnsureLocalCodingWorkspaceTool::new($pane_tx.clone()))
+            .tool(AgentCliTurnTool::new($pane_tx.clone()))
             .tool(EnsureLocalAgentTargetTool::new($pane_tx.clone()))
             .tool(EnsureLocalShellTargetTool::new($pane_tx.clone()))
             .tool(EnsureRemoteShellTargetTool::new($pane_tx.clone()))
@@ -811,6 +812,7 @@ impl AgentProvider {
                     .tool(TmuxFindTargetsTool::new(pane_tx.clone()))
                     .tool(ResolveWorkTargetTool::new(pane_tx.clone()))
                     .tool(EnsureLocalCodingWorkspaceTool::new(pane_tx.clone()))
+                    .tool(AgentCliTurnTool::new(pane_tx.clone()))
                     .tool(EnsureLocalAgentTargetTool::new(pane_tx.clone()))
                     .tool(EnsureLocalShellTargetTool::new(pane_tx.clone()))
                     .tool(EnsureRemoteShellTargetTool::new(pane_tx.clone()))

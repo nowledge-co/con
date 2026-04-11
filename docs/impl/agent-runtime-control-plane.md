@@ -94,6 +94,7 @@ That attachment currently supports:
 - local paired-workspace preparation for local coding-agent workflows, so con can reuse or create the full local coding pair in one step: one interactive Codex / Claude Code / OpenCode pane plus one separate shell pane
 - local-shell target preparation for local coding-agent workflows, so Codex / Claude Code / OpenCode can stay in one pane while shell-oriented file/test work happens in a separate reusable local shell pane
 - local agent-target preparation for local coding-agent workflows, so Codex / Claude Code / OpenCode can be reused or launched intentionally instead of being inferred only from the visible pane
+- interactive agent-cli turns for local and tmux workflows, so con can send a prompt into an existing Codex / Claude Code / OpenCode target, wait for that target to settle, and return a fresh snapshot without dropping back to raw keystroke timing guesses
 
 This is the right abstraction because it scales across:
 
