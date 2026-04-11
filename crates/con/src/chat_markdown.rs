@@ -97,7 +97,7 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(720.0),
                 base_font_size: px(15.0),
                 base_line_height: px(24.0),
-                code_font_size: px(13.0),
+                code_font_size: theme.mono_font_size,
                 code_line_height: px(21.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
@@ -129,7 +129,7 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(640.0),
                 base_font_size: px(12.75),
                 base_line_height: px(20.0),
-                code_font_size: px(12.0),
+                code_font_size: theme.mono_font_size - px(0.5),
                 code_line_height: px(19.0),
                 text_color: theme.muted_foreground.opacity(0.66),
                 muted_text_color: theme.muted_foreground.opacity(0.58),
@@ -650,7 +650,10 @@ fn render_code_block(
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
     let mono_style = style.code_text_style();
-    let preserved_lines: Vec<String> = code.lines().map(preserve_code_indentation).collect();
+    let line_layouts: Vec<CodeLineLayout> = code
+        .lines()
+        .map(preserve_code_indentation_with_map)
+        .collect();
     let has_trailing_newline = code.ends_with('\n');
     let header_label = language
         .as_deref()
@@ -697,9 +700,9 @@ fn render_code_block(
         );
 
     let mut code_column = div().flex().flex_col().gap(px(0.0)).w_full();
-    let syntax_runs = highlighted_code_runs(code, language, style);
+    let syntax_runs = highlighted_code_runs(code, language, &line_layouts, style);
 
-    for (line_idx, line) in preserved_lines.iter().enumerate() {
+    for (line_idx, line_layout) in line_layouts.iter().enumerate() {
         code_column = code_column.child(
             div()
                 .w_full()
@@ -713,15 +716,15 @@ fn render_code_block(
                         .as_ref()
                         .and_then(|runs| runs.get(line_idx).cloned())
                     {
-                        Some(runs) => StyledText::new(line.clone()).with_runs(runs),
-                        None => StyledText::new(line.clone())
-                            .with_runs(vec![mono_style.to_run(line.len())]),
+                        Some(runs) => StyledText::new(line_layout.display.clone()).with_runs(runs),
+                        None => StyledText::new(line_layout.display.clone())
+                            .with_runs(vec![mono_style.to_run(line_layout.display.len())]),
                     },
                 ),
         );
     }
 
-    if preserved_lines.is_empty() || has_trailing_newline {
+    if line_layouts.is_empty() || has_trailing_newline {
         code_column = code_column.child(
             div()
                 .h(style.code_line_height)
@@ -746,6 +749,7 @@ fn render_code_block(
 fn highlighted_code_runs(
     code: &str,
     language: &Option<String>,
+    line_layouts: &[CodeLineLayout],
     style: &ChatMarkdownStyle<'_>,
 ) -> Option<Vec<Vec<gpui::TextRun>>> {
     let lang = language.as_deref()?.trim();
@@ -761,8 +765,9 @@ fn highlighted_code_runs(
     let mut line_runs = Vec::new();
     let mut line_start = 0usize;
 
-    for line in code.lines() {
+    for (line_idx, line) in code.lines().enumerate() {
         let line_end = line_start + line.len();
+        let line_layout = line_layouts.get(line_idx)?;
         let mut runs = Vec::new();
         let mut cursor = line_start;
 
@@ -774,31 +779,38 @@ fn highlighted_code_runs(
             }
 
             if start > cursor {
+                let display_start =
+                    line_layout.display_byte_index(cursor.saturating_sub(line_start));
+                let display_end = line_layout.display_byte_index(start.saturating_sub(line_start));
                 runs.push(mono_style_run(
                     &style.code_text_style(),
-                    code[cursor..start].chars().count(),
+                    display_end.saturating_sub(display_start),
                 ));
             }
 
             let highlighted_style = style.code_text_style().highlight(*highlight);
+            let display_start = line_layout.display_byte_index(start.saturating_sub(line_start));
+            let display_end = line_layout.display_byte_index(end.saturating_sub(line_start));
             runs.push(
                 softened_code_highlight(highlighted_style, style)
-                    .to_run(code[start..end].chars().count()),
+                    .to_run(display_end.saturating_sub(display_start)),
             );
             cursor = end;
         }
 
         if cursor < line_end {
+            let display_start = line_layout.display_byte_index(cursor.saturating_sub(line_start));
+            let display_end = line_layout.display_byte_index(line_end.saturating_sub(line_start));
             runs.push(mono_style_run(
                 &style.code_text_style(),
-                code[cursor..line_end].chars().count(),
+                display_end.saturating_sub(display_start),
             ));
         }
 
         if runs.is_empty() {
             runs.push(mono_style_run(
                 &style.code_text_style(),
-                line.chars().count(),
+                line_layout.display.len(),
             ));
         }
 
@@ -814,10 +826,7 @@ fn mono_style_run(text_style: &TextStyle, len: usize) -> gpui::TextRun {
 }
 
 fn suppress_syntax_highlighting(lang: &str) -> bool {
-    matches!(
-        lang.to_ascii_lowercase().as_str(),
-        "sh" | "shell" | "bash" | "zsh" | "console" | "terminal" | "text" | "txt" | "plain"
-    )
+    matches!(lang.to_ascii_lowercase().as_str(), "text" | "txt" | "plain")
 }
 
 fn softened_code_highlight(mut text_style: TextStyle, style: &ChatMarkdownStyle<'_>) -> TextStyle {
@@ -1135,26 +1144,59 @@ fn push_run(text: &mut String, runs: &mut Vec<gpui::TextRun>, style: &TextStyle,
     runs.push(style.to_run(content.len()));
 }
 
-fn preserve_code_indentation(line: &str) -> String {
+#[derive(Debug, Clone)]
+struct CodeLineLayout {
+    display: String,
+    original_to_display: Vec<usize>,
+}
+
+impl CodeLineLayout {
+    fn display_byte_index(&self, original_byte_index: usize) -> usize {
+        self.original_to_display
+            .get(original_byte_index)
+            .copied()
+            .unwrap_or_else(|| self.display.len())
+    }
+}
+
+fn preserve_code_indentation_with_map(line: &str) -> CodeLineLayout {
     let mut output = String::with_capacity(line.len());
+    let mut original_to_display = vec![0; line.len() + 1];
     let mut preserving_indent = true;
+    let mut original_byte_index = 0usize;
 
     for ch in line.chars() {
+        let mut replacement = String::new();
         if preserving_indent {
             match ch {
-                ' ' => output.push('\u{00A0}'),
-                '\t' => output.push_str("\u{00A0}\u{00A0}\u{00A0}\u{00A0}"),
+                ' ' => replacement.push('\u{00A0}'),
+                '\t' => replacement.push_str("\u{00A0}\u{00A0}\u{00A0}\u{00A0}"),
                 _ => {
                     preserving_indent = false;
-                    output.push(ch);
+                    replacement.push(ch);
                 }
             }
         } else {
-            output.push(ch);
+            replacement.push(ch);
+        }
+
+        output.push_str(&replacement);
+        original_byte_index += ch.len_utf8();
+        original_to_display[original_byte_index] = output.len();
+
+        if ch.len_utf8() > 1 {
+            let filled = output.len();
+            let start = original_byte_index + 1 - ch.len_utf8();
+            for byte_index in start..original_byte_index {
+                original_to_display[byte_index] = filled;
+            }
         }
     }
 
-    output
+    CodeLineLayout {
+        display: output,
+        original_to_display,
+    }
 }
 
 #[cfg(test)]
