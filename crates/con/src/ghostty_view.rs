@@ -346,6 +346,15 @@ impl GhosttyView {
             }
         }
 
+        if let Some(terminal) = &self.terminal {
+            let effective_visible =
+                self.native_view_visible.get() && !self.awaiting_first_layout_visibility;
+            if effective_visible {
+                terminal.set_occlusion(false);
+                terminal.refresh();
+            }
+        }
+
         if self.awaiting_first_layout_visibility {
             self.awaiting_first_layout_visibility = false;
             self.set_visible(self.native_view_visible.get());
