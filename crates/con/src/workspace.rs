@@ -534,9 +534,7 @@ impl ConWorkspace {
                             return false;
                         };
                         workspace.update(cx, |_workspace, cx| {
-                            if !terminal.surface_ready(cx) && terminal.has_layout(cx) {
-                                terminal.ensure_surface(window, cx);
-                            }
+                            terminal.ensure_surface(window, cx);
                             terminal.notify(cx);
                             terminal.set_native_view_visible(true, cx);
                             terminal.set_focus_state(should_focus, cx);
@@ -3877,9 +3875,6 @@ impl Render for ConWorkspace {
 
         if !needs_ghostty_hidden {
             for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
-                if !terminal.surface_ready(cx) && terminal.has_layout(cx) {
-                    terminal.ensure_surface(window, cx);
-                }
                 terminal.set_native_view_visible(true, cx);
             }
         }

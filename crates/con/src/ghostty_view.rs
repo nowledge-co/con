@@ -77,9 +77,6 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     /// Retry surface creation after transient libghostty initialization failures.
     next_surface_init_retry_at: Option<Instant>,
-    /// Ordinary pane startup should defer native surface creation until one frame
-    /// after the first layout so the host AppKit view hierarchy is settled.
-    deferred_initialization_pending: bool,
 }
 
 /// Register ghostty key bindings. Call once at startup.
@@ -93,28 +90,6 @@ pub fn init(cx: &mut App) {
 }
 
 impl GhosttyView {
-    #[cfg(target_os = "macos")]
-    fn apply_nsview_frame(nsview: id, bounds: Bounds<Pixels>) {
-        unsafe {
-            let superview: id = msg_send![nsview, superview];
-            if superview.is_null() {
-                return;
-            }
-            let super_frame: NSRect = msg_send![superview, frame];
-            let flipped_y =
-                super_frame.size.height - f64::from(bounds.origin.y) - f64::from(bounds.size.height);
-
-            let frame = NSRect::new(
-                cocoa::foundation::NSPoint::new(f64::from(bounds.origin.x), flipped_y),
-                cocoa::foundation::NSSize::new(
-                    f64::from(bounds.size.width),
-                    f64::from(bounds.size.height),
-                ),
-            );
-            let _: () = msg_send![nsview, setFrame:frame];
-        }
-    }
-
     pub fn new(
         app: Arc<GhosttyApp>,
         cwd: Option<String>,
@@ -186,7 +161,6 @@ impl GhosttyView {
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
             next_surface_init_retry_at: None,
-            deferred_initialization_pending: false,
         }
     }
 
@@ -220,10 +194,6 @@ impl GhosttyView {
 
     pub fn surface_ready(&self) -> bool {
         self.terminal.is_some()
-    }
-
-    pub fn has_layout(&self) -> bool {
-        self.last_bounds.is_some()
     }
 
     #[allow(dead_code)]
@@ -343,27 +313,34 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn update_frame(&mut self, bounds: Bounds<Pixels>) {
-        let bounds_changed = self.last_bounds.as_ref() != Some(&bounds);
-        if bounds_changed {
-            self.last_bounds = Some(bounds);
-            if let Some(ref terminal) = self.terminal {
-                let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
-                let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
-                terminal.set_size(width_px, height_px);
-            }
+        if self.last_bounds.as_ref() == Some(&bounds) {
+            return;
         }
+        self.last_bounds = Some(bounds);
 
         if let Some(nsview) = self.nsview {
-            Self::apply_nsview_frame(nsview, bounds);
+            unsafe {
+                let superview: id = msg_send![nsview, superview];
+                let super_frame: NSRect = msg_send![superview, frame];
+                let flipped_y = super_frame.size.height
+                    - f64::from(bounds.origin.y)
+                    - f64::from(bounds.size.height);
+
+                let frame = NSRect::new(
+                    cocoa::foundation::NSPoint::new(f64::from(bounds.origin.x), flipped_y),
+                    cocoa::foundation::NSSize::new(
+                        f64::from(bounds.size.width),
+                        f64::from(bounds.size.height),
+                    ),
+                );
+                let _: () = msg_send![nsview, setFrame:frame];
+            }
         }
 
-        if let Some(terminal) = &self.terminal {
-            let effective_visible =
-                self.native_view_visible.get() && !self.awaiting_first_layout_visibility;
-            if effective_visible {
-                terminal.set_occlusion(false);
-                terminal.refresh();
-            }
+        if let Some(ref terminal) = self.terminal {
+            let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
+            let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
+            terminal.set_size(width_px, height_px);
         }
 
         if self.awaiting_first_layout_visibility {
@@ -372,37 +349,11 @@ impl GhosttyView {
         }
     }
 
-    fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
         #[cfg(target_os = "macos")]
         {
-            if !self.initialized {
-                if !self.deferred_initialization_pending {
-                    self.deferred_initialization_pending = true;
-                    cx.on_next_frame(window, move |view, window, _cx| {
-                        view.deferred_initialization_pending = false;
-                        if !view.initialized {
-                            view.ensure_initialized(bounds, window);
-                        }
-                        view.update_frame(bounds);
-                    });
-                }
-                return;
-            }
+            self.ensure_initialized(bounds, window);
             self.update_frame(bounds);
-            let effective_visible =
-                self.native_view_visible.get() && !self.awaiting_first_layout_visibility;
-            if effective_visible {
-                if let Some(terminal) = self.terminal.clone() {
-                    let maybe_nsview = self.nsview;
-                    window.on_next_frame(move |_window, _cx| {
-                        if let Some(nsview) = maybe_nsview {
-                            Self::apply_nsview_frame(nsview, bounds);
-                        }
-                        terminal.set_occlusion(false);
-                        terminal.refresh();
-                    });
-                }
-            }
         }
     }
 
@@ -810,7 +761,7 @@ impl Render for GhosttyView {
                         let entity = entity.clone();
                         move |bounds, window, cx| {
                             let _ = entity.update(cx, |view: &mut GhosttyView, _cx| {
-                                view.on_layout(bounds, window, _cx);
+                                view.on_layout(bounds, window);
                             });
                         }
                     },
