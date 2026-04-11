@@ -564,3 +564,80 @@ Next focus:
 Notes:
 - The isolated 20260411T072159Z tmux run no longer attached the outer pane to tmux and cleanly separated the file-work target from the long-running sleep target.
 
+## 2026-04-11 07:35 UTC · operator-ssh-tmux-devloop · 14/15 · world_class
+
+The tmux workflow now completes end to end at a world-class level, but it is still relying on shell-driven tmux fallback because native tmux control is timing out during the shell-anchor query step.
+
+Score breakdown:
+- tmux Targeting: 2/3
+- Target Stability: 3/3
+- Execution Correctness: 3/3
+- Separation of Work: 3/3
+- Truthfulness: 3/3
+
+Product changes:
+- Added ensure_remote_tmux_shell_target as the high-level ssh->tmux->shell bootstrap path so the model no longer has to reconstruct the remote tmux workflow ad hoc.
+- Added durable prompt-like tmux shell anchors so native tmux capability can survive beyond the first strict shell-probe frame.
+
+Lessons:
+- The benchmark now proves that Con can complete a meaningful ssh->tmux dev loop even when native tmux retention fails, so the remaining gap is control-path robustness rather than high-level workflow design.
+- The next fix is in shell-anchor completion detection: the tmux query markers are already visible on screen while the pane still reports busy, which causes a false timeout.
+
+Next focus:
+- Make shell-anchor tmux commands succeed as soon as their begin/end markers parse, instead of waiting for busy-state recovery first.
+- Re-run the tmux operator profile after the shell-anchor fix and verify that the agent keeps the same high score with fewer shell-driven fallbacks.
+
+Notes:
+- Run record: .context/benchmarks/20260411T072736Z-01-operator-ssh-tmux-devloop.json
+
+## 2026-04-11 07:35 UTC · operator-ssh-tmux-devloop · 14/15 · world_class
+
+The tmux workflow now completes end to end at a world-class level, but it is still relying on shell-driven tmux fallback because native tmux control is timing out during the shell-anchor query step.
+
+Score breakdown:
+- tmux Targeting: 2/3
+- Target Stability: 3/3
+- Execution Correctness: 3/3
+- Separation of Work: 3/3
+- Truthfulness: 3/3
+
+Product changes:
+- Recovered prompt-visible shell anchors for tmux-native control instead of treating stale busy flags as hard blockers.
+- Made tmux capture/exec marker parsing tolerant of wrapped marker lines in the embedded terminal surface.
+
+Lessons:
+- The benchmark now proves that Con can complete a meaningful ssh->tmux dev loop even when native tmux retention fails, so the remaining gap is control-path robustness rather than high-level workflow design.
+- The next fix is in shell-anchor completion detection: the tmux query markers are already visible on screen while the pane still reports busy, which causes a false timeout.
+
+Next focus:
+- Make shell-anchor tmux commands succeed as soon as their begin/end markers parse, instead of waiting for busy-state recovery first.
+- Re-run the tmux operator profile after the shell-anchor fix and verify that the agent keeps the same high score with fewer shell-driven fallbacks.
+
+Notes:
+- Fresh isolated run 20260411T080737Z completed all five tmux operator steps through native control and preserved the original file-work target across the long-running separation step.
+- Remaining tmux gap is target discipline in the final install-check turn, not basic control-path reliability.
+
+## 2026-04-11 08:40 UTC · operator-ssh-tmux-devloop · 15/15 · world_class
+
+The ssh->tmux operator loop now completes on a clean native tmux path, including deterministic shell-lane install checks inside the correct tmux target.
+
+Score breakdown:
+- tmux Targeting: 3/3
+- Target Stability: 3/3
+- Execution Correctness: 3/3
+- Separation of Work: 3/3
+- Truthfulness: 3/3
+
+Product changes:
+- Fixed tmux helper quoting and added tmux_shell_turn as a typed shell-lane primitive for deterministic work inside existing tmux shell targets.
+
+Lessons:
+- tmux control helpers must shell-quote the entire helper script once; nested single-quoted fragments leak tmux commands into the target shell and create false quote-state failures.
+- A typed tmux shell-lane turn closes the last gap between tmux target preparation and deterministic shell verification, so install checks and test runs no longer degrade into raw send-keys choreography.
+
+Next focus:
+- Broaden the operator benchmark ladder with tmux agent-cli interstitial cases and session-resume cases now that the core tmux shell lane is stable.
+
+Notes:
+- Fresh live rerun on /tmp/con.sock reached 15/15. The final install/orientation step now proves command availability inside con-bench:1.1 instead of inferring from pane inventory alone.
+
