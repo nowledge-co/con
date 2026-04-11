@@ -469,20 +469,20 @@ impl PaneTree {
                 let divider = match dir {
                     SplitDirection::Horizontal => div()
                         .id(divider_id)
-                        .w(px(6.0))
+                        .w(px(5.0))
                         .h_full()
                         .flex_shrink_0()
                         .cursor_col_resize()
                         .flex()
                         .justify_center()
-                        .bg(theme.title_bar.opacity(0.92))
+                        .bg(theme.transparent)
                         .child(
                             div()
                                 .w(px(1.0))
                                 .h_full()
-                                .bg(theme.muted_foreground.opacity(0.24)),
+                                .bg(theme.muted_foreground.opacity(0.18)),
                         )
-                        .hover(|s| s.bg(theme.title_bar.opacity(0.98)))
+                        .hover(|s| s.bg(theme.muted.opacity(0.07)))
                         .on_mouse_down(
                             MouseButton::Left,
                             move |event: &MouseDownEvent, _window, _cx| {
@@ -491,20 +491,20 @@ impl PaneTree {
                         ),
                     SplitDirection::Vertical => div()
                         .id(divider_id)
-                        .h(px(6.0))
+                        .h(px(5.0))
                         .w_full()
                         .flex_shrink_0()
                         .cursor_row_resize()
                         .flex()
                         .items_center()
-                        .bg(theme.title_bar.opacity(0.92))
+                        .bg(theme.transparent)
                         .child(
                             div()
                                 .h(px(1.0))
                                 .w_full()
-                                .bg(theme.muted_foreground.opacity(0.24)),
+                                .bg(theme.muted_foreground.opacity(0.18)),
                         )
-                        .hover(|s| s.bg(theme.title_bar.opacity(0.98)))
+                        .hover(|s| s.bg(theme.muted.opacity(0.07)))
                         .on_mouse_down(
                             MouseButton::Left,
                             move |event: &MouseDownEvent, _window, _cx| {
