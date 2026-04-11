@@ -368,3 +368,92 @@ Notes:
 - Record: .context/benchmarks/terminal-agent-20260411T043451Z.json
 - Scored card: .context/benchmarks/scored/20260411T044040Z-operator-ssh-tmux-devloop.json
 
+## 2026-04-11 05:14 UTC · operator-local-codex-devloop · 7/15 · below_floor
+
+Paired local workspace bootstrap is correct now, but the first real create-and-test turn still times out before the coding loop closes.
+
+Score breakdown:
+- Target Preparation: 3/3
+- Target Reuse: 1/3
+- Workspace Correctness: 3/3
+- Execution Loop: 0/3
+- Follow-up Repair: 0/3
+
+Product changes:
+- Fresh live rerun after typed agent_cli_turn: local coding bootstrap is now clean, but the first create-and-test turn still times out, so the next iteration shifts to reducing shell-plus-agent orchestration burden in that turn.
+
+Lessons:
+- The local coding workspace now comes up cleanly without burning a turn on missing-directory recovery.
+- The remaining failure has moved from target preparation to the first substantive agent-cli-plus-shell work turn.
+
+Next focus:
+- Inspect the timed-out create-and-test turn and reduce the amount of shell-plus-Codex orchestration the model must compose in one turn.
+- Add a higher-level local coding step or stronger target guidance so the first coding turn closes reliably after workspace prep.
+
+## 2026-04-11 05:14 UTC · operator-ssh-tmux-devloop · 13/15 · target_met
+
+The tmux dev loop is functionally strong, but setup still leans on raw tmux transcript handling instead of fully clean native control promotion.
+
+Score breakdown:
+- tmux Targeting: 2/3
+- Target Stability: 3/3
+- Execution Correctness: 3/3
+- Separation of Work: 2/3
+- Truthfulness: 3/3
+
+Product changes:
+- Fresh tmux rerun confirms the stack is strong once the target is established; remaining tmux work is cleaner native bootstrap and stronger proof on agent-cli orientation, not basic execution.
+
+Lessons:
+- Once the tmux file-work target is established, Con keeps it stable through create, edit, rerun, and separate long-running work.
+- The remaining tmux gap is cleaner native orientation and verification, not basic execution.
+
+Next focus:
+- Tighten tmux bootstrap so the initial setup turn promotes native control earlier and avoids shell-compat fallback notes.
+- Improve installation-check verification so agent-cli orientation ends with stronger proof, not cautious follow-up wording.
+
+## 2026-04-11 05:14 UTC · operator-ssh-dual-host-recovery · 15/15 · world_class
+
+Selective SSH recovery is now operator-grade: one host disconnected, only that host was recovered, and the final mapping stayed explicit.
+
+Score breakdown:
+- Host Routing: 3/3
+- Selective Recovery: 3/3
+- Workspace Reuse: 3/3
+- Recovery Honesty: 3/3
+- Result Clarity: 3/3
+
+Product changes:
+- First live run of the new dual-host recovery profile reached world-class behavior; selective SSH recovery is now a strong typed control path and should stay stable while pressure moves elsewhere.
+
+Lessons:
+- Typed remote-workspace recovery now preserves host identity strongly enough for selective recovery instead of full workspace recreation.
+- The happy path is no longer the real benchmark pressure on dual-host SSH; recovery is now strong too.
+
+Next focus:
+- Keep this path stable while shifting SSH benchmark pressure toward more hostile stale-pane and mixed-layout scenarios.
+- Do not regress selective recovery while improving other host-workspace behaviors.
+
+## 2026-04-11 05:36 UTC · operator-local-codex-devloop · 13/15 · target_met
+
+Paired local coding is strong again: clean preparation, same-target reuse, correct shell lane, and bounded Codex follow-up. The remaining gap is that Codex did not finish the repair within the turn budget.
+
+Score breakdown:
+- Target Preparation: 3/3
+- Target Reuse: 3/3
+- Workspace Correctness: 3/3
+- Execution Loop: 3/3
+- Follow-up Repair: 1/3
+
+Product changes:
+- Reuse local agent targets via workspace hints
+- Separate shell and agent-cli lanes in local coding
+
+Lessons:
+- The shell-vs-agent-cli lane rule fixed the duplicate-work regression; the shell lane now carries deterministic file/test work cleanly.
+- The remaining local Codex gap is not workspace reuse anymore; it is bounded interactive repair completion inside the existing Codex pane.
+
+Next focus:
+- Improve same-target Codex repair completion without regressing the shell-lane separation.
+- Investigate whether a stronger local Codex attachment or a smarter post-turn wait/check path can close the repair loop.
+
