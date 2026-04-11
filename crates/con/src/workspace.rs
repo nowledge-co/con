@@ -3592,7 +3592,9 @@ impl ConWorkspace {
             }
         }
 
-        window.remove_window();
+        window.defer(cx, |window, _cx| {
+            window.remove_window();
+        });
     }
 
     fn reindex_pending_control_agent_requests_after_tab_close(&mut self, closed_tab_idx: usize) {
@@ -4115,14 +4117,14 @@ impl Render for ConWorkspace {
                         .flex_shrink_0()
                         .flex()
                         .justify_center()
-                        .bg(theme.transparent)
+                        .bg(theme.muted.opacity(0.035))
                         .opacity(agent_panel_chrome_progress)
                         .cursor_col_resize()
                         .child(
                             div()
                                 .w(px(1.0))
                                 .h_full()
-                                .bg(theme.muted_foreground.opacity(0.18)),
+                                .bg(theme.muted_foreground.opacity(0.20)),
                         )
                         .hover(|s| s.bg(theme.muted.opacity(0.07)))
                         .on_mouse_down(
