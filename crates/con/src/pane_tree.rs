@@ -473,6 +473,7 @@ impl PaneTree {
                         .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
+                        .bg(theme.muted_foreground.opacity(0.28))
                         .child(
                             div()
                                 .absolute()
@@ -482,20 +483,12 @@ impl PaneTree {
                                 .w(px(5.0))
                                 .cursor_col_resize()
                                 .bg(theme.transparent)
-                                .flex()
-                                .justify_center()
                                 .hover(|s| s.bg(theme.muted.opacity(0.05)))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     move |event: &MouseDownEvent, _window, _cx| {
                                         cb_divider(sid, f32::from(event.position.x));
                                     },
-                                )
-                                .child(
-                                    div()
-                                        .w(px(1.0))
-                                        .h_full()
-                                        .bg(theme.muted_foreground.opacity(0.20)),
                                 ),
                         ),
                     SplitDirection::Vertical => div()
@@ -504,6 +497,7 @@ impl PaneTree {
                         .h(px(1.0))
                         .w_full()
                         .flex_shrink_0()
+                        .bg(theme.muted_foreground.opacity(0.28))
                         .child(
                             div()
                                 .absolute()
@@ -513,20 +507,12 @@ impl PaneTree {
                                 .h(px(5.0))
                                 .cursor_row_resize()
                                 .bg(theme.transparent)
-                                .flex()
-                                .items_center()
                                 .hover(|s| s.bg(theme.muted.opacity(0.05)))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     move |event: &MouseDownEvent, _window, _cx| {
                                         cb_divider(sid, f32::from(event.position.y));
                                     },
-                                )
-                                .child(
-                                    div()
-                                        .h(px(1.0))
-                                        .w_full()
-                                        .bg(theme.muted_foreground.opacity(0.20)),
                                 ),
                         )
                 };

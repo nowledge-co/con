@@ -3549,7 +3549,7 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    fn close_window_from_last_tab(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+    fn close_window_from_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_all_sessions();
 
         for request in std::mem::take(&mut self.pending_window_control_requests) {
@@ -3588,7 +3588,10 @@ impl ConWorkspace {
             let _ = conv.lock().save();
         }
 
-        window.remove_window();
+        window.blur();
+        window.defer(cx, |window, _cx| {
+            window.remove_window();
+        });
     }
 
     fn reindex_pending_control_agent_requests_after_tab_close(&mut self, closed_tab_idx: usize) {
@@ -4110,6 +4113,7 @@ impl Render for ConWorkspace {
                         .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
+                        .bg(theme.muted_foreground.opacity(0.28))
                         .opacity(agent_panel_chrome_progress)
                         .child(
                             div()
@@ -4120,8 +4124,6 @@ impl Render for ConWorkspace {
                                 .w(px(5.0))
                                 .cursor_col_resize()
                                 .bg(theme.transparent)
-                                .flex()
-                                .justify_center()
                                 .hover(|s| s.bg(theme.muted.opacity(0.05)))
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -4132,12 +4134,6 @@ impl Render for ConWorkspace {
                                         ));
                                     }),
                                 )
-                                .child(
-                                    div()
-                                        .w(px(1.0))
-                                        .h_full()
-                                        .bg(theme.muted_foreground.opacity(0.20)),
-                                ),
                         )
                 )
                 .child(
