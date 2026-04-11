@@ -1424,11 +1424,15 @@ fn render_result_block(
                 .bg(nested_surface)
                 .child(
                     div()
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .rounded(px(8.0))
+                        .bg(trace_inner_surface(theme))
                         .text_size(px(10.75))
                         .font_family(theme.mono_font_family.clone())
                         .text_color(theme.muted_foreground.opacity(0.66))
                         .overflow_x_hidden()
-                        .whitespace_nowrap()
+                        .whitespace_normal()
                         .child(content.to_string()),
                 )
                 .into_any_element()
@@ -1441,7 +1445,7 @@ fn render_result_block(
                 .font_family(theme.mono_font_family.clone())
                 .text_color(theme.muted_foreground.opacity(0.54))
                 .overflow_x_hidden()
-                .whitespace_nowrap()
+                .whitespace_normal()
                 .child(content.to_string())
                 .into_any_element()
         }
@@ -1453,7 +1457,7 @@ fn render_result_block(
             for line in content.lines() {
                 lines_el = lines_el.child(
                     div()
-                        .whitespace_nowrap()
+                        .whitespace_normal()
                         .child(if line.is_empty() { " " } else { line }.to_string()),
                 );
             }
@@ -1542,6 +1546,7 @@ fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Them
                 .child(
                     div()
                         .flex_1()
+                        .whitespace_normal()
                         .text_color(theme.foreground.opacity(0.84))
                         .child(value.clone()),
                 ),
@@ -1551,27 +1556,27 @@ fn render_key_value_rows(rows: &[(String, String)], theme: &gpui_component::Them
 }
 
 fn trace_group_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary_active.opacity(0.58)
+    theme.secondary.opacity(0.56)
 }
 
 fn trace_step_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.background
+    theme.background.opacity(0.98)
 }
 
 fn trace_step_header_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary
+    theme.muted.opacity(0.12)
 }
 
 fn trace_step_header_hover_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary_active
+    theme.muted.opacity(0.18)
 }
 
 fn trace_detail_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.background
+    theme.background.opacity(0.96)
 }
 
 fn trace_inner_surface(theme: &gpui_component::Theme) -> Hsla {
-    theme.secondary
+    theme.muted.opacity(0.09)
 }
 
 fn result_toggle_label(content: &str, expanded: bool) -> String {
@@ -2667,61 +2672,81 @@ impl Render for AgentPanel {
                                 } else {
                                     result_preview(detail, TOOL_RESULT_PREVIEW_LINES)
                                 };
+                                let detail_block = div()
+                                    .px(px(12.0))
+                                    .pt(px(10.0))
+                                    .bg(trace_detail_surface(theme))
+                                    .child(render_result_block(
+                                        &visible_detail,
+                                        &format!("step-result-{msg_idx}-{step_idx}"),
+                                        theme,
+                                        true,
+                                    ));
                                 step_shell = step_shell.child(
-                                    div()
-                                        .px(px(12.0))
-                                        .pt(px(10.0))
-                                        .bg(trace_detail_surface(theme))
-                                        .child(render_result_block(
-                                            &visible_detail,
-                                            &format!("step-result-{msg_idx}-{step_idx}"),
-                                            theme,
-                                            true,
+                                    detail_block.with_animation(
+                                        SharedString::from(format!(
+                                            "step-detail-reveal-{msg_idx}-{step_idx}"
                                         )),
+                                        Animation::new(std::time::Duration::from_millis(170))
+                                            .with_easing(ease_out_quint()),
+                                        |this, delta| {
+                                            this.opacity(delta).pt(px((1.0 - delta) * 6.0))
+                                        },
+                                    ),
                                 );
                                 if is_expandable {
                                     let expanded = step.detail_expanded;
                                     let button_label = result_toggle_label(detail, expanded);
-                                    step_shell = step_shell.child(
-                                        div()
-                                            .px(px(12.0))
-                                            .pt(px(4.0))
-                                            .pb(px(10.0))
-                                            .bg(trace_detail_surface(theme))
-                                            .child(
-                                                div()
-                                                    .id(SharedString::from(format!(
-                                                        "step-detail-expand-{msg_idx}-{step_idx}"
-                                                    )))
-                                                    .cursor_pointer()
-                                                    .hover(|s| {
-                                                        s.bg(theme.muted.opacity(0.03))
-                                                            .rounded(px(6.0))
-                                                    })
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        cx.listener(move |this, _, _, cx| {
-                                                            if let Some(message) =
-                                                                this.state.messages.get_mut(msg_idx)
+                                    let detail_toggle = div()
+                                        .px(px(12.0))
+                                        .pt(px(4.0))
+                                        .pb(px(10.0))
+                                        .bg(trace_detail_surface(theme))
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "step-detail-expand-{msg_idx}-{step_idx}"
+                                                )))
+                                                .cursor_pointer()
+                                                .hover(|s| {
+                                                    s.bg(theme.muted.opacity(0.03))
+                                                        .rounded(px(6.0))
+                                                })
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        if let Some(message) =
+                                                            this.state.messages.get_mut(msg_idx)
+                                                        {
+                                                            if let Some(step) =
+                                                                message.steps.get_mut(step_idx)
                                                             {
-                                                                if let Some(step) =
-                                                                    message.steps.get_mut(step_idx)
-                                                                {
-                                                                    step.detail_expanded =
-                                                                        !step.detail_expanded;
-                                                                }
+                                                                step.detail_expanded =
+                                                                    !step.detail_expanded;
                                                             }
-                                                            cx.notify();
-                                                        }),
-                                                    )
-                                                    .child(div().px(px(2.0)).py(px(2.0)).child(
-                                                        render_result_toggle_chrome(
-                                                            expanded,
-                                                            button_label,
-                                                            theme,
-                                                        ),
-                                                    )),
-                                            ),
+                                                        }
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                                .child(div().px(px(2.0)).py(px(2.0)).child(
+                                                    render_result_toggle_chrome(
+                                                        expanded,
+                                                        button_label,
+                                                        theme,
+                                                    ),
+                                                )),
+                                        );
+                                    step_shell = step_shell.child(
+                                        detail_toggle.with_animation(
+                                            SharedString::from(format!(
+                                                "step-detail-toggle-{msg_idx}-{step_idx}"
+                                            )),
+                                            Animation::new(std::time::Duration::from_millis(185))
+                                                .with_easing(ease_out_quint()),
+                                            |this, delta| {
+                                                this.opacity(delta).pt(px((1.0 - delta) * 4.0))
+                                            },
+                                        ),
                                     );
                                 } else {
                                     step_shell = step_shell.child(
@@ -2737,7 +2762,14 @@ impl Render for AgentPanel {
                         steps_el = steps_el.child(step_shell);
                     }
 
-                    run_card = run_card.child(steps_el);
+                    run_card = run_card.child(
+                        steps_el.with_animation(
+                            SharedString::from(format!("steps-reveal-{msg_idx}")),
+                            Animation::new(std::time::Duration::from_millis(190))
+                                .with_easing(ease_out_quint()),
+                            |this, delta| this.opacity(delta).pt(px((1.0 - delta) * 8.0)),
+                        ),
+                    );
                 }
 
                 msg_el = msg_el.child(run_card);
