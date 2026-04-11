@@ -3566,7 +3566,9 @@ impl ConWorkspace {
     }
 
     fn close_window_from_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.request_native_window_close(window, cx);
+        cx.defer_in(window, |workspace, window, cx| {
+            workspace.request_native_window_close(window, cx);
+        });
     }
 
     fn prepare_window_close(&mut self, cx: &mut Context<Self>) {
