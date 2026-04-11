@@ -97,7 +97,7 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(720.0),
                 base_font_size: px(15.0),
                 base_line_height: px(24.0),
-                code_font_size: theme.mono_font_size,
+                code_font_size: theme.mono_font_size + px(0.5),
                 code_line_height: px(21.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
@@ -129,7 +129,7 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(640.0),
                 base_font_size: px(12.75),
                 base_line_height: px(20.0),
-                code_font_size: theme.mono_font_size - px(0.5),
+                code_font_size: theme.mono_font_size,
                 code_line_height: px(19.0),
                 text_color: theme.muted_foreground.opacity(0.66),
                 muted_text_color: theme.muted_foreground.opacity(0.58),
@@ -811,12 +811,16 @@ fn softened_code_highlight(
     let base_color = if style.theme.is_dark() {
         style.text_color.opacity(0.96)
     } else {
-        style.text_color.opacity(0.92)
+        style.text_color.opacity(0.90)
     };
+    highlight.font_style = None;
+    highlight.font_weight = None;
     highlight.background_color = None;
+    highlight.underline = None;
+    highlight.strikethrough = None;
     highlight.color = highlight
         .color
-        .map(|color| color.mix_oklab(base_color, 0.32).opacity(0.98));
+        .map(|color| color.mix_oklab(base_color, 0.76).opacity(0.99));
     highlight
 }
 
