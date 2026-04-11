@@ -3485,6 +3485,7 @@ impl ConWorkspace {
             t.set_focus_state(false, cx);
         }
         let was_active = index == self.active_tab;
+        self.reindex_pending_control_agent_requests_after_tab_close(index);
         self.tabs.remove(index);
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
@@ -3523,6 +3524,13 @@ impl ConWorkspace {
 
     fn reset_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active_idx = self.active_tab;
+        self.fail_pending_control_agent_request(
+            active_idx,
+            format!(
+                "Tab {} was reset while agent.ask was still pending",
+                active_idx + 1
+            ),
+        );
         {
             let conv = self.tabs[active_idx].session.conversation();
             let _ = conv.lock().save();
@@ -3556,6 +3564,36 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    fn fail_pending_control_agent_request(&mut self, tab_idx: usize, message: String) {
+        if let Some(pending) = self.pending_control_agent_requests.remove(&tab_idx) {
+            Self::send_control_result(pending.response_tx, Err(ControlError::internal(message)));
+        }
+    }
+
+    fn reindex_pending_control_agent_requests_after_tab_close(&mut self, closed_tab_idx: usize) {
+        let mut shifted = HashMap::new();
+        for (tab_idx, pending) in std::mem::take(&mut self.pending_control_agent_requests) {
+            if tab_idx == closed_tab_idx {
+                Self::send_control_result(
+                    pending.response_tx,
+                    Err(ControlError::internal(format!(
+                        "Tab {} was closed while agent.ask was still pending",
+                        closed_tab_idx + 1
+                    ))),
+                );
+                continue;
+            }
+
+            let next_idx = if tab_idx > closed_tab_idx {
+                tab_idx - 1
+            } else {
+                tab_idx
+            };
+            shifted.insert(next_idx, pending);
+        }
+        self.pending_control_agent_requests = shifted;
     }
 
     fn execute_shell(&self, cmd: &str, window: &mut Window, cx: &mut Context<Self>) {
