@@ -3407,7 +3407,7 @@ impl ConWorkspace {
             return;
         }
         if self.tabs.len() <= 1 {
-            self.close_window(window, cx);
+            self.reset_last_tab(window, cx);
             return;
         }
         // Save the closing tab's conversation
@@ -3457,17 +3457,41 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.cancel_all_sessions();
-        self.save_session(cx);
-        for tab in &self.tabs {
-            for terminal in tab.pane_tree.all_terminals() {
-                terminal.set_focus_state(false, cx);
-                terminal.set_native_view_visible(false, cx);
-            }
+    fn reset_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active_idx = self.active_tab;
+        {
+            let conv = self.tabs[active_idx].session.conversation();
+            let _ = conv.lock().save();
         }
-        self.tabs.clear();
-        window.remove_window();
+        for terminal in self.tabs[active_idx].pane_tree.all_terminals() {
+            terminal.set_focus_state(false, cx);
+            terminal.set_native_view_visible(false, cx);
+        }
+
+        let terminal = self.create_terminal(None, window, cx);
+        self.tabs[active_idx] = Tab {
+            pane_tree: PaneTree::new(terminal.clone()),
+            title: "Terminal".to_string(),
+            needs_attention: false,
+            session: AgentSession::new(),
+            panel_state: PanelState::new(),
+            runtime_trackers: RefCell::new(HashMap::new()),
+        };
+        self.agent_panel.update(cx, |panel, cx| {
+            panel.swap_state(PanelState::new(), cx);
+        });
+        terminal.set_focus_state(true, cx);
+        terminal.focus(window, cx);
+        Self::schedule_terminal_bootstrap_reassert(
+            &terminal,
+            true,
+            self.window_handle,
+            self.workspace_handle.clone(),
+            cx,
+        );
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
     }
 
     fn execute_shell(&self, cmd: &str, window: &mut Window, cx: &mut Context<Self>) {
