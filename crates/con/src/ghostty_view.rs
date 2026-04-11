@@ -646,6 +646,33 @@ impl Render for GhosttyView {
                     terminal.send_key(key_event);
                 }
             }))
+            .on_action(cx.listener(|this, _: &crate::Copy, _window, cx| {
+                let Some(terminal) = &this.terminal else {
+                    return;
+                };
+                if !terminal.has_selection() {
+                    return;
+                }
+                if let Some(selection) = terminal.selection_text() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(selection));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
+                let Some(terminal) = &this.terminal else {
+                    return;
+                };
+                let Some(text) = cx
+                    .read_from_clipboard()
+                    .and_then(|item| item.text().map(|s| s.to_string()))
+                else {
+                    return;
+                };
+                if text.is_empty() {
+                    return;
+                }
+                terminal.send_text(&text);
+                cx.notify();
+            }))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
