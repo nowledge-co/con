@@ -26,6 +26,8 @@ Primary references:
    - `CON_BENCH_ENABLE_AGENT=1 python3 benchmarks/terminal-agent/run.py --profile basic-local-codex --suite all`
 5. Use starter profiles for quick regression checks and operator profiles for richer coding, SSH maintenance, or tmux dev-loop evaluation.
    - `python3 benchmarks/terminal-agent/run.py --profile operator-local-codex-devloop --suite operator`
+   - `python3 benchmarks/terminal-agent/run.py --profile operator-local-claude-devloop --suite operator`
+   - `python3 benchmarks/terminal-agent/run.py --profile operator-local-opencode-devloop --suite operator`
    - `python3 benchmarks/terminal-agent/run.py --profile operator-ssh-dual-host-maintenance --suite operator`
    - `python3 benchmarks/terminal-agent/run.py --profile operator-ssh-tmux-devloop --suite operator`
 6. For SSH/tmux changes, run the relevant playbook under `benchmarks/terminal-agent/playbooks/`.

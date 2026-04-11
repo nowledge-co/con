@@ -67,6 +67,8 @@ Run a complex operator benchmark:
 
 ```bash
 python3 benchmarks/terminal-agent/run.py --profile operator-local-codex-devloop --suite operator
+python3 benchmarks/terminal-agent/run.py --profile operator-local-claude-devloop --suite operator
+python3 benchmarks/terminal-agent/run.py --profile operator-local-opencode-devloop --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-ssh-dual-host-maintenance --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-ssh-dual-host-recovery --suite operator
 python3 benchmarks/terminal-agent/run.py --profile operator-ssh-tmux-devloop --suite operator
@@ -78,6 +80,8 @@ Run an isolated multi-iteration batch:
 python3 benchmarks/terminal-agent/iterate.py \
   --suite operator \
   --profile operator-local-codex-devloop \
+  --profile operator-local-claude-devloop \
+  --profile operator-local-opencode-devloop \
   --profile operator-ssh-dual-host-maintenance \
   --profile operator-ssh-dual-host-recovery \
   --profile operator-ssh-tmux-devloop
@@ -167,6 +171,8 @@ The playbooks in [`playbooks/`](./playbooks/) cover the product behaviors that s
 
 - local Codex workspace preparation and reuse
 - local Codex file-edit-test-repair loops
+- local Claude Code workspace preparation and reuse
+- local OpenCode workspace preparation and reuse
 - remote host reuse across follow-up turns
 - remote dual-host maintenance flows
 - remote dual-host recovery after one host disconnects
@@ -207,6 +213,10 @@ These are the richer human-scored scenario tracks:
 
 - `operator-local-codex-devloop`
   - local Codex workspace setup, file creation, test execution, and repair loop
+- `operator-local-claude-devloop`
+  - local Claude Code workspace setup, file creation, test execution, and repair loop
+- `operator-local-opencode-devloop`
+  - local OpenCode workspace setup, file creation, test execution, and repair loop
 - `operator-ssh-dual-host-maintenance`
   - multi-host SSH continuity for health, package-manager, and follow-up maintenance work
 - `operator-ssh-dual-host-recovery`

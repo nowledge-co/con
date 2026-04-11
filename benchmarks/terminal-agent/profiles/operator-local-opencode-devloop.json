@@ -1,0 +1,60 @@
+{
+  "name": "operator-local-opencode-devloop",
+  "description": "Operator-grade local coding workflow using OpenCode in ~/dev/temp with a real file-edit-test-repair loop.",
+  "recommended_suite": "all",
+  "fresh_conversation": true,
+  "setup_visible_shell_commands": [
+    "rm -rf ~/dev/temp/con-bench-opencode-twosum && mkdir -p ~/dev/temp"
+  ],
+  "env_checks": [
+    {
+      "name": "opencode_cli",
+      "kind": "command",
+      "value": "opencode"
+    },
+    {
+      "name": "python3",
+      "kind": "command",
+      "value": "python3"
+    },
+    {
+      "name": "temp_project_root",
+      "kind": "path_exists",
+      "value": "~/dev/temp"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Local OpenCode Two Sum Dev Loop",
+      "path": "benchmarks/terminal-agent/playbooks/local-opencode-two-sum-devloop.md"
+    }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Local OpenCode Two Sum Dev Loop",
+      "case_name": "operator_local_opencode_two_sum_dev_loop",
+      "steps": [
+        {
+          "label": "prepare_opencode_workspace",
+          "prompt": "Please prepare an OpenCode workspace in ~/dev/temp/con-bench-opencode-twosum by launching OpenCode there and preparing a paired local shell target for file and test work.",
+          "timeout_secs": 90
+        },
+        {
+          "label": "create_code_and_tests",
+          "prompt": "Using that OpenCode target plus its paired local shell target, create a small Python two_sum implementation and a unittest-based test file, then run `python3 -m unittest -q`.",
+          "timeout_secs": 120
+        },
+        {
+          "label": "repair_without_new_target",
+          "prompt": "Now break one unittest on purpose. If OpenCode is waiting at a trust or continue prompt for this directory, accept it in the same target. Then ask OpenCode to fix the failing test without creating a new target, and rerun `python3 -m unittest -q`.",
+          "timeout_secs": 150
+        },
+        {
+          "label": "summarize_target_reuse",
+          "prompt": "Summarize which pane or target you used for each step.",
+          "timeout_secs": 60
+        }
+      ]
+    }
+  ]
+}
