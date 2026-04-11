@@ -4032,13 +4032,23 @@ impl Render for ConWorkspace {
                 .child(
                     div()
                         .id("agent-panel-divider")
-                        .w(px(1.0))
+                        .w(px(6.0))
                         .h_full()
                         .flex_shrink_0()
-                        .bg(theme.muted_foreground.opacity(0.16))
+                        .flex()
+                        .justify_center()
+                        .bg(theme
+                            .title_bar
+                            .opacity((elevated_ui_surface_opacity * 0.92).min(0.96)))
                         .opacity(agent_panel_chrome_progress)
                         .cursor_col_resize()
-                        .hover(|s| s.bg(theme.primary.opacity(0.22)))
+                        .child(
+                            div()
+                                .w(px(1.0))
+                                .h_full()
+                                .bg(theme.muted_foreground.opacity(0.24)),
+                        )
+                        .hover(|s| s.bg(theme.title_bar.opacity(0.98)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &MouseDownEvent, _window, _cx| {

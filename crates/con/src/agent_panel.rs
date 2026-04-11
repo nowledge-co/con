@@ -2468,6 +2468,7 @@ impl Render for AgentPanel {
                         .id(SharedString::from(format!("steps-toggle-{msg_idx}")))
                         .flex()
                         .items_center()
+                        .min_w_0()
                         .gap(px(8.0))
                         .px(px(4.0))
                         .py(px(3.0))
@@ -2493,6 +2494,8 @@ impl Render for AgentPanel {
                             div()
                                 .flex()
                                 .flex_col()
+                                .flex_1()
+                                .min_w_0()
                                 .gap(px(2.0))
                                 .child(render_section_kicker(run_title, theme))
                                 .child(
@@ -2506,22 +2509,27 @@ impl Render for AgentPanel {
                                     div()
                                         .text_size(px(10.75))
                                         .text_color(theme.muted_foreground.opacity(0.46))
+                                        .min_w_0()
                                         .child("A compact trace of what the agent actually did"),
                                 ),
                         )
-                        .child(div().flex_1())
                         .child({
-                            let mut summary = div().flex().items_center().gap(px(8.0)).child(
-                                div()
-                                    .text_size(px(10.5))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.40))
-                                    .child(run_status_summary(
-                                        step_count,
-                                        running_count,
-                                        denied_count,
-                                    )),
-                            );
+                            let mut summary = div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .flex_shrink_0()
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_color(theme.muted_foreground.opacity(0.40))
+                                        .child(run_status_summary(
+                                            step_count,
+                                            running_count,
+                                            denied_count,
+                                        )),
+                                );
                             if running_count > 0 {
                                 summary = summary.child(render_inline_state(
                                     format!("{} live", running_count).into(),
@@ -2835,6 +2843,7 @@ impl Render for AgentPanel {
                     div()
                         .flex()
                         .items_center()
+                        .min_w_0()
                         .gap(px(8.0))
                         .px(px(4.0))
                         .py(px(3.0))
@@ -2842,6 +2851,8 @@ impl Render for AgentPanel {
                             div()
                                 .flex()
                                 .flex_col()
+                                .flex_1()
+                                .min_w_0()
                                 .gap(px(2.0))
                                 .child(render_section_kicker("Working now", theme))
                                 .child(
@@ -2855,10 +2866,10 @@ impl Render for AgentPanel {
                                     div()
                                         .text_size(px(10.75))
                                         .text_color(theme.muted_foreground.opacity(0.46))
+                                        .min_w_0()
                                         .child("Commands and reads still in progress"),
                                 ),
                         )
-                        .child(div().flex_1())
                         .child(render_inline_state(
                             format!(
                                 "{} live",
