@@ -364,7 +364,8 @@ impl GhosttyView {
         self.native_view_visible.set(visible);
         if let Some(nsview) = self.nsview {
             unsafe {
-                let hidden = if visible { NO } else { YES };
+                let effective_visible = visible && !self.awaiting_first_layout_visibility;
+                let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![nsview, setHidden:hidden];
             }
         }
