@@ -73,6 +73,7 @@ struct ChatMarkdownStyle<'a> {
     muted_text_color: Hsla,
     inline_code_background: Hsla,
     inline_code_text_color: Hsla,
+    code_block_body_background: Hsla,
     code_block_background: Hsla,
     code_block_language_background: Hsla,
     code_block_language_text_color: Hsla,
@@ -102,8 +103,9 @@ impl<'a> ChatMarkdownStyle<'a> {
                 muted_text_color: theme.muted_foreground.opacity(0.74),
                 inline_code_background: theme.secondary_hover.opacity(0.86),
                 inline_code_text_color: theme.foreground.opacity(0.92),
-                code_block_background: theme.secondary.opacity(0.62),
-                code_block_language_background: theme.muted.opacity(0.20),
+                code_block_body_background: theme.background.opacity(0.88),
+                code_block_background: theme.secondary.opacity(0.40),
+                code_block_language_background: theme.muted.opacity(0.16),
                 code_block_language_text_color: theme.muted_foreground.opacity(0.72),
                 quote_background: theme.secondary.opacity(0.68),
                 quote_tint: theme.primary.opacity(0.34),
@@ -127,8 +129,9 @@ impl<'a> ChatMarkdownStyle<'a> {
                 muted_text_color: theme.muted_foreground.opacity(0.58),
                 inline_code_background: theme.secondary_hover.opacity(0.78),
                 inline_code_text_color: theme.foreground.opacity(0.78),
-                code_block_background: theme.secondary.opacity(0.52),
-                code_block_language_background: theme.muted.opacity(0.18),
+                code_block_body_background: theme.background.opacity(0.74),
+                code_block_background: theme.secondary.opacity(0.32),
+                code_block_language_background: theme.muted.opacity(0.14),
                 code_block_language_text_color: theme.muted_foreground.opacity(0.66),
                 quote_background: theme.secondary.opacity(0.46),
                 quote_tint: theme.primary.opacity(0.24),
@@ -662,8 +665,8 @@ fn render_code_block(
         .bg(style.code_block_background.opacity(0.98))
         .child(
             div()
-                .px(px(12.0))
-                .py(px(8.0))
+                .px(px(14.0))
+                .py(px(9.0))
                 .bg(style.code_block_language_background.opacity(0.98))
                 .child(
                     div()
@@ -675,7 +678,7 @@ fn render_code_block(
                                 .px(px(7.0))
                                 .py(px(3.0))
                                 .rounded(px(7.0))
-                                .bg(style.theme.background.opacity(0.45))
+                                .bg(style.theme.background.opacity(0.52))
                                 .font_family(style.theme.mono_font_family.clone())
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_size(px(10.0))
@@ -687,7 +690,7 @@ fn render_code_block(
                             div()
                                 .h(px(1.0))
                                 .flex_1()
-                                .bg(style.rule_color.opacity(0.85)),
+                                .bg(style.rule_color.opacity(0.65)),
                         ),
                 ),
         );
@@ -725,7 +728,7 @@ fn render_code_block(
             div()
                 .px(px(14.0))
                 .py(px(13.0))
-                .bg(style.theme.background.opacity(0.82))
+                .bg(style.code_block_body_background)
                 .child(code_column),
         )
         .into_any_element()
@@ -737,7 +740,7 @@ fn highlighted_code_runs(
     style: &ChatMarkdownStyle<'_>,
 ) -> Option<Vec<Vec<gpui::TextRun>>> {
     let lang = language.as_deref()?.trim();
-    if lang.is_empty() {
+    if lang.is_empty() || suppress_syntax_highlighting(lang) {
         return None;
     }
 
@@ -797,12 +800,19 @@ fn mono_style_run(text_style: &TextStyle, len: usize) -> gpui::TextRun {
     text_style.to_run(len)
 }
 
+fn suppress_syntax_highlighting(lang: &str) -> bool {
+    matches!(
+        lang.to_ascii_lowercase().as_str(),
+        "sh" | "shell" | "bash" | "zsh" | "console" | "terminal" | "text" | "txt" | "plain"
+    )
+}
+
 fn softened_code_highlight(mut text_style: TextStyle, style: &ChatMarkdownStyle<'_>) -> TextStyle {
     text_style.font_family = style.theme.mono_font_family.clone();
     text_style.font_size = style.code_font_size.into();
     text_style.line_height = style.code_line_height.into();
     text_style.background_color = None;
-    text_style.color = text_style.color.opacity(0.90);
+    text_style.color = text_style.color.opacity(0.78);
     text_style
 }
 
