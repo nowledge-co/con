@@ -300,9 +300,15 @@ impl GhosttyView {
             let height = (window_bounds.size.height.as_f32() * 0.7).clamp(240.0, 900.0);
             Bounds::new(point(px(0.0), px(0.0)), size(px(width), px(height)))
         });
-        self.awaiting_first_layout_visibility = self.last_bounds.is_none();
+        let needs_real_layout = self.last_bounds.is_none();
+        self.awaiting_first_layout_visibility = needs_real_layout;
         self.ensure_initialized(fallback_bounds, window);
-        self.update_frame(fallback_bounds);
+        // Control-created panes may need a live PTY before GPUI has laid them out,
+        // but publishing a fallback frame makes the native view visibly jump across
+        // the workspace. Keep the surface hidden until the first real on_layout.
+        if !needs_real_layout {
+            self.update_frame(fallback_bounds);
+        }
     }
 
     #[cfg(target_os = "macos")]
