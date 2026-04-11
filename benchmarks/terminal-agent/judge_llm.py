@@ -173,6 +173,15 @@ def truncate_text(value: str, limit: int = 500) -> str:
     return value[: limit - 3] + "..."
 
 
+def truncate_tool_output(value: str, limit: int = 1800) -> str:
+    value = value.strip()
+    if len(value) <= limit:
+        return value
+    head = value[: limit // 2 - 32].rstrip()
+    tail = value[-(limit // 2 - 32) :].lstrip()
+    return f"{head}\n...\n{tail}"
+
+
 def compact_step(step: Any) -> dict[str, Any] | str:
     if not isinstance(step, dict) or len(step) != 1:
         return str(step)
@@ -189,7 +198,7 @@ def compact_step(step: Any) -> dict[str, Any] | str:
     if kind == "ToolResult":
         output = payload.get("output")
         if isinstance(output, str):
-            output = truncate_text(output, 500)
+            output = truncate_tool_output(output, 1800)
         return {
             "tool_result": {
                 "tool": payload.get("tool"),

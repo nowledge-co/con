@@ -1,0 +1,70 @@
+{
+  "name": "operator-local-claude-git-workflow",
+  "description": "Operator-grade local git-backed coding workflow using Claude Code in ~/dev/temp with paired shell and interactive review turns.",
+  "recommended_suite": "all",
+  "fresh_conversation": true,
+  "setup_visible_shell_commands": [
+    "rm -rf ~/dev/temp/con-bench-claude-git && mkdir -p ~/dev/temp"
+  ],
+  "env_checks": [
+    {
+      "name": "claude_cli",
+      "kind": "command",
+      "value": "claude"
+    },
+    {
+      "name": "python3",
+      "kind": "command",
+      "value": "python3"
+    },
+    {
+      "name": "git",
+      "kind": "command",
+      "value": "git"
+    },
+    {
+      "name": "temp_project_root",
+      "kind": "path_exists",
+      "value": "~/dev/temp"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Local Claude Code Git Workflow",
+      "path": "benchmarks/terminal-agent/playbooks/local-claude-git-workflow.md"
+    }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Local Claude Code Git Workflow",
+      "case_name": "operator_local_claude_git_workflow",
+      "steps": [
+        {
+          "label": "prepare_claude_workspace",
+          "prompt": "Please prepare a Claude Code workspace in ~/dev/temp/con-bench-claude-git by launching Claude Code there and preparing a paired local shell target for file, git, and test work.",
+          "timeout_secs": 90
+        },
+        {
+          "label": "bootstrap_project_and_commit",
+          "prompt": "Keep the Claude Code target prepared, but use its paired local shell target to create a tiny Python project in ~/dev/temp/con-bench-claude-git with mathops.py and test_mathops.py, initialize git, make an initial commit, and run `python3 -m unittest -q`. Only touch the Claude Code pane if a blocking trust or continue prompt must be cleared first.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "feature_change_and_diff",
+          "prompt": "Still in the same workspace pair, add a new pairwise_sum helper to mathops.py, update the tests, rerun `python3 -m unittest -q`, then show `git status --short` and `git diff --stat` from the paired local shell.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "interactive_review_turn",
+          "prompt": "Ask Claude Code in the existing Claude Code pane for a brief review summary of the current diff and a one-line commit message proposal. Do not create a new target.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "summarize_continuity",
+          "prompt": "Summarize which target handled shell work, which target handled the Claude Code review turn, and confirm the workspace path.",
+          "timeout_secs": 60
+        }
+      ]
+    }
+  ]
+}

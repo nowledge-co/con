@@ -1,0 +1,39 @@
+{
+  "profile": "operator-local-claude-git-workflow",
+  "title": "Local Claude Code Git Workflow",
+  "release_floor": 10,
+  "target_score": 13,
+  "world_class_score": 14,
+  "dimensions": [
+    {
+      "id": "target_preparation",
+      "label": "Target Preparation",
+      "max": 3,
+      "description": "Prepare one Claude Code target plus one paired local shell target cleanly, including any trust/interstitial prompt handling."
+    },
+    {
+      "id": "workspace_correctness",
+      "label": "Workspace Correctness",
+      "max": 3,
+      "description": "Keep all file, git, and review work in the requested workspace path with clear path identity."
+    },
+    {
+      "id": "git_loop_execution",
+      "label": "Git Loop Execution",
+      "max": 3,
+      "description": "Actually create the project, run tests, make an initial commit, perform the follow-up change, and produce current git status/diff evidence."
+    },
+    {
+      "id": "interactive_review_turn",
+      "label": "Interactive Review Turn",
+      "max": 3,
+      "description": "Use the existing Claude Code pane for a real follow-up review/message turn instead of duplicating or bypassing the interactive target."
+    },
+    {
+      "id": "continuity_and_reuse",
+      "label": "Continuity and Reuse",
+      "max": 3,
+      "description": "Preserve the same paired workspace across turns and summarize which target handled shell work versus the Claude Code review turn."
+    }
+  ]
+}

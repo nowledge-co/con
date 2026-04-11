@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = REPO_ROOT / ".context" / "benchmarks" / "batches"
 DEFAULT_CON_BIN = REPO_ROOT / "target" / "debug" / "con"
 DEFAULT_CON_CLI_BIN = REPO_ROOT / "target" / "debug" / "con-cli"
+RUBRIC_DIR = REPO_ROOT / "benchmarks" / "terminal-agent" / "rubrics"
 
 
 def utc_stamp() -> str:
@@ -56,6 +57,19 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Reuse an existing Con control socket. Each iteration runs in a fresh tab instead of relaunching the app.",
     )
+    parser.add_argument(
+        "--judge",
+        dest="judge",
+        action="store_true",
+        default=True,
+        help="After a passing operator/all run, ask Con's built-in agent to judge the raw record and transcript, then emit a scorecard.",
+    )
+    parser.add_argument(
+        "--no-judge",
+        dest="judge",
+        action="store_false",
+        help="Skip transcript-aware judging and scorecard emission.",
+    )
     return parser.parse_args()
 
 
@@ -66,6 +80,22 @@ def wait_for_socket(path: Path, timeout_secs: float) -> None:
             return
         time.sleep(0.25)
     raise RuntimeError(f"socket did not appear: {path}")
+
+
+def wait_for_control_ready(socket_path: Path, timeout_secs: float) -> None:
+    deadline = time.time() + timeout_secs
+    last_error: str | None = None
+    while time.time() < deadline:
+        try:
+            run_json(socket_path, "identify")
+            run_json(socket_path, "tabs", "list")
+            return
+        except Exception as exc:
+            last_error = str(exc)
+            time.sleep(0.5)
+    raise RuntimeError(
+        f"control plane did not become ready at {socket_path}: {last_error or 'unknown error'}"
+    )
 
 
 def terminate_process(proc: subprocess.Popen[str]) -> None:
@@ -106,12 +136,111 @@ def run_json(socket_path: Path, *args: str) -> dict:
     return json.loads(proc.stdout)
 
 
+def profile_has_rubric(profile: str) -> bool:
+    return (RUBRIC_DIR / f"{profile}.json").exists()
+
+
+def run_command(command: list[str], *, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def judge_and_score(
+    *,
+    profile: str,
+    record_path: Path,
+    socket_path: Path,
+    conversations_dir: Path | None,
+    timeout_secs: int,
+) -> dict[str, object]:
+    judge_cmd = [
+        sys.executable,
+        "benchmarks/terminal-agent/judge_llm.py",
+        "--profile",
+        profile,
+        "--record",
+        str(record_path),
+        "--socket",
+        str(socket_path),
+        "--timeout",
+        str(min(timeout_secs, 180)),
+    ]
+    if conversations_dir is not None:
+        judge_cmd.extend(["--conversations-dir", str(conversations_dir)])
+
+    judge_proc = run_command(judge_cmd, timeout=timeout_secs)
+    if judge_proc.returncode != 0:
+        raise RuntimeError(
+            f"judge_llm failed for {profile}: {judge_proc.stdout.strip()}"
+        )
+
+    judge_output = None
+    for line in reversed(judge_proc.stdout.splitlines()):
+        if line.startswith("Output: "):
+            judge_output = line[len("Output: ") :].strip()
+            break
+    if not judge_output:
+        raise RuntimeError(
+            f"judge_llm did not report an output artifact for {profile}: {judge_proc.stdout.strip()}"
+        )
+
+    score_cmd = [
+        sys.executable,
+        "benchmarks/terminal-agent/score.py",
+        "--profile",
+        profile,
+        "--record",
+        str(record_path),
+        "--judge-file",
+        judge_output,
+    ]
+    score_proc = run_command(score_cmd, timeout=timeout_secs)
+    if score_proc.returncode != 0:
+        raise RuntimeError(
+            f"score.py failed for {profile}: {score_proc.stdout.strip()}"
+        )
+
+    score_output = None
+    band = None
+    total_score = None
+    for line in score_proc.stdout.splitlines():
+        if line.startswith("Band: "):
+            band = line[len("Band: ") :].strip()
+        elif line.startswith("Output: "):
+            score_output = line[len("Output: ") :].strip()
+        elif ": " in line and "/" in line and total_score is None:
+            _, summary = line.split(": ", 1)
+            total_score = summary.split(" ", 1)[0].strip()
+
+    if not score_output:
+        raise RuntimeError(
+            f"score.py did not report an output artifact for {profile}: {score_proc.stdout.strip()}"
+        )
+
+    return {
+        "judge_artifact": judge_output,
+        "judge_stdout": judge_proc.stdout,
+        "score_artifact": score_output,
+        "score_stdout": score_proc.stdout,
+        "band": band,
+        "total_score": total_score,
+    }
+
+
 def run_iteration(
     profile: str,
     suite: str,
     index: int,
     timeout_secs: int,
     socket_override: Path | None,
+    judge_enabled: bool,
 ) -> dict:
     stamp = utc_stamp()
     runtime_root = REPO_ROOT / ".context" / "bench-runtime" / f"{stamp}-{index:02d}-{profile}"
@@ -126,6 +255,7 @@ def run_iteration(
     runtime_root.mkdir(parents=True, exist_ok=True)
 
     if socket_override is not None:
+        wait_for_control_ready(socket_override, 15)
         tab_info = run_json(socket_override, "tabs", "new")
         tab_index = int(tab_info["active_tab_index"])
         try:
@@ -150,6 +280,24 @@ def run_iteration(
                 text=True,
                 timeout=timeout_secs,
             )
+            judged = None
+            judge_error = None
+            if (
+                bench.returncode == 0
+                and judge_enabled
+                and suite in {"operator", "all"}
+                and profile_has_rubric(profile)
+            ):
+                try:
+                    judged = judge_and_score(
+                        profile=profile,
+                        record_path=record_path,
+                        socket_path=socket_override,
+                        conversations_dir=None,
+                        timeout_secs=timeout_secs,
+                    )
+                except Exception as exc:
+                    judge_error = str(exc)
             return {
                 "profile": profile,
                 "suite": suite,
@@ -162,6 +310,8 @@ def run_iteration(
                 "stdout": bench.stdout,
                 "status": "pass" if bench.returncode == 0 else "fail",
                 "tab_index": tab_index,
+                "judged": judged,
+                "judge_error": judge_error,
             }
         finally:
             try:
@@ -219,6 +369,24 @@ def run_iteration(
                 )
                 duration_ms = int((time.time() - started_at) * 1000)
                 stdout = bench.stdout
+                judged = None
+                judge_error = None
+                if (
+                    bench.returncode == 0
+                    and judge_enabled
+                    and suite in {"operator", "all"}
+                    and profile_has_rubric(profile)
+                ):
+                    try:
+                        judged = judge_and_score(
+                            profile=profile,
+                            record_path=record_path,
+                            socket_path=socket_path,
+                            conversations_dir=runtime_root / "conversations",
+                            timeout_secs=timeout_secs,
+                        )
+                    except Exception as exc:
+                        judge_error = str(exc)
                 attempts.append(
                     {
                         "attempt": attempt,
@@ -241,6 +409,8 @@ def run_iteration(
                         "stdout": stdout,
                         "status": "pass",
                         "attempts": attempts,
+                        "judged": judged,
+                        "judge_error": judge_error,
                     }
                 log_text = log_path.read_text() if log_path.exists() else ""
                 should_retry = "ghostty_surface_new returned null" in log_text
@@ -320,10 +490,23 @@ def main() -> int:
 
     iterations = []
     for idx, profile in enumerate(args.profile, start=1):
-        result = run_iteration(profile, args.suite, idx, args.timeout, args.socket)
+        result = run_iteration(
+            profile,
+            args.suite,
+            idx,
+            args.timeout,
+            args.socket,
+            args.judge,
+        )
         iterations.append(result)
         marker = "PASS" if result["status"] == "pass" else "FAIL"
-        print(f"[{marker}] {profile}: {result['record_path']}")
+        judged_suffix = ""
+        judged = result.get("judged")
+        if isinstance(judged, dict) and judged.get("total_score"):
+            judged_suffix = f" · {judged['total_score']} · {judged.get('band', 'unscored')}"
+        elif result.get("judge_error"):
+            judged_suffix = " · judge_error"
+        print(f"[{marker}] {profile}: {result['record_path']}{judged_suffix}")
 
     summary = {
         "recorded_at": datetime.now(timezone.utc).isoformat(),
