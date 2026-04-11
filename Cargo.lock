@@ -1173,6 +1173,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "log",
+ "markdown",
  "objc",
  "parking_lot",
  "pulldown-cmark",

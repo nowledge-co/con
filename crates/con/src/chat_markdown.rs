@@ -4,7 +4,7 @@ use gpui::{
     px,
 };
 use gpui_component::Theme;
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use markdown::{ParseOptions, mdast};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatMarkdownTone {
@@ -29,7 +29,19 @@ enum MarkdownBlock {
         start: usize,
         items: Vec<Vec<MarkdownBlock>>,
     },
+    Table {
+        aligns: Vec<MarkdownTableAlign>,
+        rows: Vec<Vec<Vec<MarkdownInline>>>,
+    },
     Rule,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarkdownTableAlign {
+    Left,
+    Center,
+    Right,
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,23 +57,6 @@ enum MarkdownInline {
     },
     SoftBreak,
     LineBreak,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BlockEnd {
-    BlockQuote,
-    Item,
-    List,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InlineEnd {
-    Paragraph,
-    Heading,
-    Emphasis,
-    Strong,
-    Strikethrough,
-    Link,
 }
 
 struct ChatMarkdownStyle<'a> {
@@ -83,6 +78,9 @@ struct ChatMarkdownStyle<'a> {
     quote_tint: Hsla,
     rule_color: Hsla,
     link_color: Hsla,
+    table_border: Hsla,
+    table_header_background: Hsla,
+    table_cell_background: Hsla,
     block_gap: gpui::Pixels,
     inner_gap: gpui::Pixels,
 }
@@ -109,6 +107,9 @@ impl<'a> ChatMarkdownStyle<'a> {
                 quote_tint: theme.primary.opacity(0.42),
                 rule_color: theme.muted_foreground.opacity(0.16),
                 link_color: theme.primary,
+                table_border: theme.muted_foreground.opacity(0.10),
+                table_header_background: theme.muted.opacity(0.12),
+                table_cell_background: theme.background.opacity(0.92),
                 block_gap: px(13.0),
                 inner_gap: px(9.0),
             },
@@ -131,6 +132,9 @@ impl<'a> ChatMarkdownStyle<'a> {
                 quote_tint: theme.primary.opacity(0.30),
                 rule_color: theme.muted_foreground.opacity(0.12),
                 link_color: theme.primary.opacity(0.82),
+                table_border: theme.muted_foreground.opacity(0.08),
+                table_header_background: theme.muted.opacity(0.10),
+                table_cell_background: theme.background.opacity(0.78),
                 block_gap: px(10.0),
                 inner_gap: px(8.0),
             },
@@ -209,171 +213,165 @@ pub fn render_chat_markdown(source: &str, tone: ChatMarkdownTone, theme: &Theme)
 }
 
 fn parse_markdown(source: &str) -> Vec<MarkdownBlock> {
-    let parser = Parser::new_ext(
-        source,
-        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES,
-    );
-    let mut events = parser.peekable();
-    parse_blocks(&mut events, None)
+    match markdown::to_mdast(source, &ParseOptions::gfm()) {
+        Ok(mdast::Node::Root(root)) => root
+            .children
+            .iter()
+            .filter_map(parse_block_node)
+            .collect(),
+        Ok(node) => parse_block_node(&node).into_iter().collect(),
+        Err(_) => vec![MarkdownBlock::Paragraph(vec![MarkdownInline::Text(
+            source.to_string(),
+        )])],
+    }
 }
 
-fn parse_blocks<'a>(
-    events: &mut std::iter::Peekable<Parser<'a>>,
-    until: Option<BlockEnd>,
-) -> Vec<MarkdownBlock> {
-    let mut blocks = Vec::new();
-
-    while let Some(event) = events.next() {
-        match event {
-            Event::Start(tag) => match tag {
-                Tag::Paragraph => {
-                    blocks.push(MarkdownBlock::Paragraph(parse_inlines(
-                        events,
-                        InlineEnd::Paragraph,
-                    )));
-                }
-                Tag::Heading { level, .. } => {
-                    blocks.push(MarkdownBlock::Heading {
-                        level: heading_level_to_u8(level),
-                        inlines: parse_inlines(events, InlineEnd::Heading),
-                    });
-                }
-                Tag::CodeBlock(kind) => {
-                    let language = match kind {
-                        CodeBlockKind::Indented => None,
-                        CodeBlockKind::Fenced(lang) => {
-                            let lang = lang.trim().to_string();
-                            (!lang.is_empty()).then_some(lang)
-                        }
-                    };
-
-                    let mut code = String::new();
-                    while let Some(inner) = events.next() {
-                        match inner {
-                            Event::End(TagEnd::CodeBlock) => break,
-                            Event::Text(text) | Event::Code(text) | Event::Html(text) => {
-                                code.push_str(text.as_ref())
-                            }
-                            Event::SoftBreak | Event::HardBreak => code.push('\n'),
-                            _ => {}
-                        }
-                    }
-
-                    blocks.push(MarkdownBlock::CodeBlock { language, code });
-                }
-                Tag::BlockQuote(_) => {
-                    blocks.push(MarkdownBlock::BlockQuote(parse_blocks(
-                        events,
-                        Some(BlockEnd::BlockQuote),
-                    )));
-                }
-                Tag::List(start) => {
-                    blocks.push(parse_list(events, start.map(|value| value as usize)));
-                }
-                Tag::Item => {
-                    blocks.extend(parse_blocks(events, Some(BlockEnd::Item)));
-                }
-                _ => {}
-            },
-            Event::End(end) => {
-                if block_end_matches(&end, until) {
-                    break;
-                }
-            }
-            Event::Rule => blocks.push(MarkdownBlock::Rule),
-            Event::Text(text) => {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    blocks.push(MarkdownBlock::Paragraph(vec![MarkdownInline::Text(
-                        trimmed.to_string(),
-                    )]));
-                }
-            }
-            Event::Code(text) => blocks.push(MarkdownBlock::Paragraph(vec![MarkdownInline::Code(
-                text.to_string(),
-            )])),
-            Event::SoftBreak | Event::HardBreak => {}
-            _ => {}
+fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
+    match node {
+        mdast::Node::Paragraph(val) => Some(MarkdownBlock::Paragraph(parse_inline_nodes(
+            &val.children,
+        ))),
+        mdast::Node::Heading(val) => Some(MarkdownBlock::Heading {
+            level: val.depth,
+            inlines: parse_inline_nodes(&val.children),
+        }),
+        mdast::Node::Code(raw) => Some(MarkdownBlock::CodeBlock {
+            language: raw.lang.clone().filter(|lang| !lang.trim().is_empty()),
+            code: raw.value.clone(),
+        }),
+        mdast::Node::Blockquote(val) => Some(MarkdownBlock::BlockQuote(
+            val.children.iter().filter_map(parse_block_node).collect(),
+        )),
+        mdast::Node::List(list) => Some(MarkdownBlock::List {
+            ordered: list.ordered,
+            start: list.start.unwrap_or(1) as usize,
+            items: list
+                .children
+                .iter()
+                .filter_map(|item| match item {
+                    mdast::Node::ListItem(list_item) => Some(
+                        list_item
+                            .children
+                            .iter()
+                            .filter_map(parse_block_node)
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .collect(),
+        }),
+        mdast::Node::ThematicBreak(_) => Some(MarkdownBlock::Rule),
+        mdast::Node::Table(table) => {
+            let rows = table
+                .children
+                .iter()
+                .filter_map(|row| match row {
+                    mdast::Node::TableRow(row) => Some(
+                        row.children
+                            .iter()
+                            .filter_map(|cell| match cell {
+                                mdast::Node::TableCell(cell) => {
+                                    Some(parse_inline_nodes(&cell.children))
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            Some(MarkdownBlock::Table {
+                aligns: table.align.iter().map(parse_table_align).collect(),
+                rows,
+            })
         }
-    }
-
-    blocks
-}
-
-fn parse_list<'a>(
-    events: &mut std::iter::Peekable<Parser<'a>>,
-    start: Option<usize>,
-) -> MarkdownBlock {
-    let ordered = start.is_some();
-    let mut items = Vec::new();
-
-    while let Some(event) = events.next() {
-        match event {
-            Event::Start(Tag::Item) => {
-                items.push(parse_blocks(events, Some(BlockEnd::Item)));
-            }
-            Event::End(end) if block_end_matches(&end, Some(BlockEnd::List)) => break,
-            _ => {}
+        mdast::Node::Html(raw) => {
+            let trimmed = raw.value.trim();
+            (!trimmed.is_empty())
+                .then(|| MarkdownBlock::Paragraph(vec![MarkdownInline::Text(trimmed.to_string())]))
         }
-    }
-
-    MarkdownBlock::List {
-        ordered,
-        start: start.unwrap_or(1),
-        items,
+        mdast::Node::Yaml(val) => Some(MarkdownBlock::CodeBlock {
+            language: Some("yml".to_string()),
+            code: val.value.clone(),
+        }),
+        mdast::Node::Toml(val) => Some(MarkdownBlock::CodeBlock {
+            language: Some("toml".to_string()),
+            code: val.value.clone(),
+        }),
+        mdast::Node::Math(val) => Some(MarkdownBlock::CodeBlock {
+            language: None,
+            code: val.value.clone(),
+        }),
+        mdast::Node::FootnoteDefinition(def) => Some(MarkdownBlock::Paragraph(
+            std::iter::once(MarkdownInline::Text(format!("[{}]: ", def.identifier)))
+                .chain(parse_inline_nodes(&def.children))
+                .collect(),
+        )),
+        _ => None,
     }
 }
 
-fn parse_inlines<'a>(
-    events: &mut std::iter::Peekable<Parser<'a>>,
-    end: InlineEnd,
-) -> Vec<MarkdownInline> {
+fn parse_table_align(align: &markdown::mdast::AlignKind) -> MarkdownTableAlign {
+    match align {
+        markdown::mdast::AlignKind::Left => MarkdownTableAlign::Left,
+        markdown::mdast::AlignKind::Right => MarkdownTableAlign::Right,
+        markdown::mdast::AlignKind::Center => MarkdownTableAlign::Center,
+        markdown::mdast::AlignKind::None => MarkdownTableAlign::None,
+    }
+}
+
+fn parse_inline_nodes(nodes: &[mdast::Node]) -> Vec<MarkdownInline> {
     let mut inlines = Vec::new();
-
-    while let Some(event) = events.next() {
-        match event {
-            Event::Text(text) => push_text(&mut inlines, text.as_ref()),
-            Event::Code(text) => inlines.push(MarkdownInline::Code(text.to_string())),
-            Event::SoftBreak => inlines.push(MarkdownInline::SoftBreak),
-            Event::HardBreak => inlines.push(MarkdownInline::LineBreak),
-            Event::TaskListMarker(checked) => {
-                push_text(&mut inlines, if checked { "[x] " } else { "[ ] " });
+    for node in nodes {
+        match node {
+            mdast::Node::Text(val) => push_text_fragments(&mut inlines, &val.value),
+            mdast::Node::InlineCode(val) => inlines.push(MarkdownInline::Code(val.value.clone())),
+            mdast::Node::InlineMath(val) => inlines.push(MarkdownInline::Code(val.value.clone())),
+            mdast::Node::Emphasis(val) => inlines.push(MarkdownInline::Emphasis(
+                parse_inline_nodes(&val.children),
+            )),
+            mdast::Node::Strong(val) => inlines.push(MarkdownInline::Strong(parse_inline_nodes(
+                &val.children,
+            ))),
+            mdast::Node::Delete(val) => inlines.push(MarkdownInline::Strikethrough(
+                parse_inline_nodes(&val.children),
+            )),
+            mdast::Node::Link(val) => inlines.push(MarkdownInline::Link {
+                label: parse_inline_nodes(&val.children),
+                destination: val.url.clone(),
+            }),
+            mdast::Node::LinkReference(val) => inlines.push(MarkdownInline::Link {
+                label: parse_inline_nodes(&val.children),
+                destination: val.identifier.clone(),
+            }),
+            mdast::Node::Image(val) => {
+                let label = if val.alt.is_empty() {
+                    val.url.clone()
+                } else {
+                    val.alt.clone()
+                };
+                push_text_fragments(&mut inlines, &label);
             }
-            Event::FootnoteReference(reference) => {
-                push_text(&mut inlines, &format!("[{}]", reference));
+            mdast::Node::ImageReference(val) => {
+                let label = if val.alt.is_empty() {
+                    val.identifier.clone()
+                } else {
+                    val.alt.clone()
+                };
+                push_text_fragments(&mut inlines, &label);
             }
-            Event::Html(text) | Event::InlineHtml(text) => push_text(&mut inlines, text.as_ref()),
-            Event::Start(tag) => match tag {
-                Tag::Emphasis => inlines.push(MarkdownInline::Emphasis(parse_inlines(
-                    events,
-                    InlineEnd::Emphasis,
-                ))),
-                Tag::Strong => inlines.push(MarkdownInline::Strong(parse_inlines(
-                    events,
-                    InlineEnd::Strong,
-                ))),
-                Tag::Strikethrough => inlines.push(MarkdownInline::Strikethrough(parse_inlines(
-                    events,
-                    InlineEnd::Strikethrough,
-                ))),
-                Tag::Link { dest_url, .. } => inlines.push(MarkdownInline::Link {
-                    label: parse_inlines(events, InlineEnd::Link),
-                    destination: dest_url.to_string(),
-                }),
-                Tag::Image { dest_url, .. } => {
-                    let alt = parse_inlines(events, InlineEnd::Link);
-                    let mut label = flatten_inlines_to_plain_text(&alt);
-                    if label.is_empty() {
-                        label = dest_url.to_string();
-                    }
-                    push_text(&mut inlines, &label);
-                }
-                _ => {}
-            },
-            Event::End(tag_end) => {
-                if inline_end_matches(&tag_end, end) {
-                    break;
-                }
+            mdast::Node::Break(_) => inlines.push(MarkdownInline::LineBreak),
+            mdast::Node::FootnoteReference(val) => {
+                push_text_fragments(&mut inlines, &format!("[{}]", val.identifier));
+            }
+            mdast::Node::Html(val) => {
+                push_text_fragments(&mut inlines, &val.value);
+            }
+            mdast::Node::MdxTextExpression(val) => {
+                push_text_fragments(&mut inlines, &val.value);
+            }
+            mdast::Node::MdxJsxTextElement(val) => {
+                inlines.extend(parse_inline_nodes(&val.children));
             }
             _ => {}
         }
@@ -391,6 +389,22 @@ fn push_text(inlines: &mut Vec<MarkdownInline>, text: &str) {
         existing.push_str(text);
     } else {
         inlines.push(MarkdownInline::Text(text.to_string()));
+    }
+}
+
+fn push_text_fragments(inlines: &mut Vec<MarkdownInline>, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+
+    let mut parts = text.split('\n').peekable();
+    while let Some(part) = parts.next() {
+        if !part.is_empty() {
+            push_text(inlines, part);
+        }
+        if parts.peek().is_some() {
+            inlines.push(MarkdownInline::SoftBreak);
+        }
     }
 }
 
@@ -412,59 +426,6 @@ fn coalesce_inlines(inlines: Vec<MarkdownInline>) -> Vec<MarkdownInline> {
     }
 
     output
-}
-
-fn flatten_inlines_to_plain_text(inlines: &[MarkdownInline]) -> String {
-    let mut text = String::new();
-
-    for inline in inlines {
-        match inline {
-            MarkdownInline::Text(value) | MarkdownInline::Code(value) => text.push_str(value),
-            MarkdownInline::Emphasis(children)
-            | MarkdownInline::Strong(children)
-            | MarkdownInline::Strikethrough(children) => {
-                text.push_str(&flatten_inlines_to_plain_text(children));
-            }
-            MarkdownInline::Link { label, .. } => {
-                text.push_str(&flatten_inlines_to_plain_text(label));
-            }
-            MarkdownInline::SoftBreak => text.push(' '),
-            MarkdownInline::LineBreak => text.push('\n'),
-        }
-    }
-
-    text
-}
-
-fn block_end_matches(end: &TagEnd, expected: Option<BlockEnd>) -> bool {
-    match expected {
-        Some(BlockEnd::BlockQuote) => matches!(end, TagEnd::BlockQuote(_)),
-        Some(BlockEnd::Item) => matches!(end, TagEnd::Item),
-        Some(BlockEnd::List) => matches!(end, TagEnd::List(_)),
-        None => false,
-    }
-}
-
-fn inline_end_matches(end: &TagEnd, expected: InlineEnd) -> bool {
-    match expected {
-        InlineEnd::Paragraph => matches!(end, TagEnd::Paragraph),
-        InlineEnd::Heading => matches!(end, TagEnd::Heading(..)),
-        InlineEnd::Emphasis => matches!(end, TagEnd::Emphasis),
-        InlineEnd::Strong => matches!(end, TagEnd::Strong),
-        InlineEnd::Strikethrough => matches!(end, TagEnd::Strikethrough),
-        InlineEnd::Link => matches!(end, TagEnd::Link),
-    }
-}
-
-fn heading_level_to_u8(level: HeadingLevel) -> u8 {
-    match level {
-        HeadingLevel::H1 => 1,
-        HeadingLevel::H2 => 2,
-        HeadingLevel::H3 => 3,
-        HeadingLevel::H4 => 4,
-        HeadingLevel::H5 => 5,
-        HeadingLevel::H6 => 6,
-    }
 }
 
 fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'_>) -> AnyElement {
@@ -561,11 +522,118 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
                     .into_any_element()
             }))
             .into_any_element(),
+        MarkdownBlock::Table { aligns, rows } => render_table_block(aligns, rows, style),
         MarkdownBlock::Rule => div()
             .w_full()
             .h(px(1.0))
             .bg(style.rule_color)
             .into_any_element(),
+    }
+}
+
+fn render_table_block(
+    aligns: &[MarkdownTableAlign],
+    rows: &[Vec<Vec<MarkdownInline>>],
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    if rows.is_empty() {
+        return div().into_any_element();
+    }
+
+    let header = &rows[0];
+    let body_rows = rows.iter().skip(1).enumerate().map(|(row_idx, row)| {
+        div()
+            .w_full()
+            .flex()
+            .bg(if row_idx % 2 == 0 {
+                style.table_cell_background
+            } else {
+                style.table_cell_background.opacity(0.96)
+            })
+            .children(
+                row.iter()
+                    .enumerate()
+                    .map(|(column_idx, cell)| render_table_cell(cell, column_idx, aligns, false, style)),
+            )
+            .into_any_element()
+    });
+
+    div()
+        .w_full()
+        .overflow_hidden()
+        .rounded(px(11.0))
+        .bg(style.table_border)
+        .p(px(1.0))
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(1.0))
+                .bg(style.table_border)
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .bg(style.table_header_background)
+                        .children(
+                            header
+                                .iter()
+                                .enumerate()
+                                .map(|(column_idx, cell)| render_table_cell(cell, column_idx, aligns, true, style)),
+                        ),
+                )
+                .children(body_rows),
+        )
+        .into_any_element()
+}
+
+fn render_table_cell(
+    cell: &[MarkdownInline],
+    column_idx: usize,
+    aligns: &[MarkdownTableAlign],
+    is_header: bool,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let base_style = if is_header {
+        let mut header_style = style.base_text_style();
+        header_style.font_weight = FontWeight::SEMIBOLD;
+        header_style.color = style.text_color.opacity(0.96);
+        header_style
+    } else {
+        style.base_text_style()
+    };
+
+    let align = aligns
+        .get(column_idx)
+        .copied()
+        .unwrap_or(MarkdownTableAlign::Left);
+
+    let content = render_inline_content(cell, &base_style, style);
+
+    let cell = div()
+        .flex_1()
+        .min_w(px(84.0))
+        .min_w_0()
+        .px(px(11.0))
+        .py(px(if is_header { 8.0 } else { 9.0 }))
+        .child(match align {
+            MarkdownTableAlign::Center => div().w_full().text_center().child(content),
+            MarkdownTableAlign::Right => div().w_full().text_right().child(content),
+            MarkdownTableAlign::Left | MarkdownTableAlign::None => {
+                div().w_full().child(content)
+            }
+        });
+
+    if column_idx > 0 {
+        div()
+            .flex()
+            .bg(style.table_border)
+            .child(div().w(px(1.0)).self_stretch())
+            .child(cell)
+            .into_any_element()
+    } else {
+        cell.into_any_element()
     }
 }
 
@@ -981,5 +1049,17 @@ mod tests {
                 .iter()
                 .any(|inline| matches!(inline, MarkdownInline::LineBreak))
         );
+    }
+
+    #[test]
+    fn parses_tables_from_mdast() {
+        let blocks = parse_markdown("| Name | Value |\n| --- | ---: |\n| foo | `bar` |");
+        let MarkdownBlock::Table { aligns, rows } = &blocks[0] else {
+            panic!("expected table");
+        };
+
+        assert_eq!(aligns.len(), 2);
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(aligns[1], MarkdownTableAlign::Right));
     }
 }
