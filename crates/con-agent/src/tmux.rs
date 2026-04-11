@@ -57,7 +57,7 @@ fn shell_quote(value: &str) -> String {
 
 pub fn build_tmux_list_command(nonce: &str) -> String {
     format!(
-        r#"sh -lc '
+        r#"sh -c '
 printf "%s\n" "__CON_TMUX_BEGIN_{nonce}__"
 tmux list-panes -a -F "__CON_TMUX__\t#{{session_name}}\t#{{window_id}}\t#{{window_index}}\t#{{window_name}}\t#{{pane_id}}\t#{{pane_index}}\t#{{pane_active}}\t#{{window_active}}\t#{{pane_current_command}}\t#{{pane_current_path}}" 2>/dev/null
 printf "%s\n" "__CON_TMUX_END_{nonce}__"
@@ -119,7 +119,7 @@ pub fn build_tmux_capture_command(nonce: &str, target: Option<&str>, lines: usiz
         .map(|value| format!("-t {} ", shell_quote(value)))
         .unwrap_or_default();
     format!(
-        r#"sh -lc '
+        r#"sh -c '
 printf "%s\n" "__CON_TMUX_CAPTURE_BEGIN_{nonce}__"
 tmux capture-pane -p -J {target_flag}-S -{lines} 2>/dev/null
 printf "%s\n" "__CON_TMUX_CAPTURE_END_{nonce}__"
@@ -185,7 +185,7 @@ pub fn build_tmux_send_keys_command(
         commands.push(format!("tmux send-keys -t {} Enter", shell_quote(target)));
     }
 
-    Ok(format!("sh -lc {}", shell_quote(&commands.join(" && "))))
+    Ok(format!("sh -c {}", shell_quote(&commands.join(" && "))))
 }
 
 pub fn build_tmux_exec_command(
@@ -237,7 +237,7 @@ pub fn build_tmux_exec_command(
     args.push(shell_quote(command));
 
     format!(
-        r#"sh -lc '
+        r#"sh -c '
 printf "%s\n" "__CON_TMUX_EXEC_BEGIN_{nonce}__"
 {}
 printf "%s\n" "__CON_TMUX_EXEC_END_{nonce}__"

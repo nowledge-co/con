@@ -31,7 +31,7 @@ pub struct ShellProbeResult {
 
 pub fn build_shell_probe_command(nonce: &str) -> String {
     format!(
-        r##"sh -lc '
+        r##"sh -c '
 con_probe_emit() {{ printf "__CON_SHELL_PROBE__\t%s\t%s\n" "$1" "$2"; }}
 printf "%s\n" "__CON_SHELL_PROBE_BEGIN_{nonce}__"
 con_probe_emit host "$(hostname 2>/dev/null || uname -n 2>/dev/null || printf "")"
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn parse_probe_block_extracts_tmux_context() {
         let lines = vec![
-            "prompt$ sh -lc '...'".to_string(),
+            "prompt$ sh -c '...'".to_string(),
             "__CON_SHELL_PROBE_BEGIN_42__".to_string(),
             "__CON_SHELL_PROBE__\thost\thaswell".to_string(),
             "__CON_SHELL_PROBE__\tpwd\t/home/weyl/project".to_string(),
