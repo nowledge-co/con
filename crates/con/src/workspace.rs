@@ -187,8 +187,19 @@ impl ConWorkspace {
         value.clamp(0.0, 1.0)
     }
 
+    fn remap_opacity(value: f32, input_floor: f32, output_floor: f32, exponent: f32) -> f32 {
+        let normalized = ((value - input_floor) / (1.0 - input_floor)).clamp(0.0, 1.0);
+        output_floor + (1.0 - output_floor) * normalized.powf(exponent)
+    }
+
+    fn effective_terminal_opacity(value: f32) -> f32 {
+        let clamped = Self::clamp_terminal_opacity(value);
+        Self::remap_opacity(clamped, 0.25, 0.72, 1.55)
+    }
+
     fn ui_surface_opacity(&self) -> f32 {
-        Self::clamp_ui_opacity(self.ui_opacity)
+        let clamped = Self::clamp_ui_opacity(self.ui_opacity);
+        Self::remap_opacity(clamped, 0.35, 0.84, 1.9)
     }
 
     fn has_active_tab(&self) -> bool {
@@ -196,7 +207,7 @@ impl ConWorkspace {
     }
 
     fn elevated_ui_surface_opacity(&self) -> f32 {
-        (self.ui_surface_opacity() + 0.03).min(0.98)
+        (self.ui_surface_opacity() + 0.02).min(0.98)
     }
 
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -204,7 +215,7 @@ impl ConWorkspace {
         let terminal_font_family = config.terminal.font_family.clone();
         let ui_font_family = config.appearance.ui_font_family.clone();
         let font_size = config.terminal.font_size;
-        let terminal_opacity = Self::clamp_terminal_opacity(config.appearance.terminal_opacity);
+        let terminal_opacity = Self::effective_terminal_opacity(config.appearance.terminal_opacity);
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
         let background_image = config.appearance.background_image.clone();
         let background_image_opacity =
@@ -1991,7 +2002,7 @@ impl ConWorkspace {
         self.terminal_font_family = term_config.font_family.clone();
         self.ui_font_family = appearance_config.ui_font_family.clone();
         self.font_size = term_config.font_size;
-        self.terminal_opacity = Self::clamp_terminal_opacity(appearance_config.terminal_opacity);
+        self.terminal_opacity = Self::effective_terminal_opacity(appearance_config.terminal_opacity);
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
         self.background_image = appearance_config.background_image.clone();
         self.background_image_opacity =
@@ -4018,9 +4029,10 @@ impl Render for ConWorkspace {
                         .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
+                        .bg(theme.muted_foreground.opacity(0.16))
                         .opacity(agent_panel_chrome_progress)
                         .cursor_col_resize()
-                        .hover(|s| s.bg(theme.primary.opacity(0.15)))
+                        .hover(|s| s.bg(theme.primary.opacity(0.22)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
