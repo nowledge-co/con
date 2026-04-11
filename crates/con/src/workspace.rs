@@ -3397,6 +3397,10 @@ impl ConWorkspace {
             .update(cx, |panel, cx| panel.swap_state(incoming, cx));
         self.tabs[old_active].panel_state = outgoing;
 
+        for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
+            terminal.set_native_view_visible(true, cx);
+            terminal.ensure_surface(window, cx);
+        }
         terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
         Self::schedule_terminal_bootstrap_reassert(

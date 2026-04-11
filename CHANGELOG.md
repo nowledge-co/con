@@ -113,6 +113,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Font size changes now apply to existing Ghostty panes immediately, so terminal text updates in place when you save Settings.
 - Terminal theme changes now apply to live Ghostty panes immediately instead of only updating the surrounding con interface.
 - Control-created panes now bootstrap as real Ghostty surfaces immediately instead of staying as uninitialized placeholders until a later render pass. `panes.create` now returns `surface_ready`, `is_alive`, and `has_shell_integration`, which makes CLI- and agent-driven pane setup much more truthful.
+- Control-created tabs now bootstrap their first Ghostty pane through the same visibility and surface-ensure path as normal tab activation, so `tabs.new` no longer leaves automation on a dead first pane.
 - The control plane can now create and close tabs through `con-cli`, and workspace bootstrap now reasserts new or newly focused terminals until Ghostty either comes up or the environment proves it cannot.
 - Split rails now keep a visible resting presence instead of appearing only on hover, so sparse or newly created panes still read as separate terminal workspaces at a glance.
 - Split panes no longer blank out when they lose focus. Embedded Ghostty surfaces are no longer dimmed with GPUI opacity, which restores correct rendering for unfocused split panes while keeping the layout borderless.

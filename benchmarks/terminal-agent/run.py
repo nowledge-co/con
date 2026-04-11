@@ -99,6 +99,12 @@ class BenchmarkContext:
     def tabs_list(self) -> dict[str, Any]:
         return self.run_json("tabs", "list")
 
+    def tabs_new(self) -> dict[str, Any]:
+        return self.run_json("tabs", "new")
+
+    def tabs_close(self, tab_index: int) -> dict[str, Any]:
+        return self.run_json("tabs", "close", "--tab", str(tab_index))
+
     def panes_list(self, tab_index: int | None = None) -> dict[str, Any]:
         args = ["panes", "list"]
         if tab_index is not None:
@@ -611,16 +617,102 @@ def operator_case_for(
         if not steps:
             raise BenchError(f"operator scenario `{scenario_name}` has no steps")
 
-        tab_index = ctx.active_tab_index()
-        setup_actions = run_profile_setup(ctx, profile, tab_index)
+        created_tab = None
+        if ctx.default_tab is None:
+            new_tab = ctx.tabs_new()
+            created_tab = int(new_tab["active_tab_index"])
+            ctx.wait_for_live_surface_ready_panes(created_tab)
+            tab_index = created_tab
+        else:
+            tab_index = ctx.active_tab_index()
+
+        setup_actions: list[dict[str, Any]] = []
+        if created_tab is not None:
+            setup_actions.append(
+                {
+                    "kind": "new_tab",
+                    "tab_index": created_tab,
+                    "tab_count": new_tab.get("tab_count"),
+                    "focused_pane_id": new_tab.get("focused_pane_id"),
+                }
+            )
+
         executed_steps: list[dict[str, Any]] = []
 
-        for idx, step in enumerate(steps, start=1):
-            try:
-                prompt = step.get("prompt", "").strip()
-                if not prompt:
+        try:
+            setup_actions.extend(run_profile_setup(ctx, profile, tab_index))
+
+            for idx, step in enumerate(steps, start=1):
+                try:
+                    prompt = step.get("prompt", "").strip()
+                    if not prompt:
+                        raise BenchFailure(
+                            f"operator scenario `{scenario_name}` step {idx} has an empty prompt",
+                            details={
+                                "tab_index": tab_index,
+                                "scenario": scenario_name,
+                                "review_required": True,
+                                "setup_actions": setup_actions,
+                                "steps": executed_steps,
+                                "failed_step_index": idx,
+                            },
+                        )
+
+                    label = step.get("label") or f"step_{idx}"
+                    timeout_secs = step.get("timeout_secs")
+                    result = ctx.agent_ask(
+                        tab_index,
+                        prompt,
+                        request_timeout_secs=float(timeout_secs)
+                        if timeout_secs is not None
+                        else 90.0,
+                    )
+                    message = result.get("message", {})
+                    content = str(message.get("content", "")).strip()
+                    if not content:
+                        raise BenchFailure(
+                            f"operator scenario `{scenario_name}` step {idx} returned no assistant content",
+                            details={
+                                "tab_index": tab_index,
+                                "scenario": scenario_name,
+                                "review_required": True,
+                                "setup_actions": setup_actions,
+                                "steps": executed_steps,
+                                "failed_step_index": idx,
+                            },
+                        )
+
+                    expect_contains = step.get("expect_contains", [])
+                    missing = [needle for needle in expect_contains if needle not in content]
+                    if missing:
+                        raise BenchFailure(
+                            f"operator scenario `{scenario_name}` step {idx} missing expected content: {missing}",
+                            details={
+                                "tab_index": tab_index,
+                                "scenario": scenario_name,
+                                "review_required": True,
+                                "setup_actions": setup_actions,
+                                "steps": executed_steps,
+                                "failed_step_index": idx,
+                                "missing_expectations": missing,
+                            },
+                        )
+
+                    executed_steps.append(
+                        {
+                            "index": idx,
+                            "label": label,
+                            "timeout_secs": timeout_secs,
+                            "prompt": prompt,
+                            "conversation_id": result.get("conversation_id"),
+                            "message_id": message.get("id"),
+                            "duration_ms": message.get("duration_ms"),
+                            "content": content,
+                        }
+                    )
+                except BenchError as exc:
                     raise BenchFailure(
-                        f"operator scenario `{scenario_name}` step {idx} has an empty prompt",
+                        str(exc),
                         details={
                             "tab_index": tab_index,
                             "scenario": scenario_name,
@@ -629,83 +721,24 @@ def operator_case_for(
                             "steps": executed_steps,
                             "failed_step_index": idx,
                         },
-                    )
+                    ) from exc
 
-                label = step.get("label") or f"step_{idx}"
-                timeout_secs = step.get("timeout_secs")
-                result = ctx.agent_ask(
-                    tab_index,
-                    prompt,
-                    request_timeout_secs=float(timeout_secs)
-                    if timeout_secs is not None
-                    else 90.0,
-                )
-                message = result.get("message", {})
-                content = str(message.get("content", "")).strip()
-                if not content:
-                    raise BenchFailure(
-                        f"operator scenario `{scenario_name}` step {idx} returned no assistant content",
-                        details={
-                            "tab_index": tab_index,
-                            "scenario": scenario_name,
-                            "review_required": True,
-                            "setup_actions": setup_actions,
-                            "steps": executed_steps,
-                            "failed_step_index": idx,
-                        },
-                    )
-
-                expect_contains = step.get("expect_contains", [])
-                missing = [needle for needle in expect_contains if needle not in content]
-                if missing:
-                    raise BenchFailure(
-                        f"operator scenario `{scenario_name}` step {idx} missing expected content: {missing}",
-                        details={
-                            "tab_index": tab_index,
-                            "scenario": scenario_name,
-                            "review_required": True,
-                            "setup_actions": setup_actions,
-                            "steps": executed_steps,
-                            "failed_step_index": idx,
-                            "missing_expectations": missing,
-                        },
-                    )
-
-                executed_steps.append(
-                    {
-                        "index": idx,
-                        "label": label,
-                        "timeout_secs": timeout_secs,
-                        "prompt": prompt,
-                        "conversation_id": result.get("conversation_id"),
-                        "message_id": message.get("id"),
-                        "duration_ms": message.get("duration_ms"),
-                        "content": content,
-                    }
-                )
-            except BenchError as exc:
-                raise BenchFailure(
-                    str(exc),
-                    details={
-                        "tab_index": tab_index,
-                        "scenario": scenario_name,
-                        "review_required": True,
-                        "setup_actions": setup_actions,
-                        "steps": executed_steps,
-                        "failed_step_index": idx,
-                    },
-                ) from exc
-
-        return (
-            f"{scenario_name}: executed {len(executed_steps)} operator step(s) on tab {tab_index}; review transcript for quality",
-            {
-                "tab_index": tab_index,
-                "scenario": scenario_name,
-                "review_required": True,
-                "setup_actions": setup_actions,
-                "steps": executed_steps,
-            },
-        )
+            return (
+                f"{scenario_name}: executed {len(executed_steps)} operator step(s) on tab {tab_index}; review transcript for quality",
+                {
+                    "tab_index": tab_index,
+                    "scenario": scenario_name,
+                    "review_required": True,
+                    "setup_actions": setup_actions,
+                    "steps": executed_steps,
+                },
+            )
+        finally:
+            if created_tab is not None:
+                try:
+                    ctx.tabs_close(created_tab)
+                except BenchError:
+                    pass
 
     return case_name, case
 
