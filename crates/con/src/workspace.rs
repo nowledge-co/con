@@ -3586,6 +3586,11 @@ impl ConWorkspace {
         for tab in &self.tabs {
             let conv = tab.session.conversation();
             let _ = conv.lock().save();
+
+            for terminal in tab.pane_tree.all_terminals() {
+                terminal.set_focus_state(false, cx);
+                terminal.detach_native_view(cx);
+            }
         }
 
         window.blur();
@@ -4113,7 +4118,7 @@ impl Render for ConWorkspace {
                         .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
-                        .bg(theme.muted_foreground.opacity(0.42))
+                        .bg(theme.title_bar_border)
                         .opacity(agent_panel_chrome_progress)
                         .child(
                             div()

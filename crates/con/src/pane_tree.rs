@@ -473,7 +473,7 @@ impl PaneTree {
                         .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
-                        .bg(theme.muted_foreground.opacity(0.42))
+                        .bg(theme.title_bar_border)
                         .child(
                             div()
                                 .absolute()
@@ -497,7 +497,7 @@ impl PaneTree {
                         .h(px(1.0))
                         .w_full()
                         .flex_shrink_0()
-                        .bg(theme.muted_foreground.opacity(0.42))
+                        .bg(theme.title_bar_border)
                         .child(
                             div()
                                 .absolute()
