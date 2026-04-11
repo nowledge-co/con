@@ -21,13 +21,12 @@ use crate::hook::{ConHook, ToolApprovalDecision};
 use crate::tools::{
     AgentCliTurnTool, BatchExecTool, CreatePaneTool, EditFileTool, EnsureLocalAgentTargetTool,
     EnsureLocalCodingWorkspaceTool, EnsureLocalShellTargetTool, EnsureRemoteShellTargetTool,
-    EnsureRemoteTmuxShellTargetTool, EnsureRemoteTmuxWorkspaceTool,
-    FileReadTool, FileWriteTool, ListFilesTool, ListPanesTool, ListTabWorkspacesTool, PaneRequest,
-    ProbeShellContextTool, ReadPaneTool, RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool,
-    SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecTool,
-    TmuxCaptureTool, TmuxEnsureAgentTargetTool, TmuxEnsureShellTargetTool, TmuxFindTargetsTool,
-    TmuxInspectTool, TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool, TmuxShellTurnTool,
-    WaitForTool,
+    EnsureRemoteTmuxShellTargetTool, EnsureRemoteTmuxWorkspaceTool, FileReadTool, FileWriteTool,
+    ListFilesTool, ListPanesTool, ListTabWorkspacesTool, PaneRequest, ProbeShellContextTool,
+    ReadPaneTool, RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool, SearchTool, SendKeysTool,
+    ShellExecTool, TerminalExecRequest, TerminalExecTool, TmuxCaptureTool,
+    TmuxEnsureAgentTargetTool, TmuxEnsureShellTargetTool, TmuxFindTargetsTool, TmuxInspectTool,
+    TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool, TmuxShellTurnTool, WaitForTool,
 };
 
 // ── Provider enum ───────────────────────────────────────────────────

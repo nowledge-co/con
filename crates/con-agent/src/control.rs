@@ -638,7 +638,9 @@ fn runtime_has_native_tmux_anchor(runtime: &PaneRuntimeState) -> bool {
         return false;
     }
 
-    recent_tmux_session || runtime.tmux_session.is_some() || runtime.last_verified_tmux_session.is_some()
+    recent_tmux_session
+        || runtime.tmux_session.is_some()
+        || runtime.last_verified_tmux_session.is_some()
 }
 
 fn target_stack_from_runtime(runtime: &PaneRuntimeState) -> Vec<PaneVisibleTarget> {

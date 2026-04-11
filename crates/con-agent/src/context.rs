@@ -722,7 +722,9 @@ impl PaneRuntimeTracker {
             .find(|scope| scope.kind == PaneScopeKind::Multiplexer)
             .and_then(|scope| scope.label.clone())
             .or(action_tmux_session);
-        let agent_cli = None;
+        let agent_cli =
+            classify_screen_agent_cli(observation.title.as_deref(), &observation.recent_output)
+                .map(ToString::to_string);
 
         let mut warnings = Vec::new();
         if !shell_metadata_fresh {
@@ -1476,6 +1478,34 @@ pub fn derive_screen_hints(title: Option<&str>, lines: &[String]) -> Vec<PaneObs
     }
 
     hints
+}
+
+fn classify_screen_agent_cli(_title: Option<&str>, lines: &[String]) -> Option<&'static str> {
+    let joined = lines.join("\n").to_ascii_lowercase();
+
+    if joined.contains("openai codex") {
+        return Some("codex");
+    }
+
+    if joined.contains("claude code") {
+        return Some("claude");
+    }
+
+    let opencode_markers = [
+        joined.contains("ask anything"),
+        joined.contains("tab agents"),
+        joined.contains("ctrl+p commands"),
+    ];
+    if opencode_markers
+        .into_iter()
+        .filter(|present| *present)
+        .count()
+        >= 2
+    {
+        return Some("opencode");
+    }
+
+    None
 }
 
 fn is_prompt_like_line(line: &str) -> bool {
@@ -2539,6 +2569,8 @@ impl TerminalContext {
              - FOLLOW-UP LOCAL CODING WORK in `<local_workspaces>` → reuse those local Codex / Claude / OpenCode / shell workspaces by default. Do not create duplicate local panes when a reusable workspace already exists for the same project path.\n\
              - When `<work_target_hints>` is present, use those typed hints before improvising pane choice from raw metadata.\n\
              - For CURRENT TERMINAL SITUATION answers, structure the response as: proven facts, current-screen assessment, and unknowns/limits. Use `screen_hints` and `terminal_output` to describe what appears on screen now without promoting it to backend truth.\n\
+             - When you summarize evidence, name the actual evidence source you used. Do not describe a `tmux_shell_turn`, `terminal_exec`, `agent_cli_turn`, or `command -v` result as a `shell probe` unless `probe_shell_context` actually ran.\n\
+             - When a command or install check produced decisive output, prefer quoting or closely paraphrasing that concrete output over upgrading it into a broader claim.\n\
              - When multiple panes are visible and the user asks about the terminal/session state, mention the pane count and summarize materially different peer panes. Do not collapse the whole tab into only the focused pane unless the user explicitly asks about that pane alone.\n\
              - Never restate stale shell metadata as if it were the current foreground runtime. If shell metadata is not fresh, label it as historical shell metadata or omit it.\n\
              - TMUX TARGET DISCOVERY on a pane with tmux native control → tmux_find_targets or tmux_list_targets, then tmux_capture_pane.\n\
@@ -2546,7 +2578,9 @@ impl TerminalContext {
              - In a paired LOCAL coding workspace, use the shell lane for deterministic file writes, test runs, git commands, and other direct shell work. Use the interactive agent CLI lane only when the user explicitly wants Codex / Claude / OpenCode to act or when you need a natural-language follow-up inside that CLI.\n\
              - If a local coding request asks you to create/edit files, run tests, or execute shell commands in a project path, do that work in the shell lane by default. Keep the interactive agent CLI target untouched unless the request explicitly asks you to consult it, or unless you must clear a trust/continue prompt that is blocking later work.\n\
              - Do NOT send the same local coding task to both the shell lane and the interactive agent CLI lane in the same turn.\n\
+             - When collecting git output through the shell lane, prefer pager-safe forms such as `git --no-pager diff --stat`, `git --no-pager show`, or `GIT_PAGER=cat ...` so the shell returns to a prompt and the result stays verifiable.\n\
              - INTERACTIVE AGENT-CLI FOLLOW-UP (Codex / Claude Code / OpenCode already running in a known pane or tmux target) → agent_cli_turn. Prefer this over raw send_keys or tmux_send_keys so con can wait for the interactive target to settle and return a fresh snapshot before you continue.\n\
+             - For interactive agent-CLI requests, \"prompt submitted\" is not completion. Stay with the same target until you have the requested answer, a clear blocking interstitial, or an explicit timeout/no-answer result.\n\
              - TMUX SHELL PREPARATION on a pane with tmux native control → tmux_ensure_shell_target to reuse or create a safe shell pane before remote file work or shell execution inside tmux.\n\
              - TMUX SHELL FOLLOW-UP in an existing tmux shell target → tmux_shell_turn. Prefer this over manually composing tmux_send_keys + tmux_capture_pane when you need deterministic shell work, file edits, test runs, or install checks inside tmux.\n\
              - TMUX AGENT TARGET PREPARATION on a pane with tmux native control → tmux_ensure_agent_target to reuse or create a Codex CLI, Claude Code, or OpenCode tmux pane before interacting with that agent.\n\
@@ -3558,6 +3592,44 @@ mod tests {
         assert_eq!(runtime.mode, PaneMode::Unknown);
         assert_eq!(runtime.agent_cli, None);
         assert_eq!(runtime.active_scope, None);
+    }
+
+    #[test]
+    fn runtime_state_detects_codex_from_visible_screen() {
+        let observation = PaneObservationFrame {
+            title: Some("con-bench-codex-git".to_string()),
+            cwd: Some("/tmp".to_string()),
+            recent_output: vec![
+                "╭────────────────────────────────────────────╮".to_string(),
+                "│ >_ OpenAI Codex (v0.118.0)                 │".to_string(),
+                "│ model:     gpt-5.4 high   /model to change │".to_string(),
+                "╰────────────────────────────────────────────╯".to_string(),
+            ],
+            screen_hints: derive_screen_hints(
+                Some("con-bench-codex-git"),
+                &[
+                    "╭────────────────────────────────────────────╮".to_string(),
+                    "│ >_ OpenAI Codex (v0.118.0)                 │".to_string(),
+                    "│ model:     gpt-5.4 high   /model to change │".to_string(),
+                    "╰────────────────────────────────────────────╯".to_string(),
+                ],
+            ),
+            last_command: None,
+            last_exit_code: None,
+            last_command_duration_secs: None,
+            support: PaneObservationSupport {
+                foreground_command: true,
+                ..PaneObservationSupport::default()
+            },
+            has_shell_integration: true,
+            is_alt_screen: false,
+            is_busy: true,
+            input_generation: 1,
+            last_command_finished_input_generation: 0,
+        };
+
+        let runtime = PaneRuntimeState::from_observation(&observation);
+        assert_eq!(runtime.agent_cli.as_deref(), Some("codex"));
     }
 
     #[test]

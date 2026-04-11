@@ -175,6 +175,8 @@ fn make_ghostty_terminal(
 }
 
 impl ConWorkspace {
+    const SECONDARY_PANE_OBSERVATION_LINES: usize = 40;
+
     fn clamp_terminal_opacity(value: f32) -> f32 {
         value.clamp(0.25, 1.0)
     }
@@ -354,7 +356,9 @@ impl ConWorkspace {
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
         agent_panel.update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
         input_bar.update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
-        command_palette.update(cx, |palette, _cx| palette.set_ui_opacity(effective_ui_opacity));
+        command_palette.update(cx, |palette, _cx| {
+            palette.set_ui_opacity(effective_ui_opacity)
+        });
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
@@ -958,9 +962,10 @@ impl ConWorkspace {
         }
 
         let observation = pane.observation_frame(40, cx);
-        let prompt_like = observation.screen_hints.iter().any(|hint| {
-            hint.kind == con_agent::context::PaneObservationHintKind::PromptLikeInput
-        });
+        let prompt_like = observation
+            .screen_hints
+            .iter()
+            .any(|hint| hint.kind == con_agent::context::PaneObservationHintKind::PromptLikeInput);
 
         if prompt_like {
             pane.recover_shell_prompt_state(cx);
@@ -1006,8 +1011,12 @@ impl ConWorkspace {
                     if pid == focused_pid {
                         continue;
                     }
-                    let (observation, runtime) =
-                        self.observe_terminal_runtime_for_tab(tab_idx, terminal, 10, cx);
+                    let (observation, runtime) = self.observe_terminal_runtime_for_tab(
+                        tab_idx,
+                        terminal,
+                        Self::SECONDARY_PANE_OBSERVATION_LINES,
+                        cx,
+                    );
                     let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                     let remote_workspace =
                         con_agent::context::remote_workspace_anchor(&runtime, &observation);
@@ -2007,7 +2016,8 @@ impl ConWorkspace {
         self.terminal_font_family = term_config.font_family.clone();
         self.ui_font_family = appearance_config.ui_font_family.clone();
         self.font_size = term_config.font_size;
-        self.terminal_opacity = Self::effective_terminal_opacity(appearance_config.terminal_opacity);
+        self.terminal_opacity =
+            Self::effective_terminal_opacity(appearance_config.terminal_opacity);
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
         let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
         self.background_image = appearance_config.background_image.clone();
@@ -2020,8 +2030,9 @@ impl ConWorkspace {
             .update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
         self.input_bar
             .update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
-        self.command_palette
-            .update(cx, |palette, _cx| palette.set_ui_opacity(effective_ui_opacity));
+        self.command_palette.update(cx, |palette, _cx| {
+            palette.set_ui_opacity(effective_ui_opacity)
+        });
 
         if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
             self.apply_terminal_theme(new_theme, window, cx);
@@ -2549,8 +2560,12 @@ impl ConWorkspace {
                     .enumerate()
                     .map(|(idx, terminal)| {
                         let pid = pane_tree.pane_id_for_terminal(terminal).unwrap_or(idx);
-                        let (observation, runtime) =
-                            self.observe_terminal_runtime_for_tab(tab_idx, terminal, 12, cx);
+                        let (observation, runtime) = self.observe_terminal_runtime_for_tab(
+                            tab_idx,
+                            terminal,
+                            Self::SECONDARY_PANE_OBSERVATION_LINES,
+                            cx,
+                        );
                         let control = con_agent::control::PaneControlState::from_runtime(&runtime);
                         let remote_workspace =
                             con_agent::context::remote_workspace_anchor(&runtime, &observation);

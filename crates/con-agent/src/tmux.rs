@@ -389,8 +389,7 @@ mod tests {
     fn list_parser_accepts_literal_backslash_t_rows() {
         let lines = vec![
             "__CON_TMUX_BEGIN_x__".to_string(),
-            "__CON_TMUX__\\twork\\t@1\\t1\\tshell\\t%3\\t0\\t1\\t1\\tzsh\\t/home/w"
-                .to_string(),
+            "__CON_TMUX__\\twork\\t@1\\t1\\tshell\\t%3\\t0\\t1\\t1\\tzsh\\t/home/w".to_string(),
             "__CON_TMUX_END_x__".to_string(),
         ];
         let snapshot = parse_tmux_list_lines(&lines, "x").expect("parse");

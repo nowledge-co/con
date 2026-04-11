@@ -1044,6 +1044,10 @@ fn recv_pane_response(
     })
 }
 
+fn is_transient_pane_read_timeout(err: &ToolError) -> bool {
+    matches!(err, ToolError::CommandFailed(message) if message == "pane read timed out")
+}
+
 fn pane_query_tmux_list(
     pane_tx: &Sender<PaneRequest>,
     target: PaneSelector,
@@ -1134,7 +1138,7 @@ fn pane_query_read_content(
         })
         .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
 
-    match recv_pane_response(response_rx, 5, "pane read")? {
+    match recv_pane_response(response_rx, 12, "pane read")? {
         PaneResponse::Content(content) => Ok(content),
         PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
         _ => Err(ToolError::CommandFailed("Unexpected response".into())),
@@ -1188,6 +1192,50 @@ fn pane_query_tmux_send_keys(
         PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
         _ => Err(ToolError::CommandFailed("Unexpected response".into())),
     }
+}
+
+async fn submit_visible_agent_prompt(
+    pane_tx: &Sender<PaneRequest>,
+    target: PaneSelector,
+    prompt: &str,
+) -> Result<(), ToolError> {
+    let prompt = prompt.trim_end_matches(['\r', '\n']);
+    if !prompt.is_empty() {
+        pane_query_send_keys(pane_tx, target, prompt.to_string())?;
+        // Interactive CLIs often suppress Enter-as-submit when it arrives in
+        // the same burst as pasted text. Send submit as a separate event.
+        tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+    }
+    pane_query_send_keys(pane_tx, target, "\r".to_string())
+}
+
+async fn submit_tmux_agent_prompt(
+    pane_tx: &Sender<PaneRequest>,
+    pane: PaneSelector,
+    target: &str,
+    prompt: &str,
+) -> Result<(), ToolError> {
+    let prompt = prompt.trim_end_matches(['\r', '\n']);
+    if !prompt.is_empty() {
+        pane_query_tmux_send_keys(
+            pane_tx,
+            pane,
+            target.to_string(),
+            Some(prompt.to_string()),
+            Vec::new(),
+            false,
+        )?;
+        tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+    }
+    pane_query_tmux_send_keys(
+        pane_tx,
+        pane,
+        target.to_string(),
+        None,
+        vec!["Enter".to_string()],
+        false,
+    )?;
+    Ok(())
 }
 
 fn pane_query_list(pane_tx: &Sender<PaneRequest>) -> Result<Vec<PaneInfo>, ToolError> {
@@ -1324,6 +1372,42 @@ fn default_agent_launch_command(agent_name: &str) -> Option<&'static str> {
         "opencode" => Some("opencode"),
         _ => None,
     }
+}
+
+fn output_contains_codex_trust_prompt(output: &str) -> bool {
+    output.contains("Do you trust the contents of this directory?")
+}
+
+fn output_contains_queue_hint(output: &str) -> bool {
+    output.contains("tab to queue") || output.contains("tab to queue message")
+}
+
+async fn maybe_auto_accept_known_agent_interstitial(
+    pane_tx: &Sender<PaneRequest>,
+    agent_name: &str,
+    target: PaneSelector,
+    current_output: String,
+) -> Result<(String, Option<String>), ToolError> {
+    if canonical_agent_cli_name(agent_name) == Some("codex")
+        && output_contains_codex_trust_prompt(&current_output)
+    {
+        pane_query_send_keys(pane_tx, target, "\r".to_string())?;
+        let (_, settled_output) = wait_for_visible_pane_settle(pane_tx, target, 80, 30).await?;
+        let output = if settled_output.trim().is_empty() {
+            pane_query_read_content(pane_tx, target, 80)?
+        } else {
+            settled_output
+        };
+        return Ok((
+            output,
+            Some(
+                "Accepted the Codex trust prompt so the interactive pane is actually ready for later turns."
+                    .to_string(),
+            ),
+        ));
+    }
+
+    Ok((current_output, None))
 }
 
 fn agent_cli_native_attachment(agent_name: &str) -> (AgentCliNativeAttachmentState, String) {
@@ -1513,7 +1597,11 @@ fn pane_recent_ssh_target(pane: &PaneInfo) -> Option<String> {
 fn pane_remote_host_hint(pane: &PaneInfo) -> Option<String> {
     pane.hostname
         .clone()
-        .or_else(|| pane.remote_workspace.as_ref().map(|anchor| anchor.host.clone()))
+        .or_else(|| {
+            pane.remote_workspace
+                .as_ref()
+                .map(|anchor| anchor.host.clone())
+        })
         .or_else(|| pane_recent_ssh_target(pane))
 }
 
@@ -1544,13 +1632,37 @@ fn pane_matches_remote_anchor(pane: &PaneInfo, host_contains: Option<&String>) -
 }
 
 fn pane_is_visible_agent_cli(pane: &PaneInfo, agent_name: Option<&String>) -> bool {
-    pane.visible_target.kind == PaneVisibleTargetKind::AgentCli
+    if pane.visible_target.kind == PaneVisibleTargetKind::AgentCli
         || pane.agent_cli.as_deref().is_some_and(|value| {
             agent_name
                 .as_ref()
                 .and_then(|name| canonical_agent_cli_name(name))
                 .is_none_or(|expected| canonical_agent_cli_name(value) == Some(expected))
         })
+    {
+        return true;
+    }
+
+    // Con-launched local agent panes can lose their visible header after a few
+    // turns. Preserve that lane when Con itself launched the CLI there and no
+    // current shell evidence contradicts it.
+    let hinted =
+        crate::context::workspace_agent_cli_hint(pane.agent_cli.as_deref(), &pane.recent_actions);
+    let Some(hinted) = hinted.as_deref().and_then(canonical_agent_cli_name) else {
+        return false;
+    };
+    if agent_name
+        .as_ref()
+        .and_then(|name| canonical_agent_cli_name(name))
+        .is_some_and(|expected| expected != hinted)
+    {
+        return false;
+    }
+
+    !pane_has_screen_hint(
+        pane,
+        crate::context::PaneObservationHintKind::PromptLikeInput,
+    )
 }
 
 fn pane_has_screen_hint(pane: &PaneInfo, kind: crate::context::PaneObservationHintKind) -> bool {
@@ -1874,10 +1986,7 @@ fn make_local_shell_preparation_candidate(pane: &PaneInfo, reason: String) -> Wo
     }
 }
 
-fn make_remote_shell_preparation_candidate(
-    pane: &PaneInfo,
-    reason: String,
-) -> WorkTargetCandidate {
+fn make_remote_shell_preparation_candidate(pane: &PaneInfo, reason: String) -> WorkTargetCandidate {
     WorkTargetCandidate {
         pane_index: pane.index,
         pane_id: pane.pane_id,
@@ -1975,6 +2084,7 @@ fn pane_is_local_shell_candidate(pane: &PaneInfo) -> bool {
         && !pane_has_tmux_layer(pane)
         && !pane_has_tmux_observation(pane)
         && !pane_is_disconnected_workspace(pane)
+        && pane.agent_cli.is_none()
         && pane.visible_target.kind != PaneVisibleTargetKind::AgentCli
 }
 
@@ -2327,21 +2437,12 @@ fn resolve_work_target_candidates(
                         .unwrap_or("agent CLI");
                     candidates.push((
                         150 + if pane.is_focused { 1 } else { 0 },
-                        WorkTargetCandidate {
-                            pane_index: pane.index,
-                            pane_id: pane.pane_id,
-                            pane_title: pane.title.clone(),
-                            host: pane.hostname.clone(),
-                            control_path: WorkTargetControlPath::VisibleAgentUi,
-                            visible_target: pane.visible_target.clone(),
-                            tmux_mode: pane.tmux_control.as_ref().map(|tmux| tmux.mode),
-                            tmux_target: None,
-                            requires_preparation: false,
-                            suggested_tool: "agent_cli_turn".to_string(),
-                            reason: format!(
-                                "This pane was previously created for local {label} work and still looks like the same local agent target. Continue it with a typed agent_cli_turn."
+                        make_local_agent_preparation_candidate(
+                            &pane,
+                            format!(
+                                "This pane was previously used for local {label} work, but a live interactive {label} target is not currently proven. Re-prepare the dedicated local agent target instead of sending a turn into a shell-like pane."
                             ),
-                        },
+                        ),
                     ));
                 } else if pane_is_local_shell_candidate(&pane) {
                     let label = agent_name
@@ -3155,10 +3256,10 @@ impl Tool for TmuxEnsureShellTargetTool {
                 requested_session
                     .as_ref()
                     .is_none_or(|session| pane.session_name == *session)
-                    &&
-                pane.pane_current_command
-                    .as_deref()
-                    .is_some_and(is_tmux_shell_command)
+                    && pane
+                        .pane_current_command
+                        .as_deref()
+                        .is_some_and(is_tmux_shell_command)
                     && cwd_contains.as_ref().is_none_or(|needle| {
                         pane.pane_current_path
                             .as_deref()
@@ -3285,14 +3386,18 @@ fn ensure_local_agent_target_impl(
     let panes = pane_query_list(pane_tx)?;
     let (native_attachment_state, native_attachment_note) = agent_cli_native_attachment(agent_name);
 
-    let best_existing = panes
+    let best_visible = panes
         .iter()
         .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
         .filter(|pane| args.pane_id.is_none_or(|id| pane.pane_id == id))
-        .filter(|pane| {
-            pane_is_visible_local_agent_cli(pane, Some(&agent_name.to_string()))
-                || pane_has_local_agent_continuity(pane, agent_name, cwd_lower.as_ref())
-        })
+        .filter(|pane| pane_is_visible_local_agent_cli(pane, Some(&agent_name.to_string())))
+        .filter(|pane| pane_matches_cwd(pane, cwd_lower.as_ref()))
+        .max_by_key(|pane| 10 + if pane.is_focused { 5 } else { 0 });
+    let continuity_hint = panes
+        .iter()
+        .filter(|pane| args.pane_index.is_none_or(|idx| pane.index == idx))
+        .filter(|pane| args.pane_id.is_none_or(|id| pane.pane_id == id))
+        .filter(|pane| pane_has_local_agent_continuity(pane, agent_name, cwd_lower.as_ref()))
         .filter(|pane| pane_matches_cwd(pane, cwd_lower.as_ref()))
         .max_by_key(|pane| 10 + if pane.is_focused { 5 } else { 0 });
 
@@ -3302,7 +3407,7 @@ fn ensure_local_agent_target_impl(
             .to_string()
     });
 
-    if let Some(pane) = best_existing {
+    if let Some(pane) = best_visible {
         return Ok(EnsureLocalAgentTargetResult {
             agent_name: agent_name.to_string(),
             created: false,
@@ -3366,7 +3471,17 @@ fn ensure_local_agent_target_impl(
         match_source: LocalAgentTargetMatchSource::Created,
         launch_command,
         output: String::new(),
-        reason: if let Some(cwd) = args.cwd {
+        reason: if let Some(pane) = continuity_hint {
+            let cwd_note = args
+                .cwd
+                .as_ref()
+                .map(|cwd| format!(" at `{cwd}`"))
+                .unwrap_or_default();
+            format!(
+                "Pane {} was previously used for local {agent_name} work{}, but no live interactive {agent_name} target is currently proven there, so con created a fresh dedicated local agent pane.",
+                pane.index, cwd_note
+            )
+        } else if let Some(cwd) = args.cwd {
             format!(
                 "No reusable local {agent_name} target matched `{cwd}`, so con created a new local agent pane there."
             )
@@ -3425,16 +3540,27 @@ impl Tool for EnsureLocalAgentTargetTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let result = ensure_local_agent_target_impl(&self.pane_tx, args)?;
+        let mut result = ensure_local_agent_target_impl(&self.pane_tx, args)?;
+        let target = selector_from(Some(result.pane_index), result.pane_id);
         let output = if result.created {
-            wait_for_pane_initial_output(
-                &self.pane_tx,
-                selector_from(Some(result.pane_index), result.pane_id),
-            )
-            .await?
+            wait_for_pane_initial_output(&self.pane_tx, target).await?
         } else {
             String::new()
         };
+        let (output, interstitial_note) = if result.created {
+            maybe_auto_accept_known_agent_interstitial(
+                &self.pane_tx,
+                &result.agent_name,
+                target,
+                output,
+            )
+            .await?
+        } else {
+            (output, None)
+        };
+        if let Some(note) = interstitial_note {
+            result.reason = format!("{} {}", result.reason, note);
+        }
         Ok(EnsureLocalAgentTargetResult { output, ..result })
     }
 }
@@ -3488,7 +3614,7 @@ fn ensure_local_coding_workspace_impl(
         },
     )?;
 
-    let shell_target = ensure_local_shell_target_impl(
+    let mut shell_target = ensure_local_shell_target_impl(
         pane_tx,
         EnsureLocalShellTargetArgs {
             cwd: args.cwd.clone(),
@@ -3498,6 +3624,63 @@ fn ensure_local_coding_workspace_impl(
             location: args.location,
         },
     )?;
+
+    if shell_target.pane_id == agent_target.pane_id {
+        shell_target = ensure_local_shell_target_impl(
+            pane_tx,
+            EnsureLocalShellTargetArgs {
+                cwd: args.cwd.clone(),
+                pane_index: None,
+                pane_id: None,
+                create_cwd_if_missing: true,
+                location: args.location,
+            },
+        )?;
+
+        if shell_target.pane_id == agent_target.pane_id {
+            let command = args
+                .cwd
+                .as_ref()
+                .map(|cwd| build_local_cwd_command_prefix(cwd, true));
+            let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+            pane_tx
+                .send(PaneRequest {
+                    query: PaneQuery::CreatePane {
+                        command: command.clone(),
+                        location: args.location,
+                    },
+                    response_tx,
+                })
+                .map_err(|_| ToolError::CommandFailed("Pane query channel closed".into()))?;
+
+            let response = tokio::task::block_in_place(|| {
+                response_rx
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .map_err(|_| ToolError::CommandFailed("Create pane request timed out".into()))
+            })?;
+
+            let (pane_index, pane_id) = match response {
+                PaneResponse::PaneCreated {
+                    pane_index,
+                    pane_id,
+                    ..
+                } => (pane_index, pane_id),
+                PaneResponse::Error(e) => return Err(ToolError::CommandFailed(e)),
+                _ => return Err(ToolError::CommandFailed("Unexpected response".into())),
+            };
+
+            shell_target = EnsureLocalShellTargetResult {
+                created: true,
+                pane_index,
+                pane_id: Some(pane_id),
+                cwd: args.cwd.clone(),
+                match_source: LocalShellMatchSource::Created,
+                command,
+                output: String::new(),
+                reason: "The existing shell candidate was the same pane as the interactive agent target, so con created a separate local shell pane to preserve the paired workspace.".to_string(),
+            };
+        }
+    }
 
     let shell_created = shell_target.created;
     let agent_created = agent_target.created;
@@ -3727,19 +3910,34 @@ impl Tool for AgentCliTurnTool {
         match best.control_path {
             WorkTargetControlPath::VisibleAgentUi => {
                 let target = selector_from(Some(best.pane_index), Some(best.pane_id));
-                let mut keys = args.prompt;
-                if !keys.ends_with('\n') {
-                    keys.push('\n');
-                }
-                pane_query_send_keys(&self.pane_tx, target, keys)?;
+                let current_output = pane_query_read_content(&self.pane_tx, target, lines)?;
+                let (_, interstitial_note) = maybe_auto_accept_known_agent_interstitial(
+                    &self.pane_tx,
+                    agent_name,
+                    target,
+                    current_output,
+                )
+                .await?;
+                submit_visible_agent_prompt(&self.pane_tx, target, &args.prompt).await?;
                 let (wait_status, settled_output) =
-                    wait_for_visible_pane_settle(&self.pane_tx, target, lines, timeout_secs)
-                        .await?;
+                    wait_for_visible_agent_turn(&self.pane_tx, target, lines, timeout_secs).await?;
                 let output = if settled_output.trim().is_empty() {
                     pane_query_read_content(&self.pane_tx, target, lines)?
                 } else {
                     settled_output
                 };
+                let mut note = if wait_status == "submitted_only"
+                    || output_contains_queue_hint(&output)
+                {
+                    "Sent the prompt into the visible agent CLI pane with a separate submit keystroke and waited for a second response phase. The pane still shows only submission-visible state, so this does not yet prove the agent answered."
+                        .to_string()
+                } else {
+                    "Sent the prompt into the visible agent CLI pane with a separate submit keystroke, waited for a distinct response phase to settle, and returned a fresh pane snapshot."
+                        .to_string()
+                };
+                if let Some(extra) = interstitial_note {
+                    note = format!("{note} {extra}");
+                }
                 Ok(AgentCliTurnResult {
                     agent_name: agent_name.to_string(),
                     pane_index: best.pane_index,
@@ -3748,7 +3946,7 @@ impl Tool for AgentCliTurnTool {
                     tmux_target: None,
                     wait_status,
                     output,
-                    note: "Sent the prompt into the visible agent CLI pane, waited for visible output to change and settle, and returned a fresh pane snapshot.".to_string(),
+                    note,
                 })
             }
             WorkTargetControlPath::TmuxAgentTarget => {
@@ -3758,14 +3956,8 @@ impl Tool for AgentCliTurnTool {
                     )
                 })?;
                 let pane = selector_from(Some(best.pane_index), Some(best.pane_id));
-                pane_query_tmux_send_keys(
-                    &self.pane_tx,
-                    pane,
-                    tmux_target.target.clone(),
-                    Some(args.prompt),
-                    Vec::new(),
-                    true,
-                )?;
+                submit_tmux_agent_prompt(&self.pane_tx, pane, &tmux_target.target, &args.prompt)
+                    .await?;
                 let (wait_status, output) = wait_for_tmux_capture_settle(
                     &self.pane_tx,
                     pane,
@@ -3782,7 +3974,7 @@ impl Tool for AgentCliTurnTool {
                     tmux_target: Some(tmux_target),
                     wait_status,
                     output,
-                    note: "Sent the prompt into the tmux agent target, waited for captured output to settle, and returned a fresh tmux capture.".to_string(),
+                    note: "Sent the prompt into the tmux agent target with a separate submit keystroke, waited for captured output to settle, and returned a fresh tmux capture.".to_string(),
                 })
             }
             _ => Err(ToolError::CommandFailed(format!(
@@ -3893,10 +4085,7 @@ impl Tool for TmuxShellTurnTool {
             return Err(ToolError::CommandFailed(format!(
                 "tmux target `{}` is not a known shell target (current command: {}). Use tmux_ensure_shell_target for shell work or tmux_ensure_agent_target / agent_cli_turn for interactive agent CLIs.",
                 target.target,
-                target
-                    .pane_current_command
-                    .as_deref()
-                    .unwrap_or("unknown")
+                target.pane_current_command.as_deref().unwrap_or("unknown")
             )));
         }
 
@@ -4363,11 +4552,15 @@ async fn wait_for_visible_pane_settle(
 
     while std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
-        let snapshot = pane_query_read_content(pane_tx, target, lines)?
-            .lines()
-            .map(|line| line.trim_end())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let snapshot = match pane_query_read_content(pane_tx, target, lines) {
+            Ok(snapshot) => snapshot,
+            Err(err) if is_transient_pane_read_timeout(&err) => continue,
+            Err(err) => return Err(err),
+        }
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
         latest_snapshot = snapshot.clone();
 
         if !phase_changed {
@@ -4390,7 +4583,88 @@ async fn wait_for_visible_pane_settle(
         }
     }
 
-    let status = if phase_changed { "timeout" } else { "no_change" };
+    let status = if phase_changed {
+        "timeout"
+    } else {
+        "no_change"
+    };
+    Ok((status.to_string(), latest_snapshot))
+}
+
+async fn wait_for_visible_agent_turn(
+    pane_tx: &Sender<PaneRequest>,
+    target: PaneSelector,
+    lines: usize,
+    timeout_secs: u64,
+) -> Result<(String, String), ToolError> {
+    const POLL_MS: u64 = 700;
+    const STABLE_POLLS: u32 = 3;
+
+    let baseline = pane_query_read_content(pane_tx, target, lines)?
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let mut submission_snapshot: Option<String> = None;
+    let mut response_phase_started = false;
+    let mut last_snapshot = baseline.clone();
+    let mut latest_snapshot = baseline;
+    let mut stable_count = 0u32;
+
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(POLL_MS)).await;
+        let snapshot = match pane_query_read_content(pane_tx, target, lines) {
+            Ok(snapshot) => snapshot,
+            Err(err) if is_transient_pane_read_timeout(&err) => continue,
+            Err(err) => return Err(err),
+        }
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+        latest_snapshot = snapshot.clone();
+
+        if submission_snapshot.is_none() {
+            if snapshot != last_snapshot {
+                submission_snapshot = Some(snapshot.clone());
+                last_snapshot = snapshot;
+                stable_count = 0;
+            }
+            continue;
+        }
+
+        if !response_phase_started {
+            if submission_snapshot
+                .as_ref()
+                .is_some_and(|submitted| &snapshot != submitted)
+            {
+                response_phase_started = true;
+                last_snapshot = snapshot;
+                stable_count = 0;
+            }
+            continue;
+        }
+
+        if snapshot == last_snapshot {
+            stable_count += 1;
+            if stable_count >= STABLE_POLLS {
+                return Ok(("settled".to_string(), snapshot));
+            }
+        } else {
+            last_snapshot = snapshot;
+            stable_count = 0;
+        }
+    }
+
+    let status = if response_phase_started {
+        "timeout"
+    } else if submission_snapshot.is_some() {
+        "submitted_only"
+    } else {
+        "no_change"
+    };
     Ok((status.to_string(), latest_snapshot))
 }
 
@@ -5632,7 +5906,11 @@ async fn ensure_remote_tmux_workspace_impl(
     let anchor = panes
         .iter()
         .find(|candidate| candidate.pane_id == ensure.pane_id.unwrap_or(usize::MAX))
-        .or_else(|| panes.iter().find(|candidate| candidate.index == ensure.pane_index))
+        .or_else(|| {
+            panes
+                .iter()
+                .find(|candidate| candidate.index == ensure.pane_index)
+        })
         .ok_or_else(|| {
             ToolError::CommandFailed(format!(
                 "Remote pane {} disappeared before tmux workspace preparation could continue.",
@@ -5682,7 +5960,11 @@ async fn ensure_remote_tmux_workspace_impl(
     let updated = panes
         .iter()
         .find(|candidate| candidate.pane_id == ensure.pane_id.unwrap_or(usize::MAX))
-        .or_else(|| panes.iter().find(|candidate| candidate.index == ensure.pane_index))
+        .or_else(|| {
+            panes
+                .iter()
+                .find(|candidate| candidate.index == ensure.pane_index)
+        })
         .ok_or_else(|| {
             ToolError::CommandFailed(format!(
                 "Remote pane {} disappeared after tmux workspace preparation.",
@@ -5928,11 +6210,10 @@ impl Tool for EnsureRemoteTmuxShellTargetTool {
             .iter()
             .filter(|tmux_pane| {
                 tmux_pane.session_name == workspace.session_name
-                    &&
-                tmux_pane
-                    .pane_current_command
-                    .as_deref()
-                    .is_some_and(is_tmux_shell_command)
+                    && tmux_pane
+                        .pane_current_command
+                        .as_deref()
+                        .is_some_and(is_tmux_shell_command)
                     && cwd_contains.as_ref().is_none_or(|needle| {
                         tmux_pane
                             .pane_current_path
@@ -6501,8 +6782,7 @@ mod tests {
         AgentCliNativeAttachmentState, ResolveWorkTargetResult, TmuxTargetKindFilter,
         WorkTargetControlPath, WorkTargetIntent, agent_cli_native_attachment,
         build_local_cwd_command_prefix, canonical_agent_cli_name, decode_key_escapes,
-        expand_home_prefix, is_tmux_agent_cli_command, is_tmux_shell_command,
-        pane_matches_cwd,
+        expand_home_prefix, is_tmux_agent_cli_command, is_tmux_shell_command, pane_matches_cwd,
         resolve_work_target_candidates, split_at_standalone_esc,
     };
     use crate::context::{
@@ -6999,6 +7279,131 @@ mod tests {
         assert_eq!(best.control_path, WorkTargetControlPath::LocalShellTarget);
         assert_eq!(best.suggested_tool, "ensure_local_shell_target");
         assert!(best.requires_preparation);
+    }
+
+    #[test]
+    fn resolve_work_target_agent_cli_does_not_reuse_continuity_only_shell_pane() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut pane = test_pane(5, "con-bench-codex");
+        pane.control_capabilities = vec![PaneControlCapability::ExecVisibleShell];
+        pane.visible_target.kind = PaneVisibleTargetKind::ShellPrompt;
+        pane.front_state = PaneFrontState::ShellPrompt;
+        pane.mode = super::PaneMode::Shell;
+        pane.shell_metadata_fresh = true;
+        pane.screen_hints.push(crate::context::PaneObservationHint {
+            kind: crate::context::PaneObservationHintKind::PromptLikeInput,
+            confidence: crate::context::PaneConfidence::Advisory,
+            detail: "Prompt-like line is visible.".to_string(),
+        });
+        pane.recent_actions.push(crate::context::PaneActionRecord {
+            sequence: 1,
+            kind: crate::context::PaneActionKind::PaneCreated,
+            summary: "con created this pane with startup command".to_string(),
+            command: Some(
+                "mkdir -p /Users/weyl/dev/temp/con-bench-codex-git && cd /Users/weyl/dev/temp/con-bench-codex-git && codex"
+                    .to_string(),
+            ),
+            source: crate::context::PaneEvidenceSource::ActionHistory,
+            confidence: crate::context::PaneConfidence::Advisory,
+            input_generation: None,
+            note: None,
+        });
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![pane],
+            WorkTargetIntent::AgentCli,
+            None,
+            None,
+            None,
+            Some("/Users/weyl/dev/temp/con-bench-codex-git".to_string()),
+            Some("codex".to_string()),
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.control_path, WorkTargetControlPath::LocalAgentTarget);
+        assert_eq!(best.suggested_tool, "ensure_local_agent_target");
+        assert!(best.requires_preparation);
+    }
+
+    #[test]
+    fn resolve_work_target_agent_cli_reuses_con_launched_non_shell_pane() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut pane = test_pane(5, "con-bench-codex");
+        pane.is_busy = true;
+        pane.recent_actions.push(crate::context::PaneActionRecord {
+            sequence: 1,
+            kind: crate::context::PaneActionKind::PaneCreated,
+            summary: "con created this pane with startup command".to_string(),
+            command: Some(
+                "mkdir -p /Users/weyl/dev/temp/con-bench-codex-git && cd /Users/weyl/dev/temp/con-bench-codex-git && codex"
+                    .to_string(),
+            ),
+            source: crate::context::PaneEvidenceSource::ActionHistory,
+            confidence: crate::context::PaneConfidence::Advisory,
+            input_generation: None,
+            note: None,
+        });
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![pane],
+            WorkTargetIntent::AgentCli,
+            None,
+            None,
+            None,
+            Some("/Users/weyl/dev/temp/con-bench-codex-git".to_string()),
+            Some("codex".to_string()),
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.control_path, WorkTargetControlPath::VisibleAgentUi);
+        assert_eq!(best.suggested_tool, "agent_cli_turn");
+        assert!(!best.requires_preparation);
+    }
+
+    #[test]
+    fn resolve_work_target_agent_cli_reuses_dedicated_lane_despite_stale_shell_metadata() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut pane = test_pane(6, "con-bench-codex");
+        pane.control_capabilities = vec![PaneControlCapability::ExecVisibleShell];
+        pane.front_state = PaneFrontState::ShellPrompt;
+        pane.visible_target.kind = PaneVisibleTargetKind::ShellPrompt;
+        pane.recent_actions.push(crate::context::PaneActionRecord {
+            sequence: 1,
+            kind: crate::context::PaneActionKind::PaneCreated,
+            summary: "con created this pane with startup command".to_string(),
+            command: Some(
+                "mkdir -p /Users/weyl/dev/temp/con-bench-codex-git && cd /Users/weyl/dev/temp/con-bench-codex-git && codex"
+                    .to_string(),
+            ),
+            source: crate::context::PaneEvidenceSource::ActionHistory,
+            confidence: crate::context::PaneConfidence::Advisory,
+            input_generation: None,
+            note: None,
+        });
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![pane],
+            WorkTargetIntent::AgentCli,
+            None,
+            None,
+            None,
+            Some("/Users/weyl/dev/temp/con-bench-codex-git".to_string()),
+            Some("codex".to_string()),
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.control_path, WorkTargetControlPath::VisibleAgentUi);
+        assert_eq!(best.suggested_tool, "agent_cli_turn");
+        assert!(!best.requires_preparation);
     }
 
     #[test]
