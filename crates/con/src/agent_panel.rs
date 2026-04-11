@@ -1603,7 +1603,11 @@ fn result_toggle_label(content: &str, expanded: bool) -> String {
     } else {
         let hidden = hidden_result_line_count(content, TOOL_RESULT_PREVIEW_LINES);
         if hidden > 0 {
-            format!("Show {} more line{}", hidden, if hidden == 1 { "" } else { "s" })
+            format!(
+                "Show {} more line{}",
+                hidden,
+                if hidden == 1 { "" } else { "s" }
+            )
         } else {
             "Show full output".to_string()
         }
@@ -2731,8 +2735,7 @@ impl Render for AgentPanel {
                                                 )))
                                                 .cursor_pointer()
                                                 .hover(|s| {
-                                                    s.bg(theme.muted.opacity(0.03))
-                                                        .rounded(px(6.0))
+                                                    s.bg(theme.muted.opacity(0.03)).rounded(px(6.0))
                                                 })
                                                 .on_mouse_down(
                                                     MouseButton::Left,
