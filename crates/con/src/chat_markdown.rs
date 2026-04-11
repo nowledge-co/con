@@ -4,7 +4,7 @@ use gpui::{
     px,
 };
 use gpui_component::highlighter::SyntaxHighlighter;
-use gpui_component::Theme;
+use gpui_component::{Colorize, Theme};
 use markdown::{ParseOptions, mdast};
 use ropey::Rope;
 
@@ -74,6 +74,7 @@ struct ChatMarkdownStyle<'a> {
     inline_code_background: Hsla,
     inline_code_text_color: Hsla,
     code_block_background: Hsla,
+    code_block_body_background: Hsla,
     code_block_language_background: Hsla,
     code_block_language_text_color: Hsla,
     quote_background: Hsla,
@@ -96,15 +97,22 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(720.0),
                 base_font_size: px(15.0),
                 base_line_height: px(24.0),
-                code_font_size: px(12.75),
-                code_line_height: px(20.0),
+                code_font_size: px(13.0),
+                code_line_height: px(21.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
-                inline_code_background: theme.secondary_active.opacity(0.72),
-                inline_code_text_color: theme.foreground.opacity(0.92),
-                code_block_background: theme.secondary.opacity(0.48),
-                code_block_language_background: theme.muted.opacity(0.16),
-                code_block_language_text_color: theme.muted_foreground.opacity(0.72),
+                inline_code_background: theme
+                    .secondary_active
+                    .mix_oklab(theme.background, 0.26)
+                    .opacity(0.96),
+                inline_code_text_color: theme.foreground.opacity(0.96),
+                code_block_background: theme.secondary.mix_oklab(theme.background, 0.56),
+                code_block_body_background: theme.background.mix_oklab(theme.secondary, 0.90),
+                code_block_language_background: theme
+                    .secondary_active
+                    .mix_oklab(theme.background, 0.24)
+                    .opacity(0.92),
+                code_block_language_text_color: theme.foreground.opacity(0.74),
                 quote_background: theme.secondary.opacity(0.68),
                 quote_tint: theme.primary.opacity(0.34),
                 rule_color: theme.muted_foreground.opacity(0.16),
@@ -121,15 +129,22 @@ impl<'a> ChatMarkdownStyle<'a> {
                 content_width: px(640.0),
                 base_font_size: px(12.75),
                 base_line_height: px(20.0),
-                code_font_size: px(11.75),
-                code_line_height: px(18.0),
+                code_font_size: px(12.0),
+                code_line_height: px(19.0),
                 text_color: theme.muted_foreground.opacity(0.66),
                 muted_text_color: theme.muted_foreground.opacity(0.58),
-                inline_code_background: theme.secondary_active.opacity(0.64),
-                inline_code_text_color: theme.foreground.opacity(0.78),
-                code_block_background: theme.secondary.opacity(0.38),
-                code_block_language_background: theme.muted.opacity(0.14),
-                code_block_language_text_color: theme.muted_foreground.opacity(0.66),
+                inline_code_background: theme
+                    .secondary_active
+                    .mix_oklab(theme.background, 0.20)
+                    .opacity(0.90),
+                inline_code_text_color: theme.foreground.opacity(0.84),
+                code_block_background: theme.secondary.mix_oklab(theme.background, 0.48),
+                code_block_body_background: theme.background.mix_oklab(theme.secondary, 0.84),
+                code_block_language_background: theme
+                    .secondary_active
+                    .mix_oklab(theme.background, 0.18)
+                    .opacity(0.82),
+                code_block_language_text_color: theme.foreground.opacity(0.68),
                 quote_background: theme.secondary.opacity(0.46),
                 quote_tint: theme.primary.opacity(0.24),
                 rule_color: theme.muted_foreground.opacity(0.12),
@@ -216,11 +231,7 @@ pub fn render_chat_markdown(source: &str, tone: ChatMarkdownTone, theme: &Theme)
 
 fn parse_markdown(source: &str) -> Vec<MarkdownBlock> {
     match markdown::to_mdast(source, &ParseOptions::gfm()) {
-        Ok(mdast::Node::Root(root)) => root
-            .children
-            .iter()
-            .filter_map(parse_block_node)
-            .collect(),
+        Ok(mdast::Node::Root(root)) => root.children.iter().filter_map(parse_block_node).collect(),
         Ok(node) => parse_block_node(&node).into_iter().collect(),
         Err(_) => vec![MarkdownBlock::Paragraph(vec![MarkdownInline::Text(
             source.to_string(),
@@ -230,9 +241,9 @@ fn parse_markdown(source: &str) -> Vec<MarkdownBlock> {
 
 fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
     match node {
-        mdast::Node::Paragraph(val) => Some(MarkdownBlock::Paragraph(parse_inline_nodes(
-            &val.children,
-        ))),
+        mdast::Node::Paragraph(val) => {
+            Some(MarkdownBlock::Paragraph(parse_inline_nodes(&val.children)))
+        }
         mdast::Node::Heading(val) => Some(MarkdownBlock::Heading {
             level: val.depth,
             inlines: parse_inline_nodes(&val.children),
@@ -329,12 +340,12 @@ fn parse_inline_nodes(nodes: &[mdast::Node]) -> Vec<MarkdownInline> {
             mdast::Node::Text(val) => push_text_fragments(&mut inlines, &val.value),
             mdast::Node::InlineCode(val) => inlines.push(MarkdownInline::Code(val.value.clone())),
             mdast::Node::InlineMath(val) => inlines.push(MarkdownInline::Code(val.value.clone())),
-            mdast::Node::Emphasis(val) => inlines.push(MarkdownInline::Emphasis(
-                parse_inline_nodes(&val.children),
-            )),
-            mdast::Node::Strong(val) => inlines.push(MarkdownInline::Strong(parse_inline_nodes(
-                &val.children,
-            ))),
+            mdast::Node::Emphasis(val) => {
+                inlines.push(MarkdownInline::Emphasis(parse_inline_nodes(&val.children)))
+            }
+            mdast::Node::Strong(val) => {
+                inlines.push(MarkdownInline::Strong(parse_inline_nodes(&val.children)))
+            }
             mdast::Node::Delete(val) => inlines.push(MarkdownInline::Strikethrough(
                 parse_inline_nodes(&val.children),
             )),
@@ -552,11 +563,9 @@ fn render_table_block(
             } else {
                 style.table_cell_background.opacity(0.96)
             })
-            .children(
-                row.iter()
-                    .enumerate()
-                    .map(|(column_idx, cell)| render_table_cell(cell, column_idx, aligns, false, style)),
-            )
+            .children(row.iter().enumerate().map(|(column_idx, cell)| {
+                render_table_cell(cell, column_idx, aligns, false, style)
+            }))
             .into_any_element()
     });
 
@@ -578,12 +587,9 @@ fn render_table_block(
                         .w_full()
                         .flex()
                         .bg(style.table_header_background)
-                        .children(
-                            header
-                                .iter()
-                                .enumerate()
-                                .map(|(column_idx, cell)| render_table_cell(cell, column_idx, aligns, true, style)),
-                        ),
+                        .children(header.iter().enumerate().map(|(column_idx, cell)| {
+                            render_table_cell(cell, column_idx, aligns, true, style)
+                        })),
                 )
                 .children(body_rows),
         )
@@ -622,9 +628,7 @@ fn render_table_cell(
         .child(match align {
             MarkdownTableAlign::Center => div().w_full().text_center().child(content),
             MarkdownTableAlign::Right => div().w_full().text_right().child(content),
-            MarkdownTableAlign::Left | MarkdownTableAlign::None => {
-                div().w_full().child(content)
-            }
+            MarkdownTableAlign::Left | MarkdownTableAlign::None => div().w_full().child(content),
         });
 
     if column_idx > 0 {
@@ -658,58 +662,62 @@ fn render_code_block(
         .flex()
         .flex_col()
         .overflow_hidden()
-        .rounded(px(12.0))
-        .bg(style.code_block_background.opacity(0.96))
+        .rounded(px(13.0))
+        .bg(style.code_block_background.opacity(0.98))
+        .p(px(1.0))
         .child(
             div()
-                .px(px(14.0))
-                .py(px(8.0))
-                .bg(style.code_block_language_background.opacity(0.98))
+                .overflow_hidden()
+                .rounded(px(12.0))
+                .bg(style
+                    .code_block_background
+                    .mix_oklab(style.code_block_body_background, 0.82))
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(
-                            div()
-                                .px(px(7.0))
-                                .py(px(3.0))
-                                .rounded(px(7.0))
-                                .bg(style.theme.background.opacity(0.38))
-                                .font_family(style.theme.mono_font_family.clone())
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_size(px(10.0))
-                                .line_height(px(11.0))
-                                .text_color(style.code_block_language_text_color.opacity(0.92))
-                                .child(header_label.to_string()),
-                        )
-                        .child(
-                            div()
-                                .h(px(1.0))
-                                .flex_1()
-                                .bg(style.rule_color.opacity(0.45)),
-                        ),
+                    div().px(px(14.0)).pt(px(10.0)).pb(px(8.0)).child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .px(px(8.0))
+                                    .py(px(4.0))
+                                    .rounded(px(8.0))
+                                    .bg(style.code_block_language_background)
+                                    .font_family(style.theme.mono_font_family.clone())
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_size(px(10.5))
+                                    .line_height(px(11.0))
+                                    .text_color(style.code_block_language_text_color)
+                                    .child(header_label.to_string()),
+                            )
+                            .child(div().h(px(1.0)).flex_1().bg(style.rule_color.opacity(0.36))),
+                    ),
                 ),
-        )
-        .child(div().h(px(1.0)).bg(style.rule_color.opacity(0.28)));
+        );
 
-    let mut code_column = div().flex().flex_col().gap(px(2.0)).w_full();
+    let mut code_column = div().flex().flex_col().gap(px(0.0)).w_full();
     let syntax_runs = highlighted_code_runs(code, language, style);
 
     for (line_idx, line) in preserved_lines.iter().enumerate() {
         code_column = code_column.child(
             div()
+                .w_full()
+                .min_h(style.code_line_height)
                 .font_family(style.theme.mono_font_family.clone())
                 .text_size(style.code_font_size)
                 .line_height(style.code_line_height)
-                .text_color(style.text_color)
-                .child(match syntax_runs
-                    .as_ref()
-                    .and_then(|runs| runs.get(line_idx).cloned())
-                {
-                    Some(runs) => StyledText::new(line.clone()).with_runs(runs),
-                    None => StyledText::new(line.clone()).with_runs(vec![mono_style.to_run(line.len())]),
-                }),
+                .text_color(style.text_color.opacity(0.96))
+                .child(
+                    match syntax_runs
+                        .as_ref()
+                        .and_then(|runs| runs.get(line_idx).cloned())
+                    {
+                        Some(runs) => StyledText::new(line.clone()).with_runs(runs),
+                        None => StyledText::new(line.clone())
+                            .with_runs(vec![mono_style.to_run(line.len())]),
+                    },
+                ),
         );
     }
 
@@ -723,11 +731,14 @@ fn render_code_block(
 
     block
         .child(
-            div()
-                .px(px(14.0))
-                .py(px(12.0))
-                .bg(style.code_block_background.opacity(0.92))
-                .child(code_column),
+            div().px(px(10.0)).pb(px(10.0)).child(
+                div()
+                    .rounded(px(10.0))
+                    .bg(style.code_block_body_background.opacity(0.985))
+                    .px(px(12.0))
+                    .py(px(11.0))
+                    .child(code_column),
+            ),
         )
         .into_any_element()
 }
@@ -770,9 +781,10 @@ fn highlighted_code_runs(
             }
 
             let highlighted_style = style.code_text_style().highlight(*highlight);
-            runs.push(softened_code_highlight(highlighted_style, style).to_run(
-                code[start..end].chars().count(),
-            ));
+            runs.push(
+                softened_code_highlight(highlighted_style, style)
+                    .to_run(code[start..end].chars().count()),
+            );
             cursor = end;
         }
 
@@ -784,7 +796,10 @@ fn highlighted_code_runs(
         }
 
         if runs.is_empty() {
-            runs.push(mono_style_run(&style.code_text_style(), line.chars().count()));
+            runs.push(mono_style_run(
+                &style.code_text_style(),
+                line.chars().count(),
+            ));
         }
 
         line_runs.push(runs);
@@ -806,11 +821,16 @@ fn suppress_syntax_highlighting(lang: &str) -> bool {
 }
 
 fn softened_code_highlight(mut text_style: TextStyle, style: &ChatMarkdownStyle<'_>) -> TextStyle {
+    let base_color = if style.theme.is_dark() {
+        style.text_color.opacity(0.94)
+    } else {
+        style.text_color.opacity(0.90)
+    };
     text_style.font_family = style.theme.mono_font_family.clone();
     text_style.font_size = style.code_font_size.into();
     text_style.line_height = style.code_line_height.into();
     text_style.background_color = None;
-    text_style.color = text_style.color.opacity(0.78);
+    text_style.color = text_style.color.mix_oklab(base_color, 0.54).opacity(0.98);
     text_style
 }
 
@@ -886,7 +906,9 @@ fn append_inline_flow_segments(
 ) {
     for inline in inlines {
         match inline {
-            MarkdownInline::Text(value) => append_text_flow_segments(value, &current_style, children),
+            MarkdownInline::Text(value) => {
+                append_text_flow_segments(value, &current_style, children)
+            }
             MarkdownInline::Code(value) => {
                 children.push(render_inline_code_chip(value, &current_style, style));
             }
@@ -945,7 +967,11 @@ fn tokenize_inline_text(value: &str) -> Vec<String> {
         } else if trailing_whitespace.is_empty() {
             tokens.push(part.to_string());
         } else {
-            tokens.push(format!("{}{}", trailing_whitespace.replace(' ', "\u{00A0}"), part));
+            tokens.push(format!(
+                "{}{}",
+                trailing_whitespace.replace(' ', "\u{00A0}"),
+                part
+            ));
             trailing_whitespace.clear();
         }
     }
@@ -997,17 +1023,17 @@ fn render_inline_code_chip(
     _text_style: &TextStyle,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
-    let font_size = style.code_font_size - px(0.25);
-    let line_height = style.code_line_height - px(1.0);
+    let font_size = style.code_font_size - px(0.5);
+    let line_height = style.code_line_height - px(3.0);
     div()
         .flex()
         .flex_none()
         .items_center()
         .mx(px(1.0))
-        .my(px(1.0))
+        .my(px(0.5))
         .px(px(6.0))
         .py(px(2.0))
-        .rounded(px(7.0))
+        .rounded(px(6.0))
         .bg(style.inline_code_background)
         .font_family(style.theme.mono_font_family.clone())
         .font_weight(FontWeight::MEDIUM)
