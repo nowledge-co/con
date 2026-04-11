@@ -268,3 +268,18 @@ Next focus:
 Notes:
 - Batch run 20260410T122538Z iteration 10.
 
+## 2026-04-11 03:20 UTC · local-coding-follow-up · unscored
+
+Benchmark inspection exposed two local-coding continuity bugs that were not visible in the earlier numeric score alone.
+
+Product changes:
+- Added `ensure_local_coding_workspace` so the agent can prepare or reuse the full local coding pair in one step instead of stitching `ensure_local_agent_target` and `ensure_local_shell_target` together ad hoc.
+- Prevented panes with recent local agent-cli continuity from being silently reused as generic local shell targets on follow-up turns.
+- Normalized `~` project paths before startup shell quoting so new local coding panes no longer fail with literal `cd '~/project'` commands.
+
+Lessons:
+- The local coding path needs its own first-class control concept. Treating CLI panes and shell panes as interchangeable creates avoidable ambiguity under pressure.
+- Startup command correctness matters as much as target selection. A wrongly quoted cwd can make a benchmark look like an agent-reasoning failure when the real issue is bootstrap plumbing.
+
+Next focus:
+- Rerun the local Codex operator benchmark on a freshly launched Con build and verify that the paired-workspace path becomes the default, not the lucky case.

@@ -1271,6 +1271,26 @@ fn normalize_lower(value: &Option<String>) -> Option<String> {
     value.as_ref().map(|v| v.to_ascii_lowercase())
 }
 
+fn expand_home_prefix(value: &str) -> String {
+    if value == "~" {
+        return dirs::home_dir()
+            .map(|home| home.to_string_lossy().into_owned())
+            .unwrap_or_else(|| value.to_string());
+    }
+    if let Some(suffix) = value.strip_prefix("~/") {
+        return dirs::home_dir()
+            .map(|home| home.join(suffix).to_string_lossy().into_owned())
+            .unwrap_or_else(|| value.to_string());
+    }
+    value.to_string()
+}
+
+fn normalize_cwd_lower(value: &Option<String>) -> Option<String> {
+    value
+        .as_ref()
+        .map(|v| expand_home_prefix(v).to_ascii_lowercase())
+}
+
 fn pane_matches_host(pane: &PaneInfo, host_contains: Option<&String>) -> bool {
     host_contains.is_none_or(|needle| {
         pane.hostname
@@ -1382,6 +1402,7 @@ fn pane_has_local_shell_continuity(pane: &PaneInfo, cwd_contains: Option<&String
         || pane_has_tmux_observation(pane)
         || pane_has_remote_shell_context(pane)
         || pane.remote_workspace.is_some()
+        || pane_has_any_local_agent_continuity(pane)
         || !pane_has_screen_hint(
             pane,
             crate::context::PaneObservationHintKind::PromptLikeInput,
@@ -1432,6 +1453,23 @@ fn pane_has_local_agent_continuity(
                     command.to_ascii_lowercase().contains(needle)
                 })
             }))
+}
+
+fn pane_has_any_local_agent_continuity(pane: &PaneInfo) -> bool {
+    if pane_is_disconnected_workspace(pane)
+        || pane_has_tmux_layer(pane)
+        || pane_has_tmux_observation(pane)
+        || pane_has_remote_shell_context(pane)
+        || pane.remote_workspace.is_some()
+    {
+        return false;
+    }
+
+    pane_recent_command_matches(pane, |command| {
+        command
+            .split_whitespace()
+            .any(|token| classify_agent_cli_command(token).is_some())
+    })
 }
 
 fn workspace_kind_for_pane(pane: &PaneInfo) -> crate::context::TabWorkspaceKind {
@@ -1773,7 +1811,7 @@ fn resolve_work_target_candidates(
     limit: usize,
 ) -> Result<ResolveWorkTargetResult, ToolError> {
     let host_contains = normalize_lower(&host_contains);
-    let cwd_contains = normalize_lower(&cwd_contains);
+    let cwd_contains = normalize_cwd_lower(&cwd_contains);
     let agent_name = normalize_lower(&agent_name);
     let mut candidates = Vec::new();
 
@@ -1826,6 +1864,21 @@ fn resolve_work_target_candidates(
                     } else {
                         "The visible target is a local agent CLI. Prepare a separate local shell target for file edits, tests, and other shell work instead of typing shell commands into the agent UI."
                             .to_string()
+                    };
+                    candidates.push((score, make_local_shell_preparation_candidate(&pane, reason)));
+                } else if pane_has_any_local_agent_continuity(&pane) {
+                    let mut score = 80;
+                    if pane.is_focused {
+                        score += 5;
+                    }
+                    let reason = if let Some(agent_name) =
+                        agent_name.as_deref().and_then(canonical_agent_cli_name)
+                    {
+                        format!(
+                            "This pane was recently launched for local {agent_name} work. Prepare or reuse a separate local shell target instead of routing shell commands back into the interactive agent pane."
+                        )
+                    } else {
+                        "This pane was recently launched for local agent-CLI work. Prepare or reuse a separate local shell target instead of routing shell commands back into the interactive agent pane.".to_string()
                     };
                     candidates.push((score, make_local_shell_preparation_candidate(&pane, reason)));
                 }
@@ -3005,7 +3058,7 @@ fn ensure_local_agent_target_impl(
             args.agent_name
         )));
     };
-    let cwd_lower = normalize_lower(&args.cwd);
+    let cwd_lower = normalize_cwd_lower(&args.cwd);
     let panes = pane_query_list(pane_tx)?;
     let (native_attachment_state, native_attachment_note) = agent_cli_native_attachment(agent_name);
 
@@ -3046,7 +3099,11 @@ fn ensure_local_agent_target_impl(
     }
 
     let command = if let Some(cwd) = args.cwd.as_ref() {
-        format!("cd {} && {}", shell_quote_fragment(cwd), launch_command)
+        format!(
+            "cd {} && {}",
+            shell_quote_fragment(&expand_home_prefix(cwd)),
+            launch_command
+        )
     } else {
         launch_command.clone()
     };
@@ -3156,6 +3213,168 @@ impl Tool for EnsureLocalAgentTargetTool {
             String::new()
         };
         Ok(EnsureLocalAgentTargetResult { output, ..result })
+    }
+}
+
+// ── ensure_local_coding_workspace tool ───────────────────────────
+
+#[derive(Serialize)]
+pub struct EnsureLocalCodingWorkspaceResult {
+    pub agent_name: String,
+    pub cwd: Option<String>,
+    pub agent_target: EnsureLocalAgentTargetResult,
+    pub shell_target: EnsureLocalShellTargetResult,
+    pub reason: String,
+}
+
+#[derive(Deserialize)]
+pub struct EnsureLocalCodingWorkspaceArgs {
+    pub agent_name: String,
+    pub cwd: Option<String>,
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
+    pub launch_command: Option<String>,
+    #[serde(default = "default_pane_create_location")]
+    pub location: PaneCreateLocation,
+}
+
+pub struct EnsureLocalCodingWorkspaceTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl EnsureLocalCodingWorkspaceTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+fn ensure_local_coding_workspace_impl(
+    pane_tx: &Sender<PaneRequest>,
+    args: EnsureLocalCodingWorkspaceArgs,
+) -> Result<EnsureLocalCodingWorkspaceResult, ToolError> {
+    let agent_target = ensure_local_agent_target_impl(
+        pane_tx,
+        EnsureLocalAgentTargetArgs {
+            agent_name: args.agent_name.clone(),
+            cwd: args.cwd.clone(),
+            pane_index: args.pane_index,
+            pane_id: args.pane_id,
+            launch_command: args.launch_command.clone(),
+            location: args.location,
+        },
+    )?;
+
+    let shell_target = ensure_local_shell_target_impl(
+        pane_tx,
+        EnsureLocalShellTargetArgs {
+            cwd: args.cwd.clone(),
+            pane_index: None,
+            pane_id: None,
+            location: args.location,
+        },
+    )?;
+
+    let shell_created = shell_target.created;
+    let agent_created = agent_target.created;
+    let cwd_note = args
+        .cwd
+        .as_ref()
+        .map(|cwd| format!(" at `{cwd}`"))
+        .unwrap_or_default();
+
+    Ok(EnsureLocalCodingWorkspaceResult {
+        agent_name: agent_target.agent_name.clone(),
+        cwd: args.cwd,
+        reason: match (agent_created, shell_created) {
+            (false, false) => format!(
+                "Reused both the local {} pane and its paired shell workspace{}.",
+                agent_target.agent_name, cwd_note
+            ),
+            (true, false) => format!(
+                "Created a new local {} pane and reused an existing paired shell workspace{}.",
+                agent_target.agent_name, cwd_note
+            ),
+            (false, true) => format!(
+                "Reused the local {} pane and created a fresh paired shell workspace{}.",
+                agent_target.agent_name, cwd_note
+            ),
+            (true, true) => format!(
+                "Created both a local {} pane and a paired shell workspace{}.",
+                agent_target.agent_name, cwd_note
+            ),
+        },
+        agent_target,
+        shell_target,
+    })
+}
+
+impl Tool for EnsureLocalCodingWorkspaceTool {
+    const NAME: &'static str = "ensure_local_coding_workspace";
+    type Error = ToolError;
+    type Args = EnsureLocalCodingWorkspaceArgs;
+    type Output = EnsureLocalCodingWorkspaceResult;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Prepare a LOCAL coding workspace as a deliberate pair: one pane for the interactive Codex / Claude Code / OpenCode UI, and a separate local shell pane for file edits, tests, git commands, and other shell work. Reuses existing matching panes when possible and creates only the missing side of the pair.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Agent CLI family to reuse or launch, such as codex, claude, or opencode."
+                    },
+                    "cwd": {
+                        "type": ["string", "null"],
+                        "description": "Optional project directory the local coding workspace should be prepared in."
+                    },
+                    "pane_index": {
+                        "type": ["integer", "null"],
+                        "description": "Optional con pane index to bias or constrain agent-target reuse. Positional only."
+                    },
+                    "pane_id": {
+                        "type": ["integer", "null"],
+                        "description": "Optional stable pane id to bias or constrain agent-target reuse."
+                    },
+                    "launch_command": {
+                        "type": ["string", "null"],
+                        "description": "Optional explicit launch command for the agent CLI. Defaults to the canonical CLI command."
+                    },
+                    "location": {
+                        "type": "string",
+                        "enum": ["right", "down"],
+                        "description": "Where to place newly created panes. Defaults to right."
+                    }
+                },
+                "required": ["agent_name"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let mut result = ensure_local_coding_workspace_impl(&self.pane_tx, args)?;
+        if result.agent_target.created {
+            result.agent_target.output = wait_for_pane_initial_output(
+                &self.pane_tx,
+                selector_from(
+                    Some(result.agent_target.pane_index),
+                    result.agent_target.pane_id,
+                ),
+            )
+            .await?;
+        }
+        if result.shell_target.created {
+            result.shell_target.output = wait_for_pane_initial_output(
+                &self.pane_tx,
+                selector_from(
+                    Some(result.shell_target.pane_index),
+                    result.shell_target.pane_id,
+                ),
+            )
+            .await?;
+        }
+        Ok(result)
     }
 }
 
@@ -4342,7 +4561,7 @@ fn ensure_local_shell_target_impl(
     args: EnsureLocalShellTargetArgs,
 ) -> Result<EnsureLocalShellTargetResult, ToolError> {
     let panes = pane_query_list(pane_tx)?;
-    let cwd_lower = normalize_lower(&args.cwd);
+    let cwd_lower = normalize_cwd_lower(&args.cwd);
 
     let exact_match = panes
         .iter()
@@ -4401,7 +4620,7 @@ fn ensure_local_shell_target_impl(
     let command = args
         .cwd
         .as_ref()
-        .map(|cwd| format!("cd {}", shell_quote_fragment(cwd)));
+        .map(|cwd| format!("cd {}", shell_quote_fragment(&expand_home_prefix(cwd))));
     let (response_tx, response_rx) = crossbeam_channel::bounded(1);
     pane_tx
         .send(PaneRequest {
@@ -5157,8 +5376,9 @@ mod tests {
     use super::{
         AgentCliNativeAttachmentState, ResolveWorkTargetResult, TmuxTargetKindFilter,
         WorkTargetControlPath, WorkTargetIntent, agent_cli_native_attachment,
-        canonical_agent_cli_name, decode_key_escapes, is_tmux_agent_cli_command,
-        is_tmux_shell_command, resolve_work_target_candidates, split_at_standalone_esc,
+        canonical_agent_cli_name, decode_key_escapes, expand_home_prefix,
+        is_tmux_agent_cli_command, is_tmux_shell_command, resolve_work_target_candidates,
+        split_at_standalone_esc,
     };
     use crate::context::{
         PaneConfidence, PaneEvidenceSource, PaneFrontState, PaneObservationSupport,
@@ -5601,6 +5821,61 @@ mod tests {
         assert_eq!(best.control_path, WorkTargetControlPath::LocalShellTarget);
         assert_eq!(best.suggested_tool, "ensure_local_shell_target");
         assert!(best.requires_preparation);
+    }
+
+    #[test]
+    fn resolve_work_target_visible_shell_does_not_reuse_recent_local_agent_pane() {
+        let (pane_tx, _pane_rx) = unbounded();
+        let mut pane = test_pane(4, "con-bench");
+        pane.control_capabilities = vec![PaneControlCapability::ExecVisibleShell];
+        pane.visible_target.kind = PaneVisibleTargetKind::ShellPrompt;
+        pane.front_state = PaneFrontState::ShellPrompt;
+        pane.mode = super::PaneMode::Shell;
+        pane.shell_metadata_fresh = true;
+        pane.screen_hints.push(crate::context::PaneObservationHint {
+            kind: crate::context::PaneObservationHintKind::PromptLikeInput,
+            confidence: crate::context::PaneConfidence::Advisory,
+            detail: "Prompt-like line is visible.".to_string(),
+        });
+        pane.recent_actions.push(crate::context::PaneActionRecord {
+            sequence: 1,
+            kind: crate::context::PaneActionKind::VisibleShellExec,
+            summary: "con executed `cd ~/dev/temp/con-bench && codex` in the visible shell"
+                .to_string(),
+            command: Some("cd ~/dev/temp/con-bench && codex".to_string()),
+            source: crate::context::PaneEvidenceSource::ActionHistory,
+            confidence: crate::context::PaneConfidence::Advisory,
+            input_generation: Some(5),
+            note: None,
+        });
+
+        let result = resolve_work_target_candidates(
+            &pane_tx,
+            vec![pane],
+            WorkTargetIntent::VisibleShell,
+            None,
+            None,
+            None,
+            Some("~/dev/temp/con-bench".to_string()),
+            Some("codex".to_string()),
+            8,
+        )
+        .expect("resolve");
+
+        let best = result.best_match.expect("best");
+        assert_eq!(best.control_path, WorkTargetControlPath::LocalShellTarget);
+        assert_eq!(best.suggested_tool, "ensure_local_shell_target");
+        assert!(best.requires_preparation);
+    }
+
+    #[test]
+    fn expand_home_prefix_rewrites_tilde_paths() {
+        let home = dirs::home_dir().expect("home");
+        assert_eq!(
+            expand_home_prefix("~/dev/temp"),
+            home.join("dev/temp").to_string_lossy()
+        );
+        assert_eq!(expand_home_prefix("~"), home.to_string_lossy());
     }
 
     // ── split_at_standalone_esc tests ────────────────────────────────

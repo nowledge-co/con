@@ -72,6 +72,7 @@ pub fn is_dangerous(tool_name: &str) -> bool {
             | "send_keys"
             | "ensure_remote_shell_target"
             | "remote_exec"
+            | "ensure_local_coding_workspace"
             | "tmux_run_command"
             | "tmux_ensure_shell_target"
             | "tmux_ensure_agent_target"

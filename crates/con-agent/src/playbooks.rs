@@ -122,9 +122,10 @@ pub const LOCAL_AGENT_CLI_WORK: &str = "\
 ## Working with a local agent CLI
 
 When Codex CLI, Claude Code, or OpenCode is running locally in a visible pane:
-- Use ensure_local_agent_target(agent_name=\"codex\" | \"claude\" | \"opencode\", cwd=\"...\") when you need to reuse or launch the local coding CLI itself.
+- Prefer ensure_local_coding_workspace(agent_name=\"codex\" | \"claude\" | \"opencode\", cwd=\"...\") when you need both the local coding CLI and its paired shell workspace.
+- Use ensure_local_agent_target(agent_name=\"codex\" | \"claude\" | \"opencode\", cwd=\"...\") when you only need to reuse or launch the local coding CLI itself.
 - Keep the interactive agent target and shell work separate.
-- Use ensure_local_shell_target(cwd=\"...\") to reuse or create a paired local shell pane for file edits, test runs, git status, and other shell commands.
+- Use ensure_local_shell_target(cwd=\"...\") when you only need the paired local shell pane for file edits, test runs, git status, and other shell commands.
 - Do NOT type shell setup or test commands into the agent CLI unless the CLI itself is prompting for them.
 - Reuse the same local shell target across follow-up turns instead of creating a new pane each time.
 ";
