@@ -197,9 +197,13 @@ impl ConWorkspace {
         Self::remap_opacity(clamped, 0.25, 0.72, 1.55)
     }
 
-    fn ui_surface_opacity(&self) -> f32 {
-        let clamped = Self::clamp_ui_opacity(self.ui_opacity);
+    fn effective_ui_opacity(value: f32) -> f32 {
+        let clamped = Self::clamp_ui_opacity(value);
         Self::remap_opacity(clamped, 0.35, 0.84, 1.9)
+    }
+
+    fn ui_surface_opacity(&self) -> f32 {
+        Self::effective_ui_opacity(self.ui_opacity)
     }
 
     fn has_active_tab(&self) -> bool {
@@ -217,6 +221,7 @@ impl ConWorkspace {
         let font_size = config.terminal.font_size;
         let terminal_opacity = Self::effective_terminal_opacity(config.appearance.terminal_opacity);
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
+        let effective_ui_opacity = Self::effective_ui_opacity(ui_opacity);
         let background_image = config.appearance.background_image.clone();
         let background_image_opacity =
             Self::clamp_background_image_opacity(config.appearance.background_image_opacity);
@@ -347,9 +352,9 @@ impl ConWorkspace {
         let settings_panel =
             cx.new(|cx| SettingsPanel::new(&config, registry, oauth_runtime, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
-        agent_panel.update(cx, |panel, _cx| panel.set_ui_opacity(ui_opacity));
-        input_bar.update(cx, |bar, _cx| bar.set_ui_opacity(ui_opacity));
-        command_palette.update(cx, |palette, _cx| palette.set_ui_opacity(ui_opacity));
+        agent_panel.update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
+        input_bar.update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
+        command_palette.update(cx, |palette, _cx| palette.set_ui_opacity(effective_ui_opacity));
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
@@ -2004,6 +2009,7 @@ impl ConWorkspace {
         self.font_size = term_config.font_size;
         self.terminal_opacity = Self::effective_terminal_opacity(appearance_config.terminal_opacity);
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
+        let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
         self.background_image = appearance_config.background_image.clone();
         self.background_image_opacity =
             Self::clamp_background_image_opacity(appearance_config.background_image_opacity);
@@ -2011,11 +2017,11 @@ impl ConWorkspace {
         self.background_image_fit = appearance_config.background_image_fit.clone();
         self.background_image_repeat = appearance_config.background_image_repeat;
         self.agent_panel
-            .update(cx, |panel, _cx| panel.set_ui_opacity(self.ui_opacity));
+            .update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
         self.input_bar
-            .update(cx, |bar, _cx| bar.set_ui_opacity(self.ui_opacity));
+            .update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
         self.command_palette
-            .update(cx, |palette, _cx| palette.set_ui_opacity(self.ui_opacity));
+            .update(cx, |palette, _cx| palette.set_ui_opacity(effective_ui_opacity));
 
         if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
             self.apply_terminal_theme(new_theme, window, cx);
