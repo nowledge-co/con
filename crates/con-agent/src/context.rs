@@ -2548,6 +2548,7 @@ impl TerminalContext {
              - Do NOT send the same local coding task to both the shell lane and the interactive agent CLI lane in the same turn.\n\
              - INTERACTIVE AGENT-CLI FOLLOW-UP (Codex / Claude Code / OpenCode already running in a known pane or tmux target) → agent_cli_turn. Prefer this over raw send_keys or tmux_send_keys so con can wait for the interactive target to settle and return a fresh snapshot before you continue.\n\
              - TMUX SHELL PREPARATION on a pane with tmux native control → tmux_ensure_shell_target to reuse or create a safe shell pane before remote file work or shell execution inside tmux.\n\
+             - TMUX SHELL FOLLOW-UP in an existing tmux shell target → tmux_shell_turn. Prefer this over manually composing tmux_send_keys + tmux_capture_pane when you need deterministic shell work, file edits, test runs, or install checks inside tmux.\n\
              - TMUX AGENT TARGET PREPARATION on a pane with tmux native control → tmux_ensure_agent_target to reuse or create a Codex CLI, Claude Code, or OpenCode tmux pane before interacting with that agent.\n\
              - TMUX NATIVE COMMAND LAUNCH on a pane with tmux native control → tmux_run_command to create a new tmux window or split for a shell, Codex CLI, Claude Code, OpenCode, or a long-running command.\n\
              - TMUX NATIVE INTERACTION on a pane with tmux native control → tmux_send_keys to a specific tmux pane target.\n\
@@ -2603,6 +2604,7 @@ impl TerminalContext {
              - remote_exec: Reuse or create remote SSH workspaces for one or more hosts, then run the same command on them in parallel. Its per-host results include stable `pane_id` values for follow-up work.\n\
              - tmux_capture_pane: Capture the content of a specific tmux pane target without confusing it with the outer con pane.\n\
              - tmux_ensure_shell_target: Reuse or create a tmux shell target through a proven same-session tmux shell anchor.\n\
+             - tmux_shell_turn: Run one deterministic shell command inside an existing tmux shell target, wait for that shell target to settle, and return a fresh capture. Use this for tmux shell-lane work instead of manually pairing tmux_send_keys with tmux_capture_pane.\n\
              - tmux_ensure_agent_target: Reuse or create a tmux target for Codex CLI, Claude Code, or OpenCode. This stays in tmux control; it does not imply a native Codex/OpenCode attachment unless con explicitly proves one.\n\
              - tmux_run_command: Create a new tmux window or split pane and run a command there through a proven same-session tmux shell anchor.\n\
              - tmux_send_keys: Send text or tmux key names to a specific tmux pane target through a proven same-session tmux shell anchor.\n\

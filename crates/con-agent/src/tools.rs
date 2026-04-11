@@ -1362,6 +1362,58 @@ fn sort_tmux_matches(matches: &mut [crate::tmux::TmuxPaneInfo]) {
     });
 }
 
+fn tmux_creation_target(
+    snapshot: &TmuxSnapshot,
+    session_name: &str,
+    location: TmuxExecLocation,
+) -> Option<String> {
+    match location {
+        TmuxExecLocation::NewWindow => Some(session_name.to_string()),
+        TmuxExecLocation::SplitHorizontal | TmuxExecLocation::SplitVertical => snapshot
+            .panes
+            .iter()
+            .filter(|pane| pane.session_name == session_name)
+            .max_by(|a, b| {
+                a.pane_active
+                    .cmp(&b.pane_active)
+                    .then_with(|| a.window_active.cmp(&b.window_active))
+                    .then_with(|| b.window_index.cmp(&a.window_index))
+                    .then_with(|| b.pane_index.cmp(&a.pane_index))
+            })
+            .map(|pane| pane.target.clone())
+            .or_else(|| Some(session_name.to_string())),
+    }
+}
+
+fn preferred_tmux_shell_session(
+    panes: &[PaneInfo],
+    pane: PaneSelector,
+    explicit_session_name: Option<&str>,
+) -> Option<String> {
+    let explicit = explicit_session_name
+        .map(str::trim)
+        .filter(|session| !session.is_empty())
+        .map(ToString::to_string);
+
+    if explicit.is_some() {
+        return explicit;
+    }
+
+    panes
+        .iter()
+        .find(|candidate| {
+            pane.pane_index.is_none_or(|index| candidate.index == index)
+                && pane.pane_id.is_none_or(|id| candidate.pane_id == id)
+        })
+        .and_then(|candidate| {
+            candidate
+                .tmux_control
+                .as_ref()
+                .and_then(|tmux| tmux.session_name.clone())
+                .or_else(|| candidate.tmux_session.clone())
+        })
+}
+
 fn normalize_lower(value: &Option<String>) -> Option<String> {
     value.as_ref().map(|v| v.to_ascii_lowercase())
 }
@@ -3009,6 +3061,7 @@ impl Tool for TmuxFindTargetsTool {
 pub struct TmuxEnsureShellTargetArgs {
     pub pane_index: Option<usize>,
     pub pane_id: Option<usize>,
+    pub session_name: Option<String>,
     pub cwd: Option<String>,
     pub window_name: Option<String>,
     pub shell_command: Option<String>,
@@ -3053,6 +3106,10 @@ impl Tool for TmuxEnsureShellTargetTool {
                         "type": "integer",
                         "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
                     },
+                    "session_name": {
+                        "type": ["string", "null"],
+                        "description": "Optional tmux session to constrain shell-target reuse. Defaults to the pane's active tmux workspace session when con already knows it."
+                    },
                     "cwd": {
                         "type": ["string", "null"],
                         "description": "Optional path hint. Existing tmux shell panes whose pane_current_path contains this value are preferred, and new shell targets inherit it when created."
@@ -3082,13 +3139,23 @@ impl Tool for TmuxEnsureShellTargetTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let pane = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
+        let panes = pane_query_list(&self.pane_tx)?;
+        let requested_session =
+            preferred_tmux_shell_session(&panes, pane, args.session_name.as_deref());
         let snapshot = pane_query_tmux_list(&self.pane_tx, pane)?;
         let cwd_contains = args.cwd.as_ref().map(|v| v.to_ascii_lowercase());
 
+        let creation_target = requested_session
+            .as_ref()
+            .and_then(|session| tmux_creation_target(&snapshot, session, args.location));
         let mut shell_matches = snapshot
             .panes
-            .into_iter()
+            .iter()
             .filter(|pane| {
+                requested_session
+                    .as_ref()
+                    .is_none_or(|session| pane.session_name == *session)
+                    &&
                 pane.pane_current_command
                     .as_deref()
                     .is_some_and(is_tmux_shell_command)
@@ -3100,6 +3167,7 @@ impl Tool for TmuxEnsureShellTargetTool {
                             .contains(needle)
                     })
             })
+            .cloned()
             .collect::<Vec<_>>();
         sort_tmux_matches(&mut shell_matches);
 
@@ -3119,7 +3187,7 @@ impl Tool for TmuxEnsureShellTargetTool {
         let creation = pane_query_tmux_run_command(
             &self.pane_tx,
             pane,
-            None,
+            creation_target,
             args.location,
             shell_command,
             args.window_name,
@@ -3723,6 +3791,154 @@ impl Tool for AgentCliTurnTool {
                 best.suggested_tool
             ))),
         }
+    }
+}
+
+// ── tmux_shell_turn tool ──────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TmuxShellTurnArgs {
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
+    pub target: String,
+    pub command: String,
+    #[serde(default = "default_agent_cli_turn_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_pane_lines")]
+    pub lines: usize,
+}
+
+#[derive(Serialize)]
+pub struct TmuxShellTurnResult {
+    pub pane_index: usize,
+    pub pane_id: usize,
+    pub target: crate::tmux::TmuxPaneInfo,
+    pub wait_status: String,
+    pub output: String,
+    pub note: String,
+}
+
+pub struct TmuxShellTurnTool {
+    pane_tx: Sender<PaneRequest>,
+}
+
+impl TmuxShellTurnTool {
+    pub fn new(pane_tx: Sender<PaneRequest>) -> Self {
+        Self { pane_tx }
+    }
+}
+
+impl Tool for TmuxShellTurnTool {
+    const NAME: &'static str = "tmux_shell_turn";
+    type Error = ToolError;
+    type Args = TmuxShellTurnArgs;
+    type Output = TmuxShellTurnResult;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Run one deterministic shell command inside an existing tmux shell target, wait for that target to settle, and return a fresh capture. Use this for file work, test runs, install checks, and other shell-lane work inside tmux instead of manually composing tmux_send_keys plus tmux_capture_pane.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pane_index": {
+                        "type": ["integer", "null"],
+                        "description": "Optional con pane index that owns the tmux control anchor. Positional only."
+                    },
+                    "pane_id": {
+                        "type": ["integer", "null"],
+                        "description": "Optional stable con pane id that owns the tmux control anchor."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "tmux shell target such as %17 or session:window.pane."
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command to run inside the existing tmux shell target."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": "How long to wait for the tmux shell target to settle after the command. Defaults to 90 seconds."
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "description": "How many recent lines to capture after the command settles. Defaults to 50."
+                    }
+                },
+                "required": ["target", "command"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let pane = require_pane_target(args.pane_index, args.pane_id, Self::NAME)?;
+        let snapshot = pane_query_tmux_list(&self.pane_tx, pane)?;
+        let target = snapshot
+            .panes
+            .into_iter()
+            .find(|candidate| candidate.target == args.target || candidate.pane_id == args.target)
+            .ok_or_else(|| {
+                ToolError::CommandFailed(format!(
+                    "tmux target `{}` was not found in the current tmux workspace.",
+                    args.target
+                ))
+            })?;
+
+        if !target
+            .pane_current_command
+            .as_deref()
+            .is_some_and(is_tmux_shell_command)
+        {
+            return Err(ToolError::CommandFailed(format!(
+                "tmux target `{}` is not a known shell target (current command: {}). Use tmux_ensure_shell_target for shell work or tmux_ensure_agent_target / agent_cli_turn for interactive agent CLIs.",
+                target.target,
+                target
+                    .pane_current_command
+                    .as_deref()
+                    .unwrap_or("unknown")
+            )));
+        }
+
+        pane_query_tmux_send_keys(
+            &self.pane_tx,
+            pane,
+            target.target.clone(),
+            Some(args.command),
+            Vec::new(),
+            true,
+        )?;
+        let timeout_secs = args.timeout_secs.clamp(5, 180);
+        let lines = args.lines.clamp(10, 200);
+        let (wait_status, output) = wait_for_tmux_capture_settle(
+            &self.pane_tx,
+            pane,
+            target.target.clone(),
+            lines,
+            timeout_secs,
+        )
+        .await?;
+        let resolved_pane = pane_query_list(&self.pane_tx)?
+            .into_iter()
+            .find(|candidate| {
+                pane.pane_id.is_some_and(|id| candidate.pane_id == id)
+                    || pane.pane_index.is_some_and(|index| candidate.index == index)
+            })
+            .ok_or_else(|| {
+                ToolError::CommandFailed(
+                    "tmux shell turn completed, but con could not resolve the owning pane afterward."
+                        .to_string(),
+                )
+            })?;
+
+        Ok(TmuxShellTurnResult {
+            pane_index: resolved_pane.index,
+            pane_id: resolved_pane.pane_id,
+            target,
+            wait_status,
+            output,
+            note: "Sent the command into the existing tmux shell target, waited for captured output to settle, and returned a fresh tmux capture.".to_string(),
+        })
     }
 }
 
@@ -5711,6 +5927,8 @@ impl Tool for EnsureRemoteTmuxShellTargetTool {
             .panes
             .iter()
             .filter(|tmux_pane| {
+                tmux_pane.session_name == workspace.session_name
+                    &&
                 tmux_pane
                     .pane_current_command
                     .as_deref()
@@ -5732,13 +5950,15 @@ impl Tool for EnsureRemoteTmuxShellTargetTool {
             if let Some(shell_target) = shell_matches.into_iter().next() {
                 (false, shell_target, None, snapshot)
             } else {
+                let creation_target =
+                    tmux_creation_target(&snapshot, &workspace.session_name, args.tmux_location);
                 let shell_command = args
                     .shell_command
                     .unwrap_or_else(|| "exec \"${SHELL:-/bin/sh}\" -il".to_string());
                 let creation = pane_query_tmux_run_command(
                     &self.pane_tx,
                     pane,
-                    None,
+                    creation_target,
                     args.tmux_location,
                     shell_command,
                     args.window_name.clone(),
@@ -6293,7 +6513,10 @@ mod tests {
         PaneAddressSpace, PaneControlCapability, PaneVisibleTarget, PaneVisibleTargetKind,
         TmuxControlMode, TmuxControlState,
     };
-    use crate::tools::shell_quote_fragment;
+    use crate::tmux::{TmuxExecLocation, TmuxPaneInfo, TmuxSnapshot};
+    use crate::tools::{
+        PaneSelector, preferred_tmux_shell_session, shell_quote_fragment, tmux_creation_target,
+    };
     use crossbeam_channel::unbounded;
 
     #[test]
@@ -6826,6 +7049,75 @@ mod tests {
         assert_eq!(
             build_local_cwd_command_prefix("~/dev/temp", false),
             format!("cd {quoted}")
+        );
+    }
+
+    #[test]
+    fn tmux_creation_target_prefers_requested_session() {
+        let snapshot = TmuxSnapshot {
+            panes: vec![
+                TmuxPaneInfo {
+                    session_name: "benchmark".to_string(),
+                    window_id: "@16".to_string(),
+                    window_index: "4".to_string(),
+                    window_name: "zsh".to_string(),
+                    window_target: "benchmark:4".to_string(),
+                    pane_id: "%24".to_string(),
+                    pane_index: "1".to_string(),
+                    target: "benchmark:4.1".to_string(),
+                    pane_active: true,
+                    window_active: true,
+                    pane_current_command: Some("zsh".to_string()),
+                    pane_current_path: Some("/home/w".to_string()),
+                },
+                TmuxPaneInfo {
+                    session_name: "con-bench".to_string(),
+                    window_id: "@48".to_string(),
+                    window_index: "1".to_string(),
+                    window_name: "zsh".to_string(),
+                    window_target: "con-bench:1".to_string(),
+                    pane_id: "%59".to_string(),
+                    pane_index: "1".to_string(),
+                    target: "con-bench:1.1".to_string(),
+                    pane_active: true,
+                    window_active: true,
+                    pane_current_command: Some("zsh".to_string()),
+                    pane_current_path: Some("/home/w".to_string()),
+                },
+            ],
+        };
+
+        assert_eq!(
+            tmux_creation_target(&snapshot, "con-bench", TmuxExecLocation::NewWindow),
+            Some("con-bench".to_string())
+        );
+        assert_eq!(
+            tmux_creation_target(&snapshot, "con-bench", TmuxExecLocation::SplitHorizontal),
+            Some("con-bench:1.1".to_string())
+        );
+    }
+
+    #[test]
+    fn preferred_tmux_shell_session_defaults_to_pane_workspace_session() {
+        let mut pane = test_pane(2, "tmux shell");
+        pane.tmux_control = Some(TmuxControlState {
+            session_name: Some("con-bench".to_string()),
+            mode: TmuxControlMode::Native,
+            front_target: None,
+            reason: "native".to_string(),
+        });
+
+        assert_eq!(
+            preferred_tmux_shell_session(&[pane], PaneSelector::new(Some(2), Some(2)), None),
+            Some("con-bench".to_string())
+        );
+        assert_eq!(
+            preferred_tmux_shell_session(
+                &[test_pane(2, "tmux shell")],
+                PaneSelector::new(Some(2), Some(2)),
+                Some("benchmark"),
+            ),
+            Some("benchmark".to_string())
         );
     }
 

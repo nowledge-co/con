@@ -41,6 +41,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - tmux native control can now also come from fresh shell continuity plus recent con-caused tmux setup. If con just created or targeted a tmux session from a still-fresh shell prompt, that shell can immediately become a tmux control anchor instead of falling back to raw tmux keystrokes first.
 - con can now launch work inside tmux natively through the same typed control anchor. The agent can create a new tmux window or split pane and run a command there, which is the right path for fresh shells, Codex CLI, Claude Code, OpenCode, and long-running jobs inside tmux.
 - tmux-native workflows now have higher-level helpers too. The agent can find likely tmux shell or agent-cli targets without hand-filtering every pane, and it can reuse or create a clean tmux shell target before remote file edits or command work.
+- tmux shell work now has a typed follow-up tool too. Once a clean tmux shell target exists, the agent can run one deterministic shell command there, wait for that shell target to settle, and return a fresh capture instead of manually composing tmux key delivery and capture steps.
 - tmux-native agent CLI workflows now have a typed helper too. The agent can reuse or create a Codex CLI, Claude Code, or OpenCode tmux target directly instead of manually reconstructing that flow from `tmux_list_targets` and `tmux_run_command`.
 - Remote `ssh -> tmux -> shell-work` bootstrap now has a typed one-step helper too. con can reuse or create the SSH pane, ensure the tmux session, and then reuse or create the clean tmux shell target for file work without forcing the agent to reconstruct that path by hand.
 - tmux-native control can now survive one more honest boundary: if con recently prepared tmux from a pane and the current visible screen still looks like a prompt inside that tmux workspace, con can retain the same-session tmux shell anchor long enough to keep tmux-native tools available without pretending the foreground app is fully proven.
@@ -133,6 +134,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed agent hanging after receiving a final response from certain providers
 - Fixed empty agent responses appearing as stuck/hanging when providers don't emit text items during streaming
 - Fixed a Unicode logging crash where long tool-result previews could be truncated at an invalid UTF-8 byte boundary
+- Fixed tmux native control helper quoting so tmux list/capture/exec commands no longer leak into the target shell as broken `quote>` input when a quoted tmux target is present
 
 **Terminal**
 - Full terminal emulation with 256-color and truecolor support

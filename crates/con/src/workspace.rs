@@ -880,50 +880,80 @@ impl ConWorkspace {
         pane.write(format!("{command}\n").as_bytes(), cx);
 
         cx.spawn(async move |this, cx| {
-            let deadline =
-                std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(250))
                     .await;
 
+                let lines = this
+                    .update(cx, |_, cx| pane.recent_lines(400, cx))
+                    .unwrap_or_default();
+
+                match parse_response(lines.clone()) {
+                    Ok(response) => {
+                        let _ = this.update(cx, |_, cx| {
+                            pane.recover_shell_prompt_state(cx);
+                        });
+                        let _ = response_tx.send(response);
+                        return;
+                    }
+                    Err(_) => {}
+                }
+
                 if std::time::Instant::now() >= deadline {
+                    let excerpt = this
+                        .update(cx, |_, cx| pane.recent_lines(120, cx).join("\n"))
+                        .unwrap_or_default();
                     let _ = response_tx.send(con_agent::PaneResponse::Error(format!(
-                        "Shell-anchor command timed out in pane {} after {}s.",
-                        pane_index, timeout_secs
+                        "Shell-anchor command timed out in pane {} after {}s.\nRecent output:\n{}",
+                        pane_index, timeout_secs, excerpt
                     )));
                     return;
                 }
 
                 let finished = this
-                    .update(cx, |_, cx| pane.take_command_finished(cx).is_some() || !pane.is_busy(cx))
+                    .update(cx, |_, cx| {
+                        pane.take_command_finished(cx).is_some() || !pane.is_busy(cx)
+                    })
                     .unwrap_or(false);
                 if !finished {
                     continue;
                 }
 
-                let lines = this
-                    .update(cx, |_, cx| pane.recent_lines(400, cx))
+                let excerpt = this
+                    .update(cx, |_, cx| pane.recent_lines(120, cx).join("\n"))
                     .unwrap_or_default();
-                match parse_response(lines) {
-                    Ok(response) => {
-                        let _ = response_tx.send(response);
-                    }
-                    Err(err) => {
-                        let excerpt = this
-                            .update(cx, |_, cx| pane.recent_lines(120, cx).join("\n"))
-                            .unwrap_or_default();
-                        let _ = response_tx.send(con_agent::PaneResponse::Error(format!(
-                            "Shell-anchor command in pane {} could not be parsed: {}\nRecent output:\n{}",
-                            pane_index, err, excerpt
-                        )));
-                    }
-                }
+                let parse_err = parse_response(lines).err().unwrap_or_else(|| {
+                    "shell-anchor markers were not observed in pane output".to_string()
+                });
+                let _ = response_tx.send(con_agent::PaneResponse::Error(format!(
+                    "Shell-anchor command in pane {} could not be parsed: {}\nRecent output:\n{}",
+                    pane_index, parse_err, excerpt
+                )));
                 return;
             }
         })
         .detach();
+    }
+
+    fn pane_blocks_shell_anchor_control(pane: &TerminalPane, cx: &App) -> bool {
+        if !pane.is_busy(cx) {
+            return false;
+        }
+
+        let observation = pane.observation_frame(40, cx);
+        let prompt_like = observation.screen_hints.iter().any(|hint| {
+            hint.kind == con_agent::context::PaneObservationHintKind::PromptLikeInput
+        });
+
+        if prompt_like {
+            pane.recover_shell_prompt_state(cx);
+            return false;
+        }
+
+        true
     }
 
     fn effective_remote_host_for_tab(
@@ -2666,7 +2696,7 @@ impl ConWorkspace {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ))
-                    } else if resolved.pane.is_busy(cx) {
+                    } else if Self::pane_blocks_shell_anchor_control(&resolved.pane, cx) {
                         PaneResponse::Error(format!(
                             "Pane {} (id {}) is busy. Wait for the current command to finish before running tmux-native queries from its shell anchor.",
                             resolved.pane_index, resolved.pane_id
@@ -2725,7 +2755,7 @@ impl ConWorkspace {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ))
-                    } else if resolved.pane.is_busy(cx) {
+                    } else if Self::pane_blocks_shell_anchor_control(&resolved.pane, cx) {
                         PaneResponse::Error(format!(
                             "Pane {} (id {}) is busy. Wait for the current command to finish before running tmux capture from its shell anchor.",
                             resolved.pane_index, resolved.pane_id
@@ -2794,7 +2824,7 @@ impl ConWorkspace {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ))
-                    } else if resolved.pane.is_busy(cx) {
+                    } else if Self::pane_blocks_shell_anchor_control(&resolved.pane, cx) {
                         PaneResponse::Error(format!(
                             "Pane {} (id {}) is busy. Wait for the current command to finish before sending tmux-native keys from its shell anchor.",
                             resolved.pane_index, resolved.pane_id
@@ -2860,7 +2890,7 @@ impl ConWorkspace {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ))
-                    } else if resolved.pane.is_busy(cx) {
+                    } else if Self::pane_blocks_shell_anchor_control(&resolved.pane, cx) {
                         PaneResponse::Error(format!(
                             "Pane {} (id {}) is busy. Wait for the current command to finish before launching tmux-native commands from its shell anchor.",
                             resolved.pane_index, resolved.pane_id
@@ -2930,7 +2960,7 @@ impl ConWorkspace {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ))
-                    } else if pane.is_busy(cx) {
+                    } else if Self::pane_blocks_shell_anchor_control(&pane, cx) {
                         PaneResponse::Error(format!(
                             "Pane {} (id {}) is busy. Wait for the current command to finish before running a shell probe.",
                             pane_index, pane_id

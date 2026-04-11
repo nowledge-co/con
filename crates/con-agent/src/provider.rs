@@ -26,7 +26,8 @@ use crate::tools::{
     ProbeShellContextTool, ReadPaneTool, RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool,
     SearchTool, SendKeysTool, ShellExecTool, TerminalExecRequest, TerminalExecTool,
     TmuxCaptureTool, TmuxEnsureAgentTargetTool, TmuxEnsureShellTargetTool, TmuxFindTargetsTool,
-    TmuxInspectTool, TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
+    TmuxInspectTool, TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool, TmuxShellTurnTool,
+    WaitForTool,
 };
 
 // ── Provider enum ───────────────────────────────────────────────────
@@ -640,9 +641,10 @@ macro_rules! build_and_stream {
                 $pane_tx.clone(),
                 $terminal_exec_tx.clone(),
             ))
+            .tool(TmuxEnsureShellTargetTool::new($pane_tx.clone()))
+            .tool(TmuxShellTurnTool::new($pane_tx.clone()))
             .tool(TmuxSendKeysTool::new($pane_tx.clone()))
             .tool(TmuxRunCommandTool::new($pane_tx.clone()))
-            .tool(TmuxEnsureShellTargetTool::new($pane_tx.clone()))
             .tool(TmuxEnsureAgentTargetTool::new($pane_tx.clone()))
             .tool(ProbeShellContextTool::new($pane_tx.clone()))
             .tool(ReadPaneTool::new($pane_tx.clone()))
@@ -837,9 +839,10 @@ impl AgentProvider {
                         pane_tx.clone(),
                         terminal_exec_tx.clone(),
                     ))
+                    .tool(TmuxEnsureShellTargetTool::new(pane_tx.clone()))
+                    .tool(TmuxShellTurnTool::new(pane_tx.clone()))
                     .tool(TmuxSendKeysTool::new(pane_tx.clone()))
                     .tool(TmuxRunCommandTool::new(pane_tx.clone()))
-                    .tool(TmuxEnsureShellTargetTool::new(pane_tx.clone()))
                     .tool(TmuxEnsureAgentTargetTool::new(pane_tx.clone()))
                     .tool(ProbeShellContextTool::new(pane_tx.clone()))
                     .tool(ReadPaneTool::new(pane_tx.clone()))

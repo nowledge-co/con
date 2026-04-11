@@ -36,5 +36,5 @@ pub use tools::{
     ReadPaneTool, RemoteExecTool, ResolveWorkTargetTool, SearchPanesTool, SearchTool, SendKeysTool,
     ShellExecTool, TerminalExecRequest, TerminalExecResponse, TerminalExecTool, TmuxCaptureTool,
     TmuxEnsureShellTargetTool, TmuxFindTargetsTool, TmuxInspectTool, TmuxListTool,
-    TmuxRunCommandTool, TmuxSendKeysTool, WaitForTool,
+    TmuxRunCommandTool, TmuxSendKeysTool, TmuxShellTurnTool, WaitForTool,
 };

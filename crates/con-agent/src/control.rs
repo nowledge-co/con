@@ -313,11 +313,17 @@ impl PaneControlState {
                         .to_string(),
                 );
             }
-        } else if has_native_tmux_anchor && runtime.screen_tmux_like && runtime.screen_prompt_like {
+        } else if has_native_tmux_anchor && runtime.screen_prompt_like {
             let session = tmux_session_hint(runtime).unwrap_or_else(|| "tmux".to_string());
-            notes.push(format!(
-                "The current screen still looks like a prompt inside tmux session `{session}`, and recent con-caused tmux setup keeps a durable same-session tmux shell anchor alive."
-            ));
+            if runtime.screen_tmux_like {
+                notes.push(format!(
+                    "The current screen still looks like a prompt inside tmux session `{session}`, and recent con-caused tmux setup keeps a durable same-session tmux shell anchor alive."
+                ));
+            } else {
+                notes.push(format!(
+                    "The current screen still looks like a prompt on the shell that prepared tmux session `{session}`, and recent con-caused tmux setup keeps a durable same-session tmux control anchor alive."
+                ));
+            }
             notes.push(
                 "Prefer tmux-native query/capture/run/send tools over raw tmux shell commands or outer-pane keystrokes while that prompt-like tmux shell remains visible."
                     .to_string(),
@@ -479,6 +485,9 @@ fn attachments_from_runtime(
                     .to_string(),
             ),
         });
+    }
+
+    if runtime_has_native_tmux_anchor(runtime) {
         if let Some(session_name) = tmux_session_hint(runtime) {
             let (authority, note) = if runtime.shell_context_fresh
                 && runtime
@@ -492,30 +501,32 @@ fn attachments_from_runtime(
                     "A fresh shell probe confirmed a same-session tmux shell anchor. con can query tmux state, create tmux targets, and send tmux-native keys through that shell."
                         .to_string(),
                 )
-            } else if runtime_has_native_tmux_anchor(runtime) {
+            } else if runtime.screen_prompt_like && runtime.screen_tmux_like {
                 (
                     PaneAttachmentAuthority::ActionHistory,
-                    "A recent con-executed tmux command and the current fresh shell prompt establish a tmux control anchor. con can query tmux state, create tmux targets, and send tmux-native keys through that shell while the prompt remains fresh."
+                    "A recent con-executed tmux command and the current prompt-like tmux screen keep a durable same-session tmux control anchor alive."
                         .to_string(),
                 )
             } else {
-                (PaneAttachmentAuthority::ProtocolFact, String::new())
+                (
+                    PaneAttachmentAuthority::ActionHistory,
+                    "A recent con-executed tmux command and the current prompt-like shell keep a durable same-session tmux control anchor alive."
+                        .to_string(),
+                )
             };
-            if !note.is_empty() {
-                attachments.push(PaneProtocolAttachment {
-                    id: "tmux_control".to_string(),
-                    kind: PaneAttachmentKind::TmuxControl,
-                    authority,
-                    transport: PaneAttachmentTransport::TmuxProtocol,
-                    label: Some(session_name),
-                    capabilities: vec![
-                        PaneControlCapability::QueryTmux,
-                        PaneControlCapability::SendTmuxKeys,
-                        PaneControlCapability::ExecTmuxCommand,
-                    ],
-                    note: Some(note),
-                });
-            }
+            attachments.push(PaneProtocolAttachment {
+                id: "tmux_control".to_string(),
+                kind: PaneAttachmentKind::TmuxControl,
+                authority,
+                transport: PaneAttachmentTransport::TmuxProtocol,
+                label: Some(session_name),
+                capabilities: vec![
+                    PaneControlCapability::QueryTmux,
+                    PaneControlCapability::SendTmuxKeys,
+                    PaneControlCapability::ExecTmuxCommand,
+                ],
+                note: Some(note),
+            });
         }
     }
 
@@ -568,8 +579,12 @@ fn tmux_control_from_runtime(
                 .is_some()
         {
             "con has a typed same-session tmux shell anchor for this pane. Native tmux query, capture, run-command, and send-keys are available through that anchor.".to_string()
-        } else if has_native_tmux_anchor && runtime.screen_tmux_like && runtime.screen_prompt_like {
-            "The current screen still looks like a prompt inside tmux, and recent Con-caused tmux setup from this pane keeps a durable same-session tmux shell anchor alive. Native tmux query, capture, run-command, and send-keys remain available through that prompt-like tmux shell.".to_string()
+        } else if has_native_tmux_anchor && runtime.screen_prompt_like {
+            if runtime.screen_tmux_like {
+                "The current screen still looks like a prompt inside tmux, and recent Con-caused tmux setup from this pane keeps a durable same-session tmux shell anchor alive. Native tmux query, capture, run-command, and send-keys remain available through that prompt-like tmux shell.".to_string()
+            } else {
+                "The current screen still looks like a prompt on the shell that prepared tmux, and recent Con-caused tmux setup from this pane keeps a durable same-session tmux control anchor alive. Native tmux query, capture, run-command, and send-keys remain available through that prompt-like shell.".to_string()
+            }
         } else if has_native_tmux_anchor {
             "A recent con-executed tmux command and the current fresh shell prompt give con a native tmux control anchor for this session, even though tmux is not yet the proven front-most target.".to_string()
         } else if has_current_tmux {
@@ -623,10 +638,7 @@ fn runtime_has_native_tmux_anchor(runtime: &PaneRuntimeState) -> bool {
         return false;
     }
 
-    runtime.screen_tmux_like
-        && (recent_tmux_session
-            || runtime.tmux_session.is_some()
-            || runtime.last_verified_tmux_session.is_some())
+    recent_tmux_session || runtime.tmux_session.is_some() || runtime.last_verified_tmux_session.is_some()
 }
 
 fn target_stack_from_runtime(runtime: &PaneRuntimeState) -> Vec<PaneVisibleTarget> {
@@ -1126,6 +1138,67 @@ mod tests {
                 .notes
                 .iter()
                 .any(|note| note.contains("prompt inside tmux"))
+        );
+    }
+
+    #[test]
+    fn prompt_like_shell_retains_native_tmux_anchor_after_setup() {
+        let runtime = PaneRuntimeState {
+            front_state: PaneFrontState::Unknown,
+            mode: PaneMode::Unknown,
+            shell_metadata_fresh: false,
+            screen_prompt_like: true,
+            screen_tmux_like: false,
+            screen_ssh_disconnected: false,
+            remote_host: Some("haswell".to_string()),
+            remote_host_confidence: Some(PaneConfidence::Advisory),
+            remote_host_source: Some(PaneEvidenceSource::ActionHistory),
+            agent_cli: None,
+            tmux_session: None,
+            last_verified_scope_stack: Vec::new(),
+            last_verified_tmux_session: Some("con-bench".to_string()),
+            shell_context: None,
+            shell_context_fresh: false,
+            active_scope: None,
+            evidence: Vec::new(),
+            scope_stack: Vec::new(),
+            recent_actions: vec![PaneActionRecord {
+                sequence: 1,
+                kind: PaneActionKind::VisibleShellExec,
+                summary: "con executed `tmux has-session -t con-bench 2>/dev/null || tmux new-session -d -s con-bench` in the visible shell".to_string(),
+                command: Some(
+                    "tmux has-session -t con-bench 2>/dev/null || tmux new-session -d -s con-bench"
+                        .to_string(),
+                ),
+                source: PaneEvidenceSource::ActionHistory,
+                confidence: PaneConfidence::Advisory,
+                input_generation: Some(4),
+                note: None,
+            }],
+            warnings: Vec::new(),
+        };
+
+        let control = PaneControlState::from_runtime(&runtime);
+        assert_eq!(
+            control.tmux.as_ref().map(|tmux| tmux.mode),
+            Some(TmuxControlMode::Native)
+        );
+        assert!(
+            control
+                .capabilities
+                .contains(&PaneControlCapability::QueryTmux)
+        );
+        assert!(
+            control
+                .notes
+                .iter()
+                .any(|note| note.contains("prompt on the shell"))
+        );
+        assert!(
+            control
+                .attachments
+                .iter()
+                .any(|attachment| attachment.kind == PaneAttachmentKind::TmuxControl)
         );
     }
 }
