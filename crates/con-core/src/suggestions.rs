@@ -129,23 +129,19 @@ async fn request_completion(
         context
             .recent_commands
             .iter()
-            .take(6)
+            .take(3)
             .map(|cmd| format!("- {cmd}"))
             .collect::<Vec<_>>()
             .join("\n")
     };
     let prompt = format!(
-        "Complete this shell command.\n\
-         Reply with ONLY the remaining characters to complete the command, nothing else.\n\
-         Do not repeat the already-typed prefix.\n\
-         Continue the same shell command; do not start a new command.\n\
-         Preserve quoting and spacing style from the prefix.\n\
-         Do not add explanations, newlines, comments, shell chaining, or destructive extras.\n\
-         Do not add a leading space unless the completion truly needs one.\n\
-         If you cannot complete it confidently, reply with an empty string.\n\n\
-         Current directory: {}\n\
-         Recent commands:\n{}\n\n\
-         Command so far: {}",
+        "Complete this shell command suffix.\n\
+         Return only the missing trailing characters.\n\
+         No explanations. No newline. No shell chaining. No destructive extras.\n\
+         Preserve quoting and spaces. If unsure, return empty.\n\n\
+         cwd: {}\n\
+         recent:\n{}\n\n\
+         prefix: {}",
         context.cwd.as_deref().unwrap_or("(unknown)"),
         recent_commands,
         prefix,

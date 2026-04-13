@@ -593,14 +593,14 @@ impl AgentConfig {
             if let Some(ref model) = self.suggestion_model.model {
                 pc.model = Some(model.clone());
             }
-            pc.max_tokens = Some(100);
+            pc.max_tokens = Some(48);
             providers.set(&suggestion_provider, pc);
         } else if let Some(ref model) = self.suggestion_model.model {
             providers.set(
                 &suggestion_provider,
                 ProviderConfig {
                     model: Some(model.clone()),
-                    max_tokens: Some(100),
+                    max_tokens: Some(48),
                     ..Default::default()
                 },
             );

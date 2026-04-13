@@ -82,6 +82,7 @@ pub struct SkillEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SuggestionSource {
+    Path,
     History,
     Ai,
 }
@@ -474,6 +475,10 @@ impl InputBar {
 
     pub fn set_history_inline_suggestion(&mut self, prefix: &str, suggestion: &str) {
         self.set_inline_suggestion(prefix, suggestion, SuggestionSource::History);
+    }
+
+    pub fn set_path_inline_suggestion(&mut self, prefix: &str, suggestion: &str) {
+        self.set_inline_suggestion(prefix, suggestion, SuggestionSource::Path);
     }
 
     pub fn set_ai_inline_suggestion(&mut self, prefix: &str, suggestion: &str) {
@@ -1021,6 +1026,7 @@ impl Render for InputBar {
                 .as_deref()
                 .is_some_and(|suffix| !suffix.is_empty());
         let ghost_tint = match self.inline_suggestion_source {
+            Some(SuggestionSource::Path) => theme.success.opacity(0.68),
             Some(SuggestionSource::Ai) => theme.primary.opacity(0.64),
             _ => theme.muted_foreground.opacity(0.56),
         };

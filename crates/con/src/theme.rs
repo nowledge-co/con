@@ -17,7 +17,6 @@ const CON_SHELL_HIGHLIGHTS: &str = r####"
   (heredoc_start)
   (heredoc_end)
   (ansi_c_string)
-  (word)
 ] @string
 
 (variable_name) @variable
@@ -45,26 +44,26 @@ const CON_SHELL_HIGHLIGHTS: &str = r####"
   "then"
   "until"
   "while"
-] @keyword.control
+] @keyword
 
 (comment) @comment
 
 ((program
   .
-  (comment) @keyword.directive)
-  (#match? @keyword.directive "^#![ \t]*/"))
+  (comment) @preproc)
+  (#match? @preproc "^#![ \t]*/"))
 
 (function_definition
   name: (word) @function)
 
 (command_name
-  (word) @keyword)
+  (word) @primary)
 
 (command
   argument: [
-    (word) @variable.parameter
+    (word) @text.literal
     (_
-      (word) @variable.parameter)
+      (word) @text.literal)
   ])
 
 [
@@ -101,7 +100,7 @@ const CON_SHELL_HIGHLIGHTS: &str = r####"
   "=="
 ] @operator
 
-(test_operator) @keyword.operator
+(test_operator) @keyword
 
 ";" @punctuation.delimiter
 

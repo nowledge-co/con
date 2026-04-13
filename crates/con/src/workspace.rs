@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -96,6 +98,7 @@ pub struct ConWorkspace {
     harness: AgentHarness,
     shell_suggestion_engine: SuggestionEngine,
     global_shell_history: VecDeque<CommandSuggestionEntry>,
+    layout_matte_until: Option<Instant>,
     agent_panel_open: bool,
     agent_panel_motion: MotionValue,
     agent_panel_width: f32,
@@ -289,7 +292,7 @@ impl ConWorkspace {
             panic!("Fatal: agent harness initialization failed: {}", e);
         });
         harness.prewarm_input_classification();
-        let shell_suggestion_engine = harness.suggestion_engine(320);
+        let shell_suggestion_engine = harness.suggestion_engine(180);
         let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
         let (shell_suggestion_tx, shell_suggestion_rx) = crossbeam_channel::unbounded();
         let control_socket = match con_core::spawn_control_socket_server(
@@ -568,6 +571,7 @@ impl ConWorkspace {
             harness,
             shell_suggestion_engine,
             global_shell_history,
+            layout_matte_until: None,
             agent_panel_open,
             agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
             agent_panel_width,
@@ -609,6 +613,15 @@ impl ConWorkspace {
             if self.tabs.len() > 1 { 1.0 } else { 0.0 },
             std::time::Duration::from_millis(180),
         );
+    }
+
+    fn prime_layout_matte(&mut self, duration: Duration) {
+        self.layout_matte_until = Some(Instant::now() + duration);
+    }
+
+    fn layout_matte_active(&self) -> bool {
+        self.layout_matte_until
+            .is_some_and(|deadline| Instant::now() < deadline)
     }
 
     fn current_top_bar_height(&self) -> f32 {
@@ -2245,7 +2258,7 @@ impl ConWorkspace {
         let new_config = settings.read(cx).agent_config().clone();
         let auto_approve = new_config.auto_approve_tools;
         self.harness.update_config(new_config);
-        self.shell_suggestion_engine = self.harness.suggestion_engine(320);
+        self.shell_suggestion_engine = self.harness.suggestion_engine(180);
         self.shell_suggestion_engine.clear_cache();
 
         // Sync auto-approve to agent panel UI
@@ -3527,6 +3540,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.prime_layout_matte(Duration::from_millis(220));
         self.agent_panel_open = !self.agent_panel_open;
         self.agent_panel_motion.set_target(
             if self.agent_panel_open { 1.0 } else { 0.0 },
@@ -3556,6 +3570,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.prime_layout_matte(Duration::from_millis(220));
         self.input_bar_visible = !self.input_bar_visible;
         self.input_bar_motion.set_target(
             if self.input_bar_visible { 1.0 } else { 0.0 },
@@ -3663,6 +3678,7 @@ impl ConWorkspace {
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.prime_layout_matte(Duration::from_millis(220));
         let terminal = self.create_terminal(None, window, cx);
         let tab_number = self.tabs.len() + 1;
         let old_active = self.active_tab;
@@ -3721,6 +3737,7 @@ impl ConWorkspace {
     }
 
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.prime_layout_matte(Duration::from_millis(220));
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
         let tab = &mut self.tabs[self.active_tab];
@@ -3962,6 +3979,115 @@ impl ConWorkspace {
         fallback
     }
 
+    fn local_path_completion_for_prefix(
+        &self,
+        tab_idx: usize,
+        pane_id: usize,
+        input: &str,
+        cx: &App,
+    ) -> Option<String> {
+        let pane_tree = &self.tabs.get(tab_idx)?.pane_tree;
+        let terminal = pane_tree
+            .pane_terminals()
+            .into_iter()
+            .find_map(|(id, terminal)| (id == pane_id).then_some(terminal))?;
+
+        if self
+            .effective_remote_host_for_tab(tab_idx, &terminal, cx)
+            .is_some()
+        {
+            return None;
+        }
+
+        let cwd = terminal.current_dir(cx)?;
+        let token_start = input
+            .char_indices()
+            .rev()
+            .find_map(|(idx, ch)| ch.is_whitespace().then_some(idx + ch.len_utf8()))
+            .unwrap_or(0);
+        let token = &input[token_start..];
+        if token.is_empty() {
+            return None;
+        }
+
+        let head = input[..token_start].trim_end();
+        let first_word = head.split_whitespace().next().unwrap_or_default();
+        let completes_path = first_word == "cd"
+            || token.starts_with('~')
+            || token.starts_with('.')
+            || token.contains('/');
+        if !completes_path {
+            return None;
+        }
+
+        let directories_only = first_word == "cd";
+        let home_dir = dirs::home_dir();
+        let (search_dir, dir_prefix, search_prefix) =
+            if let Some(stripped) = token.strip_prefix("~/") {
+                let home = home_dir?;
+                match stripped.rsplit_once('/') {
+                    Some((dir, prefix)) => {
+                        (home.join(dir), format!("~/{dir}/"), prefix.to_string())
+                    }
+                    None => (home, "~/".to_string(), stripped.to_string()),
+                }
+            } else if token == "~" {
+                let home = home_dir?;
+                (home, String::new(), "~".to_string())
+            } else if let Some((dir, prefix)) = token.rsplit_once('/') {
+                let base = if dir.is_empty() {
+                    PathBuf::from("/")
+                } else if Path::new(dir).is_absolute() {
+                    PathBuf::from(dir)
+                } else {
+                    PathBuf::from(&cwd).join(dir)
+                };
+                (base, format!("{dir}/"), prefix.to_string())
+            } else {
+                (PathBuf::from(&cwd), String::new(), token.to_string())
+            };
+
+        let mut matches = std::fs::read_dir(&search_dir)
+            .ok()?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let file_type = entry.file_type().ok()?;
+                if directories_only && !file_type.is_dir() {
+                    return None;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.starts_with(&search_prefix).then_some((name, file_type.is_dir()))
+            })
+            .collect::<Vec<_>>();
+        if matches.is_empty() {
+            return None;
+        }
+        matches.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let matched_name = if matches.len() == 1 {
+            let (name, is_dir) = &matches[0];
+            let mut single = name.clone();
+            if *is_dir {
+                single.push('/');
+            }
+            single
+        } else {
+            let prefix = longest_common_prefix(matches.iter().map(|(name, _)| name.as_str()));
+            if prefix.chars().count() <= search_prefix.chars().count() {
+                return None;
+            }
+            prefix
+        };
+
+        let completed_token = if token == "~" {
+            matched_name
+        } else {
+            format!("{dir_prefix}{matched_name}")
+        };
+
+        Some(format!("{}{}", &input[..token_start], completed_token))
+    }
+
     fn refresh_input_suggestion(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.has_active_tab() {
             self.shell_suggestion_engine.cancel();
@@ -3991,6 +4117,16 @@ impl ConWorkspace {
             .into_iter()
             .find_map(|(id, terminal)| (id == pane_id).then_some(terminal));
         let cwd = pane.as_ref().and_then(|pane| pane.current_dir(cx));
+
+        if let Some(path_match) =
+            self.local_path_completion_for_prefix(self.active_tab, pane_id, &text, cx)
+        {
+            self.shell_suggestion_engine.cancel();
+            self.input_bar.update(cx, |bar, _cx| {
+                bar.set_path_inline_suggestion(&text, &path_match);
+            });
+            return;
+        }
 
         if let Some(history_match) = self.history_completion_for_prefix(&text, cwd.as_deref()) {
             self.shell_suggestion_engine.cancel();
@@ -4189,6 +4325,7 @@ impl ConWorkspace {
         if index >= self.tabs.len() || index == self.active_tab {
             return;
         }
+        self.prime_layout_matte(Duration::from_millis(220));
         let old_active = self.active_tab;
 
         // Take the incoming tab's panel state
@@ -4294,6 +4431,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.prime_layout_matte(Duration::from_millis(220));
         // Find which tab contains the dead pane (may not be the active tab).
         let entity_id = entity.entity_id();
         let tab_idx = self
@@ -4601,6 +4739,10 @@ impl Render for ConWorkspace {
                 terminal.notify(cx);
             }
         }
+        let layout_matte_active = self.layout_matte_active();
+        if layout_matte_active {
+            window.request_animation_frame();
+        }
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
@@ -4630,6 +4772,11 @@ impl Render for ConWorkspace {
             .flex_1()
             .min_w_0()
             .min_h_0()
+            .bg(if layout_matte_active {
+                theme.background.opacity(0.96)
+            } else {
+                theme.transparent
+            })
             .child(pane_tree_rendered);
 
         let mut main_area = div().flex().flex_1().min_h_0().child(terminal_area);
@@ -5335,4 +5482,24 @@ fn pane_display_name(
     }
 
     format!("Pane {}", pane_id + 1)
+}
+
+fn longest_common_prefix<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    let mut iter = values.into_iter();
+    let Some(first) = iter.next() else {
+        return String::new();
+    };
+    let mut prefix = first.to_string();
+    for value in iter {
+        let shared = prefix
+            .chars()
+            .zip(value.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        prefix = prefix.chars().take(shared).collect();
+        if prefix.is_empty() {
+            break;
+        }
+    }
+    prefix
 }
