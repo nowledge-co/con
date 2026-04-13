@@ -303,6 +303,8 @@ impl InputBar {
                             let idx = this.skill_selection.min(matches.len().saturating_sub(1));
                             let name = matches[idx].name.clone();
                             this.complete_skill(&name, window, cx);
+                        } else if this.has_path_completion_candidates() {
+                            let _ = this.accept_selected_path_completion(window, cx);
                         } else {
                             let value = this.current_input_state().read(cx).value();
                             if !value.trim().is_empty() {
@@ -330,6 +332,7 @@ impl InputBar {
                 .folding(false)
         });
         shell_input_state.update(cx, |state, cx| {
+            state.set_highlighter("con-shell", cx);
             // Warm the single-line shell highlighter up-front so first focus/type
             // does not pay parser initialization latency on the UI path.
             state.set_value(":", window, cx);
@@ -1183,6 +1186,16 @@ impl Render for InputBar {
                             this.complete_skill(&name, window, cx);
                             window.prevent_default();
                             cx.stop_propagation();
+                        } else if this.has_path_completion_candidates() {
+                            let moved = if mods.shift {
+                                this.navigate_path_completion(true, cx)
+                            } else {
+                                this.navigate_path_completion(false, cx)
+                            };
+                            if moved {
+                                window.prevent_default();
+                                cx.stop_propagation();
+                            }
                         } else if this.accept_selected_path_completion(window, cx)
                             || this.accept_inline_suggestion(window, cx)
                         {
