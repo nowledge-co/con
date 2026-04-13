@@ -9,6 +9,7 @@ actions!(
     [
         SubmitInput,
         EscapeInput,
+        AcceptSuggestion,
         AcceptSuggestionOrMoveRight,
         AcceptSuggestionOrMoveEnd,
         DeletePreviousWord
@@ -107,40 +108,50 @@ impl InputBar {
             KeyBinding::new(
                 "right",
                 AcceptSuggestionOrMoveRight,
-                Some("ConCommandInput && Input"),
+                Some("ConCommandInput > Input"),
+            ),
+            KeyBinding::new(
+                "tab",
+                AcceptSuggestion,
+                Some("ConCommandInput > Input"),
             ),
             KeyBinding::new(
                 "ctrl-e",
                 AcceptSuggestionOrMoveEnd,
-                Some("ConCommandInput && Input"),
+                Some("ConCommandInput > Input"),
             ),
             KeyBinding::new(
                 "cmd-e",
                 AcceptSuggestionOrMoveEnd,
-                Some("ConCommandInput && Input"),
+                Some("ConCommandInput > Input"),
+            ),
+            KeyBinding::new(
+                "cmd-w",
+                DeletePreviousWord,
+                Some("ConCommandInput > Input"),
             ),
             KeyBinding::new(
                 "cmd-right",
                 AcceptSuggestionOrMoveEnd,
-                Some("ConCommandInput && Input"),
+                Some("ConCommandInput > Input"),
             ),
             KeyBinding::new(
                 "end",
                 AcceptSuggestionOrMoveEnd,
-                Some("ConCommandInput && Input"),
+                Some("ConCommandInput > Input"),
             ),
             KeyBinding::new(
                 "ctrl-w",
                 DeletePreviousWord,
-                Some("ConCommandInput && Input"),
+                Some("ConCommandInput > Input"),
             ),
         ]);
     }
 
     fn current_input_state(&self) -> Entity<InputState> {
         match self.mode {
-            InputMode::Shell => self.shell_input_state.clone(),
-            InputMode::Smart | InputMode::Agent => self.agent_input_state.clone(),
+            InputMode::Agent => self.agent_input_state.clone(),
+            InputMode::Smart | InputMode::Shell => self.shell_input_state.clone(),
         }
     }
 
@@ -226,6 +237,13 @@ impl InputBar {
                 .code_editor("bash")
                 .multi_line(false)
                 .folding(false)
+        });
+        shell_input_state.update(cx, |state, cx| {
+            // Warm the single-line shell highlighter up-front so first focus/type
+            // does not pay parser initialization latency on the UI path.
+            state.set_value(":", window, cx);
+            state.set_value("", window, cx);
+            state.set_cursor_position(Position::new(0, 0), window, cx);
         });
 
         let _subscriptions = vec![
@@ -794,9 +812,14 @@ impl Render for InputBar {
 
         let input_field = div()
             .flex_1()
-            .min_h(px(22.0))
+            .min_h(px(24.0))
             .relative()
             .key_context("ConCommandInput")
+            .on_action(cx.listener(
+                |this, _: &AcceptSuggestion, window, cx| {
+                    let _ = this.accept_inline_suggestion(window, cx);
+                },
+            ))
             .on_action(cx.listener(
                 |this, _: &AcceptSuggestionOrMoveEnd, window, cx| {
                     if !this.accept_inline_suggestion(window, cx) {
@@ -813,6 +836,96 @@ impl Render for InputBar {
             ))
             .on_action(cx.listener(|this, _: &DeletePreviousWord, window, cx| {
                 this.delete_previous_word(window, cx);
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let matches = this.filtered_skills(cx);
+                let has_completions = !matches.is_empty();
+                let mods = event.keystroke.modifiers;
+                let key = event.keystroke.key.as_str();
+
+                match key {
+                    "tab" => {
+                        if has_completions {
+                            let idx = this.skill_selection.min(matches.len().saturating_sub(1));
+                            let name = matches[idx].name.clone();
+                            this.complete_skill(&name, window, cx);
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        } else if this.accept_inline_suggestion(window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    "escape" => {
+                        if has_completions {
+                            this.current_input_state()
+                                .update(cx, |s, cx| s.set_value("", window, cx));
+                            this.skill_selection = 0;
+                            this.clear_inline_suggestion();
+                            cx.emit(SkillAutocompleteChanged);
+                            cx.emit(InputEdited);
+                            cx.notify();
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        } else if this.inline_suggestion_suffix.is_some() {
+                            this.clear_inline_suggestion();
+                            cx.emit(InputEdited);
+                            cx.notify();
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        } else {
+                            cx.emit(EscapeInput);
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    "up" if has_completions => {
+                        this.skill_selection = this.skill_selection.saturating_sub(1);
+                        cx.emit(SkillAutocompleteChanged);
+                        cx.notify();
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
+                    "down" if has_completions => {
+                        this.skill_selection =
+                            (this.skill_selection + 1).min(matches.len().saturating_sub(1));
+                        cx.emit(SkillAutocompleteChanged);
+                        cx.notify();
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
+                    "right" if !mods.control && !mods.platform && !mods.alt => {
+                        if this.accept_inline_suggestion(window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    "end" => {
+                        if this.accept_inline_suggestion(window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    "e" if mods.control || mods.platform => {
+                        if !this.accept_inline_suggestion(window, cx) {
+                            this.move_cursor_to_line_end(window, cx);
+                        }
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
+                    "right" if mods.platform => {
+                        if this.accept_inline_suggestion(window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    "w" if mods.control || mods.platform => {
+                        this.delete_previous_word(window, cx);
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
             }))
             .font_family(input_font.clone())
             .text_size(px(13.0))
@@ -848,7 +961,7 @@ impl Render for InputBar {
                     .cleanable(false)
                     .font_family(input_font)
                     .text_sm()
-                    .h(px(22.0)),
+                    .h(px(24.0)),
             );
 
         // ── Main layout — flat bar, no rounded bubble ──
@@ -858,53 +971,6 @@ impl Render for InputBar {
             .bg(theme.title_bar.opacity(self.ui_opacity))
             .font_family(theme.font_family.clone())
             .text_size(px(13.0))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let matches = this.filtered_skills(cx);
-                let has_completions = !matches.is_empty();
-                match event.keystroke.key.as_str() {
-                    "tab" => {
-                        if has_completions {
-                            let idx = this.skill_selection.min(matches.len().saturating_sub(1));
-                            let name = matches[idx].name.clone();
-                            this.complete_skill(&name, window, cx);
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        } else if this.accept_inline_suggestion(window, cx) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
-                    }
-                    "escape" => {
-                        if has_completions {
-                            this.current_input_state()
-                                .update(cx, |s, cx| s.set_value("", window, cx));
-                            this.skill_selection = 0;
-                            this.clear_inline_suggestion();
-                            cx.emit(SkillAutocompleteChanged);
-                            cx.emit(InputEdited);
-                            cx.notify();
-                        } else if this.inline_suggestion_suffix.is_some() {
-                            this.clear_inline_suggestion();
-                            cx.emit(InputEdited);
-                            cx.notify();
-                        } else {
-                            cx.emit(EscapeInput);
-                        }
-                    }
-                    "up" if has_completions => {
-                        this.skill_selection = this.skill_selection.saturating_sub(1);
-                        cx.emit(SkillAutocompleteChanged);
-                        cx.notify();
-                    }
-                    "down" if has_completions => {
-                        this.skill_selection =
-                            (this.skill_selection + 1).min(matches.len().saturating_sub(1));
-                        cx.emit(SkillAutocompleteChanged);
-                        cx.notify();
-                    }
-                    _ => {}
-                }
-            }))
             // ── Flat container ──
             .child(
                 div()
@@ -921,7 +987,7 @@ impl Render for InputBar {
                         div()
                             .flex()
                             .items_center()
-                            .h(px(28.0))
+                            .h(px(30.0))
                             .gap(px(8.0))
                             .child(mode_prefix)
                             .child(input_field)
