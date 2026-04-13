@@ -4090,6 +4090,7 @@ impl ConWorkspace {
 
     fn refresh_input_suggestion(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.has_active_tab() {
+            log::debug!(target: "con::suggestions", "skip suggestion: no active tab");
             self.shell_suggestion_engine.cancel();
             self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
             return;
@@ -4105,6 +4106,14 @@ impl ConWorkspace {
             || trimmed.starts_with('/')
             || target_ids.len() != 1
         {
+            log::debug!(
+                target: "con::suggestions",
+                "skip suggestion: empty={} multiline={} slash={} targets={}",
+                trimmed.is_empty(),
+                text.contains('\n'),
+                trimmed.starts_with('/'),
+                target_ids.len()
+            );
             self.shell_suggestion_engine.cancel();
             self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
             return;
@@ -4121,6 +4130,12 @@ impl ConWorkspace {
         if let Some(path_match) =
             self.local_path_completion_for_prefix(self.active_tab, pane_id, &text, cx)
         {
+            log::debug!(
+                target: "con::suggestions",
+                "use path suggestion prefix={:?} completion={:?}",
+                text,
+                path_match
+            );
             self.shell_suggestion_engine.cancel();
             self.input_bar.update(cx, |bar, _cx| {
                 bar.set_path_inline_suggestion(&text, &path_match);
@@ -4129,6 +4144,12 @@ impl ConWorkspace {
         }
 
         if let Some(history_match) = self.history_completion_for_prefix(&text, cwd.as_deref()) {
+            log::debug!(
+                target: "con::suggestions",
+                "use history suggestion prefix={:?} completion={:?}",
+                text,
+                history_match
+            );
             self.shell_suggestion_engine.cancel();
             self.input_bar.update(cx, |bar, _cx| {
                 bar.set_history_inline_suggestion(&text, &history_match);
@@ -4143,6 +4164,11 @@ impl ConWorkspace {
             InputMode::Shell => true,
             InputMode::Smart => {
                 if shell_probe_too_short {
+                    log::debug!(
+                        target: "con::suggestions",
+                        "skip ai suggestion: smart-mode probe too short prefix={:?}",
+                        text
+                    );
                     false
                 } else {
                     let is_remote = self
@@ -4158,11 +4184,21 @@ impl ConWorkspace {
         };
 
         if !is_shell_mode {
+            log::debug!(
+                target: "con::suggestions",
+                "skip ai suggestion: input classified as non-shell prefix={:?}",
+                text
+            );
             self.shell_suggestion_engine.cancel();
             return;
         }
 
         if !self.harness.config().suggestion_model.enabled {
+            log::debug!(
+                target: "con::suggestions",
+                "skip ai suggestion: disabled in config prefix={:?}",
+                text
+            );
             self.shell_suggestion_engine.cancel();
             return;
         }
@@ -4191,6 +4227,12 @@ impl ConWorkspace {
 
     fn apply_shell_suggestion(&mut self, result: ShellSuggestionResult, cx: &mut Context<Self>) {
         if result.tab_idx != self.active_tab {
+            log::debug!(
+                target: "con::suggestions",
+                "drop ai suggestion for inactive tab={} active={}",
+                result.tab_idx,
+                self.active_tab
+            );
             return;
         }
 
@@ -4204,6 +4246,11 @@ impl ConWorkspace {
             || text.trim().starts_with('/')
             || text.contains('\n')
         {
+            log::debug!(
+                target: "con::suggestions",
+                "drop ai suggestion prefix={:?}: text/mode/target changed",
+                result.prefix
+            );
             return;
         }
 
@@ -4215,9 +4262,20 @@ impl ConWorkspace {
             .flatten();
 
         if self.history_completion_for_prefix(&text, cwd.as_deref()).is_some() {
+            log::debug!(
+                target: "con::suggestions",
+                "drop ai suggestion prefix={:?}: history match became available",
+                result.prefix
+            );
             return;
         }
 
+        log::debug!(
+            target: "con::suggestions",
+            "apply ai suggestion prefix={:?} completion={:?}",
+            result.prefix,
+            result.completion
+        );
         self.input_bar.update(cx, |bar, _cx| {
             bar.set_ai_inline_suggestion(&result.prefix, &result.completion);
         });

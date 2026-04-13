@@ -57,7 +57,7 @@ const CON_SHELL_HIGHLIGHTS: &str = r####"
   name: (word) @function)
 
 (command_name
-  (word) @primary)
+  (word) @function)
 
 (command
   argument: [

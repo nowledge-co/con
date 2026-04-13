@@ -48,6 +48,7 @@ impl SuggestionEngine {
         callback: impl FnOnce(String) + Send + 'static,
     ) {
         if prefix.trim().is_empty() {
+            log::debug!(target: "con_core::suggestions", "skip ai suggestion: empty prefix");
             return;
         }
 
@@ -58,9 +59,23 @@ impl SuggestionEngine {
 
         // Check cache
         if let Some(cached) = self.cache.lock().get(&cache_key) {
+            log::debug!(
+                target: "con_core::suggestions",
+                "ai suggestion cache hit prefix={:?} completion={:?}",
+                prefix,
+                cached
+            );
             callback(cached.clone());
             return;
         }
+
+        log::debug!(
+            target: "con_core::suggestions",
+            "queue ai suggestion prefix={:?} cwd={:?} recent_commands={}",
+            prefix,
+            context.cwd,
+            context.recent_commands.len()
+        );
 
         // Update pending request
         *self.pending.lock() = Some(prefix.to_string());
@@ -81,6 +96,12 @@ impl SuggestionEngine {
             // Check if this is still the latest request
             let current_pending = pending.lock().clone();
             if current_pending.as_deref() != Some(&prefix_owned) {
+                log::debug!(
+                    target: "con_core::suggestions",
+                    "drop ai suggestion prefix={:?}: superseded by {:?}",
+                    prefix_owned,
+                    current_pending
+                );
                 return;
             }
 
@@ -90,15 +111,38 @@ impl SuggestionEngine {
                 .map(|t| t.elapsed())
                 .unwrap_or(Duration::ZERO);
             if elapsed < debounce {
+                log::debug!(
+                    target: "con_core::suggestions",
+                    "drop ai suggestion prefix={:?}: debounce not elapsed ({:?})",
+                    prefix_owned,
+                    elapsed
+                );
                 return;
             }
 
             // Make the completion request
+            log::debug!(
+                target: "con_core::suggestions",
+                "dispatch ai suggestion prefix={:?}",
+                prefix_owned
+            );
             if let Some(completion) = request_completion(&config, &prefix_owned, &context_owned).await
             {
                 if !completion.is_empty() {
                     cache.lock().insert(cache_key_owned, completion.clone());
+                    log::debug!(
+                        target: "con_core::suggestions",
+                        "ai suggestion result prefix={:?} completion={:?}",
+                        prefix_owned,
+                        completion
+                    );
                     callback(completion);
+                } else {
+                    log::debug!(
+                        target: "con_core::suggestions",
+                        "ai suggestion empty result prefix={:?}",
+                        prefix_owned
+                    );
                 }
             }
         });
@@ -111,6 +155,7 @@ impl SuggestionEngine {
 
     /// Cancel any pending request
     pub fn cancel(&self) {
+        log::debug!(target: "con_core::suggestions", "cancel ai suggestion pending request");
         *self.pending.lock() = None;
     }
 }
@@ -160,7 +205,7 @@ async fn request_completion(
             }
         }
         Err(e) => {
-            log::debug!("Suggestion completion failed: {}", e);
+            log::debug!(target: "con_core::suggestions", "Suggestion completion failed: {}", e);
             None
         }
     }
