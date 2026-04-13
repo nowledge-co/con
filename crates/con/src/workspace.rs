@@ -318,8 +318,6 @@ impl ConWorkspace {
             .iter()
             .enumerate()
             .map(|(i, tab_state)| {
-                let cwd = tab_state.cwd.as_deref();
-                let terminal = make_terminal(cwd, window, cx);
                 // Restore per-tab conversation, with migration from global conversation_id
                 let agent_session = if let Some(conv_id) = &tab_state.conversation_id {
                     match Conversation::load(conv_id) {
@@ -344,8 +342,16 @@ impl ConWorkspace {
                     let conv = conv.lock();
                     PanelState::from_conversation(&conv)
                 };
+                let pane_tree = if let Some(layout) = &tab_state.layout {
+                    let mut restore_terminal =
+                        |restore_cwd: Option<&str>| make_terminal(restore_cwd, window, cx);
+                    PaneTree::from_state(layout, tab_state.focused_pane_id, &mut restore_terminal)
+                } else {
+                    let cwd = tab_state.cwd.as_deref();
+                    PaneTree::new(make_terminal(cwd, window, cx))
+                };
                 Tab {
-                    pane_tree: PaneTree::new(terminal),
+                    pane_tree,
                     title: if tab_state.title.is_empty() {
                         format!("Terminal {}", i + 1)
                     } else {
@@ -355,7 +361,7 @@ impl ConWorkspace {
                     session: agent_session,
                     panel_state,
                     runtime_trackers: RefCell::new(HashMap::new()),
-                    shell_history: HashMap::new(),
+                    shell_history: Self::restore_shell_history(tab_state),
                 }
             })
             .collect();
@@ -1799,10 +1805,36 @@ impl ConWorkspace {
                 let terminal = tab.pane_tree.focused_terminal();
                 let cwd = terminal.current_dir(cx);
                 let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
+                let pane_layout = tab.pane_tree.to_state(cx);
+                let pane_states = tab
+                    .pane_tree
+                    .pane_terminals()
+                    .into_iter()
+                    .map(|(_, terminal)| con_core::session::PaneState {
+                        cwd: terminal.current_dir(cx),
+                    })
+                    .collect();
+                let shell_history = tab
+                    .shell_history
+                    .iter()
+                    .map(|(pane_id, entries)| con_core::session::PaneCommandHistoryState {
+                        pane_id: Some(*pane_id),
+                        entries: entries
+                            .iter()
+                            .map(|entry| con_core::session::CommandHistoryEntryState {
+                                command: entry.command.clone(),
+                                cwd: entry.cwd.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect();
                 con_core::session::TabState {
                     title,
                     cwd,
-                    panes: vec![],
+                    layout: Some(pane_layout),
+                    focused_pane_id: Some(tab.pane_tree.focused_pane_id()),
+                    panes: pane_states,
+                    shell_history,
                     conversation_id: Some(tab.session.conversation_id()),
                 }
             })
@@ -1819,6 +1851,32 @@ impl ConWorkspace {
         if let Err(e) = session.save() {
             log::warn!("Failed to save session: {}", e);
         }
+    }
+
+    fn restore_shell_history(
+        tab_state: &con_core::session::TabState,
+    ) -> HashMap<usize, VecDeque<CommandSuggestionEntry>> {
+        let mut restored = HashMap::new();
+
+        for pane_history in &tab_state.shell_history {
+            let Some(pane_id) = pane_history.pane_id else {
+                continue;
+            };
+            let entries = pane_history
+                .entries
+                .iter()
+                .filter(|entry| !entry.command.trim().is_empty())
+                .map(|entry| CommandSuggestionEntry {
+                    command: entry.command.trim().to_string(),
+                    cwd: entry.cwd.clone(),
+                })
+                .collect::<VecDeque<_>>();
+            if !entries.is_empty() {
+                restored.insert(pane_id, entries);
+            }
+        }
+
+        restored
     }
 
     fn on_new_conversation(
@@ -2120,24 +2178,7 @@ impl ConWorkspace {
 
         // Re-apply keybindings at runtime so changes take effect immediately
         let kb = settings.read(cx).keybinding_config().clone();
-        cx.bind_keys([
-            KeyBinding::new(&kb.quit, crate::Quit, None),
-            KeyBinding::new(&kb.new_window, crate::NewWindow, None),
-            KeyBinding::new(&kb.new_tab, crate::NewTab, None),
-            KeyBinding::new(&kb.toggle_agent, crate::ToggleAgentPanel, None),
-            KeyBinding::new(&kb.close_tab, crate::CloseTab, None),
-            KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
-            KeyBinding::new(
-                &kb.command_palette,
-                crate::command_palette::ToggleCommandPalette,
-                None,
-            ),
-            KeyBinding::new(&kb.split_right, crate::SplitRight, None),
-            KeyBinding::new(&kb.split_down, crate::SplitDown, None),
-            KeyBinding::new(&kb.focus_input, crate::FocusInput, None),
-            KeyBinding::new(&kb.cycle_input_mode, crate::CycleInputMode, None),
-            KeyBinding::new(&kb.toggle_input_bar, crate::ToggleInputBar, None),
-        ]);
+        crate::bind_app_keybindings(cx, &kb);
 
         // Settings panel closes on save — restore terminal focus
         self.focus_terminal(window, cx);
@@ -3568,6 +3609,7 @@ impl ConWorkspace {
             let new_focus = tab.pane_tree.focused_terminal();
             new_focus.set_focus_state(true, cx);
             new_focus.focus(window, cx);
+            self.save_session(cx);
             cx.notify();
             return;
         }
@@ -3839,6 +3881,11 @@ impl ConWorkspace {
 
         self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
 
+        if !self.harness.config().suggestion_model.enabled {
+            self.shell_suggestion_engine.cancel();
+            return;
+        }
+
         let suggestion_tx = self.shell_suggestion_tx.clone();
         let prefix = text.clone();
         let callback_prefix = prefix.clone();
@@ -3925,6 +3972,7 @@ impl ConWorkspace {
         self.input_bar.update(cx, |bar, _cx| {
             bar.clear_inline_suggestion();
         });
+        self.save_session(cx);
 
         // Always keep focus on input bar after sending a command —
         // the terminal output is visible, and the user can click to focus it.
@@ -3975,6 +4023,7 @@ impl ConWorkspace {
             self.workspace_handle.clone(),
             cx,
         );
+        self.save_session(cx);
         cx.notify();
     }
 

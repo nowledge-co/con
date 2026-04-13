@@ -20,6 +20,7 @@ mod workspace;
 
 use gpui::*;
 use gpui_component::ActiveTheme;
+use con_core::config::KeybindingConfig;
 use con_core::session::Session;
 use workspace::ConWorkspace;
 
@@ -109,6 +110,47 @@ fn open_con_window(
     .detach();
 }
 
+pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
+    cx.bind_keys([
+        KeyBinding::new(&kb.quit, Quit, None),
+        KeyBinding::new(&kb.new_window, NewWindow, None),
+        KeyBinding::new(&kb.new_tab, NewTab, None),
+        KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
+        KeyBinding::new(&kb.close_tab, CloseTab, None),
+        KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
+        KeyBinding::new(
+            &kb.command_palette,
+            command_palette::ToggleCommandPalette,
+            None,
+        ),
+        KeyBinding::new(&kb.split_right, SplitRight, None),
+        KeyBinding::new(&kb.split_down, SplitDown, None),
+        KeyBinding::new(&kb.focus_input, FocusInput, None),
+        KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, None),
+        KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
+        KeyBinding::new(&kb.quit, Quit, Some("Input")),
+        KeyBinding::new(&kb.new_window, NewWindow, Some("Input")),
+        KeyBinding::new(&kb.new_tab, NewTab, Some("Input")),
+        KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, Some("Input")),
+        KeyBinding::new(&kb.close_tab, CloseTab, Some("Input")),
+        KeyBinding::new(
+            &kb.settings,
+            settings_panel::ToggleSettings,
+            Some("Input"),
+        ),
+        KeyBinding::new(
+            &kb.command_palette,
+            command_palette::ToggleCommandPalette,
+            Some("Input"),
+        ),
+        KeyBinding::new(&kb.split_right, SplitRight, Some("Input")),
+        KeyBinding::new(&kb.split_down, SplitDown, Some("Input")),
+        KeyBinding::new(&kb.focus_input, FocusInput, Some("Input")),
+        KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, Some("Input")),
+        KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, Some("Input")),
+    ]);
+}
+
 fn main() {
     env_logger::init();
 
@@ -137,25 +179,7 @@ fn main() {
         ghostty_view::init(cx);
 
         // Register global keybindings from user config
-        let kb = &config.keybindings;
-        cx.bind_keys([
-            KeyBinding::new(&kb.quit, Quit, None),
-            KeyBinding::new(&kb.new_window, NewWindow, None),
-            KeyBinding::new(&kb.new_tab, NewTab, None),
-            KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
-            KeyBinding::new(&kb.close_tab, CloseTab, None),
-            KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
-            KeyBinding::new(
-                &kb.command_palette,
-                command_palette::ToggleCommandPalette,
-                None,
-            ),
-            KeyBinding::new(&kb.split_right, SplitRight, None),
-            KeyBinding::new(&kb.split_down, SplitDown, None),
-            KeyBinding::new(&kb.focus_input, FocusInput, None),
-            KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, None),
-            KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
-        ]);
+        bind_app_keybindings(cx, &config.keybindings);
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             let config = con_core::Config::load().unwrap_or_default();

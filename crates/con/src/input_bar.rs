@@ -95,8 +95,8 @@ pub struct InputBar {
 impl InputBar {
     fn current_input_state(&self) -> Entity<InputState> {
         match self.mode {
-            InputMode::Agent => self.agent_input_state.clone(),
-            InputMode::Smart | InputMode::Shell => self.shell_input_state.clone(),
+            InputMode::Shell => self.shell_input_state.clone(),
+            InputMode::Smart | InputMode::Agent => self.agent_input_state.clone(),
         }
     }
 
@@ -313,13 +313,10 @@ impl InputBar {
 
         let mut completed = text;
         completed.push_str(&suffix);
+        let completed_chars = completed.chars().count() as u32;
         input_state.update(cx, |s, cx| {
             s.set_value(&completed, window, cx);
-            s.set_cursor_position(
-                Position::new(0, completed.encode_utf16().count() as u32),
-                window,
-                cx,
-            );
+            s.set_cursor_position(Position::new(0, completed_chars), window, cx);
         });
         self.clear_inline_suggestion();
         cx.emit(InputEdited);

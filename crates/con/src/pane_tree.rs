@@ -1,5 +1,6 @@
 use gpui::*;
 use gpui_component::ActiveTheme;
+use con_core::session::{PaneLayoutState, PaneSplitDirection};
 
 use crate::terminal_pane::TerminalPane;
 
@@ -67,6 +68,35 @@ impl PaneTree {
             next_split_id: 0,
             dragging: None,
         }
+    }
+
+    pub fn from_state(
+        layout: &PaneLayoutState,
+        focused_pane_id: Option<PaneId>,
+        make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
+    ) -> Self {
+        let mut root = Self::node_from_state(layout, make_terminal);
+        let mut next_split_id = 0;
+        Self::normalize_split_ids(&mut root, &mut next_split_id);
+        let next_id = Self::max_pane_id(&root).saturating_add(1);
+        let requested_focus = focused_pane_id.unwrap_or_else(|| Self::first_pane_id(&root));
+        let focused_pane_id = if Self::find_terminal(&root, requested_focus).is_some() {
+            requested_focus
+        } else {
+            Self::first_pane_id(&root)
+        };
+
+        Self {
+            root,
+            focused_pane_id,
+            next_id,
+            next_split_id,
+            dragging: None,
+        }
+    }
+
+    pub fn to_state(&self, cx: &App) -> PaneLayoutState {
+        Self::node_to_state(&self.root, cx)
     }
 
     /// Get the focused terminal
@@ -297,6 +327,32 @@ impl PaneTree {
             PaneNode::Leaf { .. } => 1,
             PaneNode::Split { first, second, .. } => {
                 Self::count_leaves(first) + Self::count_leaves(second)
+            }
+        }
+    }
+
+    fn max_pane_id(node: &PaneNode) -> PaneId {
+        match node {
+            PaneNode::Leaf { id, .. } => *id,
+            PaneNode::Split { first, second, .. } => {
+                Self::max_pane_id(first).max(Self::max_pane_id(second))
+            }
+        }
+    }
+
+    fn normalize_split_ids(node: &mut PaneNode, next_split_id: &mut SplitId) {
+        match node {
+            PaneNode::Leaf { .. } => {}
+            PaneNode::Split {
+                split_id,
+                first,
+                second,
+                ..
+            } => {
+                *split_id = *next_split_id;
+                *next_split_id += 1;
+                Self::normalize_split_ids(first, next_split_id);
+                Self::normalize_split_ids(second, next_split_id);
             }
         }
     }
@@ -597,6 +653,57 @@ impl PaneTree {
                 Self::collect_pane_terminals(first, result);
                 Self::collect_pane_terminals(second, result);
             }
+        }
+    }
+
+    fn node_to_state(node: &PaneNode, cx: &App) -> PaneLayoutState {
+        match node {
+            PaneNode::Leaf { id, terminal } => PaneLayoutState::Leaf {
+                pane_id: *id,
+                cwd: terminal.current_dir(cx),
+            },
+            PaneNode::Split {
+                direction,
+                ratio,
+                first,
+                second,
+                ..
+            } => PaneLayoutState::Split {
+                direction: match direction {
+                    SplitDirection::Horizontal => PaneSplitDirection::Horizontal,
+                    SplitDirection::Vertical => PaneSplitDirection::Vertical,
+                },
+                ratio: *ratio,
+                first: Box::new(Self::node_to_state(first, cx)),
+                second: Box::new(Self::node_to_state(second, cx)),
+            },
+        }
+    }
+
+    fn node_from_state(
+        state: &PaneLayoutState,
+        make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
+    ) -> PaneNode {
+        match state {
+            PaneLayoutState::Leaf { pane_id, cwd } => PaneNode::Leaf {
+                id: *pane_id,
+                terminal: make_terminal(cwd.as_deref()),
+            },
+            PaneLayoutState::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => PaneNode::Split {
+                split_id: 0,
+                direction: match direction {
+                    PaneSplitDirection::Horizontal => SplitDirection::Horizontal,
+                    PaneSplitDirection::Vertical => SplitDirection::Vertical,
+                },
+                first: Box::new(Self::node_from_state(first, make_terminal)),
+                second: Box::new(Self::node_from_state(second, make_terminal)),
+                ratio: ratio.clamp(0.05, 0.95),
+            },
         }
     }
 }

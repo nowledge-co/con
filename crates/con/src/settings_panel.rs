@@ -89,6 +89,7 @@ pub struct SettingsPanel {
     temperature_input: Entity<InputState>,
     auto_approve: bool,
 
+    suggestion_enabled: bool,
     suggestion_provider_select: Entity<SelectState<SearchableVec<String>>>,
     suggestion_model_input: Entity<InputState>,
     oauth_states: HashMap<ProviderKind, ProviderOAuthState>,
@@ -887,6 +888,7 @@ impl SettingsPanel {
             max_turns_input,
             temperature_input,
             auto_approve: config.agent.auto_approve_tools,
+            suggestion_enabled: config.agent.suggestion_model.enabled,
             suggestion_provider_select,
             suggestion_model_input,
             oauth_states: HashMap::new(),
@@ -937,6 +939,7 @@ impl SettingsPanel {
                     cx,
                 )
             });
+            self.suggestion_enabled = agent.suggestion_model.enabled;
             self.suggestion_provider_select.update(cx, |select, cx| {
                 select.set_selected_value(
                     &Self::suggestion_provider_label(agent.suggestion_model.provider.as_ref()),
@@ -1288,6 +1291,7 @@ impl SettingsPanel {
         };
         self.config.agent.auto_approve_tools = self.auto_approve;
         self.config.agent.suggestion_model = SuggestionModelConfig {
+            enabled: self.suggestion_enabled,
             provider: Self::suggestion_provider_from_label(&suggestion_provider_label),
             model: if suggestion_model_text.is_empty() {
                 None
@@ -2765,6 +2769,18 @@ impl SettingsPanel {
                                 .font_weight(FontWeight::MEDIUM)
                                 .child("Tuning"),
                         )
+                        .child(toggle_row(
+                            "AI Command Suggestions",
+                            "Use the suggestion provider only when local command history has no strong match",
+                            Switch::new("ai-suggestion-toggle")
+                                .checked(self.suggestion_enabled)
+                                .small()
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.suggestion_enabled = *checked;
+                                    cx.notify();
+                                })),
+                            theme,
+                        ))
                         .child(stacked_input_field(
                             "Max Tokens",
                             "Per-provider token ceiling",

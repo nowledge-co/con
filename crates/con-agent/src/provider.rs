@@ -403,9 +403,10 @@ impl ProviderMap {
 
 /// Optional overrides for the inline suggestion model.
 /// API key and base_url are inherited from the provider's entry in `providers`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SuggestionModelConfig {
+    pub enabled: bool,
     pub provider: Option<ProviderKind>,
     pub model: Option<String>,
 }
@@ -476,6 +477,16 @@ impl Default for AgentConfig {
             api_key_env: None,
             base_url: None,
             max_tokens: None,
+        }
+    }
+}
+
+impl Default for SuggestionModelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            provider: None,
+            model: None,
         }
     }
 }
