@@ -12,6 +12,8 @@ pub struct Session {
     #[serde(default = "default_input_bar_visible")]
     pub input_bar_visible: bool,
     #[serde(default)]
+    pub global_shell_history: Vec<CommandHistoryEntryState>,
+    #[serde(default)]
     pub conversation_id: Option<String>,
 }
 
@@ -93,6 +95,7 @@ impl Default for Session {
             agent_panel_open: false,
             agent_panel_width: None,
             input_bar_visible: true,
+            global_shell_history: Vec::new(),
             conversation_id: None,
         }
     }

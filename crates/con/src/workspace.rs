@@ -12,6 +12,7 @@ const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
+const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, InlineInputSubmit,
@@ -94,6 +95,7 @@ pub struct ConWorkspace {
     model_registry: ModelRegistry,
     harness: AgentHarness,
     shell_suggestion_engine: SuggestionEngine,
+    global_shell_history: VecDeque<CommandSuggestionEntry>,
     agent_panel_open: bool,
     agent_panel_motion: MotionValue,
     agent_panel_width: f32,
@@ -380,6 +382,7 @@ impl ConWorkspace {
             });
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
+        let global_shell_history = Self::restore_global_shell_history(&session, &tabs);
         let agent_panel_open = session.agent_panel_open;
         let agent_panel_width = session
             .agent_panel_width
@@ -564,6 +567,7 @@ impl ConWorkspace {
             model_registry,
             harness,
             shell_suggestion_engine,
+            global_shell_history,
             agent_panel_open,
             agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
             agent_panel_width,
@@ -1853,6 +1857,14 @@ impl ConWorkspace {
             agent_panel_open: self.agent_panel_open,
             agent_panel_width: Some(self.agent_panel_width),
             input_bar_visible: self.input_bar_visible,
+            global_shell_history: self
+                .global_shell_history
+                .iter()
+                .map(|entry| con_core::session::CommandHistoryEntryState {
+                    command: entry.command.clone(),
+                    cwd: entry.cwd.clone(),
+                })
+                .collect(),
             conversation_id: None, // deprecated — per-tab now
         };
         if let Err(e) = session.save() {
@@ -1884,6 +1896,45 @@ impl ConWorkspace {
         }
 
         restored
+    }
+
+    fn restore_global_shell_history(
+        session: &con_core::session::Session,
+        tabs: &[Tab],
+    ) -> VecDeque<CommandSuggestionEntry> {
+        let from_session: VecDeque<_> = session
+            .global_shell_history
+            .iter()
+            .filter_map(|entry| {
+                let command = entry.command.trim();
+                (!command.is_empty()).then(|| CommandSuggestionEntry {
+                    command: command.to_string(),
+                    cwd: entry.cwd.clone(),
+                })
+            })
+            .collect();
+        if !from_session.is_empty() {
+            return from_session;
+        }
+
+        let mut aggregated = VecDeque::new();
+        for tab in tabs {
+            for entries in tab.shell_history.values() {
+                for entry in entries {
+                    if let Some(existing_idx) = aggregated
+                        .iter()
+                        .position(|existing: &CommandSuggestionEntry| existing.command == entry.command)
+                    {
+                        aggregated.remove(existing_idx);
+                    }
+                    aggregated.push_back(entry.clone());
+                    while aggregated.len() > MAX_GLOBAL_SHELL_HISTORY {
+                        aggregated.pop_front();
+                    }
+                }
+            }
+        }
+        aggregated
     }
 
     fn on_new_conversation(
@@ -3858,44 +3909,41 @@ impl ConWorkspace {
         }
         history.push_back(CommandSuggestionEntry {
             command: trimmed.to_string(),
-            cwd,
+            cwd: cwd.clone(),
         });
         while history.len() > MAX_SHELL_HISTORY_PER_PANE {
             history.pop_front();
         }
+
+        if let Some(existing_idx) = self
+            .global_shell_history
+            .iter()
+            .position(|entry| entry.command == trimmed)
+        {
+            self.global_shell_history.remove(existing_idx);
+        }
+        self.global_shell_history.push_back(CommandSuggestionEntry {
+            command: trimmed.to_string(),
+            cwd,
+        });
+        while self.global_shell_history.len() > MAX_GLOBAL_SHELL_HISTORY {
+            self.global_shell_history.pop_front();
+        }
     }
 
-    fn recent_shell_commands(
-        &self,
-        tab_idx: usize,
-        pane_id: usize,
-        limit: usize,
-    ) -> Vec<String> {
-        self.tabs
-            .get(tab_idx)
-            .and_then(|tab| tab.shell_history.get(&pane_id))
-            .map(|history| {
-                history
-                    .iter()
-                    .rev()
-                    .take(limit)
-                    .map(|entry| entry.command.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+    fn recent_shell_commands(&self, limit: usize) -> Vec<String> {
+        self.global_shell_history
+            .iter()
+            .rev()
+            .take(limit)
+            .map(|entry| entry.command.clone())
+            .collect()
     }
 
-    fn history_completion_for_prefix(
-        &self,
-        tab_idx: usize,
-        pane_id: usize,
-        prefix: &str,
-        cwd: Option<&str>,
-    ) -> Option<String> {
-        let history = self.tabs.get(tab_idx)?.shell_history.get(&pane_id)?;
+    fn history_completion_for_prefix(&self, prefix: &str, cwd: Option<&str>) -> Option<String> {
         let mut fallback: Option<String> = None;
 
-        for entry in history.iter().rev() {
+        for entry in self.global_shell_history.iter().rev() {
             if entry.command == prefix || !entry.command.starts_with(prefix) {
                 continue;
             }
@@ -3942,9 +3990,7 @@ impl ConWorkspace {
             .find_map(|(id, terminal)| (id == pane_id).then_some(terminal));
         let cwd = pane.as_ref().and_then(|pane| pane.current_dir(cx));
 
-        if let Some(history_match) =
-            self.history_completion_for_prefix(self.active_tab, pane_id, &text, cwd.as_deref())
-        {
+        if let Some(history_match) = self.history_completion_for_prefix(&text, cwd.as_deref()) {
             self.shell_suggestion_engine.cancel();
             self.input_bar.update(cx, |bar, _cx| {
                 bar.set_history_inline_suggestion(&text, &history_match);
@@ -3987,7 +4033,7 @@ impl ConWorkspace {
         let prefix = text.clone();
         let callback_prefix = prefix.clone();
         let tab_idx = self.active_tab;
-        let recent_commands = self.recent_shell_commands(tab_idx, pane_id, 6);
+        let recent_commands = self.recent_shell_commands(6);
         self.shell_suggestion_engine.request(
             &prefix,
             SuggestionContext {
@@ -4030,10 +4076,7 @@ impl ConWorkspace {
             .find_map(|(id, terminal)| (id == result.pane_id).then(|| terminal.current_dir(cx)))
             .flatten();
 
-        if self
-            .history_completion_for_prefix(self.active_tab, result.pane_id, &text, cwd.as_deref())
-            .is_some()
-        {
+        if self.history_completion_for_prefix(&text, cwd.as_deref()).is_some() {
             return;
         }
 
@@ -4273,10 +4316,32 @@ impl ConWorkspace {
         if pane_tree.pane_count() > 1 {
             // Close the specific pane whose process exited, not the focused pane.
             if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
+                let closing = pane_tree
+                    .all_terminals()
+                    .into_iter()
+                    .find(|terminal| terminal.entity_id() == entity_id)
+                    .cloned();
                 pane_tree.close_pane(pane_id);
+                let surviving_terminals: Vec<TerminalPane> =
+                    pane_tree.all_terminals().into_iter().cloned().collect();
+                for terminal in &surviving_terminals {
+                    terminal.set_native_view_visible(true, cx);
+                    terminal.ensure_surface(window, cx);
+                    terminal.notify(cx);
+                }
+                if let Some(closing) = closing {
+                    cx.on_next_frame(window, move |_workspace, _window, cx| {
+                        closing.shutdown_surface(cx);
+                        for terminal in &surviving_terminals {
+                            terminal.notify(cx);
+                        }
+                    });
+                }
             }
             if tab_idx == self.active_tab {
-                pane_tree.focused_terminal().focus(window, cx);
+                let focused = pane_tree.focused_terminal();
+                focused.set_focus_state(true, cx);
+                focused.focus(window, cx);
             }
         } else if self.tabs.len() > 1 {
             // Last pane in this tab — close the tab.
@@ -4491,9 +4556,10 @@ impl Render for ConWorkspace {
             bar.set_cwd(display_cwd);
             bar.set_skills(skill_entries);
         });
-        let recent_commands = match self.input_bar.read(cx).target_pane_ids().as_slice() {
-            [pane_id] => self.recent_shell_commands(self.active_tab, *pane_id, 40),
-            _ => Vec::new(),
+        let recent_commands = if self.input_bar.read(cx).mode() == InputMode::Agent {
+            Vec::new()
+        } else {
+            self.recent_shell_commands(40)
         };
         self.input_bar
             .update(cx, |bar, _cx| bar.set_recent_commands(recent_commands));
@@ -4586,8 +4652,12 @@ impl Render for ConWorkspace {
                                         .left(px(-2.0))
                                         .w(px(5.0))
                                         .cursor_col_resize()
-                                        .bg(theme.transparent)
-                                        .hover(|s| s.bg(theme.muted.opacity(0.05)))
+                                        .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                                        .hover(|s| {
+                                            s.bg(theme.background.opacity(
+                                                (elevated_ui_surface_opacity + 0.08).min(1.0),
+                                            ))
+                                        })
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(

@@ -80,7 +80,7 @@ fn register_command_prompt_language() {
     bash.name = "con-shell".into();
     bash.highlights = bash
         .highlights
-        .replace("(command_name) @function", "(command_name) @variable")
+        .replace("(command_name) @function", "(command_name) @keyword")
         .replace("(variable_name) @property", "(variable_name) @variable")
         .replace(
             "(command (_) @constant)\n  (#match? @constant \"^-\")",

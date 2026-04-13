@@ -2597,7 +2597,6 @@ impl SettingsPanel {
         let temperature_input = self.temperature_input.clone();
         let active_provider_select = self.active_provider_select.clone();
         let active_model_select = self.active_model_select.clone();
-        let ai_purpose_select = self.ai_purpose_select.clone();
         let suggestion_provider_select = self.suggestion_provider_select.clone();
         let suggestion_model_select = self.suggestion_model_select.clone();
         let routing_card = card(theme, card_opacity).child(
@@ -2640,12 +2639,6 @@ impl SettingsPanel {
                     "Model override for the currently active provider.",
                     &active_model_select,
                     "Select a model…",
-                    theme,
-                ))
-                .child(select_row(
-                    "Agent Stance",
-                    "This changes the built-in agent's behavioral bias, not which model handles suggestions.",
-                    &ai_purpose_select,
                     theme,
                 ))
                 .child(toggle_row(

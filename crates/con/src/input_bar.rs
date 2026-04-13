@@ -856,85 +856,95 @@ impl Render for InputBar {
                 theme.muted_foreground.opacity(0.8)
             };
             Some(
-                Button::new("pane-scope")
-                    .label(scope_label)
-                    .small()
-                    .ghost()
-                    .icon(
-                        gpui_component::Icon::default()
-                            .path(scope_icon)
-                            .text_color(scope_tint),
-                    )
-                    .text_color(if all_selected || selected_ids.len() > 1 {
-                        theme.primary
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .dropdown_menu(move |menu: PopupMenu, _window, _cx| {
-                        let focused_default = selected_ids.is_empty();
-                        let mut menu = menu.item(
-                                PopupMenuItem::new("Focused pane")
-                                    .checked(focused_default)
-                                    .on_click({
-                                        let entity = entity.clone();
-                                        move |_, window, cx| {
-                                            let _ = entity.update(cx, |this, cx| {
-                                                this.set_focused_scope(cx);
-                                                this.current_input_state()
-                                                    .update(cx, |state, cx| state.focus(window, cx));
-                                            });
-                                        }
-                                    }),
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        Button::new("pane-scope")
+                            .label(scope_label)
+                            .xsmall()
+                            .compact()
+                            .ghost()
+                            .icon(
+                                gpui_component::Icon::default()
+                                    .path(scope_icon)
+                                    .text_color(scope_tint),
                             )
-                            .item(
-                                PopupMenuItem::new("Broadcast to all panes")
-                                    .checked(!panes.is_empty() && selected_ids.len() == panes.len())
-                                    .on_click({
-                                        let entity = entity.clone();
-                                        move |_, window, cx| {
-                                            let _ = entity.update(cx, |this, cx| {
-                                                this.toggle_select_all(window, cx);
-                                                this.current_input_state()
-                                                    .update(cx, |state, cx| state.focus(window, cx));
-                                            });
-                                        }
-                                    }),
-                            )
-                            .separator();
-
-                        for pane in &panes {
-                            let pane_id = pane.id;
-                            let checked = if focused_default {
-                                pane_id == focused_pane_id
+                            .text_color(if all_selected || selected_ids.len() > 1 {
+                                theme.primary
                             } else {
-                                selected_ids.contains(&pane_id)
-                            };
-                            let label = format!(
-                                "{}  {}",
-                                if pane.is_alive {
-                                    if pane.is_busy { "●" } else { "○" }
-                                } else {
-                                    "◌"
-                                },
-                                Self::pane_target_label(pane)
-                            );
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(checked)
-                                    .on_click({
-                                        let entity = entity.clone();
-                                        move |_, window, cx| {
-                                            let _ = entity.update(cx, |this, cx| {
-                                                this.toggle_scope_pane(pane_id, window, cx);
-                                                this.current_input_state()
-                                                    .update(cx, |state, cx| state.focus(window, cx));
-                                            });
-                                        }
-                                    }),
-                            );
-                        }
-                        menu
-                    })
+                                theme.muted_foreground
+                            })
+                            .dropdown_menu(move |menu: PopupMenu, _window, _cx| {
+                                let focused_default = selected_ids.is_empty();
+                                let mut menu = menu
+                                    .item(
+                                        PopupMenuItem::new("Focused pane")
+                                            .checked(focused_default)
+                                            .on_click({
+                                                let entity = entity.clone();
+                                                move |_, window, cx| {
+                                                    let _ = entity.update(cx, |this, cx| {
+                                                        this.set_focused_scope(cx);
+                                                        this.current_input_state().update(cx, |state, cx| {
+                                                            state.focus(window, cx)
+                                                        });
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new("Broadcast to all panes")
+                                            .checked(!panes.is_empty() && selected_ids.len() == panes.len())
+                                            .on_click({
+                                                let entity = entity.clone();
+                                                move |_, window, cx| {
+                                                    let _ = entity.update(cx, |this, cx| {
+                                                        this.toggle_select_all(window, cx);
+                                                        this.current_input_state().update(cx, |state, cx| {
+                                                            state.focus(window, cx)
+                                                        });
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                    .separator();
+
+                                for pane in &panes {
+                                    let pane_id = pane.id;
+                                    let checked = if focused_default {
+                                        pane_id == focused_pane_id
+                                    } else {
+                                        selected_ids.contains(&pane_id)
+                                    };
+                                    let label = format!(
+                                        "{}  {}",
+                                        if pane.is_alive {
+                                            if pane.is_busy { "●" } else { "○" }
+                                        } else {
+                                            "◌"
+                                        },
+                                        Self::pane_target_label(pane)
+                                    );
+                                    menu = menu.item(
+                                        PopupMenuItem::new(label)
+                                            .checked(checked)
+                                            .on_click({
+                                                let entity = entity.clone();
+                                                move |_, window, cx| {
+                                                    let _ = entity.update(cx, |this, cx| {
+                                                        this.toggle_scope_pane(pane_id, window, cx);
+                                                        this.current_input_state().update(cx, |state, cx| {
+                                                            state.focus(window, cx)
+                                                        });
+                                                    });
+                                                }
+                                            }),
+                                    );
+                                }
+                                menu
+                            }),
+                    )
                     .into_any_element(),
             )
         } else {
