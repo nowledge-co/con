@@ -7,10 +7,10 @@
 <p align="center">
   Open source. Fast. Terminal-first.
 </p>
-
 <p align="center">
-  Built for local coding, SSH, tmux, and agent-native workflows.
+  Built for SSH, tmux, and agent-native workflows.
 </p>
+
 
 
 
@@ -25,9 +25,9 @@
 
 ## Why con?
 
-If you're an old-school terminal user and only want enough AI harness when needed, `con` is for you.
+If you're an old-school terminal user and only want enough AI harness when needed, nothing more or less, `con` is for you.
 
-Think of it like a beloved old beast with modern Bluetooth done right — or a truck lover who still wants an electric future.
+Think of it like a beloved old beast with modern Bluetooth done right, or a truck lover who still wants an electric future.
 
 ## What it does
 
