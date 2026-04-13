@@ -637,7 +637,17 @@ impl Render for InputBar {
         let all_selected =
             !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len();
         let pane_row = if has_multiple_panes {
-            let mut pills = div().flex().items_center().gap(px(2.0));
+            let mut pills = div()
+                .flex()
+                .items_center()
+                .gap(px(3.0))
+                .h(px(24.0))
+                .px(px(4.0))
+                .rounded(px(7.0))
+                .bg(theme.muted.opacity(0.08))
+                .overflow_hidden()
+                .min_w(px(0.0))
+                .max_w(px(220.0));
 
             for pane in &self.panes {
                 let pane_id = pane.id;
@@ -671,14 +681,19 @@ impl Render for InputBar {
                         .flex()
                         .items_center()
                         .gap(px(3.0))
-                        .h(px(20.0))
+                        .h(px(18.0))
                         .px(px(6.0))
-                        .rounded(px(4.0))
-                        .text_size(px(10.0))
-                        .font_weight(FontWeight::MEDIUM)
+                        .rounded(px(5.0))
+                        .flex_shrink_0()
+                        .text_size(px(9.5))
+                        .font_weight(if is_target {
+                            FontWeight::SEMIBOLD
+                        } else {
+                            FontWeight::MEDIUM
+                        })
                         .cursor_pointer()
                         .bg(if is_target {
-                            theme.muted.opacity(0.14)
+                            theme.background.opacity(0.55)
                         } else {
                             theme.transparent
                         })
@@ -706,12 +721,18 @@ impl Render for InputBar {
                     .items_center()
                     .justify_center()
                     .gap(px(3.0))
-                    .h(px(20.0))
+                    .h(px(18.0))
                     .px(px(5.0))
-                    .rounded(px(4.0))
+                    .rounded(px(5.0))
+                    .flex_shrink_0()
                     .text_size(px(9.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .cursor_pointer()
+                    .bg(if all_selected {
+                        theme.primary.opacity(0.10)
+                    } else {
+                        theme.transparent
+                    })
                     .text_color(if all_selected {
                         theme.primary
                     } else {
@@ -795,7 +816,7 @@ impl Render for InputBar {
             _ => rems(1.25),
         };
         let input_vertical_offset = match self.mode {
-            InputMode::Agent => px(-1.0),
+            InputMode::Agent => px(-2.0),
             _ => px(0.0),
         };
         let show_inline_suggestion = self.mode != InputMode::Agent
@@ -972,15 +993,26 @@ impl Render for InputBar {
                 div()
                     .relative()
                     .top(input_vertical_offset)
-                    .child(
+                    .child(if self.mode == InputMode::Agent {
                         Input::new(&input_state)
                             .appearance(false)
                             .cleanable(false)
                             .font_family(input_font)
                             .text_size(input_text_size)
                             .line_height(input_line_height)
-                            .h(px(24.0)),
-                    ),
+                            .pl(px(0.0))
+                            .h(px(24.0))
+                            .into_any_element()
+                    } else {
+                        Input::new(&input_state)
+                            .appearance(false)
+                            .cleanable(false)
+                            .font_family(input_font)
+                            .text_size(input_text_size)
+                            .line_height(input_line_height)
+                            .h(px(24.0))
+                            .into_any_element()
+                    }),
             );
 
         // ── Main layout — flat bar, no rounded bubble ──
@@ -997,21 +1029,18 @@ impl Render for InputBar {
                     .py(px(7.0))
                     .min_h(px(42.0))
                     .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    // Pane pills — above input when multiple panes
+                    .items_center()
+                    .h(px(30.0))
+                    .gap(px(8.0))
+                    .child(mode_prefix)
                     .children(pane_row)
-                    // Input row: mode + field + send
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .h(px(30.0))
-                            .gap(px(8.0))
-                            .child(mode_prefix)
-                            .child(input_field)
-                            .child(send_button),
-                    ),
+                            .flex_1()
+                            .min_w_0()
+                            .child(input_field),
+                    )
+                    .child(send_button),
             )
     }
 }
