@@ -4,10 +4,11 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::clipboard::Clipboard;
 use gpui_component::divider::Divider;
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
 use gpui_component::tag::Tag;
-use gpui_component::{ActiveTheme, Icon, Sizable as _};
+use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _};
 
 /// Max lines to show for tool result previews in collapsed steps
 const TOOL_RESULT_PREVIEW_LINES: usize = 6;
@@ -74,6 +75,11 @@ impl EventEmitter<CancelRequest> for AgentPanel {}
 /// Emitted when user clicks "Allow All" to enable auto-approve for the session.
 pub struct EnableAutoApprove;
 impl EventEmitter<EnableAutoApprove> for AgentPanel {}
+
+pub struct SelectSessionModel {
+    pub model: String,
+}
+impl EventEmitter<SelectSessionModel> for AgentPanel {}
 
 /// Emitted when user edits and resubmits a previous message.
 /// The workspace truncates the conversation and re-sends.
@@ -390,6 +396,7 @@ pub struct AgentPanel {
     conversation_list: Vec<ConversationSummary>,
     auto_approve: bool,
     model_name: String,
+    session_model_select: Entity<SelectState<SearchableVec<String>>>,
     content_reveal: MotionValue,
     /// Index of user message currently being edited inline (None = not editing)
     editing_msg_idx: Option<usize>,
@@ -465,8 +472,39 @@ impl PanelMessage {
 }
 
 impl AgentPanel {
+    fn build_model_select(
+        current: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<SearchableVec<String>>> {
+        let options = if current.is_empty() {
+            SearchableVec::new(Vec::<String>::new())
+        } else {
+            SearchableVec::new(vec![current.to_string()])
+        };
+        let selected_index = if current.is_empty() {
+            None
+        } else {
+            Some(IndexPath::new(0))
+        };
+        cx.new(|cx| SelectState::new(options, selected_index, window, cx).searchable(true))
+    }
+
     #[allow(dead_code)]
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let session_model_select = Self::build_model_select("", window, cx);
+        cx.subscribe_in(
+            &session_model_select,
+            window,
+            |_, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(model)) = event {
+                    cx.emit(SelectSessionModel {
+                        model: model.clone(),
+                    });
+                }
+            },
+        )
+        .detach();
         Self {
             state: PanelState::new(),
             scroll_handle: ScrollHandle::new(),
@@ -475,6 +513,7 @@ impl AgentPanel {
             conversation_list: Vec::new(),
             auto_approve: false,
             model_name: String::new(),
+            session_model_select,
             content_reveal: MotionValue::new(1.0),
             editing_msg_idx: None,
             edit_input_state: None,
@@ -495,6 +534,19 @@ impl AgentPanel {
         self.model_name = name;
     }
 
+    pub fn set_session_model_options(
+        &mut self,
+        models: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current_model = self.model_name.clone();
+        self.session_model_select.update(cx, |select, cx| {
+            select.set_items(SearchableVec::new(models), window, cx);
+            select.set_selected_value(&current_model, window, cx);
+        });
+    }
+
     pub fn set_auto_approve(&mut self, enabled: bool) {
         self.auto_approve = enabled;
     }
@@ -504,7 +556,20 @@ impl AgentPanel {
     }
 
     /// Create with a pre-populated panel state (e.g. restored from session).
-    pub fn with_state(state: PanelState, _cx: &mut Context<Self>) -> Self {
+    pub fn with_state(state: PanelState, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let session_model_select = Self::build_model_select("", window, cx);
+        cx.subscribe_in(
+            &session_model_select,
+            window,
+            |_, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(model)) = event {
+                    cx.emit(SelectSessionModel {
+                        model: model.clone(),
+                    });
+                }
+            },
+        )
+        .detach();
         Self {
             state,
             scroll_handle: ScrollHandle::new(),
@@ -513,6 +578,7 @@ impl AgentPanel {
             conversation_list: Vec::new(),
             auto_approve: false,
             model_name: String::new(),
+            session_model_select,
             content_reveal: MotionValue::new(1.0),
             editing_msg_idx: None,
             edit_input_state: None,
@@ -3222,7 +3288,17 @@ impl Render for AgentPanel {
             .flex_shrink_0()
             .child(header_left)
             .child({
-                let mut actions = div().flex().items_center().gap(px(2.0));
+                let mut actions = div().flex().items_center().gap(px(6.0));
+
+                actions = actions.child(
+                    div()
+                        .w(px(210.0))
+                        .child(
+                            Select::new(&self.session_model_select)
+                                .placeholder("Model")
+                                .small(),
+                        ),
+                );
 
                 // Stop button
                 if self.state.status != AgentStatus::Idle {

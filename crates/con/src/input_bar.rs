@@ -2,6 +2,8 @@ use gpui::*;
 use gpui_component::{
     ActiveTheme,
     input::{Input, InputEvent, InputState, Position},
+    select::{SearchableVec, Select, SelectEvent, SelectState},
+    Sizable as _,
 };
 
 actions!(
@@ -84,10 +86,12 @@ enum SuggestionSource {
 pub struct InputBar {
     agent_input_state: Entity<InputState>,
     shell_input_state: Entity<InputState>,
+    pane_target_select: Entity<SelectState<SearchableVec<String>>>,
     mode: InputMode,
     cwd: String,
     panes: Vec<PaneInfo>,
     selected_pane_ids: Vec<usize>,
+    last_single_target_id: Option<usize>,
     focused_pane_id: usize,
     skills: Vec<SkillEntry>,
     /// Index of the highlighted skill in the filtered list (for arrow-key nav)
@@ -148,6 +152,16 @@ impl InputBar {
         ]);
     }
 
+    fn make_pane_target_select(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<SearchableVec<String>>> {
+        cx.new(|cx| {
+            SelectState::new(SearchableVec::new(Vec::<String>::new()), None, window, cx)
+                .searchable(true)
+        })
+    }
+
     fn current_input_state(&self) -> Entity<InputState> {
         match self.mode {
             InputMode::Agent => self.agent_input_state.clone(),
@@ -161,6 +175,55 @@ impl InputBar {
         } else {
             text.to_string()
         }
+    }
+
+    fn pane_target_label(pane: &PaneInfo) -> String {
+        let base = if let Some(host) = &pane.hostname {
+            Self::truncate_label(host, 16, 22)
+        } else if pane.name.is_empty() {
+            format!("Pane {}", pane.id)
+        } else {
+            Self::truncate_label(&pane.name, 16, 22)
+        };
+        let status = if !pane.is_alive {
+            "offline"
+        } else if pane.is_busy {
+            "busy"
+        } else if pane.hostname.is_some() {
+            "remote"
+        } else {
+            "local"
+        };
+        format!("{base} · {status} · #{}", pane.id)
+    }
+
+    fn current_single_target_id(&self) -> usize {
+        self.selected_pane_ids
+            .first()
+            .copied()
+            .unwrap_or(self.focused_pane_id)
+    }
+
+    fn sync_pane_target_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let labels: Vec<String> = self.panes.iter().map(Self::pane_target_label).collect();
+        let selected_id = if !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len()
+        {
+            self.last_single_target_id.unwrap_or(self.focused_pane_id)
+        } else {
+            self.current_single_target_id()
+        };
+        let selected_label = self
+            .panes
+            .iter()
+            .find(|pane| pane.id == selected_id)
+            .map(Self::pane_target_label);
+
+        self.pane_target_select.update(cx, |select, cx| {
+            select.set_items(SearchableVec::new(labels), window, cx);
+            if let Some(label) = &selected_label {
+                select.set_selected_value(label, window, cx);
+            }
+        });
     }
 
     fn subscribe_input_state(
@@ -245,6 +308,7 @@ impl InputBar {
             state.set_value("", window, cx);
             state.set_cursor_position(Position::new(0, 0), window, cx);
         });
+        let pane_target_select = Self::make_pane_target_select(window, cx);
 
         let _subscriptions = vec![
             // Track shift state on enter keystrokes — fires BEFORE PressEnter
@@ -253,6 +317,15 @@ impl InputBar {
                     this.shift_enter = event.keystroke.modifiers.shift;
                 }
             }),
+            cx.subscribe_in(
+                &pane_target_select,
+                window,
+                |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                    if let SelectEvent::Confirm(Some(label)) = event {
+                        this.select_pane_target_by_label(label, cx);
+                    }
+                },
+            ),
             Self::subscribe_input_state(&agent_input_state, window, cx),
             Self::subscribe_input_state(&shell_input_state, window, cx),
         ];
@@ -260,10 +333,12 @@ impl InputBar {
         Self {
             agent_input_state,
             shell_input_state,
+            pane_target_select,
             mode: InputMode::Smart,
             cwd: "~".to_string(),
             panes: Vec::new(),
             selected_pane_ids: Vec::new(),
+            last_single_target_id: None,
             focused_pane_id: 0,
             skills: Vec::new(),
             skill_selection: 0,
@@ -301,11 +376,23 @@ impl InputBar {
         self.cwd = cwd;
     }
 
-    pub fn set_panes(&mut self, panes: Vec<PaneInfo>, focused_id: usize) {
+    pub fn set_panes(
+        &mut self,
+        panes: Vec<PaneInfo>,
+        focused_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.panes = panes;
         self.focused_pane_id = focused_id;
         let valid_ids: Vec<usize> = self.panes.iter().map(|p| p.id).collect();
         self.selected_pane_ids.retain(|id| valid_ids.contains(id));
+        if let Some(last_single) = self.last_single_target_id {
+            if !valid_ids.contains(&last_single) {
+                self.last_single_target_id = None;
+            }
+        }
+        self.sync_pane_target_select(window, cx);
     }
 
     pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
@@ -439,11 +526,22 @@ impl InputBar {
         cx.notify();
     }
 
-    fn toggle_pane_selection(&mut self, pane_id: usize, cx: &mut Context<Self>) {
-        if let Some(pos) = self.selected_pane_ids.iter().position(|&id| id == pane_id) {
-            self.selected_pane_ids.remove(pos);
+    fn select_pane_target_by_label(&mut self, label: &str, cx: &mut Context<Self>) {
+        let Some(pane_id) = self
+            .panes
+            .iter()
+            .find(|pane| Self::pane_target_label(pane) == label)
+            .map(|pane| pane.id)
+        else {
+            return;
+        };
+
+        if pane_id == self.focused_pane_id {
+            self.selected_pane_ids.clear();
+            self.last_single_target_id = Some(pane_id);
         } else {
-            self.selected_pane_ids.push(pane_id);
+            self.selected_pane_ids = vec![pane_id];
+            self.last_single_target_id = Some(pane_id);
         }
         self.clear_inline_suggestion();
         cx.emit(InputEdited);
@@ -452,13 +550,17 @@ impl InputBar {
 
     fn toggle_select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_pane_ids.len() == self.panes.len() {
-            // Deselect all — reverts to focused-pane-only
-            self.selected_pane_ids.clear();
+            self.selected_pane_ids = self
+                .last_single_target_id
+                .filter(|id| *id != self.focused_pane_id)
+                .map(|id| vec![id])
+                .unwrap_or_default();
         } else {
-            // Select all
+            self.last_single_target_id = Some(self.current_single_target_id());
             self.selected_pane_ids = self.panes.iter().map(|p| p.id).collect();
             self.set_mode(InputMode::Shell, window, cx);
         }
+        self.sync_pane_target_select(window, cx);
         self.clear_inline_suggestion();
         cx.emit(InputEdited);
         cx.notify();
@@ -633,132 +735,92 @@ impl Render for InputBar {
                     .text_color(mode_tint),
             );
 
-        // ── Pane pills — compact row above input, only with >1 pane ──
+        // ── Pane target control — scales to many panes without growing the row ──
         let all_selected =
             !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len();
         let pane_row = if has_multiple_panes {
-            let mut pills = div()
-                .flex()
-                .items_center()
-                .gap(px(3.0))
-                .h(px(24.0))
-                .px(px(4.0))
-                .rounded(px(7.0))
-                .bg(theme.muted.opacity(0.08))
-                .overflow_hidden()
-                .min_w(px(0.0))
-                .max_w(px(220.0));
+            let target_count = if all_selected {
+                self.panes.len()
+            } else {
+                1
+            };
 
-            for pane in &self.panes {
-                let pane_id = pane.id;
-                let is_target = if self.selected_pane_ids.is_empty() {
-                    pane.id == self.focused_pane_id
-                } else {
-                    self.selected_pane_ids.contains(&pane.id)
-                };
-
-                let dot_color = if !pane.is_alive {
-                    theme.danger
-                } else if pane.is_busy {
-                    theme.warning
-                } else if pane.hostname.is_some() {
-                    theme.primary
-                } else {
-                    theme.success
-                };
-
-                let label = if let Some(host) = &pane.hostname {
-                    Self::truncate_label(host, 8, 10)
-                } else if pane.name.len() > 12 {
-                    Self::truncate_label(&pane.name, 10, 12)
-                } else {
-                    pane.name.clone()
-                };
-
-                pills = pills.child(
-                    div()
-                        .id(SharedString::from(format!("pane-sel-{pane_id}")))
-                        .flex()
-                        .items_center()
-                        .gap(px(3.0))
-                        .h(px(18.0))
-                        .px(px(6.0))
-                        .rounded(px(5.0))
-                        .flex_shrink_0()
-                        .text_size(px(9.5))
-                        .font_weight(if is_target {
-                            FontWeight::SEMIBOLD
-                        } else {
-                            FontWeight::MEDIUM
-                        })
-                        .cursor_pointer()
-                        .bg(if is_target {
-                            theme.background.opacity(0.55)
-                        } else {
-                            theme.transparent
-                        })
-                        .text_color(if is_target {
-                            theme.foreground
-                        } else {
-                            theme.muted_foreground.opacity(0.4)
-                        })
-                        .hover(|s| s.bg(theme.muted.opacity(0.10)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                this.toggle_pane_selection(pane_id, cx);
-                            }),
-                        )
-                        .child(div().size(px(4.0)).rounded_full().bg(dot_color))
-                        .child(label),
-                );
-            }
-
-            pills = pills.child(
+            Some(
                 div()
-                    .id("pane-sel-all")
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .gap(px(3.0))
-                    .h(px(18.0))
-                    .px(px(5.0))
-                    .rounded(px(5.0))
-                    .flex_shrink_0()
-                    .text_size(px(9.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer()
-                    .bg(if all_selected {
-                        theme.primary.opacity(0.10)
-                    } else {
-                        theme.transparent
-                    })
-                    .text_color(if all_selected {
-                        theme.primary
-                    } else {
-                        theme.muted_foreground.opacity(0.3)
-                    })
-                    .hover(|s| s.bg(theme.muted.opacity(0.08)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.toggle_select_all(window, cx);
-                        }),
+                    .gap(px(4.0))
+                    .h(px(24.0))
+                    .px(px(4.0))
+                    .rounded(px(7.0))
+                    .bg(theme.muted.opacity(0.08))
+                    .min_w(px(0.0))
+                    .max_w(px(244.0))
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .max_w(px(176.0))
+                            .flex_1()
+                            .child(
+                                Select::new(&self.pane_target_select)
+                                    .placeholder("Focused pane")
+                                    .small(),
+                            ),
                     )
                     .child(
-                        svg()
-                            .path("phosphor/broadcast-duotone.svg")
-                            .size(px(11.0))
+                        div()
+                            .h(px(14.0))
+                            .w(px(1.0))
+                            .bg(theme.border.opacity(0.55)),
+                    )
+                    .child(
+                        div()
+                            .id("pane-sel-all")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.0))
+                            .h(px(18.0))
+                            .px(px(6.0))
+                            .rounded(px(5.0))
+                            .flex_shrink_0()
+                            .text_size(px(9.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .cursor_pointer()
+                            .bg(if all_selected {
+                                theme.primary.opacity(0.12)
+                            } else {
+                                theme.transparent
+                            })
                             .text_color(if all_selected {
                                 theme.primary
                             } else {
-                                theme.muted_foreground.opacity(0.3)
+                                theme.muted_foreground.opacity(0.5)
+                            })
+                            .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.toggle_select_all(window, cx);
+                                }),
+                            )
+                            .child(
+                                svg()
+                                    .path("phosphor/broadcast-duotone.svg")
+                                    .size(px(11.0))
+                                    .text_color(if all_selected {
+                                        theme.primary
+                                    } else {
+                                        theme.muted_foreground.opacity(0.45)
+                                    }),
+                            )
+                            .child(if all_selected {
+                                format!("{target_count} panes")
+                            } else {
+                                "Broadcast".to_string()
                             }),
-                    )
-                    .child("Broadcast"),
-            );
-
-            Some(pills)
+                    ),
+            )
         } else {
             None
         };
