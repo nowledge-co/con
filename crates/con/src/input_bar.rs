@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui_component::{
     ActiveTheme,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, Position},
 };
 
 actions!(input_bar, [SubmitInput, EscapeInput]);
@@ -283,6 +283,11 @@ impl InputBar {
         completed.push_str(&suffix);
         self.input_state.update(cx, |s, cx| {
             s.set_value(&completed, window, cx);
+            s.set_cursor_position(
+                Position::new(0, completed.encode_utf16().count() as u32),
+                window,
+                cx,
+            );
         });
         self.clear_inline_suggestion();
         cx.emit(InputEdited);
@@ -615,24 +620,24 @@ impl Render for InputBar {
             .bg(theme.title_bar.opacity(self.ui_opacity))
             .font_family(theme.font_family.clone())
             .text_size(px(13.0))
-            // Intercept Tab
-            .on_action(cx.listener(
-                |this, _: &gpui_component::input::IndentInline, window, cx| {
-                    let matches = this.filtered_skills(cx);
-                    if !matches.is_empty() {
-                        let idx = this.skill_selection.min(matches.len().saturating_sub(1));
-                        let name = matches[idx].name.clone();
-                        this.complete_skill(&name, window, cx);
-                    } else if this.accept_inline_suggestion(window, cx) {
-                    } else {
-                        this.cycle_mode(window, cx);
-                    }
-                },
-            ))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let matches = this.filtered_skills(cx);
                 let has_completions = !matches.is_empty();
+                let cursor_at_end = this.input_state.read(cx).cursor()
+                    == this.input_state.read(cx).value().len();
                 match event.keystroke.key.as_str() {
+                    "tab" => {
+                        if has_completions {
+                            let idx = this.skill_selection.min(matches.len().saturating_sub(1));
+                            let name = matches[idx].name.clone();
+                            this.complete_skill(&name, window, cx);
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        } else if this.accept_inline_suggestion(window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
                     "escape" => {
                         if has_completions {
                             this.input_state
@@ -650,8 +655,33 @@ impl Render for InputBar {
                             cx.emit(EscapeInput);
                         }
                     }
-                    "right" if !has_completions => {
-                        let _ = this.accept_inline_suggestion(window, cx);
+                    "right" if !has_completions && cursor_at_end => {
+                        if this.accept_inline_suggestion(window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    "e" if event.keystroke.modifiers.control && !has_completions && cursor_at_end => {
+                        if this.accept_inline_suggestion(window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    "end" if !has_completions && cursor_at_end => {
+                        if this.accept_inline_suggestion(window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    "right"
+                        if event.keystroke.modifiers.platform
+                            && !has_completions
+                            && cursor_at_end =>
+                    {
+                        if this.accept_inline_suggestion(window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
                     }
                     "up" if has_completions => {
                         this.skill_selection = this.skill_selection.saturating_sub(1);
@@ -688,7 +718,7 @@ impl Render for InputBar {
                                 div()
                                     .flex_1()
                                     .relative()
-                                    .font_family(input_font)
+                                    .font_family(input_font.clone())
                                     .text_size(px(13.0))
                                     .children(show_inline_suggestion.then(|| {
                                         div()
@@ -697,9 +727,10 @@ impl Render for InputBar {
                                             .right_0()
                                             .top_0()
                                             .bottom_0()
-                                            .px(px(8.0))
+                                            .px(px(12.0))
                                             .flex()
                                             .items_center()
+                                            .line_height(rems(1.25))
                                             .overflow_hidden()
                                             .child(
                                                 div()
@@ -722,7 +753,9 @@ impl Render for InputBar {
                                     .child(
                                         Input::new(&self.input_state)
                                             .appearance(false)
-                                            .cleanable(false),
+                                            .cleanable(false)
+                                            .font_family(input_font)
+                                            .text_sm(),
                                     ),
                             )
                             .child(send_button),
