@@ -3672,16 +3672,28 @@ impl ConWorkspace {
         // Only close the entire tab when it's down to a single pane.
         let tab = &mut self.tabs[self.active_tab];
         if tab.pane_tree.pane_count() > 1 {
-            // Hide the ghostty NSView of the pane being closed
-            let closing = tab.pane_tree.focused_terminal();
-            closing.shutdown_surface(cx);
+            let closing = tab.pane_tree.focused_terminal().clone();
 
             tab.pane_tree.close_focused();
+
+            let surviving_terminals: Vec<TerminalPane> =
+                tab.pane_tree.all_terminals().into_iter().cloned().collect();
+            for terminal in &surviving_terminals {
+                terminal.set_native_view_visible(true, cx);
+                terminal.ensure_surface(window, cx);
+                terminal.notify(cx);
+            }
 
             // Focus the new focused pane
             let new_focus = tab.pane_tree.focused_terminal();
             new_focus.set_focus_state(true, cx);
             new_focus.focus(window, cx);
+            cx.on_next_frame(window, move |_workspace, _window, cx| {
+                closing.shutdown_surface(cx);
+                for terminal in &surviving_terminals {
+                    terminal.notify(cx);
+                }
+            });
             self.save_session(cx);
             cx.notify();
             return;

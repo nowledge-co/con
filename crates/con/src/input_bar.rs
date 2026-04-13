@@ -241,7 +241,7 @@ impl InputBar {
         let is_focused_default = self.selected_pane_ids.is_empty();
         (
             if is_focused_default {
-                format!("Focused · {title}")
+                "Focused pane".to_string()
             } else {
                 title
             },
@@ -428,6 +428,9 @@ impl InputBar {
     }
 
     pub fn set_recent_commands(&mut self, commands: Vec<String>) {
+        if self.recent_commands == commands {
+            return;
+        }
         self.recent_commands = commands;
         self.history_nav_index = None;
         self.history_nav_draft = None;
@@ -819,7 +822,29 @@ impl Render for InputBar {
         // ── Pane target control — scales to many panes without growing the row ──
         let all_selected =
             !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len();
-        let pane_row = if has_multiple_panes {
+        let pane_row = if has_multiple_panes && self.mode == InputMode::Agent {
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .h(px(24.0))
+                    .px(px(8.0))
+                    .rounded(px(7.0))
+                    .bg(theme.muted.opacity(0.08))
+                    .text_color(theme.muted_foreground.opacity(0.7))
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(
+                        svg()
+                            .path("phosphor/app-window.svg")
+                            .size(px(11.0))
+                            .text_color(theme.muted_foreground.opacity(0.65)),
+                    )
+                    .child("Whole window")
+                    .into_any_element(),
+            )
+        } else if has_multiple_panes {
             let entity = cx.entity();
             let panes = self.panes.clone();
             let selected_ids = self.selected_pane_ids.clone();
@@ -909,7 +934,8 @@ impl Render for InputBar {
                             );
                         }
                         menu
-                    }),
+                    })
+                    .into_any_element(),
             )
         } else {
             None

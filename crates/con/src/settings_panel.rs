@@ -60,7 +60,7 @@ impl SettingsSection {
             Self::General => "phosphor/sliders.svg",
             Self::Appearance => "phosphor/sun.svg",
             Self::Ai => "phosphor/robot.svg",
-            Self::Providers => "phosphor/plug.svg",
+            Self::Providers => "phosphor/plugs-connected.svg",
             Self::Keys => "phosphor/keyboard.svg",
         }
     }
@@ -99,7 +99,7 @@ pub struct SettingsPanel {
 
     suggestion_enabled: bool,
     suggestion_provider_select: Entity<SelectState<SearchableVec<String>>>,
-    suggestion_model_input: Entity<InputState>,
+    suggestion_model_select: Entity<SelectState<SearchableVec<String>>>,
     oauth_states: HashMap<ProviderKind, ProviderOAuthState>,
 
     terminal_font_select: Entity<SelectState<SearchableVec<String>>>,
@@ -638,6 +638,15 @@ impl SettingsPanel {
             .cloned()
     }
 
+    fn effective_suggestion_provider(config: &Config) -> ProviderKind {
+        config
+            .agent
+            .suggestion_model
+            .provider
+            .clone()
+            .unwrap_or_else(|| config.agent.provider.clone())
+    }
+
     fn provider_options() -> Vec<String> {
         SIDEBAR_PROVIDERS
             .iter()
@@ -680,7 +689,7 @@ impl SettingsPanel {
         let pc = agent.providers.get_or_default(&agent.provider);
         let active_provider_select = Self::make_searchable_string_select(
             &Self::provider_options(),
-            provider_label(&agent.provider),
+            provider_label(&Self::sidebar_provider_kind(&agent.provider)),
             window,
             cx,
         );
@@ -750,19 +759,17 @@ impl SettingsPanel {
             window,
             cx,
         );
-        let suggestion_model_input = cx.new(|cx| {
-            let mut s = InputState::new(window, cx);
-            s.set_placeholder("Same as agent model", window, cx);
-            s.set_value(
-                &agent.suggestion_model.model.clone().unwrap_or_default(),
-                window,
-                cx,
-            );
-            s
-        });
+        let suggestion_provider = Self::effective_suggestion_provider(config);
         let suggestion_provider_select = Self::make_searchable_string_select(
             &Self::suggestion_provider_options(),
             &Self::suggestion_provider_label(agent.suggestion_model.provider.as_ref()),
+            window,
+            cx,
+        );
+        let suggestion_model_select = Self::make_model_select(
+            &suggestion_provider,
+            &agent.suggestion_model.model,
+            &registry,
             window,
             cx,
         );
@@ -915,6 +922,44 @@ impl SettingsPanel {
         )
         .detach();
         cx.subscribe_in(
+            &suggestion_provider_select,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.config.agent.suggestion_model.provider =
+                        Self::suggestion_provider_from_label(value);
+                    let provider = this
+                        .config
+                        .agent
+                        .suggestion_model
+                        .provider
+                        .clone()
+                        .unwrap_or_else(|| this.config.agent.provider.clone());
+                    let selected_model = this.config.agent.suggestion_model.model.clone();
+                    this.suggestion_model_select = Self::make_model_select(
+                        &provider,
+                        &selected_model,
+                        &this.registry,
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &suggestion_model_select,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.config.agent.suggestion_model.model = Some(value.clone());
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
             &ai_purpose_select,
             window,
             |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
@@ -993,7 +1038,7 @@ impl SettingsPanel {
             ai_purpose_select,
             suggestion_enabled: config.agent.suggestion_model.enabled,
             suggestion_provider_select,
-            suggestion_model_input,
+            suggestion_model_select,
             oauth_states: HashMap::new(),
             terminal_font_select,
             ui_font_select,
@@ -1036,7 +1081,11 @@ impl SettingsPanel {
                 )
             });
             self.active_provider_select.update(cx, |select, cx| {
-                select.set_selected_value(&provider_label(&agent.provider).to_string(), window, cx);
+                select.set_selected_value(
+                    &provider_label(&Self::sidebar_provider_kind(&agent.provider)).to_string(),
+                    window,
+                    cx,
+                );
             });
             self.active_model_select = Self::make_model_select(
                 &agent.provider,
@@ -1048,13 +1097,6 @@ impl SettingsPanel {
             self.ai_purpose_select.update(cx, |select, cx| {
                 select.set_selected_value(&Self::ai_purpose_label(agent.purpose).to_string(), window, cx);
             });
-            self.suggestion_model_input.update(cx, |s, cx| {
-                s.set_value(
-                    &agent.suggestion_model.model.clone().unwrap_or_default(),
-                    window,
-                    cx,
-                )
-            });
             self.suggestion_enabled = agent.suggestion_model.enabled;
             self.suggestion_provider_select.update(cx, |select, cx| {
                 select.set_selected_value(
@@ -1063,6 +1105,13 @@ impl SettingsPanel {
                     cx,
                 );
             });
+            self.suggestion_model_select = Self::make_model_select(
+                &Self::effective_suggestion_provider(&self.config),
+                &agent.suggestion_model.model,
+                &self.registry,
+                window,
+                cx,
+            );
             self.auto_approve = agent.auto_approve_tools;
             self.model_select =
                 Self::make_model_select(&agent.provider, &pc.model, &self.registry, window, cx);
@@ -1390,7 +1439,12 @@ impl SettingsPanel {
             .selected_value()
             .cloned()
             .unwrap_or_else(|| "Same as active provider".to_string());
-        let suggestion_model_text = self.suggestion_model_input.read(cx).value().to_string();
+        let suggestion_model_text = self
+            .suggestion_model_select
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default();
         let font_size_text = self.font_size_input.read(cx).value().to_string();
 
         // Save current provider's per-provider fields into the map
@@ -2545,7 +2599,7 @@ impl SettingsPanel {
         let active_model_select = self.active_model_select.clone();
         let ai_purpose_select = self.ai_purpose_select.clone();
         let suggestion_provider_select = self.suggestion_provider_select.clone();
-        let suggestion_model_input = self.suggestion_model_input.clone();
+        let suggestion_model_select = self.suggestion_model_select.clone();
         let routing_card = card(theme, card_opacity).child(
             div()
                 .px(px(14.0))
@@ -2589,8 +2643,8 @@ impl SettingsPanel {
                     theme,
                 ))
                 .child(select_row(
-                    "AI Purpose",
-                    "Build executes proactively, Explain stays analysis-first, and Operate stays terminal-first.",
+                    "Agent Stance",
+                    "This changes the built-in agent's behavioral bias, not which model handles suggestions.",
                     &ai_purpose_select,
                     theme,
                 ))
@@ -2632,10 +2686,11 @@ impl SettingsPanel {
                 .child(
                     div()
                         .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
-                        .child(stacked_input_field(
+                        .child(searchable_select_row(
                             "Suggestions Model",
-                            "Optional override for short command completions in the bottom input bar.",
-                            &suggestion_model_input,
+                            "Choose a faster or cheaper model for command completion when history has no strong match.",
+                            &suggestion_model_select,
+                            "Select a suggestion model…",
                             theme,
                         )),
                 ),
