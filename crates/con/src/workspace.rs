@@ -16,7 +16,7 @@ const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, InlineInputSubmit,
     InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
-    RerunFromMessage, SelectSessionModel,
+    RerunFromMessage, SelectSessionModel, SelectSessionProvider,
 };
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{
@@ -436,6 +436,8 @@ impl ConWorkspace {
         cx.subscribe_in(&agent_panel, window, Self::on_cancel_request)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_enable_auto_approve)
+            .detach();
+        cx.subscribe_in(&agent_panel, window, Self::on_select_session_provider)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_select_session_model)
             .detach();
@@ -1996,6 +1998,36 @@ impl ConWorkspace {
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_model_name(event.model.clone());
             panel.set_session_model_options(self.model_registry.models_for(&provider), window, cx);
+        });
+
+        self.settings_panel.update(cx, |settings, _cx| {
+            let agent = settings.agent_config_mut();
+            agent.provider = config.provider.clone();
+            agent.providers = config.providers.clone();
+        });
+
+        cx.notify();
+    }
+
+    fn on_select_session_provider(
+        &mut self,
+        _panel: &Entity<AgentPanel>,
+        event: &SelectSessionProvider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut config = self.harness.config().clone();
+        config.provider = event.provider.clone();
+        self.harness.update_config(config.clone());
+
+        let provider = config.provider.clone();
+        let model_name = self.harness.active_model_name();
+        let available_models = self.model_registry.models_for(&provider);
+
+        self.agent_panel.update(cx, |panel, cx| {
+            panel.set_provider_name(provider.clone(), window, cx);
+            panel.set_model_name(model_name);
+            panel.set_session_model_options(available_models, window, cx);
         });
 
         self.settings_panel.update(cx, |settings, _cx| {
@@ -4447,12 +4479,19 @@ impl Render for ConWorkspace {
             bar.set_cwd(display_cwd);
             bar.set_skills(skill_entries);
         });
+        let recent_commands = match self.input_bar.read(cx).target_pane_ids().as_slice() {
+            [pane_id] => self.recent_shell_commands(self.active_tab, *pane_id, 40),
+            _ => Vec::new(),
+        };
+        self.input_bar
+            .update(cx, |bar, _cx| bar.set_recent_commands(recent_commands));
 
         // Sync model name, inline input, and skills to agent panel
         let model_name = self.harness.active_model_name();
+        let provider = self.harness.config().provider.clone();
         let available_models = self
             .model_registry
-            .models_for(&self.harness.config().provider);
+            .models_for(&provider);
         let show_inline = !self.input_bar_visible && self.agent_panel_open;
         let panel_skills: Vec<crate::input_bar::SkillEntry> = self
             .harness
@@ -4464,6 +4503,7 @@ impl Render for ConWorkspace {
             })
             .collect();
         self.agent_panel.update(cx, |panel, cx| {
+            panel.set_provider_name(provider, window, cx);
             panel.set_model_name(model_name);
             panel.set_session_model_options(available_models, window, cx);
             panel.set_show_inline_input(show_inline);

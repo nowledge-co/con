@@ -40,6 +40,7 @@ enum SettingsSection {
     General,
     Appearance,
     Ai,
+    Providers,
     Keys,
 }
 
@@ -49,6 +50,7 @@ impl SettingsSection {
             Self::General => "General",
             Self::Appearance => "Appearance",
             Self::Ai => "AI",
+            Self::Providers => "Providers",
             Self::Keys => "Keys",
         }
     }
@@ -58,6 +60,7 @@ impl SettingsSection {
             Self::General => "phosphor/sliders.svg",
             Self::Appearance => "phosphor/sun.svg",
             Self::Ai => "phosphor/robot.svg",
+            Self::Providers => "phosphor/plug.svg",
             Self::Keys => "phosphor/keyboard.svg",
         }
     }
@@ -67,6 +70,7 @@ const ALL_SECTIONS: &[SettingsSection] = &[
     SettingsSection::General,
     SettingsSection::Appearance,
     SettingsSection::Ai,
+    SettingsSection::Providers,
     SettingsSection::Keys,
 ];
 
@@ -80,6 +84,8 @@ pub struct SettingsPanel {
     overlay_motion: MotionValue,
 
     selected_provider: ProviderKind,
+    active_provider_select: Entity<SelectState<SearchableVec<String>>>,
+    active_model_select: Entity<SelectState<SearchableVec<String>>>,
     model_input: Entity<InputState>,
     model_select: Entity<SelectState<SearchableVec<String>>>,
     endpoint_preset_select: Entity<SelectState<Vec<String>>>,
@@ -632,6 +638,13 @@ impl SettingsPanel {
             .cloned()
     }
 
+    fn provider_options() -> Vec<String> {
+        SIDEBAR_PROVIDERS
+            .iter()
+            .map(|provider| provider_label(provider).to_string())
+            .collect()
+    }
+
     fn ai_purpose_options() -> &'static [&'static str] {
         &["Build", "Explain", "Operate"]
     }
@@ -665,6 +678,14 @@ impl SettingsPanel {
     ) -> Self {
         let agent = &config.agent;
         let pc = agent.providers.get_or_default(&agent.provider);
+        let active_provider_select = Self::make_searchable_string_select(
+            &Self::provider_options(),
+            provider_label(&agent.provider),
+            window,
+            cx,
+        );
+        let active_model_select =
+            Self::make_model_select(&agent.provider, &pc.model, &registry, window, cx);
 
         let model_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
@@ -854,6 +875,46 @@ impl SettingsPanel {
         )
         .detach();
         cx.subscribe_in(
+            &active_provider_select,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    if let Some(provider) = Self::suggestion_provider_from_label(value) {
+                        this.config.agent.provider = provider.clone();
+                        let current_model = this
+                            .config
+                            .agent
+                            .providers
+                            .get(&provider)
+                            .and_then(|pc| pc.model.clone());
+                        this.active_model_select = Self::make_model_select(
+                            &provider,
+                            &current_model,
+                            &this.registry,
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &active_model_select,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    let provider = this.config.agent.provider.clone();
+                    let mut pc = this.config.agent.providers.get_or_default(&provider);
+                    pc.model = Some(value.clone());
+                    this.config.agent.providers.set(&provider, pc);
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
             &ai_purpose_select,
             window,
             |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
@@ -918,6 +979,8 @@ impl SettingsPanel {
             active_section: SettingsSection::General,
             overlay_motion: MotionValue::new(0.0),
             selected_provider: config.agent.provider.clone(),
+            active_provider_select,
+            active_model_select,
             model_input,
             model_select,
             endpoint_preset_select,
@@ -972,6 +1035,16 @@ impl SettingsPanel {
                     cx,
                 )
             });
+            self.active_provider_select.update(cx, |select, cx| {
+                select.set_selected_value(&provider_label(&agent.provider).to_string(), window, cx);
+            });
+            self.active_model_select = Self::make_model_select(
+                &agent.provider,
+                &agent.providers.get(&agent.provider).and_then(|pc| pc.model.clone()),
+                &self.registry,
+                window,
+                cx,
+            );
             self.ai_purpose_select.update(cx, |select, cx| {
                 select.set_selected_value(&Self::ai_purpose_label(agent.purpose).to_string(), window, cx);
             });
@@ -1325,7 +1398,6 @@ impl SettingsPanel {
         self.config.agent.providers.set(&self.selected_provider, pc);
 
         // Update global fields
-        self.config.agent.provider = self.selected_provider.clone();
         self.config.agent.max_turns = max_turns_text.parse().unwrap_or(10);
         self.config.agent.temperature = if temperature_text.is_empty() {
             None
@@ -1564,12 +1636,90 @@ impl SettingsPanel {
         );
 
         let theme = cx.theme();
-        section_content(
+
+        // Build the Updates card (only shown for channels that poll)
+        let channel = con_core::release_channel::current();
+        let show_updates = channel.polls_for_updates();
+
+        let mut container = section_content(
             "General",
             "Terminal defaults and shared app behavior.",
             theme,
-        )
-        .child(
+        );
+
+        if show_updates {
+            let updater_active = {
+                #[cfg(target_os = "macos")]
+                { crate::updater::is_active() }
+                #[cfg(not(target_os = "macos"))]
+                { false }
+            };
+            let update_status = if updater_active {
+                "Auto-update enabled"
+            } else {
+                "Auto-update disabled"
+            };
+
+            container = container.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("Updates", &theme))
+                    .child(
+                        card(theme, card_opacity)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px(px(16.0))
+                                    .h(px(44.0))
+                                    .child(div().text_sm().child("Channel"))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(theme.muted_foreground)
+                                            .child(channel.display_name()),
+                                    ),
+                            )
+                            .child(row_separator(&theme))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px(px(16.0))
+                                    .h(px(44.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(2.0))
+                                            .child(div().text_sm().child("Status"))
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.0))
+                                                    .text_color(theme.muted_foreground.opacity(0.6))
+                                                    .child(update_status),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new("check-updates")
+                                            .small()
+                                            .ghost()
+                                            .label("Check for Updates")
+                                            .on_click(cx.listener(|_this, _, _window, _cx| {
+                                                #[cfg(target_os = "macos")]
+                                                crate::updater::check_for_updates();
+                                            })),
+                                    ),
+                            ),
+                    ),
+            );
+        }
+
+        container.child(
             card(theme, card_opacity).child(
                 div()
                     .flex()
@@ -2389,15 +2539,158 @@ impl SettingsPanel {
     fn render_ai(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let card_opacity = self.card_opacity();
+        let max_turns_input = self.max_turns_input.clone();
+        let temperature_input = self.temperature_input.clone();
+        let active_provider_select = self.active_provider_select.clone();
+        let active_model_select = self.active_model_select.clone();
+        let ai_purpose_select = self.ai_purpose_select.clone();
+        let suggestion_provider_select = self.suggestion_provider_select.clone();
+        let suggestion_model_input = self.suggestion_model_input.clone();
+        let routing_card = card(theme, card_opacity).child(
+            div()
+                .px(px(14.0))
+                .py(px(12.0))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Routing"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(theme.muted_foreground)
+                                .child(
+                                    "Choose the provider and model Con should use by default. Connection details live under Providers.",
+                                ),
+                        ),
+                )
+                .child(searchable_select_row(
+                    "Active Provider",
+                    "Default provider for the agent panel, command palette actions, and AI fallback suggestions.",
+                    &active_provider_select,
+                    "Select a provider…",
+                    theme,
+                ))
+                .child(searchable_select_row(
+                    "Active Model",
+                    "Model override for the currently active provider.",
+                    &active_model_select,
+                    "Select a model…",
+                    theme,
+                ))
+                .child(select_row(
+                    "AI Purpose",
+                    "Build executes proactively, Explain stays analysis-first, and Operate stays terminal-first.",
+                    &ai_purpose_select,
+                    theme,
+                ))
+                .child(toggle_row(
+                    "Auto-Approve Tools",
+                    "Allow the agent to run tools without per-action confirmation in this app session.",
+                    Switch::new("auto-approve-toggle")
+                        .checked(self.auto_approve)
+                        .small()
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.auto_approve = *checked;
+                            cx.notify();
+                        })),
+                    theme,
+                ))
+                .child(toggle_row(
+                    "AI Command Suggestions",
+                    "Use the suggestion provider only when local command history has no strong match.",
+                    Switch::new("ai-suggestion-toggle")
+                        .checked(self.suggestion_enabled)
+                        .small()
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.suggestion_enabled = *checked;
+                            cx.notify();
+                        })),
+                    theme,
+                ))
+                .child(
+                    div()
+                        .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
+                        .child(searchable_select_row(
+                            "Suggestions Provider",
+                            "Route inline command completion to the active provider or a faster secondary host.",
+                            &suggestion_provider_select,
+                            "Select a provider…",
+                            theme,
+                        )),
+                )
+                .child(
+                    div()
+                        .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
+                        .child(stacked_input_field(
+                            "Suggestions Model",
+                            "Optional override for short command completions in the bottom input bar.",
+                            &suggestion_model_input,
+                            theme,
+                        )),
+                ),
+        );
+
+        let behavior_card = card(theme, card_opacity).child(
+            div()
+                .px(px(14.0))
+                .py(px(12.0))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Behavior"),
+                )
+                .child(stacked_input_field(
+                    "Max Turns",
+                    "Tool-use turns before the session is forced to stop.",
+                    &max_turns_input,
+                    theme,
+                ))
+                .child(stacked_input_field(
+                    "Temperature",
+                    "Blank for provider default.",
+                    &temperature_input,
+                    theme,
+                )),
+        );
+
+        let ai_layout = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .gap(px(12.0))
+            .child(routing_card)
+            .child(behavior_card);
+
+        section_content(
+            "AI",
+            "Choose how Con should use AI globally. Provider credentials and endpoint details live in Providers.",
+            theme,
+        )
+        .child(ai_layout)
+    }
+
+    fn render_providers(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let card_opacity = self.card_opacity();
         let model_input = self.model_input.clone();
         let api_key_input = self.api_key_input.clone();
         let base_url_input = self.base_url_input.clone();
         let max_tokens_input = self.max_tokens_input.clone();
-        let max_turns_input = self.max_turns_input.clone();
-        let temperature_input = self.temperature_input.clone();
-        let ai_purpose_select = self.ai_purpose_select.clone();
-        let suggestion_provider_select = self.suggestion_provider_select.clone();
-        let suggestion_model_input = self.suggestion_model_input.clone();
         let models = self.registry.models_for(&self.selected_provider);
         let model_select = self.model_select.clone();
         let endpoint_preset_select = self.endpoint_preset_select.clone();
@@ -2493,7 +2786,6 @@ impl SettingsPanel {
             "No key"
         };
 
-        // ── Model card — Select dropdown for known providers, text input for custom ──
         let model_card_content = card(theme, card_opacity).child(
             div()
                 .px(px(14.0))
@@ -2510,7 +2802,7 @@ impl SettingsPanel {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
-                                .child("Model"),
+                                .child("Provider Default Model"),
                         )
                         .child(
                             div()
@@ -2531,10 +2823,8 @@ impl SettingsPanel {
                         ),
                 )
                 .child(if models.is_empty() {
-                    // Custom providers — free-form text input
                     div().child(Input::new(&model_input))
                 } else {
-                    // Known providers — searchable Select dropdown
                     div().child(
                         Select::new(&model_select)
                             .placeholder("Select a model…")
@@ -2543,93 +2833,11 @@ impl SettingsPanel {
                 }),
         );
 
-        let behavior_card = card(theme, card_opacity).child(
-            div()
-                .px(px(14.0))
-                .py(px(12.0))
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.0))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Behavior"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.0))
-                                .line_height(px(16.0))
-                                .text_color(theme.muted_foreground)
-                                .child(
-                                    "Set how the built-in agent should behave across the app. Provider-specific connection details stay below.",
-                                ),
-                        ),
-                )
-                .child(select_row(
-                    "AI Purpose",
-                    "Build executes proactively, Explain stays analysis-first, and Operate stays terminal-first.",
-                    &ai_purpose_select,
-                    theme,
-                ))
-                .child(toggle_row(
-                    "Auto-Approve Tools",
-                    "Allow the agent to run tools without per-action confirmation in this app session.",
-                    Switch::new("auto-approve-toggle")
-                        .checked(self.auto_approve)
-                        .small()
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.auto_approve = *checked;
-                            cx.notify();
-                        })),
-                    theme,
-                ))
-                .child(toggle_row(
-                    "AI Command Suggestions",
-                    "Use the suggestion provider only when local command history has no strong match.",
-                    Switch::new("ai-suggestion-toggle")
-                        .checked(self.suggestion_enabled)
-                        .small()
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.suggestion_enabled = *checked;
-                            cx.notify();
-                        })),
-                    theme,
-                ))
-                .child(
-                    div()
-                        .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
-                        .child(searchable_select_row(
-                            "Suggestions Provider",
-                            "Route inline command completion to the active provider or a faster secondary host.",
-                            &suggestion_provider_select,
-                            "Select a provider…",
-                            theme,
-                        )),
-                )
-                .child(
-                    div()
-                        .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
-                        .child(stacked_input_field(
-                            "Suggestions Model",
-                            "Optional override for short command completions in the bottom input bar.",
-                            &suggestion_model_input,
-                            theme,
-                        )),
-                ),
-        );
-
         let right_col = div()
             .flex()
             .flex_col()
             .flex_1()
             .gap(px(12.0))
-            .child(behavior_card)
             .child(model_card_content)
             .child(
                 card(theme, card_opacity).child(
@@ -2855,24 +3063,12 @@ impl SettingsPanel {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::MEDIUM)
-                                .child("Tuning"),
+                                .child("Provider Limits"),
                         )
                         .child(stacked_input_field(
                             "Max Tokens",
-                            "Per-provider token ceiling",
+                            "Per-provider token ceiling.",
                             &max_tokens_input,
-                            theme,
-                        ))
-                        .child(stacked_input_field(
-                            "Max Turns",
-                            "Tool-use turns before hard stop",
-                            &max_turns_input,
-                            theme,
-                        ))
-                        .child(stacked_input_field(
-                            "Temperature",
-                            "Blank for default",
-                            &temperature_input,
                             theme,
                         )),
                 ),
@@ -2888,19 +3084,19 @@ impl SettingsPanel {
                 card(theme, card_opacity).child(div().px(px(4.0)).py(px(4.0)).child(provider_list)),
             );
 
-        let models_layout = div()
-            .flex()
-            .flex_1()
-            .gap(px(16.0))
-            .child(provider_column)
-            .child(right_col);
-
         section_content(
-            "AI",
-            "Set agent behavior first, then tune provider-specific model and connection details.",
+            "Providers",
+            "Manage credentials, endpoints, and provider-specific defaults independently from the app-wide AI behavior.",
             theme,
         )
-        .child(models_layout)
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .gap(px(16.0))
+                .child(provider_column)
+                .child(right_col),
+        )
     }
 
     fn render_keys(&mut self, cx: &mut Context<Self>) -> Div {
@@ -3065,6 +3261,7 @@ impl Render for SettingsPanel {
             SettingsSection::General => self.render_general(cx),
             SettingsSection::Appearance => self.render_appearance(cx),
             SettingsSection::Ai => self.render_ai(cx),
+            SettingsSection::Providers => self.render_providers(cx),
             SettingsSection::Keys => self.render_keys(cx),
         };
 
@@ -3093,6 +3290,7 @@ impl Render for SettingsPanel {
         let card_height = {
             let target = match active {
                 SettingsSection::Appearance => (viewport_h * 0.82).clamp(440.0, 780.0),
+                SettingsSection::Providers => (viewport_h * 0.80).clamp(440.0, 760.0),
                 _ => (viewport_h * 0.76).clamp(420.0, 720.0),
             };
             px(target.min(viewport_h - 32.0))
@@ -3673,7 +3871,7 @@ fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
         })
 }
 
-fn provider_label(provider: &ProviderKind) -> &'static str {
+pub(crate) fn provider_label(provider: &ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Anthropic => "Anthropic",
         ProviderKind::OpenAI => "OpenAI",

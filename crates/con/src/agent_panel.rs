@@ -15,7 +15,7 @@ const TOOL_RESULT_PREVIEW_LINES: usize = 6;
 /// Max characters to show in expanded thinking section
 const THINKING_DISPLAY_LEN: usize = 2000;
 
-use con_agent::{ConversationSummary, ToolApprovalDecision, conversation::AgentStep};
+use con_agent::{ConversationSummary, ProviderKind, ToolApprovalDecision, conversation::AgentStep};
 use con_core::harness::HarnessEvent;
 
 use chrono::Utc;
@@ -23,6 +23,7 @@ use chrono::Utc;
 use crate::chat_markdown::{ChatMarkdownTone, render_chat_markdown};
 use crate::input_bar::SkillEntry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
+use crate::settings_panel::provider_label;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentStatus {
@@ -80,6 +81,11 @@ pub struct SelectSessionModel {
     pub model: String,
 }
 impl EventEmitter<SelectSessionModel> for AgentPanel {}
+
+pub struct SelectSessionProvider {
+    pub provider: ProviderKind,
+}
+impl EventEmitter<SelectSessionProvider> for AgentPanel {}
 
 /// Emitted when user edits and resubmits a previous message.
 /// The workspace truncates the conversation and re-sends.
@@ -395,6 +401,8 @@ pub struct AgentPanel {
     showing_history: bool,
     conversation_list: Vec<ConversationSummary>,
     auto_approve: bool,
+    provider_name: String,
+    session_provider_select: Entity<SelectState<SearchableVec<String>>>,
     model_name: String,
     session_model_select: Entity<SelectState<SearchableVec<String>>>,
     content_reveal: MotionValue,
@@ -472,6 +480,74 @@ impl PanelMessage {
 }
 
 impl AgentPanel {
+    fn session_sidebar_provider_kind(provider: &ProviderKind) -> ProviderKind {
+        match provider {
+            ProviderKind::MiniMaxAnthropic => ProviderKind::MiniMax,
+            ProviderKind::MoonshotAnthropic => ProviderKind::Moonshot,
+            ProviderKind::ZAIAnthropic => ProviderKind::ZAI,
+            _ => provider.clone(),
+        }
+    }
+
+    fn provider_options() -> SearchableVec<String> {
+        SearchableVec::new(vec![
+            ProviderKind::Anthropic,
+            ProviderKind::OpenAI,
+            ProviderKind::ChatGPT,
+            ProviderKind::GitHubCopilot,
+            ProviderKind::OpenAICompatible,
+            ProviderKind::MiniMax,
+            ProviderKind::Moonshot,
+            ProviderKind::ZAI,
+            ProviderKind::DeepSeek,
+            ProviderKind::Groq,
+            ProviderKind::Gemini,
+            ProviderKind::Ollama,
+            ProviderKind::OpenRouter,
+            ProviderKind::Mistral,
+        ]
+        .into_iter()
+        .map(|provider| provider_label(&provider).to_string())
+        .collect::<Vec<_>>())
+    }
+
+    fn provider_from_label(label: &str) -> Option<ProviderKind> {
+        [
+            ProviderKind::Anthropic,
+            ProviderKind::OpenAI,
+            ProviderKind::ChatGPT,
+            ProviderKind::GitHubCopilot,
+            ProviderKind::OpenAICompatible,
+            ProviderKind::MiniMax,
+            ProviderKind::Moonshot,
+            ProviderKind::ZAI,
+            ProviderKind::DeepSeek,
+            ProviderKind::Groq,
+            ProviderKind::Gemini,
+            ProviderKind::Ollama,
+            ProviderKind::OpenRouter,
+            ProviderKind::Mistral,
+        ]
+        .into_iter()
+        .find(|provider| provider_label(provider) == label)
+    }
+
+    fn build_provider_select(
+        current: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<SearchableVec<String>>> {
+        let current = current.to_string();
+        cx.new(|cx| {
+            let mut state =
+                SelectState::new(Self::provider_options(), None, window, cx).searchable(true);
+            if !current.is_empty() {
+                state.set_selected_value(&current, window, cx);
+            }
+            state
+        })
+    }
+
     fn build_model_select(
         current: &str,
         window: &mut Window,
@@ -492,6 +568,19 @@ impl AgentPanel {
 
     #[allow(dead_code)]
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let session_provider_select = Self::build_provider_select("", window, cx);
+        cx.subscribe_in(
+            &session_provider_select,
+            window,
+            |_, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(provider)) = event {
+                    if let Some(provider) = Self::provider_from_label(provider) {
+                        cx.emit(SelectSessionProvider { provider });
+                    }
+                }
+            },
+        )
+        .detach();
         let session_model_select = Self::build_model_select("", window, cx);
         cx.subscribe_in(
             &session_model_select,
@@ -512,6 +601,8 @@ impl AgentPanel {
             showing_history: false,
             conversation_list: Vec::new(),
             auto_approve: false,
+            provider_name: String::new(),
+            session_provider_select,
             model_name: String::new(),
             session_model_select,
             content_reveal: MotionValue::new(1.0),
@@ -532,6 +623,18 @@ impl AgentPanel {
 
     pub fn set_model_name(&mut self, name: String) {
         self.model_name = name;
+    }
+
+    pub fn set_provider_name(
+        &mut self,
+        provider: ProviderKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.provider_name = provider_label(&Self::session_sidebar_provider_kind(&provider)).to_string();
+        self.session_provider_select.update(cx, |select, cx| {
+            select.set_selected_value(&self.provider_name, window, cx);
+        });
     }
 
     pub fn set_session_model_options(
@@ -557,6 +660,19 @@ impl AgentPanel {
 
     /// Create with a pre-populated panel state (e.g. restored from session).
     pub fn with_state(state: PanelState, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let session_provider_select = Self::build_provider_select("", window, cx);
+        cx.subscribe_in(
+            &session_provider_select,
+            window,
+            |_, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(provider)) = event {
+                    if let Some(provider) = Self::provider_from_label(provider) {
+                        cx.emit(SelectSessionProvider { provider });
+                    }
+                }
+            },
+        )
+        .detach();
         let session_model_select = Self::build_model_select("", window, cx);
         cx.subscribe_in(
             &session_model_select,
@@ -577,6 +693,8 @@ impl AgentPanel {
             showing_history: false,
             conversation_list: Vec::new(),
             auto_approve: false,
+            provider_name: String::new(),
+            session_provider_select,
             model_name: String::new(),
             session_model_select,
             content_reveal: MotionValue::new(1.0),
@@ -3289,6 +3407,16 @@ impl Render for AgentPanel {
             .child(header_left)
             .child({
                 let mut actions = div().flex().items_center().gap(px(6.0));
+
+                actions = actions.child(
+                    div()
+                        .w(px(160.0))
+                        .child(
+                            Select::new(&self.session_provider_select)
+                                .placeholder("Provider")
+                                .small(),
+                        ),
+                );
 
                 actions = actions.child(
                     div()

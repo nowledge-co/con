@@ -1,8 +1,9 @@
 use gpui::*;
 use gpui_component::{
     ActiveTheme,
+    button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState, Position},
-    select::{SearchableVec, Select, SelectEvent, SelectState},
+    menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
     Sizable as _,
 };
 
@@ -14,7 +15,9 @@ actions!(
         AcceptSuggestion,
         AcceptSuggestionOrMoveRight,
         AcceptSuggestionOrMoveEnd,
-        DeletePreviousWord
+        DeletePreviousWord,
+        HistoryPrevious,
+        HistoryNext
     ]
 );
 
@@ -86,13 +89,15 @@ enum SuggestionSource {
 pub struct InputBar {
     agent_input_state: Entity<InputState>,
     shell_input_state: Entity<InputState>,
-    pane_target_select: Entity<SelectState<SearchableVec<String>>>,
     mode: InputMode,
     cwd: String,
     panes: Vec<PaneInfo>,
     selected_pane_ids: Vec<usize>,
     last_single_target_id: Option<usize>,
     focused_pane_id: usize,
+    recent_commands: Vec<String>,
+    history_nav_index: Option<usize>,
+    history_nav_draft: Option<String>,
     skills: Vec<SkillEntry>,
     /// Index of the highlighted skill in the filtered list (for arrow-key nav)
     skill_selection: usize,
@@ -149,17 +154,9 @@ impl InputBar {
                 DeletePreviousWord,
                 Some("ConCommandInput > Input"),
             ),
+            KeyBinding::new("up", HistoryPrevious, Some("ConCommandInput > Input")),
+            KeyBinding::new("down", HistoryNext, Some("ConCommandInput > Input")),
         ]);
-    }
-
-    fn make_pane_target_select(
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<SelectState<SearchableVec<String>>> {
-        cx.new(|cx| {
-            SelectState::new(SearchableVec::new(Vec::<String>::new()), None, window, cx)
-                .searchable(true)
-        })
     }
 
     fn current_input_state(&self) -> Entity<InputState> {
@@ -197,33 +194,59 @@ impl InputBar {
         format!("{base} · {status} · #{}", pane.id)
     }
 
-    fn current_single_target_id(&self) -> usize {
-        self.selected_pane_ids
-            .first()
-            .copied()
-            .unwrap_or(self.focused_pane_id)
+    fn pane_scope_title(pane: &PaneInfo) -> String {
+        if let Some(host) = &pane.hostname {
+            Self::truncate_label(host, 14, 18)
+        } else if pane.name.is_empty() {
+            format!("Pane {}", pane.id)
+        } else {
+            Self::truncate_label(&pane.name, 14, 18)
+        }
     }
 
-    fn sync_pane_target_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let labels: Vec<String> = self.panes.iter().map(Self::pane_target_label).collect();
-        let selected_id = if !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len()
-        {
-            self.last_single_target_id.unwrap_or(self.focused_pane_id)
+    fn effective_target_ids(&self) -> Vec<usize> {
+        if self.selected_pane_ids.is_empty() {
+            vec![self.focused_pane_id]
         } else {
-            self.current_single_target_id()
-        };
-        let selected_label = self
+            self.selected_pane_ids.clone()
+        }
+    }
+
+    fn all_panes_selected(&self) -> bool {
+        !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len()
+    }
+
+    fn pane_scope_summary(&self) -> (String, &'static str) {
+        if self.all_panes_selected() {
+            return (
+                format!("All panes ({})", self.panes.len()),
+                "phosphor/broadcast-duotone.svg",
+            );
+        }
+
+        let targets = self.effective_target_ids();
+        if targets.len() > 1 {
+            return (
+                format!("{} panes", targets.len()),
+                "phosphor/squares-four.svg",
+            );
+        }
+
+        let title = self
             .panes
             .iter()
-            .find(|pane| pane.id == selected_id)
-            .map(Self::pane_target_label);
-
-        self.pane_target_select.update(cx, |select, cx| {
-            select.set_items(SearchableVec::new(labels), window, cx);
-            if let Some(label) = &selected_label {
-                select.set_selected_value(label, window, cx);
-            }
-        });
+            .find(|pane| pane.id == targets[0])
+            .map(Self::pane_scope_title)
+            .unwrap_or_else(|| "Focused pane".to_string());
+        let is_focused_default = self.selected_pane_ids.is_empty();
+        (
+            if is_focused_default {
+                format!("Focused · {title}")
+            } else {
+                title
+            },
+            "phosphor/cursor-click.svg",
+        )
     }
 
     fn subscribe_input_state(
@@ -242,6 +265,17 @@ impl InputBar {
                 match ev {
                     InputEvent::Change => {
                         this.clear_inline_suggestion();
+                        let current_value = this.current_input_state().read(cx).value().to_string();
+                        if let Some(history_ix) = this.history_nav_index {
+                            let matches_current = this
+                                .recent_commands
+                                .get(history_ix)
+                                .is_some_and(|entry| entry == &current_value);
+                            if !matches_current {
+                                this.history_nav_index = None;
+                                this.history_nav_draft = None;
+                            }
+                        }
                         let matches = this.filtered_skills(cx);
                         if matches.is_empty() {
                             this.skill_selection = 0;
@@ -297,7 +331,7 @@ impl InputBar {
         let shell_input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Type a command or ask AI…")
-                .code_editor("bash")
+                .code_editor("con-shell")
                 .multi_line(false)
                 .folding(false)
         });
@@ -308,8 +342,6 @@ impl InputBar {
             state.set_value("", window, cx);
             state.set_cursor_position(Position::new(0, 0), window, cx);
         });
-        let pane_target_select = Self::make_pane_target_select(window, cx);
-
         let _subscriptions = vec![
             // Track shift state on enter keystrokes — fires BEFORE PressEnter
             cx.observe_keystrokes(|this, event, _window, _cx| {
@@ -317,15 +349,6 @@ impl InputBar {
                     this.shift_enter = event.keystroke.modifiers.shift;
                 }
             }),
-            cx.subscribe_in(
-                &pane_target_select,
-                window,
-                |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
-                    if let SelectEvent::Confirm(Some(label)) = event {
-                        this.select_pane_target_by_label(label, cx);
-                    }
-                },
-            ),
             Self::subscribe_input_state(&agent_input_state, window, cx),
             Self::subscribe_input_state(&shell_input_state, window, cx),
         ];
@@ -333,13 +356,15 @@ impl InputBar {
         Self {
             agent_input_state,
             shell_input_state,
-            pane_target_select,
             mode: InputMode::Smart,
             cwd: "~".to_string(),
             panes: Vec::new(),
             selected_pane_ids: Vec::new(),
             last_single_target_id: None,
             focused_pane_id: 0,
+            recent_commands: Vec::new(),
+            history_nav_index: None,
+            history_nav_draft: None,
             skills: Vec::new(),
             skill_selection: 0,
             inline_suggestion_prefix: None,
@@ -380,7 +405,7 @@ impl InputBar {
         &mut self,
         panes: Vec<PaneInfo>,
         focused_id: usize,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.panes = panes;
@@ -392,11 +417,20 @@ impl InputBar {
                 self.last_single_target_id = None;
             }
         }
-        self.sync_pane_target_select(window, cx);
+        if self.selected_pane_ids.is_empty() && self.focused_pane_id != focused_id {
+            self.last_single_target_id = Some(focused_id);
+        }
+        cx.notify();
     }
 
     pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
         self.skills = skills;
+    }
+
+    pub fn set_recent_commands(&mut self, commands: Vec<String>) {
+        self.recent_commands = commands;
+        self.history_nav_index = None;
+        self.history_nav_draft = None;
     }
 
     pub fn current_text(&self, cx: &App) -> String {
@@ -473,6 +507,45 @@ impl InputBar {
         true
     }
 
+    fn navigate_history(
+        &mut self,
+        previous: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.mode == InputMode::Agent || self.recent_commands.is_empty() {
+            return false;
+        }
+
+        let next_index = match (previous, self.history_nav_index) {
+            (true, None) => {
+                self.history_nav_draft = Some(self.current_input_state().read(cx).value().to_string());
+                Some(0)
+            }
+            (true, Some(ix)) if ix + 1 < self.recent_commands.len() => Some(ix + 1),
+            (true, Some(ix)) => Some(ix),
+            (false, Some(0)) => None,
+            (false, Some(ix)) => Some(ix - 1),
+            (false, None) => None,
+        };
+
+        self.history_nav_index = next_index;
+        let replacement = next_index
+            .and_then(|ix| self.recent_commands.get(ix).cloned())
+            .or_else(|| self.history_nav_draft.clone())
+            .unwrap_or_default();
+        let cursor = Position::new(0, replacement.chars().count() as u32);
+
+        self.current_input_state().update(cx, |state, cx| {
+            state.set_value(&replacement, window, cx);
+            state.set_cursor_position(cursor, window, cx);
+        });
+        self.clear_inline_suggestion();
+        cx.emit(InputEdited);
+        cx.notify();
+        true
+    }
+
     /// Return matching skills if the input starts with `/`.
     /// Public so the workspace can render the popup at overlay level.
     pub fn filtered_skills(&self, cx: &App) -> Vec<&SkillEntry> {
@@ -526,22 +599,32 @@ impl InputBar {
         cx.notify();
     }
 
-    fn select_pane_target_by_label(&mut self, label: &str, cx: &mut Context<Self>) {
-        let Some(pane_id) = self
-            .panes
-            .iter()
-            .find(|pane| Self::pane_target_label(pane) == label)
-            .map(|pane| pane.id)
-        else {
-            return;
-        };
+    fn set_focused_scope(&mut self, cx: &mut Context<Self>) {
+        self.selected_pane_ids.clear();
+        self.last_single_target_id = Some(self.focused_pane_id);
+        self.clear_inline_suggestion();
+        cx.emit(InputEdited);
+        cx.notify();
+    }
 
-        if pane_id == self.focused_pane_id {
-            self.selected_pane_ids.clear();
-            self.last_single_target_id = Some(pane_id);
+    fn toggle_scope_pane(&mut self, pane_id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let mut selected = self.effective_target_ids();
+        if let Some(ix) = selected.iter().position(|id| *id == pane_id) {
+            selected.remove(ix);
         } else {
-            self.selected_pane_ids = vec![pane_id];
-            self.last_single_target_id = Some(pane_id);
+            selected.push(pane_id);
+        }
+        selected.sort_unstable();
+        selected.dedup();
+
+        if selected.is_empty() || (selected.len() == 1 && selected[0] == self.focused_pane_id) {
+            self.selected_pane_ids.clear();
+            self.last_single_target_id = Some(self.focused_pane_id);
+        } else {
+            self.selected_pane_ids = selected;
+            if self.selected_pane_ids.len() > 1 {
+                self.set_mode(InputMode::Shell, window, cx);
+            }
         }
         self.clear_inline_suggestion();
         cx.emit(InputEdited);
@@ -549,18 +632,14 @@ impl InputBar {
     }
 
     fn toggle_select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_pane_ids.len() == self.panes.len() {
-            self.selected_pane_ids = self
-                .last_single_target_id
-                .filter(|id| *id != self.focused_pane_id)
-                .map(|id| vec![id])
-                .unwrap_or_default();
+        if self.all_panes_selected() {
+            self.selected_pane_ids.clear();
+            self.last_single_target_id = Some(self.focused_pane_id);
         } else {
-            self.last_single_target_id = Some(self.current_single_target_id());
+            self.last_single_target_id = Some(self.effective_target_ids()[0]);
             self.selected_pane_ids = self.panes.iter().map(|p| p.id).collect();
             self.set_mode(InputMode::Shell, window, cx);
         }
-        self.sync_pane_target_select(window, cx);
         self.clear_inline_suggestion();
         cx.emit(InputEdited);
         cx.notify();
@@ -573,6 +652,8 @@ impl InputBar {
         let was_focused = current_state.read(cx).focus_handle(cx).is_focused(window);
 
         self.mode = mode;
+        self.history_nav_index = None;
+        self.history_nav_draft = None;
         let placeholder = self.placeholder().to_string();
         let next_state = self.current_input_state();
         next_state.update(cx, |s, cx| {
@@ -739,87 +820,96 @@ impl Render for InputBar {
         let all_selected =
             !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len();
         let pane_row = if has_multiple_panes {
-            let target_count = if all_selected {
-                self.panes.len()
+            let entity = cx.entity();
+            let panes = self.panes.clone();
+            let selected_ids = self.selected_pane_ids.clone();
+            let focused_pane_id = self.focused_pane_id;
+            let (scope_label, scope_icon) = self.pane_scope_summary();
+            let scope_tint = if all_selected || selected_ids.len() > 1 {
+                theme.primary
             } else {
-                1
+                theme.muted_foreground.opacity(0.8)
             };
-
             Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .h(px(24.0))
-                    .px(px(4.0))
-                    .rounded(px(7.0))
-                    .bg(theme.muted.opacity(0.08))
-                    .min_w(px(0.0))
-                    .max_w(px(244.0))
-                    .child(
-                        div()
-                            .min_w(px(0.0))
-                            .max_w(px(176.0))
-                            .flex_1()
-                            .child(
-                                Select::new(&self.pane_target_select)
-                                    .placeholder("Focused pane")
-                                    .small(),
-                            ),
+                Button::new("pane-scope")
+                    .label(scope_label)
+                    .small()
+                    .ghost()
+                    .icon(
+                        gpui_component::Icon::default()
+                            .path(scope_icon)
+                            .text_color(scope_tint),
                     )
-                    .child(
-                        div()
-                            .h(px(14.0))
-                            .w(px(1.0))
-                            .bg(theme.border.opacity(0.55)),
-                    )
-                    .child(
-                        div()
-                            .id("pane-sel-all")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.0))
-                            .h(px(18.0))
-                            .px(px(6.0))
-                            .rounded(px(5.0))
-                            .flex_shrink_0()
-                            .text_size(px(9.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .cursor_pointer()
-                            .bg(if all_selected {
-                                theme.primary.opacity(0.12)
-                            } else {
-                                theme.transparent
-                            })
-                            .text_color(if all_selected {
-                                theme.primary
-                            } else {
-                                theme.muted_foreground.opacity(0.5)
-                            })
-                            .hover(|s| s.bg(theme.muted.opacity(0.10)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.toggle_select_all(window, cx);
-                                }),
-                            )
-                            .child(
-                                svg()
-                                    .path("phosphor/broadcast-duotone.svg")
-                                    .size(px(11.0))
-                                    .text_color(if all_selected {
-                                        theme.primary
-                                    } else {
-                                        theme.muted_foreground.opacity(0.45)
+                    .text_color(if all_selected || selected_ids.len() > 1 {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .dropdown_menu(move |menu: PopupMenu, _window, _cx| {
+                        let focused_default = selected_ids.is_empty();
+                        let mut menu = menu.item(
+                                PopupMenuItem::new("Focused pane")
+                                    .checked(focused_default)
+                                    .on_click({
+                                        let entity = entity.clone();
+                                        move |_, window, cx| {
+                                            let _ = entity.update(cx, |this, cx| {
+                                                this.set_focused_scope(cx);
+                                                this.current_input_state()
+                                                    .update(cx, |state, cx| state.focus(window, cx));
+                                            });
+                                        }
                                     }),
                             )
-                            .child(if all_selected {
-                                format!("{target_count} panes")
+                            .item(
+                                PopupMenuItem::new("Broadcast to all panes")
+                                    .checked(!panes.is_empty() && selected_ids.len() == panes.len())
+                                    .on_click({
+                                        let entity = entity.clone();
+                                        move |_, window, cx| {
+                                            let _ = entity.update(cx, |this, cx| {
+                                                this.toggle_select_all(window, cx);
+                                                this.current_input_state()
+                                                    .update(cx, |state, cx| state.focus(window, cx));
+                                            });
+                                        }
+                                    }),
+                            )
+                            .separator();
+
+                        for pane in &panes {
+                            let pane_id = pane.id;
+                            let checked = if focused_default {
+                                pane_id == focused_pane_id
                             } else {
-                                "Broadcast".to_string()
-                            }),
-                    ),
+                                selected_ids.contains(&pane_id)
+                            };
+                            let label = format!(
+                                "{}  {}",
+                                if pane.is_alive {
+                                    if pane.is_busy { "●" } else { "○" }
+                                } else {
+                                    "◌"
+                                },
+                                Self::pane_target_label(pane)
+                            );
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .checked(checked)
+                                    .on_click({
+                                        let entity = entity.clone();
+                                        move |_, window, cx| {
+                                            let _ = entity.update(cx, |this, cx| {
+                                                this.toggle_scope_pane(pane_id, window, cx);
+                                                this.current_input_state()
+                                                    .update(cx, |state, cx| state.focus(window, cx));
+                                            });
+                                        }
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
             )
         } else {
             None
@@ -931,6 +1021,12 @@ impl Render for InputBar {
             ))
             .on_action(cx.listener(|this, _: &DeletePreviousWord, window, cx| {
                 this.delete_previous_word(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &HistoryPrevious, window, cx| {
+                let _ = this.navigate_history(true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &HistoryNext, window, cx| {
+                let _ = this.navigate_history(false, window, cx);
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let matches = this.filtered_skills(cx);

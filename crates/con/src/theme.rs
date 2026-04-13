@@ -1,6 +1,7 @@
 use con_terminal::{Color, TerminalTheme};
 use gpui::App;
 use gpui_component::scroll::ScrollbarShow;
+use gpui_component::highlighter::LanguageRegistry;
 use gpui_component::{Theme, ThemeMode, ThemeRegistry};
 use std::borrow::Cow;
 
@@ -27,6 +28,7 @@ pub fn init_theme(
     terminal_font_family: &str,
     ui_font_family: &str,
 ) {
+    register_command_prompt_language();
     cx.text_system()
         .add_fonts(vec![
             Cow::Borrowed(FONT_REGULAR),
@@ -63,6 +65,24 @@ pub fn init_theme(
     Theme::change(mode, None, cx);
     apply_font_overrides(terminal_font_family, ui_font_family, cx);
     apply_scrollbar_overrides(cx);
+}
+
+fn register_command_prompt_language() {
+    let registry = LanguageRegistry::singleton();
+    if registry.language("con-shell").is_some() {
+        return;
+    }
+
+    let Some(mut bash) = registry.language("bash") else {
+        return;
+    };
+
+    bash.name = "con-shell".into();
+    bash.highlights = bash
+        .highlights
+        .replace("(command_name) @function", "(command_name) @variable")
+        .into();
+    registry.register("con-shell", &bash);
 }
 
 /// Switch the GPUI theme to match a terminal theme.
