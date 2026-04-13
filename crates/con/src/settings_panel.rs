@@ -89,6 +89,7 @@ pub struct SettingsPanel {
     temperature_input: Entity<InputState>,
     auto_approve: bool,
 
+    suggestion_provider_select: Entity<SelectState<SearchableVec<String>>>,
     suggestion_model_input: Entity<InputState>,
     oauth_states: HashMap<ProviderKind, ProviderOAuthState>,
 
@@ -600,6 +601,34 @@ impl SettingsPanel {
         cx.new(|cx| SelectState::new(items, selected_index, window, cx).searchable(true))
     }
 
+    fn suggestion_provider_options() -> Vec<String> {
+        let mut options = vec!["Same as active provider".to_string()];
+        options.extend(
+            SIDEBAR_PROVIDERS
+                .iter()
+                .map(|provider| provider_label(provider).to_string()),
+        );
+        options
+    }
+
+    fn suggestion_provider_label(provider: Option<&ProviderKind>) -> String {
+        provider
+            .map(provider_label)
+            .unwrap_or("Same as active provider")
+            .to_string()
+    }
+
+    fn suggestion_provider_from_label(label: &str) -> Option<ProviderKind> {
+        if label == "Same as active provider" {
+            return None;
+        }
+
+        SIDEBAR_PROVIDERS
+            .iter()
+            .find(|provider| provider_label(provider) == label)
+            .cloned()
+    }
+
     fn card_opacity(&self) -> f32 {
         0.74
     }
@@ -681,6 +710,12 @@ impl SettingsPanel {
             );
             s
         });
+        let suggestion_provider_select = Self::make_searchable_string_select(
+            &Self::suggestion_provider_options(),
+            &Self::suggestion_provider_label(agent.suggestion_model.provider.as_ref()),
+            window,
+            cx,
+        );
         let font_families = Self::prepare_font_families(config, cx.text_system().all_font_names());
         let terminal_font_select = Self::make_searchable_string_select(
             &font_families,
@@ -852,6 +887,7 @@ impl SettingsPanel {
             max_turns_input,
             temperature_input,
             auto_approve: config.agent.auto_approve_tools,
+            suggestion_provider_select,
             suggestion_model_input,
             oauth_states: HashMap::new(),
             terminal_font_select,
@@ -900,6 +936,13 @@ impl SettingsPanel {
                     window,
                     cx,
                 )
+            });
+            self.suggestion_provider_select.update(cx, |select, cx| {
+                select.set_selected_value(
+                    &Self::suggestion_provider_label(agent.suggestion_model.provider.as_ref()),
+                    window,
+                    cx,
+                );
             });
             self.auto_approve = agent.auto_approve_tools;
             self.model_select =
@@ -1222,6 +1265,12 @@ impl SettingsPanel {
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let max_turns_text = self.max_turns_input.read(cx).value().to_string();
         let temperature_text = self.temperature_input.read(cx).value().to_string();
+        let suggestion_provider_label = self
+            .suggestion_provider_select
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_else(|| "Same as active provider".to_string());
         let suggestion_model_text = self.suggestion_model_input.read(cx).value().to_string();
         let font_size_text = self.font_size_input.read(cx).value().to_string();
 
@@ -1239,7 +1288,7 @@ impl SettingsPanel {
         };
         self.config.agent.auto_approve_tools = self.auto_approve;
         self.config.agent.suggestion_model = SuggestionModelConfig {
-            provider: None,
+            provider: Self::suggestion_provider_from_label(&suggestion_provider_label),
             model: if suggestion_model_text.is_empty() {
                 None
             } else {
@@ -1947,6 +1996,7 @@ impl SettingsPanel {
                             "Terminal Font",
                             "Terminal and mono UI like code blocks.",
                             &terminal_font_select,
+                            "Search fonts…",
                             theme,
                         ))
                         .child(row_separator(theme))
@@ -1954,6 +2004,7 @@ impl SettingsPanel {
                             "UI Font",
                             "Settings, prose, and other UI.",
                             &ui_font_select,
+                            "Search fonts…",
                             theme,
                         ))
                         .child(row_separator(theme))
@@ -2333,6 +2384,7 @@ impl SettingsPanel {
         let max_tokens_input = self.max_tokens_input.clone();
         let max_turns_input = self.max_turns_input.clone();
         let temperature_input = self.temperature_input.clone();
+        let suggestion_provider_select = self.suggestion_provider_select.clone();
         let suggestion_model_input = self.suggestion_model_input.clone();
         let models = self.registry.models_for(&self.selected_provider);
         let model_select = self.model_select.clone();
@@ -2729,9 +2781,16 @@ impl SettingsPanel {
                             &temperature_input,
                             theme,
                         ))
+                        .child(searchable_select_row(
+                            "Command Suggestions Provider",
+                            "Use the active provider or route completions to a faster model host",
+                            &suggestion_provider_select,
+                            "Select a provider…",
+                            theme,
+                        ))
                         .child(stacked_input_field(
                             "Suggestion Model [Optional]",
-                            "Fast model for shell completions",
+                            "Short inline completions for the bottom command bar",
                             &suggestion_model_input,
                             theme,
                         )),
@@ -3346,6 +3405,7 @@ fn searchable_select_row(
     label: &str,
     hint: &str,
     select: &Entity<SelectState<SearchableVec<String>>>,
+    placeholder: &str,
     theme: &gpui_component::Theme,
 ) -> Div {
     div()
@@ -3380,7 +3440,11 @@ fn searchable_select_row(
             div()
                 .w(px(236.0))
                 .flex_shrink_0()
-                .child(Select::new(select).placeholder("Search fonts…").small()),
+                .child(
+                    Select::new(select)
+                        .placeholder(placeholder.to_string())
+                        .small(),
+                ),
         )
 }
 
