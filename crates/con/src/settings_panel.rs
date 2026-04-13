@@ -1,7 +1,8 @@
 use con_agent::{
-    AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind, SuggestionModelConfig,
-    authorize_oauth_provider,
+    AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind,
+    SuggestionModelConfig, authorize_oauth_provider,
 };
+use con_agent::provider::AgentPurpose;
 use con_core::Config;
 use futures::{FutureExt, StreamExt};
 use gpui::*;
@@ -38,7 +39,7 @@ struct ProviderOAuthState {
 enum SettingsSection {
     General,
     Appearance,
-    Models,
+    Ai,
     Keys,
 }
 
@@ -47,7 +48,7 @@ impl SettingsSection {
         match self {
             Self::General => "General",
             Self::Appearance => "Appearance",
-            Self::Models => "Models",
+            Self::Ai => "AI",
             Self::Keys => "Keys",
         }
     }
@@ -56,7 +57,7 @@ impl SettingsSection {
         match self {
             Self::General => "phosphor/sliders.svg",
             Self::Appearance => "phosphor/sun.svg",
-            Self::Models => "phosphor/robot.svg",
+            Self::Ai => "phosphor/robot.svg",
             Self::Keys => "phosphor/keyboard.svg",
         }
     }
@@ -65,7 +66,7 @@ impl SettingsSection {
 const ALL_SECTIONS: &[SettingsSection] = &[
     SettingsSection::General,
     SettingsSection::Appearance,
-    SettingsSection::Models,
+    SettingsSection::Ai,
     SettingsSection::Keys,
 ];
 
@@ -88,6 +89,7 @@ pub struct SettingsPanel {
     max_turns_input: Entity<InputState>,
     temperature_input: Entity<InputState>,
     auto_approve: bool,
+    ai_purpose_select: Entity<SelectState<Vec<String>>>,
 
     suggestion_enabled: bool,
     suggestion_provider_select: Entity<SelectState<SearchableVec<String>>>,
@@ -630,6 +632,26 @@ impl SettingsPanel {
             .cloned()
     }
 
+    fn ai_purpose_options() -> &'static [&'static str] {
+        &["Build", "Explain", "Operate"]
+    }
+
+    fn ai_purpose_label(purpose: AgentPurpose) -> &'static str {
+        match purpose {
+            AgentPurpose::Build => "Build",
+            AgentPurpose::Explain => "Explain",
+            AgentPurpose::Operate => "Operate",
+        }
+    }
+
+    fn ai_purpose_from_label(label: &str) -> AgentPurpose {
+        match label {
+            "Explain" => AgentPurpose::Explain,
+            "Operate" => AgentPurpose::Operate,
+            _ => AgentPurpose::Build,
+        }
+    }
+
     fn card_opacity(&self) -> f32 {
         0.74
     }
@@ -701,6 +723,12 @@ impl SettingsPanel {
             );
             s
         });
+        let ai_purpose_select = Self::make_string_select(
+            Self::ai_purpose_options(),
+            Self::ai_purpose_label(agent.purpose),
+            window,
+            cx,
+        );
         let suggestion_model_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Same as agent model", window, cx);
@@ -826,6 +854,17 @@ impl SettingsPanel {
         )
         .detach();
         cx.subscribe_in(
+            &ai_purpose_select,
+            window,
+            |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.config.agent.purpose = Self::ai_purpose_from_label(value);
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
             &terminal_font_select,
             window,
             |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
@@ -888,6 +927,7 @@ impl SettingsPanel {
             max_turns_input,
             temperature_input,
             auto_approve: config.agent.auto_approve_tools,
+            ai_purpose_select,
             suggestion_enabled: config.agent.suggestion_model.enabled,
             suggestion_provider_select,
             suggestion_model_input,
@@ -931,6 +971,9 @@ impl SettingsPanel {
                     window,
                     cx,
                 )
+            });
+            self.ai_purpose_select.update(cx, |select, cx| {
+                select.set_selected_value(&Self::ai_purpose_label(agent.purpose).to_string(), window, cx);
             });
             self.suggestion_model_input.update(cx, |s, cx| {
                 s.set_value(
@@ -1403,6 +1446,9 @@ impl SettingsPanel {
     pub fn agent_config(&self) -> &AgentConfig {
         &self.config.agent
     }
+    pub fn agent_config_mut(&mut self) -> &mut AgentConfig {
+        &mut self.config.agent
+    }
     pub fn terminal_config(&self) -> &con_core::config::TerminalConfig {
         &self.config.terminal
     }
@@ -1490,16 +1536,6 @@ impl SettingsPanel {
     fn render_general(&mut self, cx: &mut Context<Self>) -> Div {
         let card_opacity = self.card_opacity();
 
-        // Auto-approve toggle
-        let is_on = self.auto_approve;
-        let toggle = Switch::new("auto-approve-toggle")
-            .checked(is_on)
-            .small()
-            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                this.auto_approve = *checked;
-                cx.notify();
-            }));
-
         // --- Skills path chips (must render before borrowing theme) ---
         let project_paths = self.config.skills.project_paths.clone();
         let global_paths = self.config.skills.global_paths.clone();
@@ -1530,7 +1566,7 @@ impl SettingsPanel {
         let theme = cx.theme();
         section_content(
             "General",
-            "Terminal defaults, agent behavior, and skills.",
+            "Terminal defaults and shared app behavior.",
             theme,
         )
         .child(
@@ -1549,37 +1585,6 @@ impl SettingsPanel {
                             .child("Managed by Ghostty"),
                     ),
             ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(group_label("Agent", &theme))
-                .child(
-                    card(theme, card_opacity).child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .px(px(16.0))
-                            .h(px(44.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.0))
-                                    .child(div().text_sm().child("Auto-approve tools"))
-                                    .child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .text_color(theme.muted_foreground)
-                                            .child("Allow agent to run tools without confirmation"),
-                                    ),
-                            )
-                            .child(toggle),
-                    ),
-                ),
         )
         // Skills paths
         .child(
@@ -2390,6 +2395,7 @@ impl SettingsPanel {
         let max_tokens_input = self.max_tokens_input.clone();
         let max_turns_input = self.max_turns_input.clone();
         let temperature_input = self.temperature_input.clone();
+        let ai_purpose_select = self.ai_purpose_select.clone();
         let suggestion_provider_select = self.suggestion_provider_select.clone();
         let suggestion_model_input = self.suggestion_model_input.clone();
         let models = self.registry.models_for(&self.selected_provider);
@@ -2537,11 +2543,93 @@ impl SettingsPanel {
                 }),
         );
 
+        let behavior_card = card(theme, card_opacity).child(
+            div()
+                .px(px(14.0))
+                .py(px(12.0))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Behavior"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(theme.muted_foreground)
+                                .child(
+                                    "Set how the built-in agent should behave across the app. Provider-specific connection details stay below.",
+                                ),
+                        ),
+                )
+                .child(select_row(
+                    "AI Purpose",
+                    "Build executes proactively, Explain stays analysis-first, and Operate stays terminal-first.",
+                    &ai_purpose_select,
+                    theme,
+                ))
+                .child(toggle_row(
+                    "Auto-Approve Tools",
+                    "Allow the agent to run tools without per-action confirmation in this app session.",
+                    Switch::new("auto-approve-toggle")
+                        .checked(self.auto_approve)
+                        .small()
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.auto_approve = *checked;
+                            cx.notify();
+                        })),
+                    theme,
+                ))
+                .child(toggle_row(
+                    "AI Command Suggestions",
+                    "Use the suggestion provider only when local command history has no strong match.",
+                    Switch::new("ai-suggestion-toggle")
+                        .checked(self.suggestion_enabled)
+                        .small()
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.suggestion_enabled = *checked;
+                            cx.notify();
+                        })),
+                    theme,
+                ))
+                .child(
+                    div()
+                        .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
+                        .child(searchable_select_row(
+                            "Suggestions Provider",
+                            "Route inline command completion to the active provider or a faster secondary host.",
+                            &suggestion_provider_select,
+                            "Select a provider…",
+                            theme,
+                        )),
+                )
+                .child(
+                    div()
+                        .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
+                        .child(stacked_input_field(
+                            "Suggestions Model",
+                            "Optional override for short command completions in the bottom input bar.",
+                            &suggestion_model_input,
+                            theme,
+                        )),
+                ),
+        );
+
         let right_col = div()
             .flex()
             .flex_col()
             .flex_1()
             .gap(px(12.0))
+            .child(behavior_card)
             .child(model_card_content)
             .child(
                 card(theme, card_opacity).child(
@@ -2769,18 +2857,6 @@ impl SettingsPanel {
                                 .font_weight(FontWeight::MEDIUM)
                                 .child("Tuning"),
                         )
-                        .child(toggle_row(
-                            "AI Command Suggestions",
-                            "Use the suggestion provider only when local command history has no strong match",
-                            Switch::new("ai-suggestion-toggle")
-                                .checked(self.suggestion_enabled)
-                                .small()
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.suggestion_enabled = *checked;
-                                    cx.notify();
-                                })),
-                            theme,
-                        ))
                         .child(stacked_input_field(
                             "Max Tokens",
                             "Per-provider token ceiling",
@@ -2797,19 +2873,6 @@ impl SettingsPanel {
                             "Temperature",
                             "Blank for default",
                             &temperature_input,
-                            theme,
-                        ))
-                        .child(searchable_select_row(
-                            "Command Suggestions Provider",
-                            "Use the active provider or route completions to a faster model host",
-                            &suggestion_provider_select,
-                            "Select a provider…",
-                            theme,
-                        ))
-                        .child(stacked_input_field(
-                            "Suggestion Model [Optional]",
-                            "Short inline completions for the bottom command bar",
-                            &suggestion_model_input,
                             theme,
                         )),
                 ),
@@ -2833,8 +2896,8 @@ impl SettingsPanel {
             .child(right_col);
 
         section_content(
-            "Models",
-            "Choose a provider, lock in a model, and tune the endpoint details.",
+            "AI",
+            "Set agent behavior first, then tune provider-specific model and connection details.",
             theme,
         )
         .child(models_layout)
@@ -3001,7 +3064,7 @@ impl Render for SettingsPanel {
         let content = match active {
             SettingsSection::General => self.render_general(cx),
             SettingsSection::Appearance => self.render_appearance(cx),
-            SettingsSection::Models => self.render_ai(cx),
+            SettingsSection::Ai => self.render_ai(cx),
             SettingsSection::Keys => self.render_keys(cx),
         };
 

@@ -411,6 +411,42 @@ pub struct SuggestionModelConfig {
     pub model: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentPurpose {
+    Build,
+    Explain,
+    Operate,
+}
+
+impl Default for AgentPurpose {
+    fn default() -> Self {
+        Self::Build
+    }
+}
+
+impl AgentPurpose {
+    pub fn system_prompt_note(self) -> &'static str {
+        match self {
+            Self::Build => {
+                "Default operating mode: Build.\n\
+                 Prefer carrying tasks through to implementation, verification, and concrete outcomes.\n\
+                 Use tools proactively when they reduce ambiguity or unblock execution."
+            }
+            Self::Explain => {
+                "Default operating mode: Explain.\n\
+                 Prefer investigation, explanation, and read-first analysis.\n\
+                 Do not make edits or run write-capable actions unless the user asks for them."
+            }
+            Self::Operate => {
+                "Default operating mode: Operate.\n\
+                 Prefer terminal-first workflows, shell verification, and concise command-driven execution.\n\
+                 Bias toward precise operational status, command hygiene, and low-ceremony responses."
+            }
+        }
+    }
+}
+
 /// Agent configuration from config.toml
 ///
 /// ```toml
@@ -438,6 +474,8 @@ pub struct SuggestionModelConfig {
 pub struct AgentConfig {
     /// Active provider selection.
     pub provider: ProviderKind,
+    /// High-level operating stance for the built-in agent.
+    pub purpose: AgentPurpose,
     /// Per-provider settings (model, key, endpoint, max_tokens).
     pub providers: ProviderMap,
     /// Global: max agent turns per request.
@@ -465,6 +503,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             provider: ProviderKind::default(),
+            purpose: AgentPurpose::default(),
             providers: ProviderMap::default(),
             max_turns: 30,
             temperature: None,
@@ -533,6 +572,10 @@ impl AgentConfig {
         self.providers.get(kind).and_then(|p| p.max_tokens)
     }
 
+    pub fn system_prompt_prefix(&self) -> &'static str {
+        self.purpose.system_prompt_note()
+    }
+
     /// Build a lightweight config for inline suggestions.
     /// Uses the suggestion provider's credentials from the providers map.
     pub fn suggestion_agent_config(&self) -> AgentConfig {
@@ -565,6 +608,7 @@ impl AgentConfig {
 
         AgentConfig {
             provider: suggestion_provider,
+            purpose: self.purpose,
             providers,
             max_turns: 1,
             temperature: Some(0.0),
@@ -729,7 +773,11 @@ impl AgentProvider {
         let _ = event_tx.send(AgentEvent::Thinking);
         let kind = &self.config.provider;
 
-        let system_prompt = context.to_system_prompt();
+        let system_prompt = format!(
+            "{}\n\n{}",
+            self.config.system_prompt_prefix(),
+            context.to_system_prompt()
+        );
         let chat_history = conversation.to_rig_history();
         let last_user_msg = conversation
             .last_user_message()
