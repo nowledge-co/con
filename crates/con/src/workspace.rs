@@ -3550,12 +3550,6 @@ impl ConWorkspace {
         let tab_number = self.tabs.len() + 1;
         let old_active = self.active_tab;
 
-        // Hide old tab's ghostty NSViews and unfocus surfaces
-        for t in self.tabs[old_active].pane_tree.all_terminals() {
-            t.set_native_view_visible(false, cx);
-            t.set_focus_state(false, cx);
-        }
-
         self.tabs.push(Tab {
             pane_tree: PaneTree::new(terminal.clone()),
             title: format!("Terminal {}", tab_number),
@@ -3578,9 +3572,15 @@ impl ConWorkspace {
             .update(cx, |panel, cx| panel.swap_state(incoming, cx));
         self.tabs[old_active].panel_state = outgoing;
 
+        for t in self.tabs[old_active].pane_tree.all_terminals() {
+            t.set_focus_state(false, cx);
+        }
         for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
             terminal.set_native_view_visible(true, cx);
             terminal.ensure_surface(window, cx);
+        }
+        for t in self.tabs[old_active].pane_tree.all_terminals() {
+            t.set_native_view_visible(false, cx);
         }
         terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
@@ -4907,17 +4907,13 @@ impl Render for ConWorkspace {
         if input_bar_progress > 0.01 {
             root = root.child(
                 div()
+                    .overflow_hidden()
+                    .h(px(43.0 * input_bar_progress))
                     .bg(theme.title_bar.opacity(ui_surface_opacity))
+                    .child(div().h(px(1.0)).bg(theme.title_bar_border))
                     .child(
                         div()
-                            .h(px(1.0))
-                            .opacity(input_bar_progress)
-                            .bg(theme.title_bar_border),
-                    )
-                    .child(
-                        div()
-                            .overflow_hidden()
-                            .max_h(px(160.0 * input_bar_progress))
+                            .h(px(42.0))
                             .opacity(input_bar_content_progress)
                             .child(self.input_bar.clone()),
                     ),
