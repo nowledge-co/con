@@ -3579,9 +3579,17 @@ impl ConWorkspace {
             terminal.set_native_view_visible(true, cx);
             terminal.ensure_surface(window, cx);
         }
-        for t in self.tabs[old_active].pane_tree.all_terminals() {
-            t.set_native_view_visible(false, cx);
-        }
+        let old_terminals: Vec<TerminalPane> = self.tabs[old_active]
+            .pane_tree
+            .all_terminals()
+            .into_iter()
+            .cloned()
+            .collect();
+        cx.on_next_frame(window, move |_workspace, _window, cx| {
+            for terminal in &old_terminals {
+                terminal.set_native_view_visible(false, cx);
+            }
+        });
         terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
         Self::schedule_terminal_bootstrap_reassert(
@@ -4082,9 +4090,17 @@ impl ConWorkspace {
         for terminal in self.tabs[old_active].pane_tree.all_terminals() {
             terminal.set_focus_state(false, cx);
         }
-        for terminal in self.tabs[old_active].pane_tree.all_terminals() {
-            terminal.set_native_view_visible(false, cx);
-        }
+        let old_terminals: Vec<TerminalPane> = self.tabs[old_active]
+            .pane_tree
+            .all_terminals()
+            .into_iter()
+            .cloned()
+            .collect();
+        cx.on_next_frame(window, move |_workspace, _window, cx| {
+            for terminal in &old_terminals {
+                terminal.set_native_view_visible(false, cx);
+            }
+        });
         let focused = self.tabs[index].pane_tree.focused_terminal();
         focused.set_focus_state(true, cx);
         focused.focus(window, cx);
