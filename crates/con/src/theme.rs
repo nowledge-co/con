@@ -1,7 +1,7 @@
 use con_terminal::{Color, TerminalTheme};
 use gpui::App;
-use gpui_component::scroll::ScrollbarShow;
 use gpui_component::highlighter::LanguageRegistry;
+use gpui_component::scroll::ScrollbarShow;
 use gpui_component::{Theme, ThemeMode, ThemeRegistry};
 use std::borrow::Cow;
 
@@ -54,10 +54,16 @@ const CON_SHELL_HIGHLIGHTS: &str = r####"
   (#match? @preproc "^#![ \t]*/"))
 
 (function_definition
-  name: (word) @function)
+  name: (word) @title)
 
 (command_name
-  (word) @function)
+  (word) @primary)
+
+((word) @keyword
+  (#match? @keyword "^--?[[:alnum:]_-]+$"))
+
+((word) @string
+  (#match? @string "^(~|\\.|/).+"))
 
 (command
   argument: [

@@ -1,10 +1,9 @@
 use gpui::*;
 use gpui_component::{
-    ActiveTheme,
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState, Position},
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
-    Sizable as _,
+    ActiveTheme, Sizable as _,
 };
 
 actions!(
@@ -105,6 +104,8 @@ pub struct InputBar {
     inline_suggestion_prefix: Option<String>,
     inline_suggestion_suffix: Option<String>,
     inline_suggestion_source: Option<SuggestionSource>,
+    path_completion_candidates: Vec<String>,
+    path_completion_selection: usize,
     /// Tracks whether shift was held on the last enter keystroke.
     /// Set by observe_keystrokes (fires before PressEnter), consumed by PressEnter handler.
     shift_enter: bool,
@@ -120,11 +121,7 @@ impl InputBar {
                 AcceptSuggestionOrMoveRight,
                 Some("ConCommandInput > Input"),
             ),
-            KeyBinding::new(
-                "tab",
-                AcceptSuggestion,
-                Some("ConCommandInput > Input"),
-            ),
+            KeyBinding::new("tab", AcceptSuggestion, Some("ConCommandInput > Input")),
             KeyBinding::new(
                 "ctrl-e",
                 AcceptSuggestionOrMoveEnd,
@@ -135,11 +132,7 @@ impl InputBar {
                 AcceptSuggestionOrMoveEnd,
                 Some("ConCommandInput > Input"),
             ),
-            KeyBinding::new(
-                "cmd-w",
-                DeletePreviousWord,
-                Some("ConCommandInput > Input"),
-            ),
+            KeyBinding::new("cmd-w", DeletePreviousWord, Some("ConCommandInput > Input")),
             KeyBinding::new(
                 "cmd-right",
                 AcceptSuggestionOrMoveEnd,
@@ -265,7 +258,7 @@ impl InputBar {
 
                 match ev {
                     InputEvent::Change => {
-                        this.clear_inline_suggestion();
+                        this.clear_completion_ui();
                         let current_value = this.current_input_state().read(cx).value().to_string();
                         if let Some(history_ix) = this.history_nav_index {
                             let matches_current = this
@@ -371,6 +364,8 @@ impl InputBar {
             inline_suggestion_prefix: None,
             inline_suggestion_suffix: None,
             inline_suggestion_source: None,
+            path_completion_candidates: Vec::new(),
+            path_completion_selection: 0,
             shift_enter: false,
             ui_opacity: 0.90,
             _subscriptions,
@@ -447,14 +442,19 @@ impl InputBar {
         self.inline_suggestion_source = None;
     }
 
-    fn set_inline_suggestion(
-        &mut self,
-        prefix: &str,
-        suggestion: &str,
-        source: SuggestionSource,
-    ) {
+    pub fn clear_path_completion_candidates(&mut self) {
+        self.path_completion_candidates.clear();
+        self.path_completion_selection = 0;
+    }
+
+    pub fn clear_completion_ui(&mut self) {
+        self.clear_inline_suggestion();
+        self.clear_path_completion_candidates();
+    }
+
+    fn set_inline_suggestion(&mut self, prefix: &str, suggestion: &str, source: SuggestionSource) {
         if prefix.is_empty() || suggestion.is_empty() {
-            self.clear_inline_suggestion();
+            self.clear_completion_ui();
             return;
         }
 
@@ -464,13 +464,44 @@ impl InputBar {
             suggestion
         };
         if suffix.is_empty() || suffix.contains('\n') || suffix.contains('\r') {
-            self.clear_inline_suggestion();
+            self.clear_completion_ui();
             return;
         }
 
+        self.clear_path_completion_candidates();
         self.inline_suggestion_prefix = Some(prefix.to_string());
         self.inline_suggestion_suffix = Some(suffix.to_string());
         self.inline_suggestion_source = Some(source);
+    }
+
+    pub fn set_path_completion_candidates(&mut self, prefix: &str, candidates: Vec<String>) {
+        let mut candidates = candidates
+            .into_iter()
+            .filter(|candidate| candidate != prefix)
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.dedup();
+
+        if prefix.is_empty() || candidates.is_empty() {
+            self.clear_path_completion_candidates();
+            return;
+        }
+
+        self.clear_inline_suggestion();
+        self.path_completion_candidates = candidates;
+        self.path_completion_selection = 0;
+    }
+
+    pub fn path_completion_candidates(&self) -> Vec<String> {
+        self.path_completion_candidates.clone()
+    }
+
+    pub fn path_completion_selection(&self) -> usize {
+        self.path_completion_selection
+    }
+
+    pub fn has_path_completion_candidates(&self) -> bool {
+        !self.path_completion_candidates.is_empty()
     }
 
     pub fn set_history_inline_suggestion(&mut self, prefix: &str, suggestion: &str) {
@@ -498,7 +529,7 @@ impl InputBar {
         let text = input_state.read(cx).value().to_string();
         let cursor = input_state.read(cx).cursor();
         if cursor != text.len() {
-            self.clear_inline_suggestion();
+            self.clear_completion_ui();
             return false;
         }
 
@@ -509,8 +540,68 @@ impl InputBar {
             s.set_value(&completed, window, cx);
             s.set_cursor_position(Position::new(0, completed_chars), window, cx);
         });
-        self.clear_inline_suggestion();
+        self.clear_completion_ui();
         cx.emit(InputEdited);
+        cx.notify();
+        true
+    }
+
+    pub fn accept_selected_path_completion(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(candidate) = self
+            .path_completion_candidates
+            .get(self.path_completion_selection)
+            .cloned()
+        else {
+            return false;
+        };
+
+        let input_state = self.current_input_state();
+        let text = input_state.read(cx).value().to_string();
+        let cursor = input_state.read(cx).cursor();
+        if cursor != text.len() {
+            self.clear_completion_ui();
+            return false;
+        }
+
+        let completed_chars = candidate.chars().count() as u32;
+        input_state.update(cx, |s, cx| {
+            s.set_value(&candidate, window, cx);
+            s.set_cursor_position(Position::new(0, completed_chars), window, cx);
+        });
+        self.clear_completion_ui();
+        cx.emit(InputEdited);
+        cx.notify();
+        true
+    }
+
+    pub fn accept_path_completion_candidate_at(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if index >= self.path_completion_candidates.len() {
+            return false;
+        }
+        self.path_completion_selection = index;
+        self.accept_selected_path_completion(window, cx)
+    }
+
+    fn navigate_path_completion(&mut self, previous: bool, cx: &mut Context<Self>) -> bool {
+        if self.path_completion_candidates.is_empty() {
+            return false;
+        }
+
+        self.path_completion_selection = if previous {
+            self.path_completion_selection.saturating_sub(1)
+        } else {
+            (self.path_completion_selection + 1)
+                .min(self.path_completion_candidates.len().saturating_sub(1))
+        };
         cx.notify();
         true
     }
@@ -527,7 +618,8 @@ impl InputBar {
 
         let next_index = match (previous, self.history_nav_index) {
             (true, None) => {
-                self.history_nav_draft = Some(self.current_input_state().read(cx).value().to_string());
+                self.history_nav_draft =
+                    Some(self.current_input_state().read(cx).value().to_string());
                 Some(0)
             }
             (true, Some(ix)) if ix + 1 < self.recent_commands.len() => Some(ix + 1),
@@ -548,7 +640,7 @@ impl InputBar {
             state.set_value(&replacement, window, cx);
             state.set_cursor_position(cursor, window, cx);
         });
-        self.clear_inline_suggestion();
+        self.clear_completion_ui();
         cx.emit(InputEdited);
         cx.notify();
         true
@@ -582,7 +674,7 @@ impl InputBar {
             s.set_value(&format!("/{name} "), window, cx);
         });
         self.skill_selection = 0;
-        self.clear_inline_suggestion();
+        self.clear_completion_ui();
         cx.emit(SkillAutocompleteChanged);
         cx.emit(InputEdited);
         cx.notify();
@@ -602,7 +694,7 @@ impl InputBar {
 
     pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_mode(self.mode.next(), window, cx);
-        self.clear_inline_suggestion();
+        self.clear_completion_ui();
         cx.emit(InputEdited);
         cx.notify();
     }
@@ -610,7 +702,7 @@ impl InputBar {
     fn set_focused_scope(&mut self, cx: &mut Context<Self>) {
         self.selected_pane_ids.clear();
         self.last_single_target_id = Some(self.focused_pane_id);
-        self.clear_inline_suggestion();
+        self.clear_completion_ui();
         cx.emit(InputEdited);
         cx.notify();
     }
@@ -634,7 +726,7 @@ impl InputBar {
                 self.set_mode(InputMode::Shell, window, cx);
             }
         }
-        self.clear_inline_suggestion();
+        self.clear_completion_ui();
         cx.emit(InputEdited);
         cx.notify();
     }
@@ -648,7 +740,7 @@ impl InputBar {
             self.selected_pane_ids = self.panes.iter().map(|p| p.id).collect();
             self.set_mode(InputMode::Shell, window, cx);
         }
-        self.clear_inline_suggestion();
+        self.clear_completion_ui();
         cx.emit(InputEdited);
         cx.notify();
     }
@@ -662,6 +754,7 @@ impl InputBar {
         self.mode = mode;
         self.history_nav_index = None;
         self.history_nav_draft = None;
+        self.clear_completion_ui();
         let placeholder = self.placeholder().to_string();
         let next_state = self.current_input_state();
         next_state.update(cx, |s, cx| {
@@ -755,7 +848,7 @@ impl InputBar {
             state.set_value(&updated, window, cx);
             state.set_cursor_position(boundary_position, window, cx);
         });
-        self.clear_inline_suggestion();
+        self.clear_completion_ui();
         cx.emit(InputEdited);
         cx.notify();
     }
@@ -891,24 +984,29 @@ impl Render for InputBar {
                                                 move |_, window, cx| {
                                                     let _ = entity.update(cx, |this, cx| {
                                                         this.set_focused_scope(cx);
-                                                        this.current_input_state().update(cx, |state, cx| {
-                                                            state.focus(window, cx)
-                                                        });
+                                                        this.current_input_state()
+                                                            .update(cx, |state, cx| {
+                                                                state.focus(window, cx)
+                                                            });
                                                     });
                                                 }
                                             }),
                                     )
                                     .item(
                                         PopupMenuItem::new("Broadcast to all panes")
-                                            .checked(!panes.is_empty() && selected_ids.len() == panes.len())
+                                            .checked(
+                                                !panes.is_empty()
+                                                    && selected_ids.len() == panes.len(),
+                                            )
                                             .on_click({
                                                 let entity = entity.clone();
                                                 move |_, window, cx| {
                                                     let _ = entity.update(cx, |this, cx| {
                                                         this.toggle_select_all(window, cx);
-                                                        this.current_input_state().update(cx, |state, cx| {
-                                                            state.focus(window, cx)
-                                                        });
+                                                        this.current_input_state()
+                                                            .update(cx, |state, cx| {
+                                                                state.focus(window, cx)
+                                                            });
                                                     });
                                                 }
                                             }),
@@ -925,26 +1023,29 @@ impl Render for InputBar {
                                     let label = format!(
                                         "{}  {}",
                                         if pane.is_alive {
-                                            if pane.is_busy { "●" } else { "○" }
+                                            if pane.is_busy {
+                                                "●"
+                                            } else {
+                                                "○"
+                                            }
                                         } else {
                                             "◌"
                                         },
                                         Self::pane_target_label(pane)
                                     );
                                     menu = menu.item(
-                                        PopupMenuItem::new(label)
-                                            .checked(checked)
-                                            .on_click({
-                                                let entity = entity.clone();
-                                                move |_, window, cx| {
-                                                    let _ = entity.update(cx, |this, cx| {
-                                                        this.toggle_scope_pane(pane_id, window, cx);
-                                                        this.current_input_state().update(cx, |state, cx| {
+                                        PopupMenuItem::new(label).checked(checked).on_click({
+                                            let entity = entity.clone();
+                                            move |_, window, cx| {
+                                                let _ = entity.update(cx, |this, cx| {
+                                                    this.toggle_scope_pane(pane_id, window, cx);
+                                                    this.current_input_state()
+                                                        .update(cx, |state, cx| {
                                                             state.focus(window, cx)
                                                         });
-                                                    });
-                                                }
-                                            }),
+                                                });
+                                            }
+                                        }),
                                     );
                                 }
                                 menu
@@ -1042,25 +1143,23 @@ impl Render for InputBar {
             .min_h(px(24.0))
             .relative()
             .key_context("ConCommandInput")
-            .on_action(cx.listener(
-                |this, _: &AcceptSuggestion, window, cx| {
-                    let _ = this.accept_inline_suggestion(window, cx);
-                },
-            ))
-            .on_action(cx.listener(
-                |this, _: &AcceptSuggestionOrMoveEnd, window, cx| {
+            .on_action(cx.listener(|this, _: &AcceptSuggestion, window, cx| {
+                let _ = this.accept_inline_suggestion(window, cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &AcceptSuggestionOrMoveEnd, window, cx| {
                     if !this.accept_inline_suggestion(window, cx) {
                         this.move_cursor_to_line_end(window, cx);
                     }
-                },
-            ))
-            .on_action(cx.listener(
-                |this, _: &AcceptSuggestionOrMoveRight, window, cx| {
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &AcceptSuggestionOrMoveRight, window, cx| {
                     if !this.accept_inline_suggestion(window, cx) {
                         this.move_cursor_right(window, cx);
                     }
-                },
-            ))
+                }),
+            )
             .on_action(cx.listener(|this, _: &DeletePreviousWord, window, cx| {
                 this.delete_previous_word(window, cx);
             }))
@@ -1084,7 +1183,9 @@ impl Render for InputBar {
                             this.complete_skill(&name, window, cx);
                             window.prevent_default();
                             cx.stop_propagation();
-                        } else if this.accept_inline_suggestion(window, cx) {
+                        } else if this.accept_selected_path_completion(window, cx)
+                            || this.accept_inline_suggestion(window, cx)
+                        {
                             window.prevent_default();
                             cx.stop_propagation();
                         }
@@ -1094,14 +1195,16 @@ impl Render for InputBar {
                             this.current_input_state()
                                 .update(cx, |s, cx| s.set_value("", window, cx));
                             this.skill_selection = 0;
-                            this.clear_inline_suggestion();
+                            this.clear_completion_ui();
                             cx.emit(SkillAutocompleteChanged);
                             cx.emit(InputEdited);
                             cx.notify();
                             window.prevent_default();
                             cx.stop_propagation();
-                        } else if this.inline_suggestion_suffix.is_some() {
-                            this.clear_inline_suggestion();
+                        } else if this.has_path_completion_candidates()
+                            || this.inline_suggestion_suffix.is_some()
+                        {
+                            this.clear_completion_ui();
                             cx.emit(InputEdited);
                             cx.notify();
                             window.prevent_default();
@@ -1119,6 +1222,12 @@ impl Render for InputBar {
                         window.prevent_default();
                         cx.stop_propagation();
                     }
+                    "up" if this.has_path_completion_candidates() => {
+                        if this.navigate_path_completion(true, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
                     "down" if has_completions => {
                         this.skill_selection =
                             (this.skill_selection + 1).min(matches.len().saturating_sub(1));
@@ -1127,27 +1236,41 @@ impl Render for InputBar {
                         window.prevent_default();
                         cx.stop_propagation();
                     }
+                    "down" if this.has_path_completion_candidates() => {
+                        if this.navigate_path_completion(false, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
                     "right" if !mods.control && !mods.platform && !mods.alt => {
-                        if this.accept_inline_suggestion(window, cx) {
+                        if this.accept_selected_path_completion(window, cx)
+                            || this.accept_inline_suggestion(window, cx)
+                        {
                             window.prevent_default();
                             cx.stop_propagation();
                         }
                     }
                     "end" => {
-                        if this.accept_inline_suggestion(window, cx) {
+                        if this.accept_selected_path_completion(window, cx)
+                            || this.accept_inline_suggestion(window, cx)
+                        {
                             window.prevent_default();
                             cx.stop_propagation();
                         }
                     }
                     "e" if mods.control || mods.platform => {
-                        if !this.accept_inline_suggestion(window, cx) {
+                        if !(this.accept_selected_path_completion(window, cx)
+                            || this.accept_inline_suggestion(window, cx))
+                        {
                             this.move_cursor_to_line_end(window, cx);
                         }
                         window.prevent_default();
                         cx.stop_propagation();
                     }
                     "right" if mods.platform => {
-                        if this.accept_inline_suggestion(window, cx) {
+                        if this.accept_selected_path_completion(window, cx)
+                            || this.accept_inline_suggestion(window, cx)
+                        {
                             window.prevent_default();
                             cx.stop_propagation();
                         }
@@ -1180,40 +1303,32 @@ impl Render for InputBar {
                             .flex()
                             .items_center()
                             .overflow_hidden()
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .opacity(0.0)
-                                    .child(ghost_prefix),
-                            )
+                            .child(div().flex_shrink_0().opacity(0.0).child(ghost_prefix))
                             .child(div().text_color(ghost_tint).child(ghost_suffix)),
                     )
             }))
-            .child(
-                div()
-                    .relative()
-                    .top(input_vertical_offset)
-                    .child(if self.mode == InputMode::Agent {
-                        Input::new(&input_state)
-                            .appearance(false)
-                            .cleanable(false)
-                            .font_family(input_font)
-                            .text_size(input_text_size)
-                            .line_height(input_line_height)
-                            .pl(px(0.0))
-                            .h(px(24.0))
-                            .into_any_element()
-                    } else {
-                        Input::new(&input_state)
-                            .appearance(false)
-                            .cleanable(false)
-                            .font_family(input_font)
-                            .text_size(input_text_size)
-                            .line_height(input_line_height)
-                            .h(px(24.0))
-                            .into_any_element()
-                    }),
-            );
+            .child(div().relative().top(input_vertical_offset).child(
+                if self.mode == InputMode::Agent {
+                    Input::new(&input_state)
+                        .appearance(false)
+                        .cleanable(false)
+                        .font_family(input_font)
+                        .text_size(input_text_size)
+                        .line_height(input_line_height)
+                        .pl(px(0.0))
+                        .h(px(24.0))
+                        .into_any_element()
+                } else {
+                    Input::new(&input_state)
+                        .appearance(false)
+                        .cleanable(false)
+                        .font_family(input_font)
+                        .text_size(input_text_size)
+                        .line_height(input_line_height)
+                        .h(px(24.0))
+                        .into_any_element()
+                },
+            ));
 
         // ── Main layout — flat bar, no rounded bubble ──
         div()
@@ -1234,12 +1349,7 @@ impl Render for InputBar {
                     .gap(px(8.0))
                     .child(mode_prefix)
                     .children(pane_row)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(input_field),
-                    )
+                    .child(div().flex_1().min_w_0().child(input_field))
                     .child(send_button),
             )
     }

@@ -126,7 +126,8 @@ impl SuggestionEngine {
                 "dispatch ai suggestion prefix={:?}",
                 prefix_owned
             );
-            if let Some(completion) = request_completion(&config, &prefix_owned, &context_owned).await
+            if let Some(completion) =
+                request_completion(&config, &prefix_owned, &context_owned).await
             {
                 if !completion.is_empty() {
                     cache.lock().insert(cache_key_owned, completion.clone());
@@ -183,7 +184,9 @@ async fn request_completion(
         "Complete this shell command suffix.\n\
          Return only the missing trailing characters.\n\
          No explanations. No newline. No shell chaining. No destructive extras.\n\
-         Preserve quoting and spaces. If unsure, return empty.\n\n\
+         Preserve quoting and spaces.\n\
+         If the best completion is identical to the prefix, return empty.\n\
+         If unsure, return empty.\n\n\
          cwd: {}\n\
          recent:\n{}\n\n\
          prefix: {}",
@@ -193,6 +196,13 @@ async fn request_completion(
     );
 
     let provider = AgentProvider::new(config.clone());
+    log::debug!(
+        target: "con_core::suggestions",
+        "request ai completion provider={:?} model={} prefix={:?}",
+        config.provider,
+        config.effective_model(&config.provider),
+        prefix
+    );
     match provider.complete(&prompt).await {
         Ok(completion) => {
             let cleaned = completion

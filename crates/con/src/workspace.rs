@@ -23,8 +23,7 @@ use crate::agent_panel::{
 };
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{
-    EscapeInput, InputBar, InputEdited, InputMode, PaneInfo, SkillAutocompleteChanged,
-    SubmitInput,
+    EscapeInput, InputBar, InputEdited, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
 };
 use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
@@ -48,8 +47,8 @@ use con_core::control::{
     SystemIdentifyResult, TabInfo,
 };
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
-use con_core::{SuggestionContext, SuggestionEngine};
 use con_core::session::Session;
+use con_core::{SuggestionContext, SuggestionEngine};
 
 struct Tab {
     pane_tree: PaneTree,
@@ -73,6 +72,11 @@ struct ShellSuggestionResult {
     pane_id: usize,
     prefix: String,
     completion: String,
+}
+
+enum LocalPathCompletion {
+    Inline(String),
+    Candidates(Vec<String>),
 }
 
 /// The main workspace: tabs + agent panel + input bar + settings overlay
@@ -1841,16 +1845,18 @@ impl ConWorkspace {
                 let shell_history = tab
                     .shell_history
                     .iter()
-                    .map(|(pane_id, entries)| con_core::session::PaneCommandHistoryState {
-                        pane_id: Some(*pane_id),
-                        entries: entries
-                            .iter()
-                            .map(|entry| con_core::session::CommandHistoryEntryState {
-                                command: entry.command.clone(),
-                                cwd: entry.cwd.clone(),
-                            })
-                            .collect(),
-                    })
+                    .map(
+                        |(pane_id, entries)| con_core::session::PaneCommandHistoryState {
+                            pane_id: Some(*pane_id),
+                            entries: entries
+                                .iter()
+                                .map(|entry| con_core::session::CommandHistoryEntryState {
+                                    command: entry.command.clone(),
+                                    cwd: entry.cwd.clone(),
+                                })
+                                .collect(),
+                        },
+                    )
                     .collect();
                 con_core::session::TabState {
                     title,
@@ -1934,9 +1940,12 @@ impl ConWorkspace {
         for tab in tabs {
             for entries in tab.shell_history.values() {
                 for entry in entries {
-                    if let Some(existing_idx) = aggregated
-                        .iter()
-                        .position(|existing: &CommandSuggestionEntry| existing.command == entry.command)
+                    if let Some(existing_idx) =
+                        aggregated
+                            .iter()
+                            .position(|existing: &CommandSuggestionEntry| {
+                                existing.command == entry.command
+                            })
                     {
                         aggregated.remove(existing_idx);
                     }
@@ -2417,12 +2426,11 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (content, mode) =
-            input_bar.update(cx, |bar, cx| {
-                let content = bar.take_content(window, cx);
-                bar.clear_inline_suggestion();
-                (content, bar.mode())
-            });
+        let (content, mode) = input_bar.update(cx, |bar, cx| {
+            let content = bar.take_content(window, cx);
+            bar.clear_completion_ui();
+            (content, bar.mode())
+        });
 
         if content.trim().is_empty() {
             return;
@@ -3919,10 +3927,7 @@ impl ConWorkspace {
             return;
         }
 
-        let history = self.tabs[tab_idx]
-            .shell_history
-            .entry(pane_id)
-            .or_default();
+        let history = self.tabs[tab_idx].shell_history.entry(pane_id).or_default();
         if let Some(existing_idx) = history.iter().position(|entry| entry.command == trimmed) {
             history.remove(existing_idx);
         }
@@ -3985,7 +3990,7 @@ impl ConWorkspace {
         pane_id: usize,
         input: &str,
         cx: &App,
-    ) -> Option<String> {
+    ) -> Option<LocalPathCompletion> {
         let pane_tree = &self.tabs.get(tab_idx)?.pane_tree;
         let terminal = pane_tree
             .pane_terminals()
@@ -4022,30 +4027,29 @@ impl ConWorkspace {
 
         let directories_only = first_word == "cd";
         let home_dir = dirs::home_dir();
-        let (search_dir, dir_prefix, search_prefix) =
-            if let Some(stripped) = token.strip_prefix("~/") {
-                let home = home_dir?;
-                match stripped.rsplit_once('/') {
-                    Some((dir, prefix)) => {
-                        (home.join(dir), format!("~/{dir}/"), prefix.to_string())
-                    }
-                    None => (home, "~/".to_string(), stripped.to_string()),
-                }
-            } else if token == "~" {
-                let home = home_dir?;
-                (home, String::new(), "~".to_string())
-            } else if let Some((dir, prefix)) = token.rsplit_once('/') {
-                let base = if dir.is_empty() {
-                    PathBuf::from("/")
-                } else if Path::new(dir).is_absolute() {
-                    PathBuf::from(dir)
-                } else {
-                    PathBuf::from(&cwd).join(dir)
-                };
-                (base, format!("{dir}/"), prefix.to_string())
+        let (search_dir, dir_prefix, search_prefix) = if let Some(stripped) =
+            token.strip_prefix("~/")
+        {
+            let home = home_dir?;
+            match stripped.rsplit_once('/') {
+                Some((dir, prefix)) => (home.join(dir), format!("~/{dir}/"), prefix.to_string()),
+                None => (home, "~/".to_string(), stripped.to_string()),
+            }
+        } else if token == "~" {
+            let home = home_dir?;
+            (home, String::new(), "~".to_string())
+        } else if let Some((dir, prefix)) = token.rsplit_once('/') {
+            let base = if dir.is_empty() {
+                PathBuf::from("/")
+            } else if Path::new(dir).is_absolute() {
+                PathBuf::from(dir)
             } else {
-                (PathBuf::from(&cwd), String::new(), token.to_string())
+                PathBuf::from(&cwd).join(dir)
             };
+            (base, format!("{dir}/"), prefix.to_string())
+        } else {
+            (PathBuf::from(&cwd), String::new(), token.to_string())
+        };
 
         let mut matches = std::fs::read_dir(&search_dir)
             .ok()?
@@ -4056,7 +4060,8 @@ impl ConWorkspace {
                     return None;
                 }
                 let name = entry.file_name().to_string_lossy().to_string();
-                name.starts_with(&search_prefix).then_some((name, file_type.is_dir()))
+                name.starts_with(&search_prefix)
+                    .then_some((name, file_type.is_dir()))
             })
             .collect::<Vec<_>>();
         if matches.is_empty() {
@@ -4074,7 +4079,21 @@ impl ConWorkspace {
         } else {
             let prefix = longest_common_prefix(matches.iter().map(|(name, _)| name.as_str()));
             if prefix.chars().count() <= search_prefix.chars().count() {
-                return None;
+                let candidates = matches
+                    .into_iter()
+                    .map(|(name, is_dir)| {
+                        let mut candidate = if token == "~" {
+                            name
+                        } else {
+                            format!("{dir_prefix}{name}")
+                        };
+                        if is_dir {
+                            candidate.push('/');
+                        }
+                        format!("{}{}", &input[..token_start], candidate)
+                    })
+                    .collect::<Vec<_>>();
+                return Some(LocalPathCompletion::Candidates(candidates));
             }
             prefix
         };
@@ -4085,14 +4104,19 @@ impl ConWorkspace {
             format!("{dir_prefix}{matched_name}")
         };
 
-        Some(format!("{}{}", &input[..token_start], completed_token))
+        Some(LocalPathCompletion::Inline(format!(
+            "{}{}",
+            &input[..token_start],
+            completed_token
+        )))
     }
 
     fn refresh_input_suggestion(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.has_active_tab() {
             log::debug!(target: "con::suggestions", "skip suggestion: no active tab");
             self.shell_suggestion_engine.cancel();
-            self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
+            self.input_bar
+                .update(cx, |bar, _cx| bar.clear_completion_ui());
             return;
         }
 
@@ -4115,7 +4139,8 @@ impl ConWorkspace {
                 target_ids.len()
             );
             self.shell_suggestion_engine.cancel();
-            self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
+            self.input_bar
+                .update(cx, |bar, _cx| bar.clear_completion_ui());
             return;
         }
 
@@ -4130,16 +4155,31 @@ impl ConWorkspace {
         if let Some(path_match) =
             self.local_path_completion_for_prefix(self.active_tab, pane_id, &text, cx)
         {
-            log::debug!(
-                target: "con::suggestions",
-                "use path suggestion prefix={:?} completion={:?}",
-                text,
-                path_match
-            );
             self.shell_suggestion_engine.cancel();
-            self.input_bar.update(cx, |bar, _cx| {
-                bar.set_path_inline_suggestion(&text, &path_match);
-            });
+            match path_match {
+                LocalPathCompletion::Inline(path_match) => {
+                    log::debug!(
+                        target: "con::suggestions",
+                        "use path suggestion prefix={:?} completion={:?}",
+                        text,
+                        path_match
+                    );
+                    self.input_bar.update(cx, |bar, _cx| {
+                        bar.set_path_inline_suggestion(&text, &path_match);
+                    });
+                }
+                LocalPathCompletion::Candidates(candidates) => {
+                    log::debug!(
+                        target: "con::suggestions",
+                        "use path candidates prefix={:?} count={}",
+                        text,
+                        candidates.len()
+                    );
+                    self.input_bar.update(cx, |bar, _cx| {
+                        bar.set_path_completion_candidates(&text, candidates);
+                    });
+                }
+            }
             return;
         }
 
@@ -4157,7 +4197,8 @@ impl ConWorkspace {
             return;
         }
 
-        self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
+        self.input_bar
+            .update(cx, |bar, _cx| bar.clear_completion_ui());
 
         let shell_probe_too_short = mode == InputMode::Smart && trimmed.chars().count() < 2;
         let is_shell_mode = match mode {
@@ -4190,6 +4231,8 @@ impl ConWorkspace {
                 text
             );
             self.shell_suggestion_engine.cancel();
+            self.input_bar
+                .update(cx, |bar, _cx| bar.clear_path_completion_candidates());
             return;
         }
 
@@ -4200,6 +4243,8 @@ impl ConWorkspace {
                 text
             );
             self.shell_suggestion_engine.cancel();
+            self.input_bar
+                .update(cx, |bar, _cx| bar.clear_path_completion_candidates());
             return;
         }
 
@@ -4261,7 +4306,10 @@ impl ConWorkspace {
             .find_map(|(id, terminal)| (id == result.pane_id).then(|| terminal.current_dir(cx)))
             .flatten();
 
-        if self.history_completion_for_prefix(&text, cwd.as_deref()).is_some() {
+        if self
+            .history_completion_for_prefix(&text, cwd.as_deref())
+            .is_some()
+        {
             log::debug!(
                 target: "con::suggestions",
                 "drop ai suggestion prefix={:?}: history match became available",
@@ -4306,7 +4354,7 @@ impl ConWorkspace {
         }
 
         self.input_bar.update(cx, |bar, _cx| {
-            bar.clear_inline_suggestion();
+            bar.clear_completion_ui();
         });
         self.save_session(cx);
 
@@ -4653,6 +4701,7 @@ impl Render for ConWorkspace {
         // If a modal was dismissed internally (escape/backdrop), restore terminal focus
         let is_modal_open = self.is_modal_open(cx);
         let has_skill_popup = !self.input_bar.read(cx).filtered_skills(cx).is_empty();
+        let has_path_popup = self.input_bar.read(cx).has_path_completion_candidates();
         let has_inline_skill_popup = self.agent_panel_open
             && !self.input_bar_visible
             && !self
@@ -4765,9 +4814,7 @@ impl Render for ConWorkspace {
         // Sync model name, inline input, and skills to agent panel
         let model_name = self.harness.active_model_name();
         let provider = self.harness.config().provider.clone();
-        let available_models = self
-            .model_registry
-            .models_for(&provider);
+        let available_models = self.model_registry.models_for(&provider);
         let show_inline = !self.input_bar_visible && self.agent_panel_open;
         let panel_skills: Vec<crate::input_bar::SkillEntry> = self
             .harness
@@ -4841,60 +4888,59 @@ impl Render for ConWorkspace {
 
         if agent_panel_progress > 0.01 {
             let animated_panel_width = self.agent_panel_width * agent_panel_progress;
-            main_area = main_area
-                .child(
-                    div()
-                        .w(px(animated_panel_width + 1.0))
-                        .h_full()
-                        .overflow_hidden()
-                        .flex_shrink_0()
-                        .flex()
-                        .flex_row()
-                        .bg(theme.background.opacity(elevated_ui_surface_opacity))
-                        .child(
-                            div()
-                                .id("agent-panel-divider")
-                                .relative()
-                                .w(px(1.0))
-                                .h_full()
-                                .flex_shrink_0()
-                                .bg(theme.title_bar_border)
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .left(px(-2.0))
-                                        .w(px(5.0))
-                                        .cursor_col_resize()
-                                        .bg(theme.background.opacity(elevated_ui_surface_opacity))
-                                        .hover(|s| {
-                                            s.bg(theme.background.opacity(
-                                                (elevated_ui_surface_opacity + 0.08).min(1.0),
-                                            ))
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(
-                                                |this, event: &MouseDownEvent, _window, _cx| {
-                                                    this.agent_panel_drag = Some((
-                                                        f32::from(event.position.x),
-                                                        this.agent_panel_width,
-                                                    ));
-                                                },
-                                            ),
+            main_area = main_area.child(
+                div()
+                    .w(px(animated_panel_width + 1.0))
+                    .h_full()
+                    .overflow_hidden()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_row()
+                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                    .child(
+                        div()
+                            .id("agent-panel-divider")
+                            .relative()
+                            .w(px(1.0))
+                            .h_full()
+                            .flex_shrink_0()
+                            .bg(theme.title_bar_border)
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .left(px(-2.0))
+                                    .w(px(5.0))
+                                    .cursor_col_resize()
+                                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                                    .hover(|s| {
+                                        s.bg(theme
+                                            .background
+                                            .opacity((elevated_ui_surface_opacity + 0.08).min(1.0)))
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            |this, event: &MouseDownEvent, _window, _cx| {
+                                                this.agent_panel_drag = Some((
+                                                    f32::from(event.position.x),
+                                                    this.agent_panel_width,
+                                                ));
+                                            },
                                         ),
-                                )
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .h_full()
-                                .opacity(agent_panel_content_progress)
-                                .child(self.agent_panel.clone()),
-                        ),
-                );
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .opacity(agent_panel_content_progress)
+                            .child(self.agent_panel.clone()),
+                    ),
+            );
         }
 
         // Top bar — compact titlebar for one tab, full strip for many
@@ -5072,12 +5118,11 @@ impl Render for ConWorkspace {
                     this.new_tab(&NewTab, window, cx);
                 }))
                 .child(
-                    svg()
-                        .path("phosphor/plus.svg")
-                        .size(px(12.0))
-                        .text_color(theme.muted_foreground.opacity(
-                            0.45 + (0.08 * compact_titlebar_progress),
-                        )),
+                    svg().path("phosphor/plus.svg").size(px(12.0)).text_color(
+                        theme
+                            .muted_foreground
+                            .opacity(0.45 + (0.08 * compact_titlebar_progress)),
+                    ),
                 ),
         );
 
@@ -5202,12 +5247,10 @@ impl Render for ConWorkspace {
                                     };
                                     (f32::from(event.position.x), win_w - panel_w)
                                 }
-                                SplitDirection::Vertical => {
-                                    (
-                                        f32::from(event.position.y),
-                                        win_h - top_bar_height - input_bar_height,
-                                    )
-                                }
+                                SplitDirection::Vertical => (
+                                    f32::from(event.position.y),
+                                    win_h - top_bar_height - input_bar_height,
+                                ),
                             }
                         } else {
                             return;
@@ -5390,6 +5433,78 @@ impl Render for ConWorkspace {
                                 .line_height(px(16.0))
                                 .text_color(theme.muted_foreground.opacity(0.68))
                                 .child(desc.clone()),
+                        ),
+                );
+            }
+            root = root.child(popup);
+        }
+
+        if has_path_popup && !has_skill_popup {
+            let theme = cx.theme();
+            let popup_width = px((window.bounds().size.width.as_f32() * 0.32).clamp(320.0, 440.0));
+            let popup_bottom = self.input_bar.read(cx).skill_popup_offset(cx);
+            let candidates = self.input_bar.read(cx).path_completion_candidates();
+            let sel = self
+                .input_bar
+                .read(cx)
+                .path_completion_selection()
+                .min(candidates.len().saturating_sub(1));
+
+            let mut popup = div()
+                .absolute()
+                .bottom(popup_bottom)
+                .left(px(24.0))
+                .w(popup_width)
+                .max_h(px(280.0))
+                .flex()
+                .flex_col()
+                .rounded(px(10.0))
+                .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                .border_1()
+                .border_color(theme.muted.opacity(0.16))
+                .py(px(6.0))
+                .overflow_hidden()
+                .font_family(theme.mono_font_family.clone());
+
+            for (i, candidate) in candidates.iter().enumerate() {
+                let is_sel = i == sel;
+                let candidate_ix = i;
+                popup = popup.child(
+                    div()
+                        .id(SharedString::from(format!("path-candidate-{i}")))
+                        .mx(px(6.0))
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .rounded(px(8.0))
+                        .cursor_pointer()
+                        .bg(if is_sel {
+                            theme.primary.opacity(0.10)
+                        } else {
+                            theme.transparent
+                        })
+                        .hover(|s| s.bg(theme.primary.opacity(0.08)))
+                        .on_mouse_down(MouseButton::Left, {
+                            let input_bar = self.input_bar.clone();
+                            cx.listener(move |_this, _, window, cx| {
+                                input_bar.update(cx, |bar, cx| {
+                                    let _ = bar.accept_path_completion_candidate_at(
+                                        candidate_ix,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            })
+                        })
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_family(theme.mono_font_family.clone())
+                                .text_color(if is_sel {
+                                    theme.primary
+                                } else {
+                                    theme.foreground
+                                })
+                                .child(candidate.clone()),
                         ),
                 );
             }

@@ -4,7 +4,6 @@ use futures::StreamExt;
 use rig::agent::{MultiTurnStreamItem, StreamingResult};
 use rig::client::CompletionClient;
 use rig::client::Nothing;
-use rig::completion::CompletionModel as _;
 use rig::providers::{
     anthropic, chatgpt, cohere, deepseek, gemini, github_copilot, groq, minimax, mistral, moonshot,
     ollama, openai, openrouter, perplexity, together, xai, zai,
@@ -1259,41 +1258,24 @@ impl AgentProvider {
     /// Lightweight completion — no tools, no history, just a simple prompt→response.
     /// Used for suggestions and other quick completions.
     pub async fn complete(&self, prompt: &str) -> Result<String> {
-        use rig::completion::AssistantContent;
+        use rig::completion::Prompt;
 
         let kind = &self.config.provider;
         let preamble = "You are a shell command completion assistant. Be extremely concise.";
 
         macro_rules! do_complete {
             ($client:expr) => {{
-                let model = $client.completion_model(self.config.effective_model(kind));
-                let response = model
-                    .completion_request(prompt)
-                    .preamble(preamble.to_string())
-                    .max_tokens(100)
-                    .send()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))?;
-                match response.choice.first() {
-                    AssistantContent::Text(t) => Ok(t.text.clone()),
-                    _ => Ok(String::new()),
+                let mut builder = $client.agent(self.config.effective_model(kind));
+                builder = builder.preamble(preamble);
+                builder = builder.max_tokens(100);
+                if let Some(temp) = self.config.temperature {
+                    builder = builder.temperature(temp);
                 }
-            }};
-        }
-
-        macro_rules! do_complete_model {
-            ($model:expr) => {{
-                let response = $model
-                    .completion_request(prompt)
-                    .preamble(preamble.to_string())
-                    .max_tokens(100)
-                    .send()
+                let agent = builder.build();
+                agent
+                    .prompt(prompt)
                     .await
-                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))?;
-                match response.choice.first() {
-                    AssistantContent::Text(t) => Ok(t.text.clone()),
-                    _ => Ok(String::new()),
-                }
+                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))
             }};
         }
 
@@ -1301,15 +1283,7 @@ impl AgentProvider {
             ProviderKind::Anthropic => do_complete!(self.build_anthropic_client()?),
             ProviderKind::OpenAI => do_complete!(self.build_openai_client()?),
             ProviderKind::ChatGPT => do_complete!(self.build_chatgpt_client()?),
-            ProviderKind::GitHubCopilot => {
-                let client = self.build_github_copilot_client()?;
-                let model = self.config.effective_model(kind);
-                if github_copilot::requires_responses_api(model) {
-                    do_complete_model!(client.responses_model(model))
-                } else {
-                    do_complete!(client)
-                }
-            }
+            ProviderKind::GitHubCopilot => do_complete!(self.build_github_copilot_client()?),
             ProviderKind::OpenAICompatible => {
                 do_complete!(self.build_openai_compatible_client()?)
             }
