@@ -786,6 +786,14 @@ impl Render for InputBar {
             InputMode::Agent => theme.font_family.clone(),
             _ => theme.mono_font_family.clone(),
         };
+        let input_text_size = match self.mode {
+            InputMode::Agent => px(14.0),
+            _ => px(13.0),
+        };
+        let input_line_height = match self.mode {
+            InputMode::Agent => rems(1.15),
+            _ => rems(1.25),
+        };
         let show_inline_suggestion = self.mode != InputMode::Agent
             && input_cursor == input_value.len()
             && !input_value.is_empty()
@@ -928,7 +936,7 @@ impl Render for InputBar {
                 }
             }))
             .font_family(input_font.clone())
-            .text_size(px(13.0))
+            .text_size(input_text_size)
             .children(show_inline_suggestion.then(|| {
                 div()
                     .absolute()
@@ -939,7 +947,7 @@ impl Render for InputBar {
                     .px(px(12.0))
                     .flex()
                     .items_center()
-                    .line_height(rems(1.25))
+                    .line_height(input_line_height)
                     .overflow_hidden()
                     .child(
                         div()
@@ -960,7 +968,8 @@ impl Render for InputBar {
                     .appearance(false)
                     .cleanable(false)
                     .font_family(input_font)
-                    .text_sm()
+                    .text_size(input_text_size)
+                    .line_height(input_line_height)
                     .h(px(24.0)),
             );
 
@@ -970,7 +979,7 @@ impl Render for InputBar {
             .flex_col()
             .bg(theme.title_bar.opacity(self.ui_opacity))
             .font_family(theme.font_family.clone())
-            .text_size(px(13.0))
+            .text_size(input_text_size)
             // ── Flat container ──
             .child(
                 div()
