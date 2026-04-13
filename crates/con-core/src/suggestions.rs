@@ -1,11 +1,12 @@
 use con_agent::AgentConfig;
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
 const SUGGESTION_MAX_LEN: usize = 200;
+const EMPTY_RESULT_TTL: Duration = Duration::from_secs(12);
 
 #[derive(Debug, Clone, Default)]
 pub struct SuggestionContext {
@@ -19,6 +20,8 @@ pub struct SuggestionContext {
 /// requests a lightweight AI completion, and caches results.
 pub struct SuggestionEngine {
     cache: Arc<Mutex<HashMap<String, String>>>,
+    empty_cache: Arc<Mutex<HashMap<String, Instant>>>,
+    in_flight: Arc<Mutex<HashSet<String>>>,
     last_request: Arc<Mutex<Option<Instant>>>,
     pending: Arc<Mutex<Option<String>>>,
     debounce_ms: u64,
@@ -30,6 +33,8 @@ impl SuggestionEngine {
     pub fn new(config: AgentConfig, runtime: Arc<Runtime>, debounce_ms: u64) -> Self {
         Self {
             cache: Arc::new(Mutex::new(HashMap::new())),
+            empty_cache: Arc::new(Mutex::new(HashMap::new())),
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
             last_request: Arc::new(Mutex::new(None)),
             pending: Arc::new(Mutex::new(None)),
             debounce_ms,
@@ -69,6 +74,39 @@ impl SuggestionEngine {
             return;
         }
 
+        if self
+            .empty_cache
+            .lock()
+            .get(&cache_key)
+            .is_some_and(|instant| instant.elapsed() < EMPTY_RESULT_TTL)
+        {
+            log::debug!(
+                target: "con_core::suggestions",
+                "skip ai suggestion prefix={:?}: recent empty result cached",
+                prefix
+            );
+            return;
+        }
+
+        let pending_key = self.pending.lock().clone();
+        if pending_key.as_deref() == Some(prefix) {
+            log::debug!(
+                target: "con_core::suggestions",
+                "skip ai suggestion prefix={:?}: already pending",
+                prefix
+            );
+            return;
+        }
+
+        if self.in_flight.lock().contains(&cache_key) {
+            log::debug!(
+                target: "con_core::suggestions",
+                "skip ai suggestion prefix={:?}: already in flight",
+                prefix
+            );
+            return;
+        }
+
         log::debug!(
             target: "con_core::suggestions",
             "queue ai suggestion prefix={:?} cwd={:?} recent_commands={}",
@@ -84,6 +122,8 @@ impl SuggestionEngine {
         let debounce = Duration::from_millis(self.debounce_ms);
         let pending = self.pending.clone();
         let cache = self.cache.clone();
+        let empty_cache = self.empty_cache.clone();
+        let in_flight = self.in_flight.clone();
         let last_request = self.last_request.clone();
         let config = self.config.clone();
         let prefix_owned = prefix.to_string();
@@ -126,11 +166,15 @@ impl SuggestionEngine {
                 "dispatch ai suggestion prefix={:?}",
                 prefix_owned
             );
+            in_flight.lock().insert(cache_key_owned.clone());
             if let Some(completion) =
                 request_completion(&config, &prefix_owned, &context_owned).await
             {
                 if !completion.is_empty() {
-                    cache.lock().insert(cache_key_owned, completion.clone());
+                    cache
+                        .lock()
+                        .insert(cache_key_owned.clone(), completion.clone());
+                    empty_cache.lock().remove(&cache_key_owned);
                     log::debug!(
                         target: "con_core::suggestions",
                         "ai suggestion result prefix={:?} completion={:?}",
@@ -139,19 +183,24 @@ impl SuggestionEngine {
                     );
                     callback(completion);
                 } else {
+                    empty_cache.lock().insert(cache_key_owned.clone(), Instant::now());
                     log::debug!(
                         target: "con_core::suggestions",
                         "ai suggestion empty result prefix={:?}",
                         prefix_owned
                     );
                 }
+            } else {
+                empty_cache.lock().insert(cache_key_owned.clone(), Instant::now());
             }
+            in_flight.lock().remove(&cache_key_owned);
         });
     }
 
     /// Clear the suggestion cache
     pub fn clear_cache(&self) {
         self.cache.lock().clear();
+        self.empty_cache.lock().clear();
     }
 
     /// Cancel any pending request
@@ -215,6 +264,14 @@ async fn request_completion(
             }
         }
         Err(e) => {
+            let message = e.to_string();
+            if message.contains("contained no message or tool call (empty)") {
+                log::debug!(
+                    target: "con_core::suggestions",
+                    "Suggestion completion returned empty provider payload"
+                );
+                return None;
+            }
             log::debug!(target: "con_core::suggestions", "Suggestion completion failed: {}", e);
             None
         }

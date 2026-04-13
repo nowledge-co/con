@@ -17,6 +17,7 @@ const CON_SHELL_HIGHLIGHTS: &str = r####"
   (heredoc_start)
   (heredoc_end)
   (ansi_c_string)
+  (word)
 ] @string
 
 (variable_name) @variable
