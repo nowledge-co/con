@@ -1543,6 +1543,7 @@ impl SettingsPanel {
             "cycle_input_mode" => self.config.keybindings.cycle_input_mode = binding,
             "split_right" => self.config.keybindings.split_right = binding,
             "split_down" => self.config.keybindings.split_down = binding,
+            "toggle_pane_scope" => self.config.keybindings.toggle_pane_scope = binding,
             "quit" => self.config.keybindings.quit = binding,
             _ => {}
         }
@@ -1564,6 +1565,7 @@ impl SettingsPanel {
             "cycle_input_mode" => &self.config.keybindings.cycle_input_mode,
             "split_right" => &self.config.keybindings.split_right,
             "split_down" => &self.config.keybindings.split_down,
+            "toggle_pane_scope" => &self.config.keybindings.toggle_pane_scope,
             "quit" => &self.config.keybindings.quit,
             _ => "",
         }
@@ -3162,6 +3164,7 @@ impl SettingsPanel {
             ("Toggle Input Bar", "toggle_input_bar"),
             ("Focus Input", "focus_input"),
             ("Cycle Input Mode", "cycle_input_mode"),
+            ("Toggle Pane Scope", "toggle_pane_scope"),
             ("Quit", "quit"),
         ];
 

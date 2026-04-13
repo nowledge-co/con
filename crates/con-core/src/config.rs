@@ -118,6 +118,9 @@ fn default_toggle_input_bar() -> String {
 fn default_cycle_input_mode() -> String {
     "cmd-;".into()
 }
+fn default_toggle_pane_scope() -> String {
+    "cmd-'".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -134,6 +137,7 @@ pub struct KeybindingConfig {
     pub focus_input: String,
     pub cycle_input_mode: String,
     pub toggle_input_bar: String,
+    pub toggle_pane_scope: String,
 }
 
 impl Default for KeybindingConfig {
@@ -151,6 +155,7 @@ impl Default for KeybindingConfig {
             focus_input: default_focus_input(),
             cycle_input_mode: default_cycle_input_mode(),
             toggle_input_bar: default_toggle_input_bar(),
+            toggle_pane_scope: default_toggle_pane_scope(),
         }
     }
 }

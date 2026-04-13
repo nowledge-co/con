@@ -1,9 +1,8 @@
 use gpui::*;
 use gpui_component::{
+    ActiveTheme, Sizable as _,
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState, Position},
-    menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
-    ActiveTheme, Sizable as _,
 };
 
 actions!(
@@ -24,6 +23,8 @@ pub struct SkillAutocompleteChanged;
 impl EventEmitter<SkillAutocompleteChanged> for InputBar {}
 pub struct InputEdited;
 impl EventEmitter<InputEdited> for InputBar {}
+pub struct TogglePaneScopePicker;
+impl EventEmitter<TogglePaneScopePicker> for InputBar {}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputMode {
@@ -86,12 +87,20 @@ enum SuggestionSource {
     Ai,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneScopeMode {
+    Broadcast,
+    Focused,
+    Custom,
+}
+
 pub struct InputBar {
     agent_input_state: Entity<InputState>,
     shell_input_state: Entity<InputState>,
     mode: InputMode,
     cwd: String,
     panes: Vec<PaneInfo>,
+    pane_scope_mode: PaneScopeMode,
     selected_pane_ids: Vec<usize>,
     last_single_target_id: Option<usize>,
     focused_pane_id: usize,
@@ -168,26 +177,6 @@ impl InputBar {
         }
     }
 
-    fn pane_target_label(pane: &PaneInfo) -> String {
-        let base = if let Some(host) = &pane.hostname {
-            Self::truncate_label(host, 16, 22)
-        } else if pane.name.is_empty() {
-            format!("Pane {}", pane.id)
-        } else {
-            Self::truncate_label(&pane.name, 16, 22)
-        };
-        let status = if !pane.is_alive {
-            "offline"
-        } else if pane.is_busy {
-            "busy"
-        } else if pane.hostname.is_some() {
-            "remote"
-        } else {
-            "local"
-        };
-        format!("{base} · {status} · #{}", pane.id)
-    }
-
     fn pane_scope_title(pane: &PaneInfo) -> String {
         if let Some(host) = &pane.hostname {
             Self::truncate_label(host, 14, 18)
@@ -199,48 +188,52 @@ impl InputBar {
     }
 
     fn effective_target_ids(&self) -> Vec<usize> {
-        if self.selected_pane_ids.is_empty() {
-            vec![self.focused_pane_id]
-        } else {
-            self.selected_pane_ids.clone()
+        match self.pane_scope_mode {
+            PaneScopeMode::Broadcast => {
+                if self.panes.is_empty() {
+                    vec![self.focused_pane_id]
+                } else {
+                    self.panes.iter().map(|pane| pane.id).collect()
+                }
+            }
+            PaneScopeMode::Focused => vec![self.focused_pane_id],
+            PaneScopeMode::Custom => {
+                if self.selected_pane_ids.is_empty() {
+                    vec![self.focused_pane_id]
+                } else {
+                    self.selected_pane_ids.clone()
+                }
+            }
         }
     }
 
     fn all_panes_selected(&self) -> bool {
-        !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len()
+        matches!(self.pane_scope_mode, PaneScopeMode::Broadcast)
+            || (!self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len())
     }
 
     fn pane_scope_summary(&self) -> (String, &'static str) {
-        if self.all_panes_selected() {
-            return (
-                format!("All panes ({})", self.panes.len()),
-                "phosphor/broadcast-duotone.svg",
-            );
+        match self.pane_scope_mode {
+            PaneScopeMode::Broadcast => ("All panes".to_string(), "phosphor/broadcast-duotone.svg"),
+            PaneScopeMode::Focused => ("Focused".to_string(), "phosphor/cursor-click.svg"),
+            PaneScopeMode::Custom => {
+                let targets = self.effective_target_ids();
+                if targets.len() > 1 {
+                    (
+                        format!("{} panes", targets.len()),
+                        "phosphor/squares-four.svg",
+                    )
+                } else {
+                    let title = self
+                        .panes
+                        .iter()
+                        .find(|pane| pane.id == targets[0])
+                        .map(Self::pane_scope_title)
+                        .unwrap_or_else(|| "Focused".to_string());
+                    (title, "phosphor/squares-four.svg")
+                }
+            }
         }
-
-        let targets = self.effective_target_ids();
-        if targets.len() > 1 {
-            return (
-                format!("{} panes", targets.len()),
-                "phosphor/squares-four.svg",
-            );
-        }
-
-        let title = self
-            .panes
-            .iter()
-            .find(|pane| pane.id == targets[0])
-            .map(Self::pane_scope_title)
-            .unwrap_or_else(|| "Focused pane".to_string());
-        let is_focused_default = self.selected_pane_ids.is_empty();
-        (
-            if is_focused_default {
-                "Focused pane".to_string()
-            } else {
-                title
-            },
-            "phosphor/cursor-click.svg",
-        )
     }
 
     fn subscribe_input_state(
@@ -356,6 +349,7 @@ impl InputBar {
             mode: InputMode::Smart,
             cwd: "~".to_string(),
             panes: Vec::new(),
+            pane_scope_mode: PaneScopeMode::Focused,
             selected_pane_ids: Vec::new(),
             last_single_target_id: None,
             focused_pane_id: 0,
@@ -389,11 +383,7 @@ impl InputBar {
     }
 
     pub fn target_pane_ids(&self) -> Vec<usize> {
-        if self.selected_pane_ids.is_empty() {
-            vec![self.focused_pane_id]
-        } else {
-            self.selected_pane_ids.clone()
-        }
+        self.effective_target_ids()
     }
 
     pub fn set_cwd(&mut self, cwd: String) {
@@ -407,6 +397,8 @@ impl InputBar {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let was_multi_pane = self.panes.len() > 1;
+        let previous_focused_id = self.focused_pane_id;
         self.panes = panes;
         self.focused_pane_id = focused_id;
         let valid_ids: Vec<usize> = self.panes.iter().map(|p| p.id).collect();
@@ -416,8 +408,23 @@ impl InputBar {
                 self.last_single_target_id = None;
             }
         }
-        if self.selected_pane_ids.is_empty() && self.focused_pane_id != focused_id {
+        if self.selected_pane_ids.is_empty() && previous_focused_id != focused_id {
             self.last_single_target_id = Some(focused_id);
+        }
+        if !was_multi_pane && self.panes.len() > 1 {
+            self.pane_scope_mode = PaneScopeMode::Broadcast;
+            self.selected_pane_ids.clear();
+        } else if self.panes.len() <= 1 {
+            self.pane_scope_mode = PaneScopeMode::Focused;
+            self.selected_pane_ids.clear();
+        } else if matches!(self.pane_scope_mode, PaneScopeMode::Focused)
+            && self.last_single_target_id.is_none()
+        {
+            self.pane_scope_mode = PaneScopeMode::Broadcast;
+        } else if matches!(self.pane_scope_mode, PaneScopeMode::Custom)
+            && self.selected_pane_ids.is_empty()
+        {
+            self.pane_scope_mode = PaneScopeMode::Broadcast;
         }
         cx.notify();
     }
@@ -702,7 +709,28 @@ impl InputBar {
         cx.notify();
     }
 
-    fn set_focused_scope(&mut self, cx: &mut Context<Self>) {
+    pub fn pane_infos(&self) -> Vec<PaneInfo> {
+        self.panes.clone()
+    }
+
+    pub fn is_broadcast_scope(&self) -> bool {
+        matches!(self.pane_scope_mode, PaneScopeMode::Broadcast)
+    }
+
+    pub fn is_focused_scope(&self) -> bool {
+        matches!(self.pane_scope_mode, PaneScopeMode::Focused)
+    }
+
+    pub fn scope_selected_ids(&self) -> Vec<usize> {
+        self.effective_target_ids()
+    }
+
+    pub fn focused_pane_id(&self) -> usize {
+        self.focused_pane_id
+    }
+
+    pub fn set_focused_scope(&mut self, cx: &mut Context<Self>) {
+        self.pane_scope_mode = PaneScopeMode::Focused;
         self.selected_pane_ids.clear();
         self.last_single_target_id = Some(self.focused_pane_id);
         self.clear_completion_ui();
@@ -710,7 +738,23 @@ impl InputBar {
         cx.notify();
     }
 
-    fn toggle_scope_pane(&mut self, pane_id: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn set_broadcast_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pane_scope_mode = PaneScopeMode::Broadcast;
+        self.selected_pane_ids.clear();
+        if self.panes.len() > 1 {
+            self.set_mode(InputMode::Shell, window, cx);
+        }
+        self.clear_completion_ui();
+        cx.emit(InputEdited);
+        cx.notify();
+    }
+
+    pub fn toggle_scope_pane(
+        &mut self,
+        pane_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let mut selected = self.effective_target_ids();
         if let Some(ix) = selected.iter().position(|id| *id == pane_id) {
             selected.remove(ix);
@@ -721,27 +765,17 @@ impl InputBar {
         selected.dedup();
 
         if selected.is_empty() || (selected.len() == 1 && selected[0] == self.focused_pane_id) {
-            self.selected_pane_ids.clear();
-            self.last_single_target_id = Some(self.focused_pane_id);
+            self.set_focused_scope(cx);
+            return;
+        } else if !self.panes.is_empty() && selected.len() == self.panes.len() {
+            self.set_broadcast_scope(window, cx);
+            return;
         } else {
+            self.pane_scope_mode = PaneScopeMode::Custom;
             self.selected_pane_ids = selected;
             if self.selected_pane_ids.len() > 1 {
                 self.set_mode(InputMode::Shell, window, cx);
             }
-        }
-        self.clear_completion_ui();
-        cx.emit(InputEdited);
-        cx.notify();
-    }
-
-    fn toggle_select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.all_panes_selected() {
-            self.selected_pane_ids.clear();
-            self.last_single_target_id = Some(self.focused_pane_id);
-        } else {
-            self.last_single_target_id = Some(self.effective_target_ids()[0]);
-            self.selected_pane_ids = self.panes.iter().map(|p| p.id).collect();
-            self.set_mode(InputMode::Shell, window, cx);
         }
         self.clear_completion_ui();
         cx.emit(InputEdited);
@@ -1006,7 +1040,12 @@ impl InputBar {
 }
 
 fn syntax_color(theme: &gpui_component::Theme, name: &str) -> Option<Hsla> {
-    theme.highlight_theme.style.syntax.style(name).and_then(|style| style.color)
+    theme
+        .highlight_theme
+        .style
+        .syntax
+        .style(name)
+        .and_then(|style| style.color)
 }
 
 fn is_operator_char(ch: char) -> bool {
@@ -1071,8 +1110,7 @@ impl Render for InputBar {
             );
 
         // ── Pane target control — scales to many panes without growing the row ──
-        let all_selected =
-            !self.panes.is_empty() && self.selected_pane_ids.len() == self.panes.len();
+        let all_selected = self.all_panes_selected();
         let pane_row = if has_multiple_panes && self.mode == InputMode::Agent {
             Some(
                 div()
@@ -1096,16 +1134,13 @@ impl Render for InputBar {
                     .into_any_element(),
             )
         } else if has_multiple_panes {
-            let entity = cx.entity();
-            let panes = self.panes.clone();
-            let selected_ids = self.selected_pane_ids.clone();
-            let focused_pane_id = self.focused_pane_id;
             let (scope_label, scope_icon) = self.pane_scope_summary();
-            let scope_tint = if all_selected || selected_ids.len() > 1 {
-                theme.primary
-            } else {
-                theme.muted_foreground.opacity(0.8)
-            };
+            let scope_tint =
+                if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {
+                    theme.primary
+                } else {
+                    theme.muted_foreground.opacity(0.8)
+                };
             Some(
                 div()
                     .flex()
@@ -1121,88 +1156,21 @@ impl Render for InputBar {
                                     .path(scope_icon)
                                     .text_color(scope_tint),
                             )
-                            .text_color(if all_selected || selected_ids.len() > 1 {
-                                theme.primary
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .dropdown_menu(move |menu: PopupMenu, _window, _cx| {
-                                let focused_default = selected_ids.is_empty();
-                                let mut menu = menu
-                                    .item(
-                                        PopupMenuItem::new("Focused pane")
-                                            .checked(focused_default)
-                                            .on_click({
-                                                let entity = entity.clone();
-                                                move |_, window, cx| {
-                                                    let _ = entity.update(cx, |this, cx| {
-                                                        this.set_focused_scope(cx);
-                                                        this.current_input_state()
-                                                            .update(cx, |state, cx| {
-                                                                state.focus(window, cx)
-                                                            });
-                                                    });
-                                                }
-                                            }),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new("Broadcast to all panes")
-                                            .checked(
-                                                !panes.is_empty()
-                                                    && selected_ids.len() == panes.len(),
-                                            )
-                                            .on_click({
-                                                let entity = entity.clone();
-                                                move |_, window, cx| {
-                                                    let _ = entity.update(cx, |this, cx| {
-                                                        this.toggle_select_all(window, cx);
-                                                        this.current_input_state()
-                                                            .update(cx, |state, cx| {
-                                                                state.focus(window, cx)
-                                                            });
-                                                    });
-                                                }
-                                            }),
-                                    )
-                                    .separator();
-
-                                for pane in &panes {
-                                    let pane_id = pane.id;
-                                    let checked = if focused_default {
-                                        pane_id == focused_pane_id
-                                    } else {
-                                        selected_ids.contains(&pane_id)
-                                    };
-                                    let label = format!(
-                                        "{}  {}",
-                                        if pane.is_alive {
-                                            if pane.is_busy {
-                                                "●"
-                                            } else {
-                                                "○"
-                                            }
-                                        } else {
-                                            "◌"
-                                        },
-                                        Self::pane_target_label(pane)
-                                    );
-                                    menu = menu.item(
-                                        PopupMenuItem::new(label).checked(checked).on_click({
-                                            let entity = entity.clone();
-                                            move |_, window, cx| {
-                                                let _ = entity.update(cx, |this, cx| {
-                                                    this.toggle_scope_pane(pane_id, window, cx);
-                                                    this.current_input_state()
-                                                        .update(cx, |state, cx| {
-                                                            state.focus(window, cx)
-                                                        });
-                                                });
-                                            }
-                                        }),
-                                    );
-                                }
-                                menu
-                            }),
+                            .text_color(
+                                if all_selected
+                                    || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
+                                {
+                                    theme.primary
+                                } else {
+                                    theme.muted_foreground
+                                },
+                            )
+                            .tooltip("Target panes")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                cx.emit(TogglePaneScopePicker);
+                                this.current_input_state()
+                                    .update(cx, |state, cx| state.focus(window, cx));
+                            })),
                     )
                     .into_any_element(),
             )
@@ -1291,12 +1259,7 @@ impl Render for InputBar {
             .unwrap_or_default()
             .replace(' ', "\u{00A0}");
         let command_overlay_runs = if self.mode != InputMode::Agent {
-            Self::command_overlay_runs(
-                &input_value,
-                theme,
-                input_text_size,
-                input_line_height,
-            )
+            Self::command_overlay_runs(&input_value, theme, input_text_size, input_line_height)
         } else {
             None
         };

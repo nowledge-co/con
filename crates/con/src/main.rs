@@ -20,10 +20,10 @@ mod theme;
 mod updater;
 mod workspace;
 
-use gpui::*;
-use gpui_component::ActiveTheme;
 use con_core::config::KeybindingConfig;
 use con_core::session::Session;
+use gpui::*;
+use gpui_component::ActiveTheme;
 use workspace::ConWorkspace;
 
 actions!(
@@ -39,6 +39,7 @@ actions!(
         SplitDown,
         FocusInput,
         CycleInputMode,
+        TogglePaneScopePicker,
         CheckForUpdates,
         Undo,
         Redo,
@@ -89,17 +90,13 @@ fn default_window_options(cx: &mut App) -> WindowOptions {
     }
 }
 
-fn open_con_window(
-    config: con_core::Config,
-    session: Session,
-    exit_on_error: bool,
-    cx: &mut App,
-) {
+fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bool, cx: &mut App) {
     let window_options = default_window_options(cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
             let restored_session = session.clone();
-            let view = cx.new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
+            let view = cx
+                .new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
             cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
         }) {
             if exit_on_error {
@@ -131,16 +128,13 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.focus_input, FocusInput, None),
         KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, None),
         KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
+        KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, None),
         KeyBinding::new(&kb.quit, Quit, Some("Input")),
         KeyBinding::new(&kb.new_window, NewWindow, Some("Input")),
         KeyBinding::new(&kb.new_tab, NewTab, Some("Input")),
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, Some("Input")),
         KeyBinding::new(&kb.close_tab, CloseTab, Some("Input")),
-        KeyBinding::new(
-            &kb.settings,
-            settings_panel::ToggleSettings,
-            Some("Input"),
-        ),
+        KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, Some("Input")),
         KeyBinding::new(
             &kb.command_palette,
             command_palette::ToggleCommandPalette,
@@ -151,6 +145,7 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.focus_input, FocusInput, Some("Input")),
         KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, Some("Input")),
         KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, Some("Input")),
+        KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, Some("Input")),
     ]);
 }
 

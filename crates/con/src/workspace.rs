@@ -3,8 +3,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui::{prelude::FluentBuilder as _, *};
+use gpui_component::{
+    ActiveTheme, Icon, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    kbd::Kbd,
+};
 use serde_json::json;
 use tokio::sync::oneshot;
 
@@ -24,6 +28,7 @@ use crate::agent_panel::{
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{
     EscapeInput, InputBar, InputEdited, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
+    TogglePaneScopePicker as TogglePaneScopePickerRequested,
 };
 use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
@@ -39,6 +44,7 @@ use crate::ghostty_view::{
 };
 use crate::{
     CloseTab, CycleInputMode, FocusInput, NewTab, Quit, SplitDown, SplitRight, ToggleAgentPanel,
+    TogglePaneScopePicker,
 };
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
@@ -47,7 +53,7 @@ use con_core::control::{
     SystemIdentifyResult, TabInfo,
 };
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
-use con_core::session::Session;
+use con_core::session::{PaneLayoutState, PaneSplitDirection, Session};
 use con_core::{SuggestionContext, SuggestionEngine};
 
 struct Tab {
@@ -103,6 +109,7 @@ pub struct ConWorkspace {
     shell_suggestion_engine: SuggestionEngine,
     global_shell_history: VecDeque<CommandSuggestionEntry>,
     layout_matte_until: Option<Instant>,
+    pane_scope_picker_open: bool,
     agent_panel_open: bool,
     agent_panel_motion: MotionValue,
     agent_panel_width: f32,
@@ -421,6 +428,12 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_skill_autocomplete_changed)
             .detach();
+        cx.subscribe_in(
+            &input_bar,
+            window,
+            Self::on_toggle_pane_scope_picker_requested,
+        )
+        .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_settings_saved)
             .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_theme_preview)
@@ -576,6 +589,7 @@ impl ConWorkspace {
             shell_suggestion_engine,
             global_shell_history,
             layout_matte_until: None,
+            pane_scope_picker_open: false,
             agent_panel_open,
             agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
             agent_panel_width,
@@ -2394,8 +2408,12 @@ impl ConWorkspace {
         _input_bar: &Entity<InputBar>,
         _event: &EscapeInput,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        if self.pane_scope_picker_open {
+            self.pane_scope_picker_open = false;
+            cx.notify();
+        }
     }
 
     fn on_skill_autocomplete_changed(
@@ -2406,6 +2424,16 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         cx.notify();
+    }
+
+    fn on_toggle_pane_scope_picker_requested(
+        &mut self,
+        _input_bar: &Entity<InputBar>,
+        _event: &TogglePaneScopePickerRequested,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_pane_scope_picker(&TogglePaneScopePicker, window, cx);
     }
 
     fn on_input_edited(
@@ -2426,6 +2454,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pane_scope_picker_open = false;
         let (content, mode) = input_bar.update(cx, |bar, cx| {
             let content = bar.take_content(window, cx);
             bar.clear_completion_ui();
@@ -3580,6 +3609,9 @@ impl ConWorkspace {
     ) {
         self.prime_layout_matte(Duration::from_millis(220));
         self.input_bar_visible = !self.input_bar_visible;
+        if !self.input_bar_visible {
+            self.pane_scope_picker_open = false;
+        }
         self.input_bar_motion.set_target(
             if self.input_bar_visible { 1.0 } else { 0.0 },
             std::time::Duration::from_millis(if self.input_bar_visible { 210 } else { 160 }),
@@ -3598,6 +3630,302 @@ impl ConWorkspace {
         }
         self.save_session(cx);
         cx.notify();
+    }
+
+    fn toggle_pane_scope_picker(
+        &mut self,
+        _: &TogglePaneScopePicker,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.input_bar.read(cx).mode() == InputMode::Agent
+            || self.input_bar.read(cx).pane_infos().len() <= 1
+        {
+            return;
+        }
+
+        if !self.input_bar_visible {
+            self.input_bar_visible = true;
+            self.input_bar_motion
+                .set_target(1.0, std::time::Duration::from_millis(180));
+        }
+
+        self.pane_scope_picker_open = !self.pane_scope_picker_open;
+        if self.pane_scope_picker_open {
+            self.input_bar.focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn close_pane_scope_picker(&mut self, cx: &mut Context<Self>) {
+        if self.pane_scope_picker_open {
+            self.pane_scope_picker_open = false;
+            cx.notify();
+        }
+    }
+
+    fn set_scope_broadcast(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_bar.update(cx, |bar, cx| {
+            bar.set_broadcast_scope(window, cx);
+        });
+        self.input_bar.focus_handle(cx).focus(window, cx);
+        self.close_pane_scope_picker(cx);
+    }
+
+    fn set_scope_focused(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_bar.update(cx, |bar, cx| {
+            bar.set_focused_scope(cx);
+        });
+        self.input_bar.focus_handle(cx).focus(window, cx);
+        self.close_pane_scope_picker(cx);
+    }
+
+    fn toggle_scope_pane_by_id(
+        &mut self,
+        pane_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.input_bar.update(cx, |bar, cx| {
+            bar.toggle_scope_pane(pane_id, window, cx);
+        });
+        self.input_bar.focus_handle(cx).focus(window, cx);
+    }
+
+    fn toggle_scope_pane_by_index(
+        &mut self,
+        pane_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panes = self.input_bar.read(cx).pane_infos();
+        if let Some(pane) = panes.get(pane_index) {
+            self.toggle_scope_pane_by_id(pane.id, window, cx);
+        }
+    }
+
+    fn active_pane_layout(&self, cx: &App) -> PaneLayoutState {
+        self.tabs[self.active_tab].pane_tree.to_state(cx)
+    }
+
+    fn render_scope_leaf(
+        &self,
+        pane_id: usize,
+        pane: &PaneInfo,
+        display_indices: &HashMap<usize, usize>,
+        selected_ids: &HashSet<usize>,
+        focused_id: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let is_selected = selected_ids.contains(&pane_id);
+        let is_focused = pane_id == focused_id;
+        let display_index = display_indices.get(&pane_id).copied().unwrap_or(0);
+        let status_color = if !pane.is_alive {
+            theme.danger
+        } else if pane.is_busy {
+            theme.warning
+        } else {
+            theme.success
+        };
+        let label = if let Some(host) = &pane.hostname {
+            host.clone()
+        } else if pane.name.is_empty() {
+            format!("Pane {}", pane.id)
+        } else {
+            pane.name.clone()
+        };
+        let status_text = if !pane.is_alive {
+            "offline"
+        } else if pane.is_busy {
+            "busy"
+        } else if pane.hostname.is_some() {
+            "remote"
+        } else {
+            "local"
+        };
+
+        div()
+            .id(SharedString::from(format!("scope-pane-{pane_id}")))
+            .h_full()
+            .w_full()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .overflow_hidden()
+            .px(px(10.0))
+            .py(px(9.0))
+            .rounded(px(9.0))
+            .cursor_pointer()
+            .bg(if is_selected {
+                theme.primary.opacity(0.14)
+            } else {
+                theme.muted.opacity(if is_focused { 0.12 } else { 0.07 })
+            })
+            .hover(|s| {
+                s.bg(if is_selected {
+                    theme.primary.opacity(0.18)
+                } else {
+                    theme.muted.opacity(0.12)
+                })
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.toggle_scope_pane_by_id(pane_id, window, cx);
+                }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.0))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(div().size(px(6.0)).rounded_full().bg(status_color))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .line_height(px(14.0))
+                                            .font_family(theme.mono_font_family.clone())
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(if is_selected {
+                                                theme.primary
+                                            } else {
+                                                theme.foreground
+                                            })
+                                            .min_w_0()
+                                            .overflow_x_hidden()
+                                            .whitespace_nowrap()
+                                            .child(label),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .line_height(px(13.0))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground.opacity(0.72))
+                                    .child(format!("Pane {} · {}", display_index + 1, status_text)),
+                            ),
+                    )
+                    .child(
+                        div().flex().items_center().gap(px(4.0)).child(
+                            div()
+                                .h(px(18.0))
+                                .px(px(6.0))
+                                .rounded(px(5.0))
+                                .bg(if is_selected {
+                                    theme.primary.opacity(0.12)
+                                } else {
+                                    theme.transparent
+                                })
+                                .text_size(px(10.0))
+                                .font_family(theme.mono_font_family.clone())
+                                .text_color(if is_selected {
+                                    theme.primary
+                                } else {
+                                    theme.muted_foreground.opacity(0.65)
+                                })
+                                .child(format!("{}", display_index + 1)),
+                        ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_scope_node(
+        &self,
+        layout: &PaneLayoutState,
+        panes: &HashMap<usize, PaneInfo>,
+        display_indices: &HashMap<usize, usize>,
+        selected_ids: &HashSet<usize>,
+        focused_id: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match layout {
+            PaneLayoutState::Leaf { pane_id, .. } => panes
+                .get(pane_id)
+                .map(|pane| {
+                    self.render_scope_leaf(
+                        *pane_id,
+                        pane,
+                        display_indices,
+                        selected_ids,
+                        focused_id,
+                        cx,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    div()
+                        .h_full()
+                        .w_full()
+                        .rounded(px(9.0))
+                        .bg(cx.theme().muted.opacity(0.06))
+                        .into_any_element()
+                }),
+            PaneLayoutState::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
+                let theme = cx.theme();
+                let make_pane = |child: AnyElement, basis: f32| {
+                    div()
+                        .flex_grow()
+                        .flex_shrink()
+                        .flex_basis(relative(basis.clamp(0.15, 0.85)))
+                        .overflow_hidden()
+                        .child(child)
+                };
+                let divider = div()
+                    .bg(theme.title_bar_border.opacity(0.75))
+                    .map(|divider| match direction {
+                        PaneSplitDirection::Horizontal => divider.w(px(1.0)).h_full(),
+                        PaneSplitDirection::Vertical => divider.h(px(1.0)).w_full(),
+                    });
+                let mut container = div().flex().size_full().gap(px(6.0));
+                container = match direction {
+                    PaneSplitDirection::Horizontal => container.flex_row(),
+                    PaneSplitDirection::Vertical => container.flex_col(),
+                };
+                container
+                    .child(make_pane(
+                        self.render_scope_node(
+                            first,
+                            panes,
+                            display_indices,
+                            selected_ids,
+                            focused_id,
+                            cx,
+                        ),
+                        *ratio,
+                    ))
+                    .child(divider)
+                    .child(make_pane(
+                        self.render_scope_node(
+                            second,
+                            panes,
+                            display_indices,
+                            selected_ids,
+                            focused_id,
+                            cx,
+                        ),
+                        1.0 - *ratio,
+                    ))
+                    .into_any_element()
+            }
+        }
     }
 
     fn quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
@@ -3634,6 +3962,9 @@ impl ConWorkspace {
         self.input_bar.update(cx, |bar, cx| {
             bar.cycle_mode(window, cx);
         });
+        if self.input_bar.read(cx).mode() == InputMode::Agent {
+            self.pane_scope_picker_open = false;
+        }
         cx.notify();
     }
 
@@ -5296,6 +5627,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::split_down))
             .on_action(cx.listener(Self::focus_input))
             .on_action(cx.listener(Self::cycle_input_mode))
+            .on_action(cx.listener(Self::toggle_pane_scope_picker))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Don't handle workspace shortcuts when a modal overlay is open
                 if this.settings_panel.read(cx).is_visible()
@@ -5306,6 +5638,31 @@ impl Render for ConWorkspace {
 
                 let mods = &event.keystroke.modifiers;
                 let key = event.keystroke.key.as_str();
+
+                if this.pane_scope_picker_open {
+                    if key == "escape" {
+                        this.close_pane_scope_picker(cx);
+                        return;
+                    }
+
+                    if mods.platform && key == "a" {
+                        this.set_scope_broadcast(window, cx);
+                        return;
+                    }
+
+                    if mods.platform && key == "f" {
+                        this.set_scope_focused(window, cx);
+                        return;
+                    }
+
+                    if mods.platform && !mods.shift {
+                        if let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10)) {
+                            let pane_index = if digit == 0 { 9 } else { (digit - 1) as usize };
+                            this.toggle_scope_pane_by_index(pane_index, window, cx);
+                            return;
+                        }
+                    }
+                }
 
                 // Cmd+1..9 — jump to tab
                 if mods.platform && !mods.shift {
@@ -5509,6 +5866,177 @@ impl Render for ConWorkspace {
                 );
             }
             root = root.child(popup);
+        }
+
+        if self.pane_scope_picker_open
+            && self.input_bar_visible
+            && self.input_bar.read(cx).mode() != InputMode::Agent
+        {
+            let panes = self.input_bar.read(cx).pane_infos();
+            if panes.len() > 1 {
+                let focused_id = self.input_bar.read(cx).focused_pane_id();
+                let selected_ids: HashSet<usize> = self
+                    .input_bar
+                    .read(cx)
+                    .scope_selected_ids()
+                    .into_iter()
+                    .collect();
+                let is_broadcast = self.input_bar.read(cx).is_broadcast_scope();
+                let is_focused = self.input_bar.read(cx).is_focused_scope();
+                let layout = self.active_pane_layout(cx);
+                let pane_map: HashMap<usize, PaneInfo> =
+                    panes.iter().cloned().map(|pane| (pane.id, pane)).collect();
+                let display_indices: HashMap<usize, usize> = panes
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, pane)| (pane.id, ix))
+                    .collect();
+                let popup_width =
+                    px((window.bounds().size.width.as_f32() * 0.34).clamp(320.0, 460.0));
+                let popup_bottom = px(58.0 + (43.0 * input_bar_progress.max(0.01)));
+                let scope_kbd = Keystroke::parse("cmd-'").ok().map(Kbd::new);
+                let all_kbd = Keystroke::parse("cmd-a").ok().map(Kbd::new);
+                let focused_kbd = Keystroke::parse("cmd-f").ok().map(Kbd::new);
+                let preview_content = self.render_scope_node(
+                    &layout,
+                    &pane_map,
+                    &display_indices,
+                    &selected_ids,
+                    focused_id,
+                    cx,
+                );
+                let theme = cx.theme();
+
+                let presets = div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                svg()
+                                    .path("phosphor/broadcast-duotone.svg")
+                                    .size(px(13.0))
+                                    .text_color(theme.primary),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(1.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child("Command Scope"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .line_height(px(13.0))
+                                            .text_color(theme.muted_foreground.opacity(0.68))
+                                            .child("Broadcast by default. Click panes or use shortcuts to narrow the target."),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .when_some(scope_kbd, |this, kbd| this.child(kbd.outline())),
+                    );
+
+                let presets_row = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        Button::new("scope-all")
+                            .label("All panes")
+                            .xsmall()
+                            .compact()
+                            .when(is_broadcast, |button| button.primary())
+                            .when(!is_broadcast, |button| button.ghost())
+                            .icon(
+                                Icon::default()
+                                    .path("phosphor/broadcast-duotone.svg")
+                                    .text_color(if is_broadcast {
+                                        theme.primary_foreground
+                                    } else {
+                                        theme.primary
+                                    }),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_scope_broadcast(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("scope-focused")
+                            .label("Focused")
+                            .xsmall()
+                            .compact()
+                            .when(is_focused, |button| button.primary())
+                            .when(!is_focused, |button| button.ghost())
+                            .icon(
+                                Icon::default()
+                                    .path("phosphor/cursor-click.svg")
+                                    .text_color(if is_focused {
+                                        theme.primary_foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    }),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_scope_focused(window, cx);
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .when_some(all_kbd, |this, kbd| this.child(kbd.outline()))
+                            .when_some(focused_kbd, |this, kbd| this.child(kbd.outline()))
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground.opacity(0.62))
+                                    .child("Cmd+1..9 toggles panes"),
+                            ),
+                    );
+
+                let preview = div()
+                    .h(px(198.0))
+                    .w_full()
+                    .rounded(px(12.0))
+                    .p(px(10.0))
+                    .bg(theme.title_bar.opacity(ui_surface_opacity * 0.95))
+                    .child(preview_content);
+
+                root = root.child(
+                    div()
+                        .absolute()
+                        .left(px(20.0))
+                        .bottom(popup_bottom)
+                        .w(popup_width)
+                        .rounded(px(14.0))
+                        .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                        .p(px(10.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.0))
+                        .child(presets)
+                        .child(presets_row)
+                        .child(preview),
+                );
+            }
         }
 
         // Inline skill popup — rendered above the agent panel's inline input
