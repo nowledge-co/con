@@ -6,29 +6,32 @@
 #   $SPARKLE_DIR/Sparkle.framework   — embed in .app/Contents/Frameworks/
 #   $SPARKLE_DIR/bin/sign_update     — sign artifacts for appcast
 #   $SPARKLE_DIR/bin/generate_appcast
+#   $SPARKLE_DIR/bin/generate_keys
 #
 # Environment:
-#   SPARKLE_VERSION   — version to download (default: 2.7.5)
+#   SPARKLE_VERSION   — version to download (default: 2.9.1)
 #   SPARKLE_DIR       — output directory (default: .sparkle)
 
 set -euo pipefail
 
-SPARKLE_VERSION="${SPARKLE_VERSION:-2.7.5}"
+SPARKLE_VERSION="${SPARKLE_VERSION:-2.9.1}"
 SPARKLE_DIR="${SPARKLE_DIR:-$(cd "$(dirname "$0")/../.." && pwd)/.sparkle}"
 
-# SHA256 checksums of official Sparkle releases.
+# SHA256 checksums of official Sparkle releases (sparkle-project/Sparkle).
 # Update this when bumping SPARKLE_VERSION.
-declare -A SPARKLE_SHA256=(
-  ["2.7.5"]="8ba2e3db6f0c4aa2fa62a31b3aa16e73e53c88c1a720a3c9fbffc9a87efab569"
-)
+sparkle_sha256() {
+  case "$1" in
+    2.9.1) echo "c0dde519fd2a43ddfc6a1eb76aec284d7d888fe281414f9177de3164d98ba4c7" ;;
+    *)     echo "" ;;
+  esac
+}
 
-expected_sha="${SPARKLE_SHA256[$SPARKLE_VERSION]:-}"
+expected_sha="$(sparkle_sha256 "$SPARKLE_VERSION")"
 
 # Official Sparkle project: https://github.com/sparkle-project/Sparkle
 url="https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
 
 if [[ -d "$SPARKLE_DIR/Sparkle.framework" && -x "$SPARKLE_DIR/bin/sign_update" ]]; then
-  # Verify the cached version matches what we want
   if [[ -f "$SPARKLE_DIR/.version" ]] && [[ "$(cat "$SPARKLE_DIR/.version")" == "$SPARKLE_VERSION" ]]; then
     echo "[sparkle] Already present at $SPARKLE_DIR (v$SPARKLE_VERSION)"
     exit 0
@@ -66,13 +69,16 @@ mkdir -p "$SPARKLE_DIR/bin"
 cp -R "$tmp/extract/Sparkle.framework" "$SPARKLE_DIR/Sparkle.framework"
 
 # CLI tools for CI
-cp "$tmp/extract/bin/sign_update"      "$SPARKLE_DIR/bin/sign_update"
-cp "$tmp/extract/bin/generate_appcast" "$SPARKLE_DIR/bin/generate_appcast"
-chmod +x "$SPARKLE_DIR/bin/sign_update" "$SPARKLE_DIR/bin/generate_appcast"
+for tool in sign_update generate_appcast generate_keys; do
+  if [[ -f "$tmp/extract/bin/$tool" ]]; then
+    cp "$tmp/extract/bin/$tool" "$SPARKLE_DIR/bin/$tool"
+    chmod +x "$SPARKLE_DIR/bin/$tool"
+  fi
+done
 
 # Record version so cache invalidation works
 printf '%s' "$SPARKLE_VERSION" >"$SPARKLE_DIR/.version"
 
 echo "[sparkle] Installed to $SPARKLE_DIR"
 echo "  Framework: $SPARKLE_DIR/Sparkle.framework"
-echo "  Tools:     $SPARKLE_DIR/bin/{sign_update,generate_appcast}"
+echo "  Tools:     $SPARKLE_DIR/bin/{sign_update,generate_appcast,generate_keys}"
