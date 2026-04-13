@@ -1,7 +1,6 @@
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Sizable as _,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme,
     input::{Input, InputEvent, InputState, Position},
 };
 
@@ -1146,31 +1145,53 @@ impl Render for InputBar {
                     .flex()
                     .items_center()
                     .child(
-                        Button::new("pane-scope")
-                            .label(scope_label)
-                            .xsmall()
-                            .compact()
-                            .ghost()
-                            .icon(
-                                gpui_component::Icon::default()
-                                    .path(scope_icon)
-                                    .text_color(scope_tint),
-                            )
-                            .text_color(
-                                if all_selected
-                                    || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
-                                {
-                                    theme.primary
+                        div()
+                            .id("pane-scope")
+                            .h(px(24.0))
+                            .px(px(8.0))
+                            .rounded(px(7.0))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .bg(if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {
+                                theme.primary.opacity(0.08)
+                            } else {
+                                theme.title_bar.opacity(self.ui_opacity * 0.94)
+                            })
+                            .hover(|s| {
+                                s.bg(if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {
+                                    theme.primary.opacity(0.11)
                                 } else {
-                                    theme.muted_foreground
-                                },
-                            )
-                            .tooltip("Target panes")
-                            .on_click(cx.listener(|this, _, window, cx| {
+                                    theme.title_bar.opacity(self.ui_opacity)
+                                })
+                            })
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window, cx| {
                                 cx.emit(TogglePaneScopePicker);
                                 this.current_input_state()
                                     .update(cx, |state, cx| state.focus(window, cx));
-                            })),
+                            }))
+                            .child(
+                                svg()
+                                    .path(scope_icon)
+                                    .size(px(11.0))
+                                    .text_color(scope_tint),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .line_height(px(12.0))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(
+                                        if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {
+                                            theme.primary
+                                        } else {
+                                            theme.muted_foreground.opacity(0.76)
+                                        },
+                                    )
+                                    .child(scope_label),
+                            ),
                     )
                     .into_any_element(),
             )

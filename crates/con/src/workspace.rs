@@ -19,9 +19,10 @@ const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 
 use crate::agent_panel::{
-    AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, InlineInputSubmit,
+    AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
     InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
     RerunFromMessage, SelectSessionModel, SelectSessionProvider,
+    SetAutoApprove,
 };
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{
@@ -456,7 +457,7 @@ impl ConWorkspace {
         .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_cancel_request)
             .detach();
-        cx.subscribe_in(&agent_panel, window, Self::on_enable_auto_approve)
+        cx.subscribe_in(&agent_panel, window, Self::on_set_auto_approve)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_select_session_provider)
             .detach();
@@ -2056,14 +2057,14 @@ impl ConWorkspace {
         self.tabs[self.active_tab].session.cancel_current();
     }
 
-    fn on_enable_auto_approve(
+    fn on_set_auto_approve(
         &mut self,
         _panel: &Entity<AgentPanel>,
-        _event: &EnableAutoApprove,
+        event: &SetAutoApprove,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
-        self.harness.set_auto_approve(true);
+        self.harness.set_auto_approve(event.enabled);
     }
 
     fn on_select_session_model(
@@ -3667,7 +3668,7 @@ impl ConWorkspace {
             bar.set_broadcast_scope(window, cx);
         });
         self.input_bar.focus_handle(cx).focus(window, cx);
-        self.close_pane_scope_picker(cx);
+        cx.notify();
     }
 
     fn set_scope_focused(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3675,7 +3676,7 @@ impl ConWorkspace {
             bar.set_focused_scope(cx);
         });
         self.input_bar.focus_handle(cx).focus(window, cx);
-        self.close_pane_scope_picker(cx);
+        cx.notify();
     }
 
     fn toggle_scope_pane_by_id(

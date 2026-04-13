@@ -5,7 +5,7 @@ use gpui_component::clipboard::Clipboard;
 use gpui_component::divider::Divider;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
+use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
 use gpui_component::spinner::Spinner;
 use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _};
 
@@ -72,9 +72,10 @@ impl EventEmitter<InlineSkillAutocompleteChanged> for AgentPanel {}
 pub struct CancelRequest;
 impl EventEmitter<CancelRequest> for AgentPanel {}
 
-/// Emitted when user clicks "Allow All" to enable auto-approve for the session.
-pub struct EnableAutoApprove;
-impl EventEmitter<EnableAutoApprove> for AgentPanel {}
+pub struct SetAutoApprove {
+    pub enabled: bool,
+}
+impl EventEmitter<SetAutoApprove> for AgentPanel {}
 
 pub struct SelectSessionModel {
     pub model: String,
@@ -400,8 +401,8 @@ pub struct AgentPanel {
     showing_history: bool,
     conversation_list: Vec<ConversationSummary>,
     auto_approve: bool,
-    provider_name: String,
-    session_provider_select: Entity<SelectState<SearchableVec<String>>>,
+    current_provider: Option<ProviderKind>,
+    session_provider_select: Entity<SelectState<SearchableVec<ProviderSelectItem>>>,
     model_name: String,
     session_model_select: Entity<SelectState<SearchableVec<String>>>,
     content_reveal: MotionValue,
@@ -421,6 +422,65 @@ pub struct AgentPanel {
     /// Tracks whether shift was held on the last enter keystroke (for inline input)
     inline_shift_enter: bool,
     ui_opacity: f32,
+}
+
+#[derive(Clone)]
+struct ProviderSelectItem {
+    provider: ProviderKind,
+    short_label: &'static str,
+    label: &'static str,
+    icon_path: &'static str,
+}
+
+impl SelectItem for ProviderSelectItem {
+    type Value = ProviderKind;
+
+    fn title(&self) -> SharedString {
+        SharedString::from(self.label)
+    }
+
+    fn display_title(&self) -> Option<AnyElement> {
+        Some(
+            div()
+                .text_size(px(11.0))
+                .line_height(px(12.0))
+                .font_family("Ioskeley Mono")
+                .child(self.short_label)
+                .into_any_element(),
+        )
+    }
+
+    fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                svg()
+                    .path(self.icon_path)
+                    .size(px(13.0))
+                    .text_color(theme.foreground.opacity(0.82)),
+            )
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .line_height(px(14.0))
+                    .font_family(theme.mono_font_family.clone())
+                    .text_color(theme.foreground)
+                    .child(self.label),
+            )
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.provider
+    }
+
+    fn matches(&self, query: &str) -> bool {
+        let q = query.to_ascii_lowercase();
+        self.label.to_ascii_lowercase().contains(&q)
+            || self.short_label.to_ascii_lowercase().contains(&q)
+    }
 }
 
 struct PanelMessage {
@@ -488,7 +548,57 @@ impl AgentPanel {
         }
     }
 
-    fn provider_options() -> SearchableVec<String> {
+    fn provider_short_label(provider: &ProviderKind) -> &'static str {
+        match provider {
+            ProviderKind::Anthropic => "Claude",
+            ProviderKind::OpenAI => "OpenAI",
+            ProviderKind::ChatGPT => "ChatGPT",
+            ProviderKind::GitHubCopilot => "Copilot",
+            ProviderKind::OpenAICompatible => "Compat",
+            ProviderKind::MiniMax => "MiniMax",
+            ProviderKind::Moonshot => "Moonshot",
+            ProviderKind::ZAI => "Z.AI",
+            ProviderKind::DeepSeek => "DeepSeek",
+            ProviderKind::Groq => "Groq",
+            ProviderKind::Gemini => "Gemini",
+            ProviderKind::Ollama => "Ollama",
+            ProviderKind::OpenRouter => "OpenRouter",
+            ProviderKind::Mistral => "Mistral",
+            _ => "Provider",
+        }
+    }
+
+    fn provider_icon_path(provider: &ProviderKind) -> &'static str {
+        match provider {
+            ProviderKind::Anthropic => "providers/anthropic.svg",
+            ProviderKind::OpenAI => "providers/openai.svg",
+            ProviderKind::ChatGPT => "providers/openai.svg",
+            ProviderKind::GitHubCopilot => "providers/githubcopilot.svg",
+            ProviderKind::OpenAICompatible => "phosphor/plugs-connected.svg",
+            ProviderKind::MiniMax => "providers/minimax.svg",
+            ProviderKind::Moonshot => "providers/moonshot.svg",
+            ProviderKind::ZAI => "providers/zai.svg",
+            ProviderKind::DeepSeek => "providers/deepseek.svg",
+            ProviderKind::Groq => "providers/groq.svg",
+            ProviderKind::Gemini => "providers/gemini.svg",
+            ProviderKind::Ollama => "providers/ollama.svg",
+            ProviderKind::OpenRouter => "providers/openrouter.svg",
+            ProviderKind::Mistral => "providers/mistral.svg",
+            _ => "phosphor/plugs-connected.svg",
+        }
+    }
+
+    fn provider_option(provider: ProviderKind) -> ProviderSelectItem {
+        let sidebar_provider = Self::session_sidebar_provider_kind(&provider);
+        ProviderSelectItem {
+            short_label: Self::provider_short_label(&sidebar_provider),
+            label: provider_label(&sidebar_provider),
+            icon_path: Self::provider_icon_path(&sidebar_provider),
+            provider: sidebar_provider,
+        }
+    }
+
+    fn provider_options() -> SearchableVec<ProviderSelectItem> {
         SearchableVec::new(
             vec![
                 ProviderKind::Anthropic,
@@ -507,42 +617,20 @@ impl AgentPanel {
                 ProviderKind::Mistral,
             ]
             .into_iter()
-            .map(|provider| provider_label(&provider).to_string())
+            .map(Self::provider_option)
             .collect::<Vec<_>>(),
         )
     }
 
-    fn provider_from_label(label: &str) -> Option<ProviderKind> {
-        [
-            ProviderKind::Anthropic,
-            ProviderKind::OpenAI,
-            ProviderKind::ChatGPT,
-            ProviderKind::GitHubCopilot,
-            ProviderKind::OpenAICompatible,
-            ProviderKind::MiniMax,
-            ProviderKind::Moonshot,
-            ProviderKind::ZAI,
-            ProviderKind::DeepSeek,
-            ProviderKind::Groq,
-            ProviderKind::Gemini,
-            ProviderKind::Ollama,
-            ProviderKind::OpenRouter,
-            ProviderKind::Mistral,
-        ]
-        .into_iter()
-        .find(|provider| provider_label(provider) == label)
-    }
-
     fn build_provider_select(
-        current: &str,
+        current: Option<ProviderKind>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<SelectState<SearchableVec<String>>> {
-        let current = current.to_string();
+    ) -> Entity<SelectState<SearchableVec<ProviderSelectItem>>> {
         cx.new(|cx| {
             let mut state =
                 SelectState::new(Self::provider_options(), None, window, cx).searchable(true);
-            if !current.is_empty() {
+            if let Some(current) = current {
                 state.set_selected_value(&current, window, cx);
             }
             state
@@ -569,15 +657,15 @@ impl AgentPanel {
 
     #[allow(dead_code)]
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let session_provider_select = Self::build_provider_select("", window, cx);
+        let session_provider_select = Self::build_provider_select(None, window, cx);
         cx.subscribe_in(
             &session_provider_select,
             window,
-            |_, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+            |_, _, event: &SelectEvent<SearchableVec<ProviderSelectItem>>, _, cx| {
                 if let SelectEvent::Confirm(Some(provider)) = event {
-                    if let Some(provider) = Self::provider_from_label(provider) {
-                        cx.emit(SelectSessionProvider { provider });
-                    }
+                    cx.emit(SelectSessionProvider {
+                        provider: provider.clone(),
+                    });
                 }
             },
         )
@@ -602,7 +690,7 @@ impl AgentPanel {
             showing_history: false,
             conversation_list: Vec::new(),
             auto_approve: false,
-            provider_name: String::new(),
+            current_provider: None,
             session_provider_select,
             model_name: String::new(),
             session_model_select,
@@ -632,10 +720,11 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.provider_name =
-            provider_label(&Self::session_sidebar_provider_kind(&provider)).to_string();
+        self.current_provider = Some(Self::session_sidebar_provider_kind(&provider));
         self.session_provider_select.update(cx, |select, cx| {
-            select.set_selected_value(&self.provider_name, window, cx);
+            if let Some(current_provider) = self.current_provider.clone() {
+                select.set_selected_value(&current_provider, window, cx);
+            }
         });
     }
 
@@ -662,15 +751,15 @@ impl AgentPanel {
 
     /// Create with a pre-populated panel state (e.g. restored from session).
     pub fn with_state(state: PanelState, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let session_provider_select = Self::build_provider_select("", window, cx);
+        let session_provider_select = Self::build_provider_select(None, window, cx);
         cx.subscribe_in(
             &session_provider_select,
             window,
-            |_, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+            |_, _, event: &SelectEvent<SearchableVec<ProviderSelectItem>>, _, cx| {
                 if let SelectEvent::Confirm(Some(provider)) = event {
-                    if let Some(provider) = Self::provider_from_label(provider) {
-                        cx.emit(SelectSessionProvider { provider });
-                    }
+                    cx.emit(SelectSessionProvider {
+                        provider: provider.clone(),
+                    });
                 }
             },
         )
@@ -695,7 +784,7 @@ impl AgentPanel {
             showing_history: false,
             conversation_list: Vec::new(),
             auto_approve: false,
-            provider_name: String::new(),
+            current_provider: None,
             session_provider_select,
             model_name: String::new(),
             session_model_select,
@@ -3310,7 +3399,7 @@ impl Render for AgentPanel {
                                     .ghost()
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.auto_approve = true;
-                                        cx.emit(EnableAutoApprove);
+                                        cx.emit(SetAutoApprove { enabled: true });
                                         this.resolve_all_approvals(cx);
                                     })),
                             )
@@ -3404,17 +3493,33 @@ impl Render for AgentPanel {
                 );
             }
 
-            if self.auto_approve {
-                actions = actions.child(
+            actions
+                .child(
                     Button::new("agent-auto-approve")
-                        .icon(Icon::default().path("phosphor/sparkle-duotone.svg"))
+                        .icon(Icon::default().path(if self.auto_approve {
+                            "phosphor/fast-forward-duotone.svg"
+                        } else {
+                            "phosphor/fast-forward.svg"
+                        }))
                         .ghost()
                         .xsmall()
-                        .tooltip("Auto-approve"),
-                );
-            }
-
-            actions
+                        .text_color(if self.auto_approve {
+                            theme.primary
+                        } else {
+                            theme.muted_foreground.opacity(0.65)
+                        })
+                        .tooltip(if self.auto_approve {
+                            "Auto-approve on"
+                        } else {
+                            "Auto-approve off"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let enabled = !this.auto_approve;
+                            this.auto_approve = enabled;
+                            cx.emit(SetAutoApprove { enabled });
+                            cx.notify();
+                        })),
+                )
                 .child(
                     Button::new("agent-history-toggle")
                         .icon(Icon::default().path("phosphor/clock-counter-clockwise.svg"))
@@ -3438,12 +3543,40 @@ impl Render for AgentPanel {
                 )
         };
 
-        let provider_picker = div().w(px(96.0)).flex_shrink_0().child(
-            Select::new(&self.session_provider_select)
-                .placeholder("Provider")
-                .xsmall()
-                .menu_width(px(180.0)),
-        );
+        let provider_icon_path = self
+            .current_provider
+            .as_ref()
+            .map(Self::provider_icon_path)
+            .unwrap_or("phosphor/plugs-connected.svg");
+
+        let provider_picker = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .min_w(px(0.0))
+            .child(
+                div()
+                    .size(px(20.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .bg(theme.title_bar.opacity(self.ui_opacity * 0.92))
+                    .child(
+                        svg()
+                            .path(provider_icon_path)
+                            .size(px(12.0))
+                            .text_color(theme.foreground.opacity(0.82)),
+                    ),
+            )
+            .child(
+                div().w(px(76.0)).flex_shrink_0().child(
+                    Select::new(&self.session_provider_select)
+                        .placeholder("Provider")
+                        .xsmall()
+                        .menu_width(px(200.0)),
+                ),
+            );
 
         let model_picker = div().min_w(px(88.0)).flex_1().min_w_0().child(
             Select::new(&self.session_model_select)
