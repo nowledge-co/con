@@ -1,10 +1,12 @@
 use gpui::*;
 use gpui_component::{
     button::{Button, ButtonVariants as _},
+    highlighter::SyntaxHighlighter,
     input::{Input, InputEvent, InputState, Position},
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
-    ActiveTheme, Sizable as _,
+    ActiveTheme, Colorize, Sizable as _,
 };
+use ropey::Rope;
 
 actions!(
     input_bar,
@@ -874,6 +876,63 @@ impl InputBar {
             InputMode::Agent => "Ask anything…",
         }
     }
+
+    fn command_overlay_runs(
+        input: &str,
+        theme: &gpui_component::Theme,
+        font_size: Pixels,
+        line_height: Rems,
+    ) -> Option<Vec<TextRun>> {
+        if input.is_empty() || input.contains('\n') {
+            return None;
+        }
+
+        let rope = Rope::from_str(input);
+        let mut highlighter = SyntaxHighlighter::new("con-shell");
+        highlighter.update(None, &rope, None);
+        let highlights = highlighter.styles(&(0..input.len()), &theme.highlight_theme);
+
+        let base_style = TextStyle {
+            color: theme.foreground.opacity(0.92),
+            font_family: theme.mono_font_family.clone(),
+            font_size: font_size.into(),
+            line_height: line_height.into(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            white_space: WhiteSpace::Nowrap,
+            ..Default::default()
+        };
+
+        if highlights.is_empty() {
+            return Some(vec![base_style.to_run(input.len())]);
+        }
+
+        let mut runs = Vec::new();
+        let mut cursor = 0usize;
+        for (range, highlight) in highlights {
+            if range.start > cursor {
+                runs.push(base_style.to_run(range.start - cursor));
+            }
+
+            let mut style = base_style.clone();
+            style.color = highlight
+                .color
+                .map(|color| color.mix_oklab(base_style.color, 0.82).opacity(0.99))
+                .unwrap_or(base_style.color);
+            style.font_style = FontStyle::Normal;
+            style.font_weight = FontWeight::NORMAL;
+            style.underline = None;
+            style.strikethrough = None;
+            runs.push(style.to_run(range.len()));
+            cursor = range.end;
+        }
+
+        if cursor < input.len() {
+            runs.push(base_style.to_run(input.len() - cursor));
+        }
+
+        Some(runs.into_iter().filter(|run| run.len > 0).collect())
+    }
 }
 
 impl EventEmitter<SubmitInput> for InputBar {}
@@ -1140,6 +1199,16 @@ impl Render for InputBar {
             .clone()
             .unwrap_or_default()
             .replace(' ', "\u{00A0}");
+        let command_overlay_runs = if self.mode != InputMode::Agent {
+            Self::command_overlay_runs(
+                &input_value,
+                theme,
+                input_text_size,
+                input_line_height,
+            )
+        } else {
+            None
+        };
 
         let input_field = div()
             .flex_1()
@@ -1298,6 +1367,29 @@ impl Render for InputBar {
             }))
             .font_family(input_font.clone())
             .text_size(input_text_size)
+            .children(command_overlay_runs.as_ref().map(|runs| {
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .px(px(12.0))
+                    .flex()
+                    .items_center()
+                    .line_height(input_line_height)
+                    .top(input_vertical_offset)
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .w_full()
+                            .overflow_hidden()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_size(input_text_size)
+                            .line_height(input_line_height)
+                            .child(StyledText::new(input_value.clone()).with_runs(runs.clone())),
+                    )
+            }))
             .children(show_inline_suggestion.then(|| {
                 div()
                     .absolute()
@@ -1336,6 +1428,11 @@ impl Render for InputBar {
                         .appearance(false)
                         .cleanable(false)
                         .font_family(input_font)
+                        .text_color(if !input_value.is_empty() {
+                            gpui::transparent_black()
+                        } else {
+                            theme.foreground
+                        })
                         .text_size(input_text_size)
                         .line_height(input_line_height)
                         .h(px(24.0))

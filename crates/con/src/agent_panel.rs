@@ -3374,13 +3374,14 @@ impl Render for AgentPanel {
             .flex()
             .items_center()
             .gap(px(8.0))
+            .flex_1()
+            .min_w_0()
             .child(
                 svg()
                     .path("phosphor/oven-duotone.svg")
                     .size(px(15.0))
                     .text_color(theme.primary),
             )
-            .child(render_model_chips(&self.model_name, None, theme))
             .child(status_indicator);
 
         if let Some((_icon, label)) = self.status_text() {
@@ -3388,6 +3389,9 @@ impl Render for AgentPanel {
                 div()
                     .text_size(px(10.5))
                     .text_color(theme.muted_foreground.opacity(0.45))
+                    .min_w_0()
+                    .overflow_x_hidden()
+                    .whitespace_nowrap()
                     .child(label),
             );
         }
@@ -3401,16 +3405,21 @@ impl Render for AgentPanel {
             .flex()
             .items_center()
             .justify_between()
+            .gap(px(8.0))
             .h(px(40.0))
             .px(px(14.0))
             .flex_shrink_0()
             .child(header_left)
             .child({
-                let mut actions = div().flex().items_center().gap(px(6.0));
+                let mut actions = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .flex_shrink_0();
 
                 actions = actions.child(
                     div()
-                        .w(px(160.0))
+                        .w(px(118.0))
                         .child(
                             Select::new(&self.session_provider_select)
                                 .placeholder("Provider")
@@ -3420,7 +3429,7 @@ impl Render for AgentPanel {
 
                 actions = actions.child(
                     div()
-                        .w(px(210.0))
+                        .w(px(148.0))
                         .child(
                             Select::new(&self.session_model_select)
                                 .placeholder("Model")
