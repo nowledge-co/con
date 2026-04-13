@@ -3708,6 +3708,15 @@ impl ConWorkspace {
         self.tabs[self.active_tab].pane_tree.to_state(cx)
     }
 
+    fn release_active_terminal_mouse_selection(&self, cx: &App) {
+        if self.active_tab >= self.tabs.len() {
+            return;
+        }
+        for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
+            terminal.release_mouse_selection(cx);
+        }
+    }
+
     fn render_scope_leaf(
         &self,
         pane_id: usize,
@@ -3792,38 +3801,38 @@ impl ConWorkspace {
                                     .items_center()
                                     .gap(px(6.0))
                                     .child(div().size(px(6.0)).rounded_full().bg(status_color))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .line_height(px(14.0))
+                                            .font_family(theme.mono_font_family.clone())
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(if is_selected {
+                                                theme.primary
+                                            } else {
+                                                theme.foreground
+                                            })
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .overflow_x_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(label),
+                                    ),
+                            )
                             .child(
                                 div()
-                                    .text_size(px(11.0))
-                                    .line_height(px(14.0))
+                                    .text_size(px(10.0))
+                                    .line_height(px(13.0))
                                     .font_family(theme.mono_font_family.clone())
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(if is_selected {
-                                        theme.primary
-                                    } else {
-                                        theme.foreground
-                                    })
+                                    .text_color(theme.muted_foreground.opacity(0.72))
                                     .min_w_0()
                                     .overflow_hidden()
-                                    .overflow_x_hidden()
                                     .whitespace_nowrap()
                                     .text_ellipsis()
-                                    .child(label),
+                                    .child(status_text),
                             ),
                     )
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .line_height(px(13.0))
-                            .font_family(theme.mono_font_family.clone())
-                            .text_color(theme.muted_foreground.opacity(0.72))
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(format!("Pane {} · {}", display_index + 1, status_text)),
-                    ),
-            )
                     .child(
                         div().flex().items_center().gap(px(4.0)).child(
                             div()
@@ -5258,14 +5267,13 @@ impl Render for ConWorkspace {
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(
-                                            |this, event: &MouseDownEvent, _window, _cx| {
-                                                this.agent_panel_drag = Some((
-                                                    f32::from(event.position.x),
-                                                    this.agent_panel_width,
-                                                ));
-                                            },
-                                        ),
+                                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                            this.release_active_terminal_mouse_selection(cx);
+                                            this.agent_panel_drag = Some((
+                                                f32::from(event.position.x),
+                                                this.agent_panel_width,
+                                            ));
+                                        }),
                                     ),
                             ),
                     )
@@ -5556,14 +5564,16 @@ impl Render for ConWorkspace {
 
                     let top_bar_height = this.current_top_bar_height();
                     let input_bar_height = if this.input_bar_visible { 42.0 } else { 0.0 };
-                    let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
-
                     // Consume a pending drag initiation written by divider on_mouse_down
                     if let Ok(mut guard) = pending.lock() {
                         if let Some((split_id, start_pos)) = guard.take() {
+                            this.release_active_terminal_mouse_selection(cx);
+                            let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
                             pane_tree.begin_drag(split_id, start_pos);
                         }
                     }
+
+                    let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
 
                     if !pane_tree.is_dragging() {
                         return;
@@ -5917,29 +5927,25 @@ impl Render for ConWorkspace {
                     .justify_between()
                     .gap(px(8.0))
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(1.0))
-                                    .child(
-                                        div()
-                                            .text_size(px(11.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child("Command scope"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(10.0))
-                                            .line_height(px(13.0))
-                                            .text_color(theme.muted_foreground.opacity(0.60))
-                                            .child("Broadcast by default"),
-                                    ),
-                            ),
+                        div().flex().items_center().gap(px(6.0)).child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(1.0))
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Command scope"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .line_height(px(13.0))
+                                        .text_color(theme.muted_foreground.opacity(0.60))
+                                        .child("Broadcast by default"),
+                                ),
+                        ),
                     )
                     .child(
                         div()
@@ -6015,7 +6021,7 @@ impl Render for ConWorkspace {
                                     .text_size(px(10.5))
                                     .font_family(theme.mono_font_family.clone())
                                     .text_color(theme.muted_foreground.opacity(0.62))
-                                    .child("Cmd+1..9"),
+                                    .child("1..9"),
                             ),
                     );
 
