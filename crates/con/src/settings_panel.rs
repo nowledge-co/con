@@ -222,9 +222,9 @@ impl SettingsPanel {
     fn provider_api_key_placeholder(provider: &ProviderKind) -> &'static str {
         match provider {
             ProviderKind::ChatGPT | ProviderKind::GitHubCopilot => {
-                "Optional override for advanced setups"
+                "Override for advanced setups"
             }
-            _ => "sk-... or env var like ANTHROPIC_API_KEY",
+            _ => "sk-.. or OPENAI_API_KEY",
         }
     }
 
@@ -239,12 +239,12 @@ impl SettingsPanel {
     fn provider_api_key_hint(provider: &ProviderKind) -> &'static str {
         match provider {
             ProviderKind::ChatGPT => {
-                "Optional. Leave blank to use Con-managed ChatGPT device login."
+                "Leave blank for ChatGPT OAuth."
             }
             ProviderKind::GitHubCopilot => {
-                "Optional. Leave blank to use Con-managed GitHub device login."
+                "Leave blank for GitHub OAuth."
             }
-            _ => "Paste a key or an env var name like ANTHROPIC_API_KEY",
+            _ => "Key or env var name",
         }
     }
 
@@ -265,8 +265,8 @@ impl SettingsPanel {
 
     fn provider_oauth_button_label(provider: &ProviderKind) -> Option<&'static str> {
         match provider {
-            ProviderKind::ChatGPT => Some("Sign In with ChatGPT"),
-            ProviderKind::GitHubCopilot => Some("Sign In with GitHub"),
+            ProviderKind::ChatGPT => Some("Auth ChatGPT"),
+            ProviderKind::GitHubCopilot => Some("Auth GitHub"),
             _ => None,
         }
     }
@@ -306,7 +306,7 @@ impl SettingsPanel {
 
     fn protocol_switch_hint(provider: &ProviderKind) -> Option<&'static str> {
         Self::protocol_pair(provider)
-            .map(|_| "Switch between OpenAI and Anthropic API compatible transport")
+            .map(|_| "OpenAI or Anthropic API compatible")
     }
 
     fn sidebar_selection_target(
@@ -434,9 +434,9 @@ impl SettingsPanel {
 
     fn provider_base_url_hint(provider: &ProviderKind) -> &'static str {
         if Self::provider_endpoint_presets(provider).is_empty() {
-            "Leave blank for the default endpoint"
+            "Blank for the default"
         } else {
-            "Leave blank for the provider default, or choose a preset below"
+            "Blank for provider default"
         }
     }
 
@@ -1876,7 +1876,7 @@ impl SettingsPanel {
                     .text_size(px(11.5))
                     .line_height(px(18.0))
                     .text_color(theme.muted_foreground.opacity(0.6))
-                    .child("Visit the community-maintained Ghostty styles site, choose a theme, then copy its Ghostty-format contents here."),
+                    .child("Browse community Ghostty themes, copy, and paste here."),
             )
             // Name input
             .child(
@@ -1931,7 +1931,7 @@ impl SettingsPanel {
 
         let mut content = section_content(
             "Appearance",
-            "Shape the terminal theme and how much of the desktop shows through.",
+            "Tweak the Con's textures, tastes and feels.",
             theme,
         );
 
@@ -1945,14 +1945,14 @@ impl SettingsPanel {
                     card(theme, card_opacity)
                         .child(searchable_select_row(
                             "Terminal Font",
-                            "Used for terminal text and mono UI surfaces such as code blocks.",
+                            "Terminal and mono UI like code blocks.",
                             &terminal_font_select,
                             theme,
                         ))
                         .child(row_separator(theme))
                         .child(searchable_select_row(
                             "UI Font",
-                            "Used for settings, prose, and the rest of the non-terminal interface.",
+                            "Settings, prose, and other UI.",
                             &ui_font_select,
                             theme,
                         ))
@@ -1971,7 +1971,7 @@ impl SettingsPanel {
                     card(theme, card_opacity)
                         .child(slider_row(
                             "Terminal Glass",
-                            "Controls the terminal surface. On macOS, a relaunch gives the cleanest result.",
+                            "Terminal opacity. Restart needed on macOS.",
                             &terminal_opacity_slider,
                             terminal_opacity,
                             theme,
@@ -1979,7 +1979,7 @@ impl SettingsPanel {
                         .child(row_separator(theme))
                         .child(slider_row(
                             "Window Chrome",
-                            "Controls tabs, the agent panel, the input bar, and command surfaces.",
+                            "UI opacity. Restart needed on macOS.",
                             &ui_opacity_slider,
                             ui_opacity,
                             theme,
@@ -2023,7 +2023,7 @@ impl SettingsPanel {
                                                             theme.muted_foreground.opacity(0.65),
                                                         )
                                                         .child(
-                                                            "Choose a PNG or JPEG. The image is applied per terminal, so splits will repeat it.",
+                                                            "Choose a PNG or JPEG. The image is applied per terminal.",
                                                         ),
                                                 ),
                                         )
@@ -2061,7 +2061,7 @@ impl SettingsPanel {
                                 .child(
                                     select_row(
                                         "Position",
-                                        "Anchor the image when it does not fill the full surface.",
+                                        "Anchor if not filling the full surface.",
                                         &background_image_position_select,
                                         theme,
                                     ),
@@ -2071,7 +2071,7 @@ impl SettingsPanel {
                         .child(
                             toggle_row(
                                 "Repeat",
-                                "Tile the image if the fit leaves empty space around it.",
+                                "Tile if the fit leaves empty space around it.",
                                 image_repeat_toggle,
                                 theme,
                             ),
@@ -2079,7 +2079,7 @@ impl SettingsPanel {
                         .child(row_separator(theme))
                         .child(slider_row(
                             "Image Strength",
-                            "Blend the image more softly or let it come forward behind the terminal.",
+                            "Blend more softly or let come forward.",
                             &background_image_opacity_slider,
                             background_image_opacity,
                             theme,
@@ -2093,7 +2093,7 @@ impl SettingsPanel {
                                 .line_height(px(16.0))
                                 .text_color(theme.muted_foreground.opacity(0.65))
                                 .child(
-                                    "Ghostty renders the image per terminal, so splits will each draw their own copy.",
+                                    "Ghostty renders the image per terminal.",
                                 ),
                         ),
                 ),
@@ -2127,7 +2127,7 @@ impl SettingsPanel {
                     .text_size(px(10.5))
                     .text_color(theme.muted_foreground.opacity(0.4))
                     .mb(px(10.0))
-                    .child("Built-in themes below. You can also import community-maintained Ghostty styles."),
+                    .child("You can also import community-maintained Ghostty styles."),
             )
             .child(builtin_grid);
 
@@ -2566,7 +2566,7 @@ impl SettingsPanel {
                                                     div()
                                                         .text_size(px(11.0))
                                                         .text_color(theme.muted_foreground)
-                                                        .child("Use device login to authorize this subscription inside Con."),
+                                                        .child("Device login"),
                                                 ),
                                         )
                                         .child(
@@ -2689,7 +2689,7 @@ impl SettingsPanel {
                             Some(
                                 div().child(select_row(
                                     "Endpoint Preset",
-                                    "Use an explicit regional or protocol endpoint, or keep the provider default.",
+                                    "Switch region or protocol",
                                     &endpoint_preset_select,
                                     theme,
                                 )),
@@ -2713,25 +2713,25 @@ impl SettingsPanel {
                         )
                         .child(stacked_input_field(
                             "Max Tokens",
-                            "Per-provider ceiling for generated tokens",
+                            "Per-provider token ceiling",
                             &max_tokens_input,
                             theme,
                         ))
                         .child(stacked_input_field(
                             "Max Turns",
-                            "How many tool-use turns before the agent must stop",
+                            "Tool-use turns before hard stop",
                             &max_turns_input,
                             theme,
                         ))
                         .child(stacked_input_field(
                             "Temperature",
-                            "Blank for default — lower is steadier, higher is looser",
+                            "Blank for default",
                             &temperature_input,
                             theme,
                         ))
                         .child(stacked_input_field(
-                            "Suggestion Model",
-                            "Optional lightweight model for shell suggestions",
+                            "Suggestion Model [Optional]",
+                            "Fast model for shell completions",
                             &suggestion_model_input,
                             theme,
                         )),
