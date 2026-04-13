@@ -755,11 +755,13 @@ impl Render for InputBar {
                         div()
                             .flex()
                             .items_center()
+                            .min_h(px(28.0))
                             .gap(px(8.0))
                             .child(mode_prefix)
                             .child(
                                 div()
                                     .flex_1()
+                                    .min_h(px(22.0))
                                     .relative()
                                     .font_family(input_font.clone())
                                     .text_size(px(13.0))

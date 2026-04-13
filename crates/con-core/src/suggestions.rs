@@ -138,7 +138,10 @@ async fn request_completion(
         "Complete this shell command.\n\
          Reply with ONLY the remaining characters to complete the command, nothing else.\n\
          Do not repeat the already-typed prefix.\n\
-         Do not add explanations, newlines, or destructive extras.\n\
+         Continue the same shell command; do not start a new command.\n\
+         Preserve quoting and spacing style from the prefix.\n\
+         Do not add explanations, newlines, comments, shell chaining, or destructive extras.\n\
+         Do not add a leading space unless the completion truly needs one.\n\
          If you cannot complete it confidently, reply with an empty string.\n\n\
          Current directory: {}\n\
          Recent commands:\n{}\n\n\
