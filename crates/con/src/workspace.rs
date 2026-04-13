@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme, Icon, Sizable as _,
+    ActiveTheme, Sizable as _,
     button::{Button, ButtonVariants as _},
     kbd::Kbd,
 };
@@ -5901,8 +5901,6 @@ impl Render for ConWorkspace {
                     px((window.bounds().size.width.as_f32() * 0.38).clamp(360.0, 520.0));
                 let popup_bottom = px(58.0 + (43.0 * input_bar_progress.max(0.01)));
                 let scope_kbd = Keystroke::parse("cmd-'").ok().map(Kbd::new);
-                let all_kbd = Keystroke::parse("cmd-a").ok().map(Kbd::new);
-                let focused_kbd = Keystroke::parse("cmd-f").ok().map(Kbd::new);
                 let preview_content = self.render_scope_node(
                     &layout,
                     &pane_map,
@@ -5924,12 +5922,6 @@ impl Render for ConWorkspace {
                             .items_center()
                             .gap(px(6.0))
                             .child(
-                                svg()
-                                    .path("phosphor/broadcast-duotone.svg")
-                                    .size(px(13.0))
-                                    .text_color(theme.primary),
-                            )
-                            .child(
                                 div()
                                     .flex()
                                     .flex_col()
@@ -5939,6 +5931,13 @@ impl Render for ConWorkspace {
                                             .text_size(px(11.5))
                                             .font_weight(FontWeight::MEDIUM)
                                             .child("Command scope"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .line_height(px(13.0))
+                                            .text_color(theme.muted_foreground.opacity(0.60))
+                                            .child("Broadcast by default"),
                                     ),
                             ),
                     )
@@ -5947,7 +5946,7 @@ impl Render for ConWorkspace {
                             .flex()
                             .items_center()
                             .gap(px(4.0))
-                            .when_some(scope_kbd, |this, kbd| this.child(kbd.outline())),
+                            .when_some(scope_kbd.clone(), |this, kbd| this.child(kbd.outline())),
                     );
 
                 let presets_row = div()
@@ -5955,53 +5954,64 @@ impl Render for ConWorkspace {
                     .items_center()
                     .gap(px(6.0))
                     .child(
-                        Button::new("scope-all")
-                            .label("All panes")
-                            .xsmall()
-                            .compact()
-                            .when(is_broadcast, |button| button.primary())
-                            .when(!is_broadcast, |button| button.ghost())
-                            .icon(
-                                Icon::default()
-                                    .path("phosphor/broadcast-duotone.svg")
-                                    .text_color(if is_broadcast {
-                                        theme.primary_foreground
+                        div()
+                            .h(px(28.0))
+                            .px(px(3.0))
+                            .rounded(px(9.0))
+                            .bg(theme.muted.opacity(0.08))
+                            .flex()
+                            .items_center()
+                            .gap(px(2.0))
+                            .child(
+                                Button::new("scope-all")
+                                    .label("All panes")
+                                    .xsmall()
+                                    .compact()
+                                    .ghost()
+                                    .bg(if is_broadcast {
+                                        theme.primary.opacity(0.14)
                                     } else {
+                                        theme.transparent
+                                    })
+                                    .text_color(if is_broadcast {
                                         theme.primary
-                                    }),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_scope_broadcast(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("scope-focused")
-                            .label("Focused")
-                            .xsmall()
-                            .compact()
-                            .when(is_focused, |button| button.primary())
-                            .when(!is_focused, |button| button.ghost())
-                            .icon(
-                                Icon::default()
-                                    .path("phosphor/cursor-click.svg")
-                                    .text_color(if is_focused {
-                                        theme.primary_foreground
                                     } else {
                                         theme.muted_foreground
-                                    }),
+                                    })
+                                    .hover(|style| style.bg(theme.primary.opacity(0.08)))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_scope_broadcast(window, cx);
+                                    })),
                             )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_scope_focused(window, cx);
-                            })),
+                            .child(
+                                Button::new("scope-focused")
+                                    .label("Focused")
+                                    .xsmall()
+                                    .compact()
+                                    .ghost()
+                                    .bg(if is_focused {
+                                        theme.primary.opacity(0.14)
+                                    } else {
+                                        theme.transparent
+                                    })
+                                    .text_color(if is_focused {
+                                        theme.primary
+                                    } else {
+                                        theme.muted_foreground
+                                    })
+                                    .hover(|style| style.bg(theme.primary.opacity(0.08)))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.set_scope_focused(window, cx);
+                                    })),
+                            ),
                     )
                     .child(div().flex_1())
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.0))
-                            .when_some(all_kbd, |this, kbd| this.child(kbd.outline()))
-                            .when_some(focused_kbd, |this, kbd| this.child(kbd.outline()))
+                            .gap(px(6.0))
+                            .when_some(scope_kbd, |this, kbd| this.child(kbd.outline()))
                             .child(
                                 div()
                                     .text_size(px(10.5))

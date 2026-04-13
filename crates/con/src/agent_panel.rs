@@ -3399,17 +3399,22 @@ impl Render for AgentPanel {
             );
         }
 
-        // Auto-approve badge — use Tag component
-        if self.auto_approve {
-            header_left = header_left.child(Tag::warning().outline().xsmall().child("YOLO"));
-        }
-
         let control_icons = {
             let mut actions = div()
                 .flex()
                 .items_center()
-                .gap(px(2.0))
+                .gap(px(3.0))
                 .flex_shrink_0();
+
+            if self.auto_approve {
+                actions = actions.child(
+                    Tag::warning()
+                        .outline()
+                        .xsmall()
+                        .child("YOLO")
+                        .into_any_element(),
+                );
+            }
 
             if self.state.status != AgentStatus::Idle {
                 actions = actions.child(
@@ -3452,16 +3457,16 @@ impl Render for AgentPanel {
         };
 
         let session_strip = div()
-            .h(px(26.0))
+            .h(px(25.0))
             .min_w(px(0.0))
             .rounded(px(8.0))
-            .bg(theme.muted.opacity(0.08))
+            .bg(theme.muted.opacity(0.07))
             .flex()
             .items_center()
             .overflow_hidden()
             .child(
                 div()
-                    .w(px(98.0))
+                    .w(px(104.0))
                     .px(px(8.0))
                     .child(
                         Select::new(&self.session_provider_select)
@@ -3474,8 +3479,8 @@ impl Render for AgentPanel {
             .child(div().w(px(1.0)).h(px(14.0)).bg(theme.title_bar_border.opacity(0.75)))
             .child(
                 div()
-                    .min_w(px(116.0))
-                    .max_w(px(176.0))
+                    .min_w(px(124.0))
+                    .max_w(px(184.0))
                     .px(px(8.0))
                     .child(
                         Select::new(&self.session_model_select)
