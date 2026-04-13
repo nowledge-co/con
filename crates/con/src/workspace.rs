@@ -285,6 +285,7 @@ impl ConWorkspace {
             );
             panic!("Fatal: agent harness initialization failed: {}", e);
         });
+        harness.prewarm_input_classification();
         let shell_suggestion_engine = harness.suggestion_engine(320);
         let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
         let (shell_suggestion_tx, shell_suggestion_rx) = crossbeam_channel::unbounded();
@@ -3839,13 +3840,18 @@ impl ConWorkspace {
         });
 
         let trimmed = text.trim();
+        let shell_probe_too_short = mode == InputMode::Smart && trimmed.chars().count() < 2;
         let is_shell_mode = match mode {
             InputMode::Shell => true,
             InputMode::Smart => {
+                if shell_probe_too_short {
+                    false
+                } else {
                 let is_remote = self
                     .effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
                     .is_some();
                 matches!(self.harness.classify_input(&text, is_remote), InputKind::ShellCommand(_))
+                }
             }
             InputMode::Agent => false,
         };
@@ -4411,9 +4417,6 @@ impl Render for ConWorkspace {
         let agent_panel_progress = self.agent_panel_motion.value(window);
         let input_bar_progress = self.input_bar_motion.value(window);
         let tab_strip_progress = self.tab_strip_motion.value(window);
-        let agent_panel_chrome_progress = ((agent_panel_progress - 0.10) / 0.90)
-            .clamp(0.0, 1.0)
-            .powf(1.55);
         let agent_panel_content_progress = ((agent_panel_progress - 0.16) / 0.84)
             .clamp(0.0, 1.0)
             .powf(0.9);
@@ -4456,7 +4459,7 @@ impl Render for ConWorkspace {
                         .h_full()
                         .flex_shrink_0()
                         .bg(theme.title_bar_border)
-                        .opacity(agent_panel_chrome_progress)
+                        .opacity(if agent_panel_progress > 0.01 { 1.0 } else { 0.0 })
                         .child(
                             div()
                                 .absolute()
@@ -4899,8 +4902,12 @@ impl Render for ConWorkspace {
                     .overflow_hidden()
                     .bg(theme.title_bar.opacity(ui_surface_opacity))
                     .max_h(px(160.0 * input_bar_progress))
-                    .opacity(input_bar_content_progress)
-                    .child(self.input_bar.clone()),
+                    .child(div().h(px(1.0)).bg(theme.title_bar_border))
+                    .child(
+                        div()
+                            .opacity(input_bar_content_progress)
+                            .child(self.input_bar.clone()),
+                    ),
             );
         }
 

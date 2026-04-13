@@ -4,7 +4,16 @@ use gpui_component::{
     input::{Input, InputEvent, InputState, Position},
 };
 
-actions!(input_bar, [SubmitInput, EscapeInput]);
+actions!(
+    input_bar,
+    [
+        SubmitInput,
+        EscapeInput,
+        AcceptSuggestionOrMoveRight,
+        AcceptSuggestionOrMoveEnd,
+        DeletePreviousWord
+    ]
+);
 
 pub struct SkillAutocompleteChanged;
 impl EventEmitter<SkillAutocompleteChanged> for InputBar {}
@@ -93,6 +102,36 @@ pub struct InputBar {
 }
 
 impl InputBar {
+    pub fn init(cx: &mut App) {
+        cx.bind_keys([
+            KeyBinding::new(
+                "right",
+                AcceptSuggestionOrMoveRight,
+                Some("ConCommandInput && Input"),
+            ),
+            KeyBinding::new(
+                "ctrl-e",
+                AcceptSuggestionOrMoveEnd,
+                Some("ConCommandInput && Input"),
+            ),
+            KeyBinding::new(
+                "cmd-right",
+                AcceptSuggestionOrMoveEnd,
+                Some("ConCommandInput && Input"),
+            ),
+            KeyBinding::new(
+                "end",
+                AcceptSuggestionOrMoveEnd,
+                Some("ConCommandInput && Input"),
+            ),
+            KeyBinding::new(
+                "ctrl-w",
+                DeletePreviousWord,
+                Some("ConCommandInput && Input"),
+            ),
+        ]);
+    }
+
     fn current_input_state(&self) -> Entity<InputState> {
         match self.mode {
             InputMode::Shell => self.shell_input_state.clone(),
@@ -179,9 +218,7 @@ impl InputBar {
         let shell_input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Type a command or ask AI…")
-                .code_editor("bash")
-                .multi_line(false)
-                .folding(false)
+                .auto_grow(1, 1)
         });
 
         let _subscriptions = vec![
@@ -425,6 +462,99 @@ impl InputBar {
         self.ui_opacity = opacity.clamp(0.35, 1.0);
     }
 
+    fn move_cursor_to_line_end(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input_state = self.current_input_state();
+        let cursor_position = input_state.read(cx).cursor_position();
+        let line_index = cursor_position.line as usize;
+        let line_length = input_state
+            .read(cx)
+            .value()
+            .lines()
+            .nth(line_index)
+            .map(|line| line.chars().count() as u32)
+            .unwrap_or(cursor_position.character);
+
+        input_state.update(cx, |state, cx| {
+            state.set_cursor_position(Position::new(cursor_position.line, line_length), window, cx);
+        });
+    }
+
+    fn move_cursor_right(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input_state = self.current_input_state();
+        let text = input_state.read(cx).value().to_string();
+        let cursor = input_state.read(cx).cursor();
+        if cursor >= text.len() {
+            return;
+        }
+
+        let next_offset = text[cursor..]
+            .chars()
+            .next()
+            .map(|ch| cursor + ch.len_utf8())
+            .unwrap_or(cursor);
+        let next_position = Self::position_for_offset(&text, next_offset);
+
+        input_state.update(cx, |state, cx| {
+            state.set_cursor_position(next_position, window, cx);
+        });
+    }
+
+    fn delete_previous_word(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input_state = self.current_input_state();
+        let text = input_state.read(cx).value().to_string();
+        let cursor = input_state.read(cx).cursor();
+        if cursor == 0 {
+            return;
+        }
+
+        let mut boundary = cursor;
+        while boundary > 0 {
+            let prev = text[..boundary]
+                .char_indices()
+                .last()
+                .map(|(idx, ch)| (idx, ch))
+                .unwrap();
+            if !prev.1.is_whitespace() {
+                break;
+            }
+            boundary = prev.0;
+        }
+        while boundary > 0 {
+            let prev = text[..boundary]
+                .char_indices()
+                .last()
+                .map(|(idx, ch)| (idx, ch))
+                .unwrap();
+            if prev.1.is_whitespace() {
+                break;
+            }
+            boundary = prev.0;
+        }
+
+        let mut updated = text[..boundary].to_string();
+        updated.push_str(&text[cursor..]);
+        let boundary_position = Self::position_for_offset(&updated, boundary);
+
+        input_state.update(cx, |state, cx| {
+            state.set_value(&updated, window, cx);
+            state.set_cursor_position(boundary_position, window, cx);
+        });
+        self.clear_inline_suggestion();
+        cx.emit(InputEdited);
+        cx.notify();
+    }
+
+    fn position_for_offset(text: &str, offset: usize) -> Position {
+        let safe_offset = offset.min(text.len());
+        let prefix = &text[..safe_offset];
+        let line = prefix.bytes().filter(|b| *b == b'\n').count() as u32;
+        let character = prefix
+            .rsplit_once('\n')
+            .map(|(_, tail)| tail.chars().count() as u32)
+            .unwrap_or_else(|| prefix.chars().count() as u32);
+        Position::new(line, character)
+    }
+
     fn placeholder(&self) -> &str {
         match self.mode {
             InputMode::Smart => "Type a command or ask AI…",
@@ -662,12 +792,27 @@ impl Render for InputBar {
             .bg(theme.title_bar.opacity(self.ui_opacity))
             .font_family(theme.font_family.clone())
             .text_size(px(13.0))
+            .key_context("ConCommandInput")
+            .on_action(cx.listener(
+                |this, _: &AcceptSuggestionOrMoveEnd, window, cx| {
+                    if !this.accept_inline_suggestion(window, cx) {
+                        this.move_cursor_to_line_end(window, cx);
+                    }
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &AcceptSuggestionOrMoveRight, window, cx| {
+                    if !this.accept_inline_suggestion(window, cx) {
+                        this.move_cursor_right(window, cx);
+                    }
+                },
+            ))
+            .on_action(cx.listener(|this, _: &DeletePreviousWord, window, cx| {
+                this.delete_previous_word(window, cx);
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let matches = this.filtered_skills(cx);
                 let has_completions = !matches.is_empty();
-                let active_state = this.current_input_state();
-                let cursor_at_end =
-                    active_state.read(cx).cursor() == active_state.read(cx).value().len();
                 match event.keystroke.key.as_str() {
                     "tab" => {
                         if has_completions {
@@ -698,34 +843,6 @@ impl Render for InputBar {
                             cx.emit(EscapeInput);
                         }
                     }
-                    "right" if !has_completions && cursor_at_end => {
-                        if this.accept_inline_suggestion(window, cx) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
-                    }
-                    "e" if event.keystroke.modifiers.control && !has_completions && cursor_at_end => {
-                        if this.accept_inline_suggestion(window, cx) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
-                    }
-                    "end" if !has_completions && cursor_at_end => {
-                        if this.accept_inline_suggestion(window, cx) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
-                    }
-                    "right"
-                        if event.keystroke.modifiers.platform
-                            && !has_completions
-                            && cursor_at_end =>
-                    {
-                        if this.accept_inline_suggestion(window, cx) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
-                    }
                     "up" if has_completions => {
                         this.skill_selection = this.skill_selection.saturating_sub(1);
                         cx.emit(SkillAutocompleteChanged);
@@ -745,6 +862,7 @@ impl Render for InputBar {
                 div()
                     .px(px(12.0))
                     .py(px(7.0))
+                    .min_h(px(42.0))
                     .flex()
                     .flex_col()
                     .gap(px(4.0))

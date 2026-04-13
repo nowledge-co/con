@@ -208,6 +208,16 @@ impl AgentHarness {
         )
     }
 
+    pub fn prewarm_input_classification(&self) {
+        self.runtime.spawn(async move {
+            let _ = tokio::task::spawn_blocking(|| {
+                let _ = path_executables();
+                let _ = shell_aliases();
+            })
+            .await;
+        });
+    }
+
     pub fn spawn_detached<F>(&self, future: F)
     where
         F: Future<Output = ()> + Send + 'static,

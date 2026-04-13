@@ -165,6 +165,7 @@ fn main() {
 
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)
         gpui_component::init(cx);
+        input_bar::InputBar::init(cx);
 
         // Load and activate con's design theme (synced to terminal theme)
         theme::init_theme(
