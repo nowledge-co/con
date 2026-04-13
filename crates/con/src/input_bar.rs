@@ -1,12 +1,10 @@
 use gpui::*;
 use gpui_component::{
     button::{Button, ButtonVariants as _},
-    highlighter::SyntaxHighlighter,
     input::{Input, InputEvent, InputState, Position},
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
-    ActiveTheme, Colorize, Sizable as _,
+    ActiveTheme, Sizable as _,
 };
-use ropey::Rope;
 
 actions!(
     input_bar,
@@ -887,11 +885,6 @@ impl InputBar {
             return None;
         }
 
-        let rope = Rope::from_str(input);
-        let mut highlighter = SyntaxHighlighter::new("con-shell");
-        highlighter.update(None, &rope, None);
-        let highlights = highlighter.styles(&(0..input.len()), &theme.highlight_theme);
-
         let base_style = TextStyle {
             color: theme.foreground.opacity(0.92),
             font_family: theme.mono_font_family.clone(),
@@ -903,36 +896,134 @@ impl InputBar {
             ..Default::default()
         };
 
-        if highlights.is_empty() {
-            return Some(vec![base_style.to_run(input.len())]);
-        }
+        let primary_color = syntax_color(theme, "primary").unwrap_or(theme.primary);
+        let flag_color = syntax_color(theme, "keyword").unwrap_or(theme.warning);
+        let path_color = syntax_color(theme, "string").unwrap_or(theme.success.opacity(0.88));
+        let variable_color =
+            syntax_color(theme, "variable.special").unwrap_or(theme.primary.opacity(0.9));
+        let number_color = syntax_color(theme, "number").unwrap_or(theme.info.opacity(0.92));
+        let operator_color =
+            syntax_color(theme, "operator").unwrap_or(theme.muted_foreground.opacity(0.78));
+        let punctuation_color = syntax_color(theme, "punctuation.delimiter")
+            .unwrap_or(theme.muted_foreground.opacity(0.74));
 
         let mut runs = Vec::new();
-        let mut cursor = 0usize;
-        for (range, highlight) in highlights {
-            if range.start > cursor {
-                runs.push(base_style.to_run(range.start - cursor));
+        let mut idx = 0usize;
+        let mut saw_command = false;
+
+        while idx < input.len() {
+            let ch = input[idx..].chars().next()?;
+            let ch_len = ch.len_utf8();
+
+            if ch.is_whitespace() {
+                let start = idx;
+                idx += ch_len;
+                while idx < input.len() {
+                    let next = input[idx..].chars().next()?;
+                    if !next.is_whitespace() {
+                        break;
+                    }
+                    idx += next.len_utf8();
+                }
+                runs.push(base_style.to_run(idx - start));
+                continue;
             }
 
-            let mut style = base_style.clone();
-            style.color = highlight
-                .color
-                .map(|color| color.mix_oklab(base_style.color, 0.82).opacity(0.99))
-                .unwrap_or(base_style.color);
-            style.font_style = FontStyle::Normal;
-            style.font_weight = FontWeight::NORMAL;
-            style.underline = None;
-            style.strikethrough = None;
-            runs.push(style.to_run(range.len()));
-            cursor = range.end;
-        }
+            let start = idx;
+            let color = if ch == '\'' || ch == '"' {
+                idx += ch_len;
+                while idx < input.len() {
+                    let next = input[idx..].chars().next()?;
+                    idx += next.len_utf8();
+                    if next == ch {
+                        break;
+                    }
+                }
+                path_color
+            } else if ch == '$' {
+                idx += ch_len;
+                while idx < input.len() {
+                    let next = input[idx..].chars().next()?;
+                    if !(next.is_ascii_alphanumeric() || next == '_' || next == '{' || next == '}')
+                    {
+                        break;
+                    }
+                    idx += next.len_utf8();
+                }
+                variable_color
+            } else if is_operator_char(ch) {
+                idx += ch_len;
+                while idx < input.len() {
+                    let next = input[idx..].chars().next()?;
+                    if !is_operator_char(next) {
+                        break;
+                    }
+                    idx += next.len_utf8();
+                }
+                operator_color
+            } else if is_punctuation_char(ch) {
+                idx += ch_len;
+                punctuation_color
+            } else {
+                idx += ch_len;
+                while idx < input.len() {
+                    let next = input[idx..].chars().next()?;
+                    if next.is_whitespace()
+                        || is_operator_char(next)
+                        || is_punctuation_char(next)
+                        || next == '\''
+                        || next == '"'
+                    {
+                        break;
+                    }
+                    idx += next.len_utf8();
+                }
 
-        if cursor < input.len() {
-            runs.push(base_style.to_run(input.len() - cursor));
+                let token = &input[start..idx];
+                if !saw_command {
+                    saw_command = true;
+                    primary_color
+                } else if token.starts_with('-') {
+                    flag_color
+                } else if looks_path_token(token) {
+                    path_color
+                } else if token.starts_with('$') {
+                    variable_color
+                } else if token.chars().all(|c| c.is_ascii_digit()) {
+                    number_color
+                } else {
+                    base_style.color
+                }
+            };
+
+            let mut style = base_style.clone();
+            style.color = color;
+            runs.push(style.to_run(idx - start));
         }
 
         Some(runs.into_iter().filter(|run| run.len > 0).collect())
     }
+}
+
+fn syntax_color(theme: &gpui_component::Theme, name: &str) -> Option<Hsla> {
+    theme.highlight_theme.style.syntax.style(name).and_then(|style| style.color)
+}
+
+fn is_operator_char(ch: char) -> bool {
+    matches!(ch, '|' | '&' | '<' | '>' | '=' | ':' | '+' | '*' | '%')
+}
+
+fn is_punctuation_char(ch: char) -> bool {
+    matches!(ch, ';' | ',' | '(' | ')' | '[' | ']' | '{' | '}')
+}
+
+fn looks_path_token(token: &str) -> bool {
+    token.starts_with("~/")
+        || token.starts_with('/')
+        || token.starts_with("./")
+        || token.starts_with("../")
+        || token.contains('/')
+        || token.starts_with('~')
 }
 
 impl EventEmitter<SubmitInput> for InputBar {}
