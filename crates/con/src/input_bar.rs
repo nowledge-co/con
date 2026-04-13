@@ -115,6 +115,11 @@ impl InputBar {
                 Some("ConCommandInput && Input"),
             ),
             KeyBinding::new(
+                "cmd-e",
+                AcceptSuggestionOrMoveEnd,
+                Some("ConCommandInput && Input"),
+            ),
+            KeyBinding::new(
                 "cmd-right",
                 AcceptSuggestionOrMoveEnd,
                 Some("ConCommandInput && Input"),
@@ -218,7 +223,9 @@ impl InputBar {
         let shell_input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Type a command or ask AI…")
-                .auto_grow(1, 1)
+                .code_editor("bash")
+                .multi_line(false)
+                .folding(false)
         });
 
         let _subscriptions = vec![
@@ -785,13 +792,10 @@ impl Render for InputBar {
             .unwrap_or_default()
             .replace(' ', "\u{00A0}");
 
-        // ── Main layout — flat bar, no rounded bubble ──
-        div()
-            .flex()
-            .flex_col()
-            .bg(theme.title_bar.opacity(self.ui_opacity))
-            .font_family(theme.font_family.clone())
-            .text_size(px(13.0))
+        let input_field = div()
+            .flex_1()
+            .min_h(px(22.0))
+            .relative()
             .key_context("ConCommandInput")
             .on_action(cx.listener(
                 |this, _: &AcceptSuggestionOrMoveEnd, window, cx| {
@@ -810,6 +814,50 @@ impl Render for InputBar {
             .on_action(cx.listener(|this, _: &DeletePreviousWord, window, cx| {
                 this.delete_previous_word(window, cx);
             }))
+            .font_family(input_font.clone())
+            .text_size(px(13.0))
+            .children(show_inline_suggestion.then(|| {
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .px(px(12.0))
+                    .flex()
+                    .items_center()
+                    .line_height(rems(1.25))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .opacity(0.0)
+                                    .child(ghost_prefix),
+                            )
+                            .child(div().text_color(ghost_tint).child(ghost_suffix)),
+                    )
+            }))
+            .child(
+                Input::new(&input_state)
+                    .appearance(false)
+                    .cleanable(false)
+                    .font_family(input_font)
+                    .text_sm()
+                    .h(px(22.0)),
+            );
+
+        // ── Main layout — flat bar, no rounded bubble ──
+        div()
+            .flex()
+            .flex_col()
+            .bg(theme.title_bar.opacity(self.ui_opacity))
+            .font_family(theme.font_family.clone())
+            .text_size(px(13.0))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let matches = this.filtered_skills(cx);
                 let has_completions = !matches.is_empty();
@@ -873,54 +921,10 @@ impl Render for InputBar {
                         div()
                             .flex()
                             .items_center()
-                            .min_h(px(28.0))
+                            .h(px(28.0))
                             .gap(px(8.0))
                             .child(mode_prefix)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h(px(22.0))
-                                    .relative()
-                                    .font_family(input_font.clone())
-                                    .text_size(px(13.0))
-                                    .children(show_inline_suggestion.then(|| {
-                                        div()
-                                            .absolute()
-                                            .left_0()
-                                            .right_0()
-                                            .top_0()
-                                            .bottom_0()
-                                            .px(px(12.0))
-                                            .flex()
-                                            .items_center()
-                                            .line_height(rems(1.25))
-                                            .overflow_hidden()
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .overflow_hidden()
-                                                    .child(
-                                                        div()
-                                                            .flex_shrink_0()
-                                                            .opacity(0.0)
-                                                            .child(ghost_prefix),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_color(ghost_tint)
-                                                            .child(ghost_suffix),
-                                                    ),
-                                            )
-                                    }))
-                                    .child(
-                                        Input::new(&input_state)
-                                            .appearance(false)
-                                            .cleanable(false)
-                                            .font_family(input_font)
-                                            .text_sm(),
-                                    ),
-                            )
+                            .child(input_field)
                             .child(send_button),
                     ),
             )

@@ -3840,24 +3840,7 @@ impl ConWorkspace {
         });
 
         let trimmed = text.trim();
-        let shell_probe_too_short = mode == InputMode::Smart && trimmed.chars().count() < 2;
-        let is_shell_mode = match mode {
-            InputMode::Shell => true,
-            InputMode::Smart => {
-                if shell_probe_too_short {
-                    false
-                } else {
-                let is_remote = self
-                    .effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
-                    .is_some();
-                matches!(self.harness.classify_input(&text, is_remote), InputKind::ShellCommand(_))
-                }
-            }
-            InputMode::Agent => false,
-        };
-
-        if !is_shell_mode
-            || trimmed.is_empty()
+        if trimmed.is_empty()
             || text.contains('\n')
             || trimmed.starts_with('/')
             || target_ids.len() != 1
@@ -3886,6 +3869,30 @@ impl ConWorkspace {
         }
 
         self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
+
+        let shell_probe_too_short = mode == InputMode::Smart && trimmed.chars().count() < 2;
+        let is_shell_mode = match mode {
+            InputMode::Shell => true,
+            InputMode::Smart => {
+                if shell_probe_too_short {
+                    false
+                } else {
+                    let is_remote = self
+                        .effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
+                        .is_some();
+                    matches!(
+                        self.harness.classify_input(&text, is_remote),
+                        InputKind::ShellCommand(_)
+                    )
+                }
+            }
+            InputMode::Agent => false,
+        };
+
+        if !is_shell_mode {
+            self.shell_suggestion_engine.cancel();
+            return;
+        }
 
         if !self.harness.config().suggestion_model.enabled {
             self.shell_suggestion_engine.cancel();
@@ -4486,6 +4493,7 @@ impl Render for ConWorkspace {
                         .w(px(animated_panel_width))
                         .h_full()
                         .overflow_hidden()
+                        .bg(theme.background.opacity(elevated_ui_surface_opacity))
                         .child(
                             div()
                                 .h_full()
@@ -4899,12 +4907,17 @@ impl Render for ConWorkspace {
         if input_bar_progress > 0.01 {
             root = root.child(
                 div()
-                    .overflow_hidden()
                     .bg(theme.title_bar.opacity(ui_surface_opacity))
-                    .max_h(px(160.0 * input_bar_progress))
-                    .child(div().h(px(1.0)).bg(theme.title_bar_border))
                     .child(
                         div()
+                            .h(px(1.0))
+                            .opacity(input_bar_progress)
+                            .bg(theme.title_bar_border),
+                    )
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .max_h(px(160.0 * input_bar_progress))
                             .opacity(input_bar_content_progress)
                             .child(self.input_bar.clone()),
                     ),
