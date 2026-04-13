@@ -7,7 +7,6 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::spinner::Spinner;
-use gpui_component::tag::Tag;
 use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _};
 
 /// Max lines to show for tool result previews in collapsed steps
@@ -3373,36 +3372,21 @@ impl Render for AgentPanel {
                 .into_any_element(),
         };
 
-        let mut header_left = div()
+        let header_left = div()
             .flex()
             .items_center()
-            .gap(px(8.0))
-            .flex_1()
-            .min_w_0()
+            .gap(px(7.0))
+            .flex_shrink_0()
             .child(
                 svg()
                     .path("phosphor/oven-duotone.svg")
-                    .size(px(15.0))
+                    .size(px(14.0))
                     .text_color(theme.primary),
             )
             .child(status_indicator);
 
-        if let Some((_icon, label)) = self.status_text() {
-            header_left = header_left.child(
-                div()
-                    .text_size(px(10.0))
-                    .font_family(theme.mono_font_family.clone())
-                    .text_color(theme.muted_foreground.opacity(0.54))
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(label),
-            );
-        }
-
         let control_icons = {
-            let mut actions = div().flex().items_center().gap(px(3.0)).flex_shrink_0();
+            let mut actions = div().flex().items_center().gap(px(2.0)).flex_shrink_0();
 
             if self.state.status != AgentStatus::Idle {
                 actions = actions.child(
@@ -3421,7 +3405,13 @@ impl Render for AgentPanel {
             }
 
             if self.auto_approve {
-                actions = actions.child(Tag::warning().outline().xsmall().child("YOLO"));
+                actions = actions.child(
+                    Button::new("agent-auto-approve")
+                        .icon(Icon::default().path("phosphor/sparkle-duotone.svg"))
+                        .ghost()
+                        .xsmall()
+                        .tooltip("Auto-approve"),
+                );
             }
 
             actions
@@ -3448,47 +3438,33 @@ impl Render for AgentPanel {
                 )
         };
 
-        let provider_picker = div().w(px(108.0)).flex_shrink_0().child(
+        let provider_picker = div().w(px(96.0)).flex_shrink_0().child(
             Select::new(&self.session_provider_select)
                 .placeholder("Provider")
                 .xsmall()
                 .menu_width(px(180.0)),
         );
 
-        let model_picker = div().min_w(px(124.0)).flex_1().min_w_0().child(
+        let model_picker = div().min_w(px(88.0)).flex_1().min_w_0().child(
             Select::new(&self.session_model_select)
                 .placeholder("Model")
                 .xsmall()
                 .menu_width(px(280.0)),
         );
 
-        let header_top = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(8.0))
-            .child(header_left)
-            .child(control_icons);
-
-        let header_bottom = div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .w_full()
-            .min_w_0()
-            .flex_shrink_0()
-            .child(provider_picker)
-            .child(model_picker);
-
         let header = div()
             .flex()
-            .flex_col()
+            .items_center()
             .gap(px(7.0))
+            .w_full()
+            .min_w_0()
             .px(px(14.0))
             .py(px(10.0))
             .flex_shrink_0()
-            .child(header_top)
-            .child(header_bottom);
+            .child(header_left)
+            .child(provider_picker)
+            .child(model_picker);
+        let header = header.child(control_icons);
 
         let live_activity_strip = if let Some(approval) = self.state.pending_approvals.first() {
             let args_display = format_tool_args(&approval.tool_name, &approval.args);

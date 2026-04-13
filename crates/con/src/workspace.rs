@@ -5,9 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme, Sizable as _,
-    button::{Button, ButtonVariants as _},
-    kbd::Kbd,
+    ActiveTheme, kbd::Kbd,
 };
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -3761,20 +3759,20 @@ impl ConWorkspace {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .px(px(10.0))
-            .py(px(9.0))
-            .rounded(px(9.0))
+            .px(px(11.0))
+            .py(px(10.0))
+            .rounded(px(10.0))
             .cursor_pointer()
             .bg(if is_selected {
-                theme.primary.opacity(0.14)
+                theme.primary.opacity(0.12)
             } else {
-                theme.muted.opacity(if is_focused { 0.12 } else { 0.07 })
+                theme.title_bar.opacity(if is_focused { 0.84 } else { 0.72 })
             })
             .hover(|s| {
                 s.bg(if is_selected {
-                    theme.primary.opacity(0.18)
+                    theme.primary.opacity(0.16)
                 } else {
-                    theme.muted.opacity(0.12)
+                    theme.title_bar.opacity(0.90)
                 })
             })
             .on_mouse_down(
@@ -3803,7 +3801,7 @@ impl ConWorkspace {
                                     .child(div().size(px(6.0)).rounded_full().bg(status_color))
                                     .child(
                                         div()
-                                            .text_size(px(11.0))
+                                            .text_size(px(11.5))
                                             .line_height(px(14.0))
                                             .font_family(theme.mono_font_family.clone())
                                             .font_weight(FontWeight::MEDIUM)
@@ -3822,10 +3820,10 @@ impl ConWorkspace {
                             )
                             .child(
                                 div()
-                                    .text_size(px(10.0))
+                                    .text_size(px(10.5))
                                     .line_height(px(13.0))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.72))
+                                    .text_color(theme.muted_foreground.opacity(0.62))
                                     .min_w_0()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
@@ -3836,20 +3834,22 @@ impl ConWorkspace {
                     .child(
                         div().flex().items_center().gap(px(4.0)).child(
                             div()
-                                .h(px(18.0))
-                                .px(px(6.0))
-                                .rounded(px(5.0))
+                                .size(px(20.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.0))
                                 .bg(if is_selected {
-                                    theme.primary.opacity(0.12)
+                                    theme.primary.opacity(0.13)
                                 } else {
-                                    theme.transparent
+                                    theme.title_bar_border.opacity(0.18)
                                 })
                                 .text_size(px(10.0))
                                 .font_family(theme.mono_font_family.clone())
                                 .text_color(if is_selected {
                                     theme.primary
                                 } else {
-                                    theme.muted_foreground.opacity(0.65)
+                                    theme.muted_foreground.opacity(0.58)
                                 })
                                 .child(format!("{}", display_index + 1)),
                         ),
@@ -5935,6 +5935,7 @@ impl Render for ConWorkspace {
                                 .child(
                                     div()
                                         .text_size(px(11.5))
+                                        .font_family(theme.mono_font_family.clone())
                                         .font_weight(FontWeight::MEDIUM)
                                         .child("Command scope"),
                                 )
@@ -5942,7 +5943,8 @@ impl Render for ConWorkspace {
                                     div()
                                         .text_size(px(10.0))
                                         .line_height(px(13.0))
-                                        .text_color(theme.muted_foreground.opacity(0.60))
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_color(theme.muted_foreground.opacity(0.56))
                                         .child("Broadcast by default"),
                                 ),
                         ),
@@ -5951,85 +5953,102 @@ impl Render for ConWorkspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.0))
-                            .when_some(scope_kbd.clone(), |this, kbd| this.child(kbd.outline())),
-                    );
-
-                let presets_row = div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(
-                        div()
-                            .h(px(28.0))
-                            .px(px(3.0))
-                            .rounded(px(9.0))
-                            .bg(theme.muted.opacity(0.08))
-                            .flex()
-                            .items_center()
-                            .gap(px(2.0))
-                            .child(
-                                Button::new("scope-all")
-                                    .label("All panes")
-                                    .xsmall()
-                                    .compact()
-                                    .ghost()
-                                    .bg(if is_broadcast {
-                                        theme.primary.opacity(0.14)
-                                    } else {
-                                        theme.transparent
-                                    })
-                                    .text_color(if is_broadcast {
-                                        theme.primary
-                                    } else {
-                                        theme.muted_foreground
-                                    })
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.set_scope_broadcast(window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("scope-focused")
-                                    .label("Focused")
-                                    .xsmall()
-                                    .compact()
-                                    .ghost()
-                                    .bg(if is_focused {
-                                        theme.primary.opacity(0.14)
-                                    } else {
-                                        theme.transparent
-                                    })
-                                    .text_color(if is_focused {
-                                        theme.primary
-                                    } else {
-                                        theme.muted_foreground
-                                    })
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.set_scope_focused(window, cx);
-                                    })),
-                            ),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
                             .gap(px(6.0))
-                            .when_some(scope_kbd, |this, kbd| this.child(kbd.outline()))
+                            .when_some(scope_kbd.clone(), |this, kbd| this.child(kbd.outline()))
                             .child(
                                 div()
                                     .text_size(px(10.5))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.62))
+                                    .text_color(theme.muted_foreground.opacity(0.58))
                                     .child("1..9"),
                             ),
                     );
+
+                let preset_segment = |id: &'static str, label: &'static str, active: bool| {
+                    div()
+                        .flex_1()
+                        .child(
+                            div()
+                                .id(SharedString::from(id))
+                                .h(px(24.0))
+                                .w_full()
+                                .rounded(px(7.0))
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(if active {
+                                    theme.primary.opacity(0.14)
+                                } else {
+                                    theme.transparent
+                                })
+                                .hover(|s| {
+                                    s.bg(if active {
+                                        theme.primary.opacity(0.16)
+                                    } else {
+                                        theme.muted.opacity(0.05)
+                                    })
+                                })
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .line_height(px(13.0))
+                                        .font_family(theme.mono_font_family.clone())
+                                        .font_weight(if active {
+                                            FontWeight::MEDIUM
+                                        } else {
+                                            FontWeight::NORMAL
+                                        })
+                                        .text_color(if active {
+                                            theme.primary
+                                        } else {
+                                            theme.muted_foreground.opacity(0.72)
+                                        })
+                                        .child(label),
+                                ),
+                        )
+                };
+
+                let presets_row = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .w(px(206.0))
+                            .h(px(30.0))
+                            .px(px(3.0))
+                            .rounded(px(10.0))
+                            .bg(theme.title_bar.opacity(ui_surface_opacity * 0.96))
+                            .flex()
+                            .items_center()
+                            .gap(px(2.0))
+                            .child(preset_segment(
+                                "scope-all",
+                                "All panes",
+                                is_broadcast,
+                            ).on_mouse_down(MouseButton::Left, cx.listener(
+                                |this: &mut ConWorkspace, _: &MouseDownEvent, window, cx| {
+                                    this.set_scope_broadcast(window, cx);
+                                },
+                            )))
+                            .child(preset_segment(
+                                "scope-focused",
+                                "Focused",
+                                is_focused,
+                            ).on_mouse_down(MouseButton::Left, cx.listener(
+                                |this: &mut ConWorkspace, _: &MouseDownEvent, window, cx| {
+                                    this.set_scope_focused(window, cx);
+                                },
+                            ))),
+                    )
+                    .child(div().flex_1());
 
                 let preview = div()
                     .h(px(224.0))
                     .w_full()
                     .rounded(px(12.0))
-                    .p(px(10.0))
+                    .p(px(11.0))
                     .bg(theme.title_bar.opacity(ui_surface_opacity * 0.98))
                     .child(preview_content);
 
