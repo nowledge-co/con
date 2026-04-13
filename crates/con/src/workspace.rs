@@ -24,7 +24,7 @@ use crate::input_bar::{
     SubmitInput,
 };
 use crate::model_registry::ModelRegistry;
-use crate::motion::{MotionValue, horizontal_reveal_offset, vertical_reveal_offset};
+use crate::motion::MotionValue;
 use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
@@ -35,7 +35,9 @@ use crate::ghostty_view::{
     GhosttyFocusChanged, GhosttyProcessExited, GhosttySplitRequested, GhosttyTitleChanged,
     GhosttyView,
 };
-use crate::{CloseTab, FocusInput, NewTab, Quit, SplitDown, SplitRight, ToggleAgentPanel};
+use crate::{
+    CloseTab, CycleInputMode, FocusInput, NewTab, Quit, SplitDown, SplitRight, ToggleAgentPanel,
+};
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
 use con_core::control::{
@@ -242,7 +244,12 @@ impl ConWorkspace {
         (self.ui_surface_opacity() + 0.02).min(0.98)
     }
 
-    pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn from_session(
+        config: Config,
+        session: Session,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
         let terminal_font_family = config.terminal.font_family.clone();
         let ui_font_family = config.appearance.ui_font_family.clone();
@@ -257,7 +264,6 @@ impl ConWorkspace {
         let background_image_fit = config.appearance.background_image_fit.clone();
         let background_image_repeat = config.appearance.background_image_repeat;
         let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
-        let session = Session::load().unwrap_or_default();
         let colors = theme_to_ghostty_colors(&terminal_theme);
         let ghostty_app = con_ghostty::GhosttyApp::new(
             Some(&colors),
@@ -589,7 +595,7 @@ impl ConWorkspace {
     }
 
     fn current_top_bar_height(&self) -> f32 {
-        if self.tabs.len() > 1 {
+        if self.tab_strip_motion.is_animating() || self.tabs.len() > 1 {
             TOP_BAR_TABS_HEIGHT
         } else {
             TOP_BAR_COMPACT_HEIGHT
@@ -2129,6 +2135,7 @@ impl ConWorkspace {
             KeyBinding::new(&kb.split_right, crate::SplitRight, None),
             KeyBinding::new(&kb.split_down, crate::SplitDown, None),
             KeyBinding::new(&kb.focus_input, crate::FocusInput, None),
+            KeyBinding::new(&kb.cycle_input_mode, crate::CycleInputMode, None),
             KeyBinding::new(&kb.toggle_input_bar, crate::ToggleInputBar, None),
         ]);
 
@@ -3436,6 +3443,18 @@ impl ConWorkspace {
         self.input_bar.focus_handle(cx).focus(window, cx);
     }
 
+    fn cycle_input_mode(
+        &mut self,
+        _: &CycleInputMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.input_bar.update(cx, |bar, cx| {
+            bar.cycle_mode(window, cx);
+        });
+        cx.notify();
+    }
+
     fn toggle_command_palette(
         &mut self,
         _: &ToggleCommandPalette,
@@ -4418,7 +4437,6 @@ impl Render for ConWorkspace {
                         .child(
                             div()
                                 .h_full()
-                                .pl(horizontal_reveal_offset(agent_panel_content_progress, 22.0))
                                 .opacity(agent_panel_content_progress)
                                 .child(self.agent_panel.clone()),
                         ),
@@ -4427,8 +4445,7 @@ impl Render for ConWorkspace {
 
         // Top bar — compact titlebar for one tab, full strip for many
         let tab_count = self.tabs.len();
-        let top_bar_height =
-            TOP_BAR_COMPACT_HEIGHT + ((TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT) * tab_strip_progress);
+        let top_bar_height = self.current_top_bar_height();
         let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
         let mut top_bar = div()
@@ -4573,7 +4590,6 @@ impl Render for ConWorkspace {
                     .min_w_0()
                     .overflow_hidden()
                     .opacity(tab_strip_progress)
-                    .pb(vertical_reveal_offset(tab_strip_progress, 5.0))
                     .child(tabs_container),
             );
         }
@@ -4782,6 +4798,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::split_right))
             .on_action(cx.listener(Self::split_down))
             .on_action(cx.listener(Self::focus_input))
+            .on_action(cx.listener(Self::cycle_input_mode))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Don't handle workspace shortcuts when a modal overlay is open
                 if this.settings_panel.read(cx).is_visible()
@@ -4831,9 +4848,9 @@ impl Render for ConWorkspace {
             root = root.child(
                 div()
                     .overflow_hidden()
+                    .bg(theme.title_bar.opacity(ui_surface_opacity))
                     .max_h(px(160.0 * input_bar_progress))
                     .opacity(input_bar_content_progress)
-                    .pt(vertical_reveal_offset(input_bar_content_progress, 10.0))
                     .child(self.input_bar.clone()),
             );
         }

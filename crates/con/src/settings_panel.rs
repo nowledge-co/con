@@ -1367,6 +1367,7 @@ impl SettingsPanel {
             "toggle_agent" => self.config.keybindings.toggle_agent = binding,
             "toggle_input_bar" => self.config.keybindings.toggle_input_bar = binding,
             "focus_input" => self.config.keybindings.focus_input = binding,
+            "cycle_input_mode" => self.config.keybindings.cycle_input_mode = binding,
             "split_right" => self.config.keybindings.split_right = binding,
             "split_down" => self.config.keybindings.split_down = binding,
             "quit" => self.config.keybindings.quit = binding,
@@ -1387,6 +1388,7 @@ impl SettingsPanel {
             "toggle_agent" => &self.config.keybindings.toggle_agent,
             "toggle_input_bar" => &self.config.keybindings.toggle_input_bar,
             "focus_input" => &self.config.keybindings.focus_input,
+            "cycle_input_mode" => &self.config.keybindings.cycle_input_mode,
             "split_right" => &self.config.keybindings.split_right,
             "split_down" => &self.config.keybindings.split_down,
             "quit" => &self.config.keybindings.quit,
@@ -2836,6 +2838,7 @@ impl SettingsPanel {
             ("Toggle Agent", "toggle_agent"),
             ("Toggle Input Bar", "toggle_input_bar"),
             ("Focus Input", "focus_input"),
+            ("Cycle Input Mode", "cycle_input_mode"),
             ("Quit", "quit"),
         ];
 

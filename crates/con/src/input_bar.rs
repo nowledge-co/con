@@ -72,7 +72,8 @@ enum SuggestionSource {
 }
 
 pub struct InputBar {
-    input_state: Entity<InputState>,
+    agent_input_state: Entity<InputState>,
+    shell_input_state: Entity<InputState>,
     mode: InputMode,
     cwd: String,
     panes: Vec<PaneInfo>,
@@ -92,6 +93,13 @@ pub struct InputBar {
 }
 
 impl InputBar {
+    fn current_input_state(&self) -> Entity<InputState> {
+        match self.mode {
+            InputMode::Agent => self.agent_input_state.clone(),
+            InputMode::Smart | InputMode::Shell => self.shell_input_state.clone(),
+        }
+    }
+
     fn truncate_label(text: &str, truncate_at: usize, ellipsis_threshold: usize) -> String {
         if text.len() > ellipsis_threshold {
             format!("{}…", &text[..text.floor_char_boundary(truncate_at)])
@@ -100,11 +108,80 @@ impl InputBar {
         }
     }
 
+    fn subscribe_input_state(
+        input_state: &Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        let tracked_state = input_state.clone();
+        let tracked_entity_id = tracked_state.entity_id();
+        cx.subscribe_in(&tracked_state, window, {
+            move |this, _, ev: &InputEvent, window, cx| {
+                if tracked_entity_id != this.current_input_state().entity_id() {
+                    return;
+                }
+
+                match ev {
+                    InputEvent::Change => {
+                        this.clear_inline_suggestion();
+                        let matches = this.filtered_skills(cx);
+                        if matches.is_empty() {
+                            this.skill_selection = 0;
+                        } else {
+                            this.skill_selection =
+                                this.skill_selection.min(matches.len().saturating_sub(1));
+                        }
+                        cx.emit(SkillAutocompleteChanged);
+                        cx.emit(InputEdited);
+                        cx.notify();
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        if this.shift_enter {
+                            this.shift_enter = false;
+                            return;
+                        }
+
+                        let active_state = this.current_input_state();
+                        active_state.update(cx, |s, cx| {
+                            let cursor = s.cursor();
+                            let val = s.value().to_string();
+                            if cursor > 0 && val.as_bytes().get(cursor - 1) == Some(&b'\n') {
+                                let mut cleaned = val[..cursor - 1].to_string();
+                                cleaned.push_str(&val[cursor..]);
+                                s.set_value(&cleaned, window, cx);
+                            }
+                        });
+
+                        let matches = this.filtered_skills(cx);
+                        if !matches.is_empty() {
+                            let idx = this.skill_selection.min(matches.len().saturating_sub(1));
+                            let name = matches[idx].name.clone();
+                            this.complete_skill(&name, window, cx);
+                        } else {
+                            let value = this.current_input_state().read(cx).value();
+                            if !value.trim().is_empty() {
+                                cx.emit(SubmitInput);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input_state = cx.new(|cx| {
+        let agent_input_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Ask anything…")
+                .auto_grow(1, 6)
+        });
+        let shell_input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Type a command or ask AI…")
-                .auto_grow(1, 6)
+                .code_editor("bash")
+                .multi_line(false)
+                .folding(false)
         });
 
         let _subscriptions = vec![
@@ -114,60 +191,13 @@ impl InputBar {
                     this.shift_enter = event.keystroke.modifiers.shift;
                 }
             }),
-            cx.subscribe_in(&input_state, window, {
-                move |this, _, ev: &InputEvent, window, cx| {
-                    match ev {
-                        InputEvent::Change => {
-                            this.clear_inline_suggestion();
-                            let matches = this.filtered_skills(cx);
-                            if matches.is_empty() {
-                                this.skill_selection = 0;
-                            } else {
-                                this.skill_selection =
-                                    this.skill_selection.min(matches.len().saturating_sub(1));
-                            }
-                            cx.emit(SkillAutocompleteChanged);
-                            cx.emit(InputEdited);
-                            cx.notify();
-                        }
-                        InputEvent::PressEnter { .. } => {
-                            if this.shift_enter {
-                                // Shift+Enter: newline already inserted by auto_grow
-                                this.shift_enter = false;
-                                return;
-                            }
-
-                            // Regular Enter: undo the newline auto_grow inserted, then submit
-                            this.input_state.update(cx, |s, cx| {
-                                let cursor = s.cursor();
-                                let val = s.value().to_string();
-                                if cursor > 0 && val.as_bytes().get(cursor - 1) == Some(&b'\n') {
-                                    let mut cleaned = val[..cursor - 1].to_string();
-                                    cleaned.push_str(&val[cursor..]);
-                                    s.set_value(&cleaned, window, cx);
-                                }
-                            });
-
-                            let matches = this.filtered_skills(cx);
-                            if !matches.is_empty() {
-                                let idx = this.skill_selection.min(matches.len().saturating_sub(1));
-                                let name = matches[idx].name.clone();
-                                this.complete_skill(&name, window, cx);
-                            } else {
-                                let value = this.input_state.read(cx).value();
-                                if !value.trim().is_empty() {
-                                    cx.emit(SubmitInput);
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }),
+            Self::subscribe_input_state(&agent_input_state, window, cx),
+            Self::subscribe_input_state(&shell_input_state, window, cx),
         ];
 
         Self {
-            input_state,
+            agent_input_state,
+            shell_input_state,
             mode: InputMode::Smart,
             cwd: "~".to_string(),
             panes: Vec::new(),
@@ -185,8 +215,9 @@ impl InputBar {
     }
 
     pub fn take_content(&self, window: &mut Window, cx: &mut App) -> String {
-        let value = self.input_state.read(cx).value().to_string();
-        self.input_state.update(cx, |state, cx| {
+        let input_state = self.current_input_state();
+        let value = input_state.read(cx).value().to_string();
+        input_state.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
         value
@@ -220,7 +251,7 @@ impl InputBar {
     }
 
     pub fn current_text(&self, cx: &App) -> String {
-        self.input_state.read(cx).value().to_string()
+        self.current_input_state().read(cx).value().to_string()
     }
 
     pub fn clear_inline_suggestion(&mut self) {
@@ -272,8 +303,9 @@ impl InputBar {
             return false;
         };
 
-        let text = self.input_state.read(cx).value().to_string();
-        let cursor = self.input_state.read(cx).cursor();
+        let input_state = self.current_input_state();
+        let text = input_state.read(cx).value().to_string();
+        let cursor = input_state.read(cx).cursor();
         if cursor != text.len() {
             self.clear_inline_suggestion();
             return false;
@@ -281,7 +313,7 @@ impl InputBar {
 
         let mut completed = text;
         completed.push_str(&suffix);
-        self.input_state.update(cx, |s, cx| {
+        input_state.update(cx, |s, cx| {
             s.set_value(&completed, window, cx);
             s.set_cursor_position(
                 Position::new(0, completed.encode_utf16().count() as u32),
@@ -298,7 +330,7 @@ impl InputBar {
     /// Return matching skills if the input starts with `/`.
     /// Public so the workspace can render the popup at overlay level.
     pub fn filtered_skills(&self, cx: &App) -> Vec<&SkillEntry> {
-        let text = self.input_state.read(cx).value().to_string();
+        let text = self.current_input_state().read(cx).value().to_string();
         let trimmed = text.trim();
         if !trimmed.starts_with('/') {
             return Vec::new();
@@ -319,7 +351,7 @@ impl InputBar {
     }
 
     pub fn complete_skill(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.input_state.update(cx, |s, cx| {
+        self.current_input_state().update(cx, |s, cx| {
             s.set_value(&format!("/{name} "), window, cx);
         });
         self.skill_selection = 0;
@@ -331,7 +363,7 @@ impl InputBar {
 
     pub fn skill_popup_offset(&self, cx: &App) -> Pixels {
         let rows = self
-            .input_state
+            .current_input_state()
             .read(cx)
             .value()
             .lines()
@@ -374,10 +406,22 @@ impl InputBar {
     }
 
     fn set_mode(&mut self, mode: InputMode, window: &mut Window, cx: &mut Context<Self>) {
+        let current_state = self.current_input_state();
+        let current_value = current_state.read(cx).value().to_string();
+        let current_position = current_state.read(cx).cursor_position();
+        let was_focused = current_state.read(cx).focus_handle(cx).is_focused(window);
+
         self.mode = mode;
         let placeholder = self.placeholder().to_string();
-        self.input_state
-            .update(cx, |s, cx| s.set_placeholder(&placeholder, window, cx));
+        let next_state = self.current_input_state();
+        next_state.update(cx, |s, cx| {
+            s.set_placeholder(&placeholder, window, cx);
+            s.set_value(&current_value, window, cx);
+            s.set_cursor_position(current_position, window, cx);
+            if was_focused {
+                s.focus(window, cx);
+            }
+        });
     }
 
     pub fn set_ui_opacity(&mut self, opacity: f32) {
@@ -398,17 +442,18 @@ impl EventEmitter<EscapeInput> for InputBar {}
 
 impl Focusable for InputBar {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.input_state.read(cx).focus_handle(cx).clone()
+        self.current_input_state().read(cx).focus_handle(cx).clone()
     }
 }
 
 impl Render for InputBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let input_state = self.current_input_state();
         let has_multiple_panes = self.panes.len() > 1;
-        let has_text = !self.input_state.read(cx).value().trim().is_empty();
-        let input_value = self.input_state.read(cx).value().to_string();
-        let input_cursor = self.input_state.read(cx).cursor();
+        let has_text = !input_state.read(cx).value().trim().is_empty();
+        let input_value = input_state.read(cx).value().to_string();
+        let input_cursor = input_state.read(cx).cursor();
 
         let mode_tint = self.mode.tint(cx);
 
@@ -623,8 +668,9 @@ impl Render for InputBar {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let matches = this.filtered_skills(cx);
                 let has_completions = !matches.is_empty();
-                let cursor_at_end = this.input_state.read(cx).cursor()
-                    == this.input_state.read(cx).value().len();
+                let active_state = this.current_input_state();
+                let cursor_at_end =
+                    active_state.read(cx).cursor() == active_state.read(cx).value().len();
                 match event.keystroke.key.as_str() {
                     "tab" => {
                         if has_completions {
@@ -640,7 +686,7 @@ impl Render for InputBar {
                     }
                     "escape" => {
                         if has_completions {
-                            this.input_state
+                            this.current_input_state()
                                 .update(cx, |s, cx| s.set_value("", window, cx));
                             this.skill_selection = 0;
                             this.clear_inline_suggestion();
@@ -751,7 +797,7 @@ impl Render for InputBar {
                                             )
                                     }))
                                     .child(
-                                        Input::new(&self.input_state)
+                                        Input::new(&input_state)
                                             .appearance(false)
                                             .cleanable(false)
                                             .font_family(input_font)

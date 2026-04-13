@@ -89,10 +89,6 @@ pub fn vertical_reveal_offset(progress: f32, distance: f32) -> gpui::Pixels {
     px((1.0 - progress).clamp(0.0, 1.0) * distance)
 }
 
-pub fn horizontal_reveal_offset(progress: f32, distance: f32) -> gpui::Pixels {
-    px((1.0 - progress).clamp(0.0, 1.0) * distance)
-}
-
 fn ease_out_quint(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(5)
 }

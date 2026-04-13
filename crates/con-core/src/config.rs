@@ -115,6 +115,9 @@ fn default_focus_input() -> String {
 fn default_toggle_input_bar() -> String {
     "ctrl-`".into()
 }
+fn default_cycle_input_mode() -> String {
+    "cmd-;".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -129,6 +132,7 @@ pub struct KeybindingConfig {
     pub split_right: String,
     pub split_down: String,
     pub focus_input: String,
+    pub cycle_input_mode: String,
     pub toggle_input_bar: String,
 }
 
@@ -145,6 +149,7 @@ impl Default for KeybindingConfig {
             split_right: default_split_right(),
             split_down: default_split_down(),
             focus_input: default_focus_input(),
+            cycle_input_mode: default_cycle_input_mode(),
             toggle_input_bar: default_toggle_input_bar(),
         }
     }

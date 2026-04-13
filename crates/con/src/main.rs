@@ -20,6 +20,7 @@ mod workspace;
 
 use gpui::*;
 use gpui_component::ActiveTheme;
+use con_core::session::Session;
 use workspace::ConWorkspace;
 
 actions!(
@@ -34,6 +35,7 @@ actions!(
         SplitRight,
         SplitDown,
         FocusInput,
+        CycleInputMode,
         Undo,
         Redo,
         Cut,
@@ -83,11 +85,17 @@ fn default_window_options(cx: &mut App) -> WindowOptions {
     }
 }
 
-fn open_con_window(config: con_core::Config, exit_on_error: bool, cx: &mut App) {
+fn open_con_window(
+    config: con_core::Config,
+    session: Session,
+    exit_on_error: bool,
+    cx: &mut App,
+) {
     let window_options = default_window_options(cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
-            let view = cx.new(|cx| ConWorkspace::new(config.clone(), window, cx));
+            let restored_session = session.clone();
+            let view = cx.new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
             cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
         }) {
             if exit_on_error {
@@ -145,17 +153,18 @@ fn main() {
             KeyBinding::new(&kb.split_right, SplitRight, None),
             KeyBinding::new(&kb.split_down, SplitDown, None),
             KeyBinding::new(&kb.focus_input, FocusInput, None),
+            KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, None),
             KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
         ]);
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             let config = con_core::Config::load().unwrap_or_default();
-            open_con_window(config, false, cx);
+            open_con_window(config, Session::default(), false, cx);
         });
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
                 let config = con_core::Config::load().unwrap_or_default();
-                open_con_window(config, false, cx);
+                open_con_window(config, Session::default(), false, cx);
             }
         });
 
@@ -203,11 +212,17 @@ fn main() {
                     MenuItem::action("Command Palette", command_palette::ToggleCommandPalette),
                     MenuItem::separator(),
                     MenuItem::action("Focus Input", FocusInput),
+                    MenuItem::action("Cycle Input Mode", CycleInputMode),
                 ],
                 disabled: false,
             },
         ]);
 
-        open_con_window(config.clone(), true, cx);
+        open_con_window(
+            config.clone(),
+            Session::load().unwrap_or_default(),
+            true,
+            cx,
+        );
     });
 }

@@ -57,7 +57,7 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "cycle-input-mode",
         label: "Cycle Input Mode",
-        shortcut: "tab",
+        shortcut: "cmd-;",
         category: "Input",
     },
     PaletteAction {
