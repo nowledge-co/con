@@ -2245,6 +2245,8 @@ impl ConWorkspace {
         let new_config = settings.read(cx).agent_config().clone();
         let auto_approve = new_config.auto_approve_tools;
         self.harness.update_config(new_config);
+        self.shell_suggestion_engine = self.harness.suggestion_engine(320);
+        self.shell_suggestion_engine.clear_cache();
 
         // Sync auto-approve to agent panel UI
         self.agent_panel.update(cx, |panel, _cx| {
@@ -4588,12 +4590,20 @@ impl Render for ConWorkspace {
             panel.set_skills(panel_skills);
         });
 
-        let theme = cx.theme();
-        let ui_surface_opacity = self.ui_surface_opacity();
-        let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
         let agent_panel_progress = self.agent_panel_motion.value(window);
         let input_bar_progress = self.input_bar_motion.value(window);
         let tab_strip_progress = self.tab_strip_motion.value(window);
+        let shell_chrome_animating = self.agent_panel_motion.is_animating()
+            || self.input_bar_motion.is_animating()
+            || self.tab_strip_motion.is_animating();
+        if shell_chrome_animating {
+            for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
+                terminal.notify(cx);
+            }
+        }
+        let theme = cx.theme();
+        let ui_surface_opacity = self.ui_surface_opacity();
+        let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
         let agent_panel_content_progress = ((agent_panel_progress - 0.16) / 0.84)
             .clamp(0.0, 1.0)
             .powf(0.9);

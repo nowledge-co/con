@@ -1021,8 +1021,8 @@ impl Render for InputBar {
                 .as_deref()
                 .is_some_and(|suffix| !suffix.is_empty());
         let ghost_tint = match self.inline_suggestion_source {
-            Some(SuggestionSource::Ai) => theme.primary.opacity(0.42),
-            _ => theme.muted_foreground.opacity(0.42),
+            Some(SuggestionSource::Ai) => theme.primary.opacity(0.64),
+            _ => theme.muted_foreground.opacity(0.56),
         };
         let ghost_prefix = input_value.replace(' ', "\u{00A0}");
         let ghost_suffix = self

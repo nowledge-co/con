@@ -9,6 +9,131 @@ const CON_DARK_THEME: &str = include_str!("../../../assets/themes/con-dark.json"
 const CON_LIGHT_THEME: &str = include_str!("../../../assets/themes/con-light.json");
 const CATPPUCCIN_THEME: &str = include_str!("../../../assets/themes/catppuccin-mocha.json");
 const TOKYONIGHT_THEME: &str = include_str!("../../../assets/themes/tokyonight.json");
+const CON_SHELL_HIGHLIGHTS: &str = r####"
+[
+  (string)
+  (raw_string)
+  (heredoc_body)
+  (heredoc_start)
+  (heredoc_end)
+  (ansi_c_string)
+  (word)
+] @string
+
+(variable_name) @variable
+
+[
+  "export"
+  "function"
+  "unset"
+  "local"
+  "declare"
+] @keyword
+
+[
+  "case"
+  "do"
+  "done"
+  "elif"
+  "else"
+  "esac"
+  "fi"
+  "for"
+  "if"
+  "in"
+  "select"
+  "then"
+  "until"
+  "while"
+] @keyword.control
+
+(comment) @comment
+
+((program
+  .
+  (comment) @keyword.directive)
+  (#match? @keyword.directive "^#![ \t]*/"))
+
+(function_definition
+  name: (word) @function)
+
+(command_name
+  (word) @keyword)
+
+(command
+  argument: [
+    (word) @variable.parameter
+    (_
+      (word) @variable.parameter)
+  ])
+
+[
+  (file_descriptor)
+  (number)
+] @number
+
+(regex) @string.regex
+
+[
+  (command_substitution)
+  (process_substitution)
+  (expansion)
+] @embedded
+
+[
+  "$"
+  "&&"
+  ">"
+  "<<"
+  ">>"
+  ">&"
+  ">&-"
+  "<"
+  "|"
+  ":"
+  "//"
+  "/"
+  "%"
+  "%%"
+  "#"
+  "##"
+  "="
+  "=="
+] @operator
+
+(test_operator) @keyword.operator
+
+";" @punctuation.delimiter
+
+[
+  "("
+  ")"
+  "{"
+  "}"
+  "["
+  "]"
+] @punctuation.bracket
+
+(simple_expansion
+  "$" @punctuation.special)
+
+(expansion
+  "${" @punctuation.special
+  "}" @punctuation.special) @embedded
+
+(command_substitution
+  "$(" @punctuation.special
+  ")" @punctuation.special)
+
+((command
+  (_) @operator)
+  (#match? @operator "^-"))
+
+(case_item
+  value: (_) @string.regex)
+
+(special_variable_name) @variable.special
+"####;
 
 // Embed IoskeleyMono font files at compile time.
 const FONT_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IoskeleyMono-Regular.ttf");
@@ -78,15 +203,7 @@ fn register_command_prompt_language() {
     };
 
     bash.name = "con-shell".into();
-    bash.highlights = bash
-        .highlights
-        .replace("(command_name) @function", "(command_name) @keyword")
-        .replace("(variable_name) @property", "(variable_name) @variable")
-        .replace(
-            "(command (_) @constant)\n  (#match? @constant \"^-\")",
-            "(command (_) @operator)\n  (#match? @operator \"^-\")",
-        )
-        .into();
+    bash.highlights = CON_SHELL_HIGHLIGHTS.into();
     registry.register("con-shell", &bash);
 }
 
