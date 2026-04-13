@@ -3387,14 +3387,20 @@ impl Render for AgentPanel {
             )
             .child(status_indicator);
 
+        if self.auto_approve {
+            header_left = header_left.child(Tag::warning().outline().xsmall().child("YOLO"));
+        }
+
         if let Some((_icon, label)) = self.status_text() {
             header_left = header_left.child(
                 div()
-                    .text_size(px(10.5))
-                    .text_color(theme.muted_foreground.opacity(0.45))
+                    .text_size(px(10.0))
+                    .font_family(theme.mono_font_family.clone())
+                    .text_color(theme.muted_foreground.opacity(0.54))
                     .min_w_0()
-                    .overflow_x_hidden()
+                    .overflow_hidden()
                     .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(label),
             );
         }
@@ -3405,16 +3411,6 @@ impl Render for AgentPanel {
                 .items_center()
                 .gap(px(3.0))
                 .flex_shrink_0();
-
-            if self.auto_approve {
-                actions = actions.child(
-                    Tag::warning()
-                        .outline()
-                        .xsmall()
-                        .child("YOLO")
-                        .into_any_element(),
-                );
-            }
 
             if self.state.status != AgentStatus::Idle {
                 actions = actions.child(
@@ -3456,64 +3452,45 @@ impl Render for AgentPanel {
                 )
         };
 
-        let session_strip = div()
-            .h(px(25.0))
-            .min_w(px(0.0))
-            .rounded(px(8.0))
-            .bg(theme.muted.opacity(0.07))
-            .flex()
-            .items_center()
-            .overflow_hidden()
+        let provider_picker = div()
+            .w(px(96.0))
+            .flex_shrink_0()
             .child(
-                div()
-                    .w(px(104.0))
-                    .px(px(8.0))
-                    .child(
-                        Select::new(&self.session_provider_select)
-                            .placeholder("Provider")
-                            .appearance(false)
-                            .xsmall()
-                            .menu_width(px(180.0)),
-                    ),
-            )
-            .child(div().w(px(1.0)).h(px(14.0)).bg(theme.title_bar_border.opacity(0.75)))
-            .child(
-                div()
-                    .min_w(px(124.0))
-                    .max_w(px(184.0))
-                    .px(px(8.0))
-                    .child(
-                        Select::new(&self.session_model_select)
-                            .placeholder("Model")
-                            .appearance(false)
-                            .xsmall()
-                            .menu_width(px(280.0)),
-                    ),
+                Select::new(&self.session_provider_select)
+                    .placeholder("Provider")
+                    .xsmall()
+                    .menu_width(px(180.0)),
             );
 
-        let header_top = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(8.0))
-            .child(header_left)
-            .child(control_icons);
+        let model_picker = div()
+            .w(px(138.0))
+            .flex_shrink_0()
+            .child(
+                Select::new(&self.session_model_select)
+                    .placeholder("Model")
+                    .xsmall()
+                    .menu_width(px(280.0)),
+            );
 
-        let header_bottom = div()
+        let header_controls = div()
             .flex()
             .items_center()
             .gap(px(8.0))
-            .child(session_strip.flex_1());
+            .flex_shrink_0()
+            .child(provider_picker)
+            .child(model_picker)
+            .child(control_icons);
 
         let header = div()
             .flex()
-            .flex_col()
-            .gap(px(7.0))
+            .items_center()
+            .justify_between()
+            .gap(px(10.0))
             .px(px(14.0))
             .py(px(10.0))
             .flex_shrink_0()
-            .child(header_top)
-            .child(header_bottom);
+            .child(header_left)
+            .child(header_controls);
 
         let live_activity_strip = if let Some(approval) = self.state.pending_approvals.first() {
             let args_display = format_tool_args(&approval.tool_name, &approval.args);

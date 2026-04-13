@@ -5978,7 +5978,6 @@ impl Render for ConWorkspace {
                                     } else {
                                         theme.muted_foreground
                                     })
-                                    .hover(|style| style.bg(theme.primary.opacity(0.08)))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.set_scope_broadcast(window, cx);
                                     })),
@@ -5999,7 +5998,6 @@ impl Render for ConWorkspace {
                                     } else {
                                         theme.muted_foreground
                                     })
-                                    .hover(|style| style.bg(theme.primary.opacity(0.08)))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.set_scope_focused(window, cx);
                                     })),
