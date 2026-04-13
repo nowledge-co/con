@@ -7,6 +7,12 @@ use tokio::runtime::Runtime;
 
 const SUGGESTION_MAX_LEN: usize = 200;
 
+#[derive(Debug, Clone, Default)]
+pub struct SuggestionContext {
+    pub cwd: Option<String>,
+    pub recent_commands: Vec<String>,
+}
+
 /// Debounced shell command suggestion engine.
 ///
 /// When the user types at a shell prompt, this engine debounces input,
@@ -35,20 +41,29 @@ impl SuggestionEngine {
     /// Request a suggestion for the given command prefix.
     /// Returns a cached result immediately if available.
     /// Otherwise, starts a debounced async request.
-    pub fn request(&self, prefix: &str, callback: impl FnOnce(String) + Send + 'static) {
-        let trimmed = prefix.trim();
-        if trimmed.is_empty() {
+    pub fn request(
+        &self,
+        prefix: &str,
+        context: SuggestionContext,
+        callback: impl FnOnce(String) + Send + 'static,
+    ) {
+        if prefix.trim().is_empty() {
             return;
         }
 
+        let cache_key = match context.cwd.as_deref() {
+            Some(cwd) if !cwd.is_empty() => format!("{cwd}\n{prefix}"),
+            _ => prefix.to_string(),
+        };
+
         // Check cache
-        if let Some(cached) = self.cache.lock().get(trimmed) {
+        if let Some(cached) = self.cache.lock().get(&cache_key) {
             callback(cached.clone());
             return;
         }
 
         // Update pending request
-        *self.pending.lock() = Some(trimmed.to_string());
+        *self.pending.lock() = Some(prefix.to_string());
         *self.last_request.lock() = Some(Instant::now());
 
         let debounce = Duration::from_millis(self.debounce_ms);
@@ -56,7 +71,9 @@ impl SuggestionEngine {
         let cache = self.cache.clone();
         let last_request = self.last_request.clone();
         let config = self.config.clone();
-        let prefix_owned = trimmed.to_string();
+        let prefix_owned = prefix.to_string();
+        let cache_key_owned = cache_key;
+        let context_owned = context;
 
         self.runtime.spawn(async move {
             tokio::time::sleep(debounce).await;
@@ -77,11 +94,10 @@ impl SuggestionEngine {
             }
 
             // Make the completion request
-            if let Some(completion) = request_completion(&config, &prefix_owned).await {
+            if let Some(completion) = request_completion(&config, &prefix_owned, &context_owned).await
+            {
                 if !completion.is_empty() {
-                    cache
-                        .lock()
-                        .insert(prefix_owned.clone(), completion.clone());
+                    cache.lock().insert(cache_key_owned, completion.clone());
                     callback(completion);
                 }
             }
@@ -100,20 +116,46 @@ impl SuggestionEngine {
 }
 
 /// Lightweight completion request using the configured AI provider
-async fn request_completion(config: &AgentConfig, prefix: &str) -> Option<String> {
+async fn request_completion(
+    config: &AgentConfig,
+    prefix: &str,
+    context: &SuggestionContext,
+) -> Option<String> {
     use con_agent::AgentProvider;
 
+    let recent_commands = if context.recent_commands.is_empty() {
+        "none".to_string()
+    } else {
+        context
+            .recent_commands
+            .iter()
+            .take(6)
+            .map(|cmd| format!("- {cmd}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let prompt = format!(
-        "Complete this shell command. Reply with ONLY the remaining characters to complete the command, nothing else. If you cannot complete it, reply with an empty string.\n\nCommand so far: {}",
-        prefix
+        "Complete this shell command.\n\
+         Reply with ONLY the remaining characters to complete the command, nothing else.\n\
+         Do not repeat the already-typed prefix.\n\
+         Do not add explanations, newlines, or destructive extras.\n\
+         If you cannot complete it confidently, reply with an empty string.\n\n\
+         Current directory: {}\n\
+         Recent commands:\n{}\n\n\
+         Command so far: {}",
+        context.cwd.as_deref().unwrap_or("(unknown)"),
+        recent_commands,
+        prefix,
     );
 
     let provider = AgentProvider::new(config.clone());
     match provider.complete(&prompt).await {
         Ok(completion) => {
-            let trimmed = completion.trim().to_string();
-            if trimmed.len() <= SUGGESTION_MAX_LEN && !trimmed.contains('\n') {
-                Some(trimmed)
+            let cleaned = completion
+                .trim_matches(|c| matches!(c, '\n' | '\r' | '\t'))
+                .to_string();
+            if cleaned.len() <= SUGGESTION_MAX_LEN && !cleaned.contains('\n') {
+                Some(cleaned)
             } else {
                 None
             }

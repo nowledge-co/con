@@ -12,4 +12,4 @@ pub use control::{
     control_socket_path, spawn_control_socket_server,
 };
 pub use harness::{AgentHarness, AgentSession};
-pub use suggestions::SuggestionEngine;
+pub use suggestions::{SuggestionContext, SuggestionEngine};

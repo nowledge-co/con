@@ -8,6 +8,8 @@ actions!(input_bar, [SubmitInput, EscapeInput]);
 
 pub struct SkillAutocompleteChanged;
 impl EventEmitter<SkillAutocompleteChanged> for InputBar {}
+pub struct InputEdited;
+impl EventEmitter<InputEdited> for InputBar {}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputMode {
@@ -63,6 +65,12 @@ pub struct SkillEntry {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SuggestionSource {
+    History,
+    Ai,
+}
+
 pub struct InputBar {
     input_state: Entity<InputState>,
     mode: InputMode,
@@ -73,6 +81,9 @@ pub struct InputBar {
     skills: Vec<SkillEntry>,
     /// Index of the highlighted skill in the filtered list (for arrow-key nav)
     skill_selection: usize,
+    inline_suggestion_prefix: Option<String>,
+    inline_suggestion_suffix: Option<String>,
+    inline_suggestion_source: Option<SuggestionSource>,
     /// Tracks whether shift was held on the last enter keystroke.
     /// Set by observe_keystrokes (fires before PressEnter), consumed by PressEnter handler.
     shift_enter: bool,
@@ -107,6 +118,7 @@ impl InputBar {
                 move |this, _, ev: &InputEvent, window, cx| {
                     match ev {
                         InputEvent::Change => {
+                            this.clear_inline_suggestion();
                             let matches = this.filtered_skills(cx);
                             if matches.is_empty() {
                                 this.skill_selection = 0;
@@ -115,6 +127,7 @@ impl InputBar {
                                     this.skill_selection.min(matches.len().saturating_sub(1));
                             }
                             cx.emit(SkillAutocompleteChanged);
+                            cx.emit(InputEdited);
                             cx.notify();
                         }
                         InputEvent::PressEnter { .. } => {
@@ -162,6 +175,9 @@ impl InputBar {
             focused_pane_id: 0,
             skills: Vec::new(),
             skill_selection: 0,
+            inline_suggestion_prefix: None,
+            inline_suggestion_suffix: None,
+            inline_suggestion_source: None,
             shift_enter: false,
             ui_opacity: 0.90,
             _subscriptions,
@@ -203,6 +219,77 @@ impl InputBar {
         self.skills = skills;
     }
 
+    pub fn current_text(&self, cx: &App) -> String {
+        self.input_state.read(cx).value().to_string()
+    }
+
+    pub fn clear_inline_suggestion(&mut self) {
+        self.inline_suggestion_prefix = None;
+        self.inline_suggestion_suffix = None;
+        self.inline_suggestion_source = None;
+    }
+
+    fn set_inline_suggestion(
+        &mut self,
+        prefix: &str,
+        suggestion: &str,
+        source: SuggestionSource,
+    ) {
+        if prefix.is_empty() || suggestion.is_empty() {
+            self.clear_inline_suggestion();
+            return;
+        }
+
+        let suffix = if let Some(stripped) = suggestion.strip_prefix(prefix) {
+            stripped
+        } else {
+            suggestion
+        };
+        if suffix.is_empty() || suffix.contains('\n') || suffix.contains('\r') {
+            self.clear_inline_suggestion();
+            return;
+        }
+
+        self.inline_suggestion_prefix = Some(prefix.to_string());
+        self.inline_suggestion_suffix = Some(suffix.to_string());
+        self.inline_suggestion_source = Some(source);
+    }
+
+    pub fn set_history_inline_suggestion(&mut self, prefix: &str, suggestion: &str) {
+        self.set_inline_suggestion(prefix, suggestion, SuggestionSource::History);
+    }
+
+    pub fn set_ai_inline_suggestion(&mut self, prefix: &str, suggestion: &str) {
+        self.set_inline_suggestion(prefix, suggestion, SuggestionSource::Ai);
+    }
+
+    pub fn accept_inline_suggestion(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(suffix) = self.inline_suggestion_suffix.clone() else {
+            return false;
+        };
+
+        let text = self.input_state.read(cx).value().to_string();
+        let cursor = self.input_state.read(cx).cursor();
+        if cursor != text.len() {
+            self.clear_inline_suggestion();
+            return false;
+        }
+
+        let mut completed = text;
+        completed.push_str(&suffix);
+        self.input_state.update(cx, |s, cx| {
+            s.set_value(&completed, window, cx);
+        });
+        self.clear_inline_suggestion();
+        cx.emit(InputEdited);
+        cx.notify();
+        true
+    }
+
     /// Return matching skills if the input starts with `/`.
     /// Public so the workspace can render the popup at overlay level.
     pub fn filtered_skills(&self, cx: &App) -> Vec<&SkillEntry> {
@@ -231,7 +318,9 @@ impl InputBar {
             s.set_value(&format!("/{name} "), window, cx);
         });
         self.skill_selection = 0;
+        self.clear_inline_suggestion();
         cx.emit(SkillAutocompleteChanged);
+        cx.emit(InputEdited);
         cx.notify();
     }
 
@@ -249,6 +338,8 @@ impl InputBar {
 
     pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_mode(self.mode.next(), window, cx);
+        self.clear_inline_suggestion();
+        cx.emit(InputEdited);
         cx.notify();
     }
 
@@ -258,6 +349,8 @@ impl InputBar {
         } else {
             self.selected_pane_ids.push(pane_id);
         }
+        self.clear_inline_suggestion();
+        cx.emit(InputEdited);
         cx.notify();
     }
 
@@ -270,6 +363,8 @@ impl InputBar {
             self.selected_pane_ids = self.panes.iter().map(|p| p.id).collect();
             self.set_mode(InputMode::Shell, window, cx);
         }
+        self.clear_inline_suggestion();
+        cx.emit(InputEdited);
         cx.notify();
     }
 
@@ -307,6 +402,8 @@ impl Render for InputBar {
         let theme = cx.theme();
         let has_multiple_panes = self.panes.len() > 1;
         let has_text = !self.input_state.read(cx).value().trim().is_empty();
+        let input_value = self.input_state.read(cx).value().to_string();
+        let input_cursor = self.input_state.read(cx).cursor();
 
         let mode_tint = self.mode.tint(cx);
 
@@ -487,6 +584,29 @@ impl Render for InputBar {
             InputMode::Agent => theme.font_family.clone(),
             _ => theme.mono_font_family.clone(),
         };
+        let show_inline_suggestion = self.mode != InputMode::Agent
+            && input_cursor == input_value.len()
+            && !input_value.is_empty()
+            && !input_value.contains('\n')
+            && !input_value.trim_start().starts_with('/')
+            && self
+                .inline_suggestion_prefix
+                .as_deref()
+                .is_some_and(|prefix| prefix == input_value)
+            && self
+                .inline_suggestion_suffix
+                .as_deref()
+                .is_some_and(|suffix| !suffix.is_empty());
+        let ghost_tint = match self.inline_suggestion_source {
+            Some(SuggestionSource::Ai) => theme.primary.opacity(0.42),
+            _ => theme.muted_foreground.opacity(0.42),
+        };
+        let ghost_prefix = input_value.replace(' ', "\u{00A0}");
+        let ghost_suffix = self
+            .inline_suggestion_suffix
+            .clone()
+            .unwrap_or_default()
+            .replace(' ', "\u{00A0}");
 
         // ── Main layout — flat bar, no rounded bubble ──
         div()
@@ -503,6 +623,7 @@ impl Render for InputBar {
                         let idx = this.skill_selection.min(matches.len().saturating_sub(1));
                         let name = matches[idx].name.clone();
                         this.complete_skill(&name, window, cx);
+                    } else if this.accept_inline_suggestion(window, cx) {
                     } else {
                         this.cycle_mode(window, cx);
                     }
@@ -517,11 +638,20 @@ impl Render for InputBar {
                             this.input_state
                                 .update(cx, |s, cx| s.set_value("", window, cx));
                             this.skill_selection = 0;
+                            this.clear_inline_suggestion();
                             cx.emit(SkillAutocompleteChanged);
+                            cx.emit(InputEdited);
+                            cx.notify();
+                        } else if this.inline_suggestion_suffix.is_some() {
+                            this.clear_inline_suggestion();
+                            cx.emit(InputEdited);
                             cx.notify();
                         } else {
                             cx.emit(EscapeInput);
                         }
+                    }
+                    "right" if !has_completions => {
+                        let _ = this.accept_inline_suggestion(window, cx);
                     }
                     "up" if has_completions => {
                         this.skill_selection = this.skill_selection.saturating_sub(1);
@@ -557,8 +687,38 @@ impl Render for InputBar {
                             .child(
                                 div()
                                     .flex_1()
+                                    .relative()
                                     .font_family(input_font)
                                     .text_size(px(13.0))
+                                    .children(show_inline_suggestion.then(|| {
+                                        div()
+                                            .absolute()
+                                            .left_0()
+                                            .right_0()
+                                            .top_0()
+                                            .bottom_0()
+                                            .px(px(8.0))
+                                            .flex()
+                                            .items_center()
+                                            .overflow_hidden()
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .overflow_hidden()
+                                                    .child(
+                                                        div()
+                                                            .flex_shrink_0()
+                                                            .opacity(0.0)
+                                                            .child(ghost_prefix),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_color(ghost_tint)
+                                                            .child(ghost_suffix),
+                                                    ),
+                                            )
+                                    }))
                                     .child(
                                         Input::new(&self.input_state)
                                             .appearance(false)

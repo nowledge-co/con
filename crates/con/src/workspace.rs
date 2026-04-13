@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -11,6 +11,7 @@ const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
+const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, EnableAutoApprove, InlineInputSubmit,
@@ -19,7 +20,8 @@ use crate::agent_panel::{
 };
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{
-    EscapeInput, InputBar, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
+    EscapeInput, InputBar, InputEdited, InputMode, PaneInfo, SkillAutocompleteChanged,
+    SubmitInput,
 };
 use crate::model_registry::ModelRegistry;
 use crate::motion::{MotionValue, horizontal_reveal_offset, vertical_reveal_offset};
@@ -41,6 +43,7 @@ use con_core::control::{
     SystemIdentifyResult, TabInfo,
 };
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
+use con_core::{SuggestionContext, SuggestionEngine};
 use con_core::session::Session;
 
 struct Tab {
@@ -50,6 +53,21 @@ struct Tab {
     session: AgentSession,
     panel_state: PanelState,
     runtime_trackers: RefCell<HashMap<usize, con_agent::context::PaneRuntimeTracker>>,
+    shell_history: HashMap<usize, VecDeque<CommandSuggestionEntry>>,
+}
+
+#[derive(Clone)]
+struct CommandSuggestionEntry {
+    command: String,
+    cwd: Option<String>,
+}
+
+#[derive(Clone)]
+struct ShellSuggestionResult {
+    tab_idx: usize,
+    pane_id: usize,
+    prefix: String,
+    completion: String,
 }
 
 /// The main workspace: tabs + agent panel + input bar + settings overlay
@@ -72,6 +90,7 @@ pub struct ConWorkspace {
     settings_panel: Entity<SettingsPanel>,
     command_palette: Entity<CommandPalette>,
     harness: AgentHarness,
+    shell_suggestion_engine: SuggestionEngine,
     agent_panel_open: bool,
     agent_panel_motion: MotionValue,
     agent_panel_width: f32,
@@ -101,6 +120,8 @@ pub struct ConWorkspace {
     control_socket: Option<con_core::ControlSocketHandle>,
     /// Pending external agent requests keyed by 0-based tab index.
     pending_control_agent_requests: HashMap<usize, PendingControlAgentRequest>,
+    shell_suggestion_rx: crossbeam_channel::Receiver<ShellSuggestionResult>,
+    shell_suggestion_tx: crossbeam_channel::Sender<ShellSuggestionResult>,
     /// Monotonic request id for control-plane agent asks so stale timeout tasks cannot
     /// cancel a newer request on the same tab.
     next_control_agent_request_id: u64,
@@ -258,7 +279,9 @@ impl ConWorkspace {
             );
             panic!("Fatal: agent harness initialization failed: {}", e);
         });
+        let shell_suggestion_engine = harness.suggestion_engine(320);
         let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
+        let (shell_suggestion_tx, shell_suggestion_rx) = crossbeam_channel::unbounded();
         let control_socket = match con_core::spawn_control_socket_server(
             harness.runtime_handle(),
             control_request_tx,
@@ -326,6 +349,7 @@ impl ConWorkspace {
                     session: agent_session,
                     panel_state,
                     runtime_trackers: RefCell::new(HashMap::new()),
+                    shell_history: HashMap::new(),
                 }
             })
             .collect();
@@ -338,6 +362,7 @@ impl ConWorkspace {
                 session: AgentSession::new(),
                 panel_state: PanelState::new(),
                 runtime_trackers: RefCell::new(HashMap::new()),
+                shell_history: HashMap::new(),
             });
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
@@ -365,6 +390,8 @@ impl ConWorkspace {
             palette.set_ui_opacity(effective_ui_opacity)
         });
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
+            .detach();
+        cx.subscribe_in(&input_bar, window, Self::on_input_edited)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
             .detach();
@@ -459,6 +486,11 @@ impl ConWorkspace {
                         got_event = true;
                         workspace.handle_control_request(request, cx);
                     }
+
+                    while let Ok(result) = workspace.shell_suggestion_rx.try_recv() {
+                        got_event = true;
+                        workspace.apply_shell_suggestion(result, cx);
+                    }
                 })
                 .ok();
 
@@ -512,6 +544,7 @@ impl ConWorkspace {
             settings_panel,
             command_palette,
             harness,
+            shell_suggestion_engine,
             agent_panel_open,
             agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
             agent_panel_width,
@@ -529,6 +562,8 @@ impl ConWorkspace {
             control_request_rx,
             control_socket,
             pending_control_agent_requests: HashMap::new(),
+            shell_suggestion_rx,
+            shell_suggestion_tx,
             next_control_agent_request_id: 1,
             window_handle: window.window_handle(),
             workspace_handle: cx.weak_entity(),
@@ -2185,6 +2220,17 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn on_input_edited(
+        &mut self,
+        _input_bar: &Entity<InputBar>,
+        _event: &InputEdited,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.refresh_input_suggestion(window, cx);
+        cx.notify();
+    }
+
     fn on_input_submit(
         &mut self,
         input_bar: &Entity<InputBar>,
@@ -2193,7 +2239,11 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         let (content, mode) =
-            input_bar.update(cx, |bar, cx| (bar.take_content(window, cx), bar.mode()));
+            input_bar.update(cx, |bar, cx| {
+                let content = bar.take_content(window, cx);
+                bar.clear_inline_suggestion();
+                (content, bar.mode())
+            });
 
         if content.trim().is_empty() {
             return;
@@ -2454,6 +2504,9 @@ impl ConWorkspace {
         // Write the command to the PTY — user sees it execute in real time
         let cmd_with_newline = format!("{}\n", req.command);
         pane.write(cmd_with_newline.as_bytes(), cx);
+        if let Some(pane_id) = self.tabs[tab_idx].pane_tree.pane_id_for_terminal(&pane) {
+            self.record_shell_command(tab_idx, pane_id, &req.command, pane.current_dir(cx));
+        }
         self.record_runtime_event_for_terminal(
             tab_idx,
             &pane,
@@ -3449,6 +3502,7 @@ impl ConWorkspace {
             session: AgentSession::new(),
             panel_state: PanelState::new(),
             runtime_trackers: RefCell::new(HashMap::new()),
+            shell_history: HashMap::new(),
         });
         self.sync_tab_strip_motion();
         self.active_tab = self.tabs.len() - 1;
@@ -3637,10 +3691,200 @@ impl ConWorkspace {
         self.pending_control_agent_requests = shifted;
     }
 
-    fn execute_shell(&self, cmd: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn record_shell_command(
+        &mut self,
+        tab_idx: usize,
+        pane_id: usize,
+        command: &str,
+        cwd: Option<String>,
+    ) {
+        let trimmed = command.trim();
+        if trimmed.is_empty() || tab_idx >= self.tabs.len() {
+            return;
+        }
+
+        let history = self.tabs[tab_idx]
+            .shell_history
+            .entry(pane_id)
+            .or_default();
+        if let Some(existing_idx) = history.iter().position(|entry| entry.command == trimmed) {
+            history.remove(existing_idx);
+        }
+        history.push_back(CommandSuggestionEntry {
+            command: trimmed.to_string(),
+            cwd,
+        });
+        while history.len() > MAX_SHELL_HISTORY_PER_PANE {
+            history.pop_front();
+        }
+    }
+
+    fn recent_shell_commands(
+        &self,
+        tab_idx: usize,
+        pane_id: usize,
+        limit: usize,
+    ) -> Vec<String> {
+        self.tabs
+            .get(tab_idx)
+            .and_then(|tab| tab.shell_history.get(&pane_id))
+            .map(|history| {
+                history
+                    .iter()
+                    .rev()
+                    .take(limit)
+                    .map(|entry| entry.command.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn history_completion_for_prefix(
+        &self,
+        tab_idx: usize,
+        pane_id: usize,
+        prefix: &str,
+        cwd: Option<&str>,
+    ) -> Option<String> {
+        let history = self.tabs.get(tab_idx)?.shell_history.get(&pane_id)?;
+        let mut fallback: Option<String> = None;
+
+        for entry in history.iter().rev() {
+            if entry.command == prefix || !entry.command.starts_with(prefix) {
+                continue;
+            }
+
+            if cwd.is_some() && entry.cwd.as_deref() == cwd {
+                return Some(entry.command.clone());
+            }
+
+            if fallback.is_none() {
+                fallback = Some(entry.command.clone());
+            }
+        }
+
+        fallback
+    }
+
+    fn refresh_input_suggestion(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_active_tab() {
+            self.shell_suggestion_engine.cancel();
+            self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
+            return;
+        }
+
+        let (text, mode, target_ids) = self.input_bar.update(cx, |bar, cx| {
+            (bar.current_text(cx), bar.mode(), bar.target_pane_ids())
+        });
+
+        let trimmed = text.trim();
+        let is_shell_mode = match mode {
+            InputMode::Shell => true,
+            InputMode::Smart => {
+                let is_remote = self
+                    .effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
+                    .is_some();
+                matches!(self.harness.classify_input(&text, is_remote), InputKind::ShellCommand(_))
+            }
+            InputMode::Agent => false,
+        };
+
+        if !is_shell_mode
+            || trimmed.is_empty()
+            || text.contains('\n')
+            || trimmed.starts_with('/')
+            || target_ids.len() != 1
+        {
+            self.shell_suggestion_engine.cancel();
+            self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
+            return;
+        }
+
+        let pane_id = target_ids[0];
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let pane = pane_tree
+            .pane_terminals()
+            .into_iter()
+            .find_map(|(id, terminal)| (id == pane_id).then_some(terminal));
+        let cwd = pane.as_ref().and_then(|pane| pane.current_dir(cx));
+
+        if let Some(history_match) =
+            self.history_completion_for_prefix(self.active_tab, pane_id, &text, cwd.as_deref())
+        {
+            self.shell_suggestion_engine.cancel();
+            self.input_bar.update(cx, |bar, _cx| {
+                bar.set_history_inline_suggestion(&text, &history_match);
+            });
+            return;
+        }
+
+        self.input_bar.update(cx, |bar, _cx| bar.clear_inline_suggestion());
+
+        let suggestion_tx = self.shell_suggestion_tx.clone();
+        let prefix = text.clone();
+        let callback_prefix = prefix.clone();
+        let tab_idx = self.active_tab;
+        let recent_commands = self.recent_shell_commands(tab_idx, pane_id, 6);
+        self.shell_suggestion_engine.request(
+            &prefix,
+            SuggestionContext {
+                cwd,
+                recent_commands,
+            },
+            move |completion| {
+                let _ = suggestion_tx.send(ShellSuggestionResult {
+                    tab_idx,
+                    pane_id,
+                    prefix: callback_prefix.clone(),
+                    completion,
+                });
+            },
+        );
+    }
+
+    fn apply_shell_suggestion(&mut self, result: ShellSuggestionResult, cx: &mut Context<Self>) {
+        if result.tab_idx != self.active_tab {
+            return;
+        }
+
+        let (text, mode, target_ids) = self.input_bar.update(cx, |bar, cx| {
+            (bar.current_text(cx), bar.mode(), bar.target_pane_ids())
+        });
+
+        if text != result.prefix
+            || matches!(mode, InputMode::Agent)
+            || target_ids.as_slice() != [result.pane_id]
+            || text.trim().starts_with('/')
+            || text.contains('\n')
+        {
+            return;
+        }
+
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let cwd = pane_tree
+            .pane_terminals()
+            .into_iter()
+            .find_map(|(id, terminal)| (id == result.pane_id).then(|| terminal.current_dir(cx)))
+            .flatten();
+
+        if self
+            .history_completion_for_prefix(self.active_tab, result.pane_id, &text, cwd.as_deref())
+            .is_some()
+        {
+            return;
+        }
+
+        self.input_bar.update(cx, |bar, _cx| {
+            bar.set_ai_inline_suggestion(&result.prefix, &result.completion);
+        });
+        cx.notify();
+    }
+
+    fn execute_shell(&mut self, cmd: &str, window: &mut Window, cx: &mut Context<Self>) {
         let target_ids = self.input_bar.read(cx).target_pane_ids();
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
         let all_terminals = pane_tree.all_terminals();
+        let mut history_records = Vec::new();
 
         for terminal in &all_terminals {
             if all_terminals.len() == 1
@@ -3649,8 +3893,19 @@ impl ConWorkspace {
                     .any(|&tid| pane_tree.terminal_has_pane_id(terminal, tid))
             {
                 terminal.write(format!("{}\n", cmd).as_bytes(), cx);
+                if let Some(pane_id) = pane_tree.pane_id_for_terminal(terminal) {
+                    history_records.push((pane_id, terminal.current_dir(cx)));
+                }
             }
         }
+
+        for (pane_id, cwd) in history_records {
+            self.record_shell_command(self.active_tab, pane_id, cmd, cwd);
+        }
+
+        self.input_bar.update(cx, |bar, _cx| {
+            bar.clear_inline_suggestion();
+        });
 
         // Always keep focus on input bar after sending a command —
         // the terminal output is visible, and the user can click to focus it.
