@@ -3404,94 +3404,111 @@ impl Render for AgentPanel {
             header_left = header_left.child(Tag::warning().outline().xsmall().child("YOLO"));
         }
 
-        let provider_picker = div()
-            .h(px(24.0))
-            .w(px(96.0))
-            .px(px(6.0))
-            .rounded(px(7.0))
-            .bg(theme.muted.opacity(0.08))
-            .child(
-                Select::new(&self.session_provider_select)
-                    .placeholder("Provider")
-                    .appearance(false)
-                    .xsmall()
-                    .menu_width(px(180.0)),
-            );
+        let control_icons = {
+            let mut actions = div()
+                .flex()
+                .items_center()
+                .gap(px(2.0))
+                .flex_shrink_0();
 
-        let model_picker = div()
-            .h(px(24.0))
-            .min_w(px(126.0))
-            .max_w(px(188.0))
-            .px(px(6.0))
-            .rounded(px(7.0))
-            .bg(theme.muted.opacity(0.08))
-            .child(
-                Select::new(&self.session_model_select)
-                    .placeholder("Model")
-                    .appearance(false)
-                    .xsmall()
-                    .menu_width(px(280.0)),
-            );
+            if self.state.status != AgentStatus::Idle {
+                actions = actions.child(
+                    Button::new("agent-stop")
+                        .icon(Icon::default().path("phosphor/stop.svg"))
+                        .ghost()
+                        .xsmall()
+                        .tooltip("Stop")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.emit(CancelRequest);
+                            this.state.status = AgentStatus::Idle;
+                            this.state.streaming = false;
+                            cx.notify();
+                        })),
+                );
+            }
 
-        let mut header_controls = div()
+            actions
+                .child(
+                    Button::new("agent-history-toggle")
+                        .icon(Icon::default().path("phosphor/clock-counter-clockwise.svg"))
+                        .ghost()
+                        .xsmall()
+                        .tooltip("History")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_history(cx);
+                        })),
+                )
+                .child(
+                    Button::new("agent-new-chat")
+                        .icon(Icon::default().path("phosphor/plus.svg"))
+                        .ghost()
+                        .xsmall()
+                        .tooltip("New Chat")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.emit(NewConversation);
+                            this.clear_messages(cx);
+                        })),
+                )
+        };
+
+        let session_strip = div()
+            .h(px(26.0))
+            .min_w(px(0.0))
+            .rounded(px(8.0))
+            .bg(theme.muted.opacity(0.08))
             .flex()
             .items_center()
-            .justify_end()
-            .gap(px(4.0))
-            .flex_wrap()
-            .flex_shrink_0()
-            .child(provider_picker)
-            .child(model_picker);
-
-        if self.state.status != AgentStatus::Idle {
-            header_controls = header_controls.child(
-                Button::new("agent-stop")
-                    .icon(Icon::default().path("phosphor/stop.svg"))
-                    .ghost()
-                    .xsmall()
-                    .tooltip("Stop")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.emit(CancelRequest);
-                        this.state.status = AgentStatus::Idle;
-                        this.state.streaming = false;
-                        cx.notify();
-                    })),
-            );
-        }
-
-        header_controls = header_controls
+            .overflow_hidden()
             .child(
-                Button::new("agent-history-toggle")
-                    .icon(Icon::default().path("phosphor/clock-counter-clockwise.svg"))
-                    .ghost()
-                    .xsmall()
-                    .tooltip("History")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_history(cx);
-                    })),
+                div()
+                    .w(px(98.0))
+                    .px(px(8.0))
+                    .child(
+                        Select::new(&self.session_provider_select)
+                            .placeholder("Provider")
+                            .appearance(false)
+                            .xsmall()
+                            .menu_width(px(180.0)),
+                    ),
             )
+            .child(div().w(px(1.0)).h(px(14.0)).bg(theme.title_bar_border.opacity(0.75)))
             .child(
-                Button::new("agent-new-chat")
-                    .icon(Icon::default().path("phosphor/plus.svg"))
-                    .ghost()
-                    .xsmall()
-                    .tooltip("New Chat")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.emit(NewConversation);
-                        this.clear_messages(cx);
-                    })),
+                div()
+                    .min_w(px(116.0))
+                    .max_w(px(176.0))
+                    .px(px(8.0))
+                    .child(
+                        Select::new(&self.session_model_select)
+                            .placeholder("Model")
+                            .appearance(false)
+                            .xsmall()
+                            .menu_width(px(280.0)),
+                    ),
             );
 
-        let header = div()
+        let header_top = div()
             .flex()
             .items_center()
             .justify_between()
-            .gap(px(10.0))
+            .gap(px(8.0))
+            .child(header_left)
+            .child(control_icons);
+
+        let header_bottom = div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(session_strip.flex_1());
+
+        let header = div()
+            .flex()
+            .flex_col()
+            .gap(px(7.0))
             .px(px(14.0))
             .py(px(10.0))
             .flex_shrink_0()
-            .child(header_left)
-            .child(header_controls);
+            .child(header_top)
+            .child(header_bottom);
 
         let live_activity_strip = if let Some(approval) = self.state.pending_approvals.first() {
             let args_display = format_tool_args(&approval.tool_name, &approval.args);

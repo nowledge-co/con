@@ -3792,32 +3792,38 @@ impl ConWorkspace {
                                     .items_center()
                                     .gap(px(6.0))
                                     .child(div().size(px(6.0)).rounded_full().bg(status_color))
-                                    .child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .line_height(px(14.0))
-                                            .font_family(theme.mono_font_family.clone())
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(if is_selected {
-                                                theme.primary
-                                            } else {
-                                                theme.foreground
-                                            })
-                                            .min_w_0()
-                                            .overflow_x_hidden()
-                                            .whitespace_nowrap()
-                                            .child(label),
-                                    ),
-                            )
                             .child(
                                 div()
-                                    .text_size(px(10.0))
-                                    .line_height(px(13.0))
+                                    .text_size(px(11.0))
+                                    .line_height(px(14.0))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.72))
-                                    .child(format!("Pane {} · {}", display_index + 1, status_text)),
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(if is_selected {
+                                        theme.primary
+                                    } else {
+                                        theme.foreground
+                                    })
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .overflow_x_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(label),
                             ),
                     )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .line_height(px(13.0))
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(theme.muted_foreground.opacity(0.72))
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(format!("Pane {} · {}", display_index + 1, status_text)),
+                    ),
+            )
                     .child(
                         div().flex().items_center().gap(px(4.0)).child(
                             div()
@@ -5892,7 +5898,7 @@ impl Render for ConWorkspace {
                     .map(|(ix, pane)| (pane.id, ix))
                     .collect();
                 let popup_width =
-                    px((window.bounds().size.width.as_f32() * 0.34).clamp(320.0, 460.0));
+                    px((window.bounds().size.width.as_f32() * 0.38).clamp(360.0, 520.0));
                 let popup_bottom = px(58.0 + (43.0 * input_bar_progress.max(0.01)));
                 let scope_kbd = Keystroke::parse("cmd-'").ok().map(Kbd::new);
                 let all_kbd = Keystroke::parse("cmd-a").ok().map(Kbd::new);
@@ -5930,16 +5936,9 @@ impl Render for ConWorkspace {
                                     .gap(px(1.0))
                                     .child(
                                         div()
-                                            .text_size(px(11.0))
+                                            .text_size(px(11.5))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .child("Command Scope"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(10.0))
-                                            .line_height(px(13.0))
-                                            .text_color(theme.muted_foreground.opacity(0.68))
-                                            .child("Broadcast by default. Click panes or use shortcuts to narrow the target."),
+                                            .child("Command scope"),
                                     ),
                             ),
                     )
@@ -6005,19 +6004,19 @@ impl Render for ConWorkspace {
                             .when_some(focused_kbd, |this, kbd| this.child(kbd.outline()))
                             .child(
                                 div()
-                                    .text_size(px(10.0))
+                                    .text_size(px(10.5))
                                     .font_family(theme.mono_font_family.clone())
                                     .text_color(theme.muted_foreground.opacity(0.62))
-                                    .child("Cmd+1..9 toggles panes"),
+                                    .child("Cmd+1..9"),
                             ),
                     );
 
                 let preview = div()
-                    .h(px(198.0))
+                    .h(px(224.0))
                     .w_full()
                     .rounded(px(12.0))
                     .p(px(10.0))
-                    .bg(theme.title_bar.opacity(ui_surface_opacity * 0.95))
+                    .bg(theme.title_bar.opacity(ui_surface_opacity * 0.98))
                     .child(preview_content);
 
                 root = root.child(
@@ -6028,10 +6027,10 @@ impl Render for ConWorkspace {
                         .w(popup_width)
                         .rounded(px(14.0))
                         .bg(theme.background.opacity(elevated_ui_surface_opacity))
-                        .p(px(10.0))
+                        .p(px(12.0))
                         .flex()
                         .flex_col()
-                        .gap(px(10.0))
+                        .gap(px(12.0))
                         .child(presets)
                         .child(presets_row)
                         .child(preview),
