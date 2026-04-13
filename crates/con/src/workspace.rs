@@ -4071,12 +4071,6 @@ impl ConWorkspace {
         // Stash outgoing state into the old tab
         self.tabs[old_active].panel_state = outgoing;
 
-        // Hide old tab's ghostty NSViews and unfocus surfaces
-        for terminal in self.tabs[old_active].pane_tree.all_terminals() {
-            terminal.set_native_view_visible(false, cx);
-            terminal.set_focus_state(false, cx);
-        }
-
         self.active_tab = index;
         self.tabs[index].needs_attention = false;
 
@@ -4084,6 +4078,12 @@ impl ConWorkspace {
         for terminal in self.tabs[index].pane_tree.all_terminals() {
             terminal.set_native_view_visible(true, cx);
             terminal.ensure_surface(window, cx);
+        }
+        for terminal in self.tabs[old_active].pane_tree.all_terminals() {
+            terminal.set_focus_state(false, cx);
+        }
+        for terminal in self.tabs[old_active].pane_tree.all_terminals() {
+            terminal.set_native_view_visible(false, cx);
         }
         let focused = self.tabs[index].pane_tree.focused_terminal();
         focused.set_focus_state(true, cx);
@@ -4456,46 +4456,51 @@ impl Render for ConWorkspace {
 
         if agent_panel_progress > 0.01 {
             let animated_panel_width = self.agent_panel_width * agent_panel_progress;
-            // Draggable divider — invisible, only visible on hover
             main_area = main_area
                 .child(
                     div()
-                        .id("agent-panel-divider")
-                        .relative()
-                        .w(px(1.0))
-                        .h_full()
-                        .flex_shrink_0()
-                        .bg(theme.title_bar_border)
-                        .opacity(if agent_panel_progress > 0.01 { 1.0 } else { 0.0 })
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .bottom_0()
-                                .left(px(-2.0))
-                                .w(px(5.0))
-                                .cursor_col_resize()
-                                .bg(theme.transparent)
-                                .hover(|s| s.bg(theme.muted.opacity(0.05)))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
-                                        this.agent_panel_drag = Some((
-                                            f32::from(event.position.x),
-                                            this.agent_panel_width,
-                                        ));
-                                    }),
-                                )
-                        )
-                )
-                .child(
-                    div()
-                        .w(px(animated_panel_width))
+                        .w(px(animated_panel_width + 1.0))
                         .h_full()
                         .overflow_hidden()
+                        .flex_shrink_0()
+                        .flex()
+                        .flex_row()
                         .bg(theme.background.opacity(elevated_ui_surface_opacity))
                         .child(
                             div()
+                                .id("agent-panel-divider")
+                                .relative()
+                                .w(px(1.0))
+                                .h_full()
+                                .flex_shrink_0()
+                                .bg(theme.title_bar_border)
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .left(px(-2.0))
+                                        .w(px(5.0))
+                                        .cursor_col_resize()
+                                        .bg(theme.transparent)
+                                        .hover(|s| s.bg(theme.muted.opacity(0.05)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(
+                                                |this, event: &MouseDownEvent, _window, _cx| {
+                                                    this.agent_panel_drag = Some((
+                                                        f32::from(event.position.x),
+                                                        this.agent_panel_width,
+                                                    ));
+                                                },
+                                            ),
+                                        ),
+                                )
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
                                 .h_full()
                                 .opacity(agent_panel_content_progress)
                                 .child(self.agent_panel.clone()),
