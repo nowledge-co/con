@@ -794,6 +794,10 @@ impl Render for InputBar {
             InputMode::Agent => rems(1.15),
             _ => rems(1.25),
         };
+        let input_vertical_offset = match self.mode {
+            InputMode::Agent => px(-1.0),
+            _ => px(0.0),
+        };
         let show_inline_suggestion = self.mode != InputMode::Agent
             && input_cursor == input_value.len()
             && !input_value.is_empty()
@@ -948,6 +952,7 @@ impl Render for InputBar {
                     .flex()
                     .items_center()
                     .line_height(input_line_height)
+                    .top(input_vertical_offset)
                     .overflow_hidden()
                     .child(
                         div()
@@ -964,13 +969,18 @@ impl Render for InputBar {
                     )
             }))
             .child(
-                Input::new(&input_state)
-                    .appearance(false)
-                    .cleanable(false)
-                    .font_family(input_font)
-                    .text_size(input_text_size)
-                    .line_height(input_line_height)
-                    .h(px(24.0)),
+                div()
+                    .relative()
+                    .top(input_vertical_offset)
+                    .child(
+                        Input::new(&input_state)
+                            .appearance(false)
+                            .cleanable(false)
+                            .font_family(input_font)
+                            .text_size(input_text_size)
+                            .line_height(input_line_height)
+                            .h(px(24.0)),
+                    ),
             );
 
         // ── Main layout — flat bar, no rounded bubble ──
