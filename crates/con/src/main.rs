@@ -211,7 +211,7 @@ impl Render for AboutView {
             .size_full()
             .bg(theme.background)
             .px(px(28.0))
-            .py(px(24.0))
+            .py(px(28.0))
             .child(
                 div()
                     .size_full()
@@ -219,13 +219,13 @@ impl Render for AboutView {
                     .flex_col()
                     .items_center()
                     .justify_center()
-                    .gap(px(18.0))
+                    .gap(px(14.0))
                     .child(
                         div()
-                            .size(px(92.0))
-                            .rounded(px(24.0))
-                            .bg(theme.secondary.opacity(0.32))
-                            .p(px(10.0))
+                            .size(px(88.0))
+                            .rounded(px(18.0))
+                            .bg(theme.secondary.opacity(0.22))
+                            .p(px(6.0))
                             .child(
                                 img("Con-macOS-Dark-256x256@2x.png")
                                     .size_full()
@@ -238,7 +238,7 @@ impl Render for AboutView {
                             .flex_col()
                             .items_center()
                             .max_w(px(310.0))
-                            .gap(px(7.0))
+                            .gap(px(5.0))
                             .child(
                                 div()
                                     .text_size(px(26.0))
@@ -251,7 +251,7 @@ impl Render for AboutView {
                                     .line_height(relative(1.35))
                                     .text_align(TextAlign::Center)
                                     .text_color(quiet_text)
-                                    .child("A GPU-accelerated terminal with a built-in AI harness."),
+                                    .child("A GPU-accelerated terminal with AI harness."),
                             ),
                     )
                     .child(
@@ -271,13 +271,7 @@ impl Render for AboutView {
                             .flex()
                             .flex_col()
                             .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                div()
-                                    .text_size(px(12.5))
-                                    .text_color(muted_text)
-                                    .child("Open source"),
-                            )
+                            .gap(px(6.0))
                             .child(
                                 div()
                                     .px(px(12.0))
@@ -297,7 +291,7 @@ impl Render for AboutView {
                         div()
                             .text_size(px(12.0))
                             .text_color(muted_text)
-                            .child("Copyright © 2026 Nowledge"),
+                            .child("Copyright © 2026 Nowledge Labs, LLC"),
                     ),
             )
     }
@@ -305,7 +299,7 @@ impl Render for AboutView {
 
 fn show_about_window(cx: &mut App) {
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(432.0), px(372.0)), cx)),
+        window_bounds: Some(WindowBounds::centered(size(px(432.0), px(388.0)), cx)),
         titlebar: Some(TitlebarOptions {
             title: Some(format!("About {}", about_panel_name()).into()),
             appears_transparent: true,
