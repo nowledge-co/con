@@ -1349,11 +1349,13 @@ mod tests {
         let mut patch = GhosttyConfigPatch {
             colors: Some(original_colors.clone()),
             font_size: Some(14.0),
+            ..Default::default()
         };
 
         patch.merge(&GhosttyConfigPatch {
             colors: None,
             font_size: Some(16.0),
+            ..Default::default()
         });
 
         assert_eq!(
@@ -1373,11 +1375,13 @@ mod tests {
         let mut patch = GhosttyConfigPatch {
             colors: Some(sample_colors(10)),
             font_size: Some(14.0),
+            ..Default::default()
         };
 
         patch.merge(&GhosttyConfigPatch {
             colors: Some(replacement_colors.clone()),
             font_size: None,
+            ..Default::default()
         });
 
         assert_eq!(
