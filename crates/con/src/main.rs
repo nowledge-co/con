@@ -23,7 +23,7 @@ mod workspace;
 use con_core::config::KeybindingConfig;
 use con_core::session::Session;
 use gpui::*;
-use gpui_component::{ActiveTheme, WindowExt};
+use gpui_component::ActiveTheme;
 use workspace::ConWorkspace;
 
 actions!(
@@ -162,30 +162,25 @@ pub(crate) fn app_build_number() -> String {
     build
 }
 
-fn show_about_dialog(cx: &mut App) {
-    let window_handle = cx
-        .active_window()
-        .or_else(|| cx.window_stack().and_then(|stack| stack.into_iter().next()));
-    let Some(window_handle) = window_handle else {
-        log::warn!("about: no active window available");
-        return;
-    };
-    let version = app_display_version();
-    let build = app_build_number();
-    let channel = con_core::release_channel::current().display_name();
-    let body = format!(
-        "Version {version}\nBuild {build}\nChannel {channel}\n\nThe terminal emulator with AI harness, nothing more."
-    );
-    let _ = window_handle.update(cx, |_view, window, cx| {
-        let body = body.clone();
-        window.open_alert_dialog(cx, move |alert, _window, _cx| {
-            alert
-                .title("About con")
-                .description(body.clone())
-                .width(px(440.0))
-        });
-    });
+#[cfg(target_os = "macos")]
+fn show_about_panel() {
+    use cocoa::appkit::NSApp;
+    use cocoa::base::nil;
+    use objc::{msg_send, sel, sel_impl};
+
+    unsafe {
+        let app = NSApp();
+        if app == nil {
+            log::warn!("about: NSApp unavailable");
+            return;
+        }
+
+        let _: () = msg_send![app, orderFrontStandardAboutPanelWithOptions: nil];
+    }
 }
+
+#[cfg(not(target_os = "macos"))]
+fn show_about_panel() {}
 
 pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
     cx.bind_keys([
@@ -274,7 +269,8 @@ fn main() {
 
         #[cfg(target_os = "macos")]
         cx.on_action(|_: &ShowAbout, cx: &mut App| {
-            show_about_dialog(cx);
+            let _ = cx;
+            show_about_panel();
         });
 
         #[cfg(target_os = "macos")]
