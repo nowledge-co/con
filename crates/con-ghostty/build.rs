@@ -1,11 +1,16 @@
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
+const GHOSTTY_REV: &str = "da835757b0330474ec4050fa2b149a9b0c887d52";
+const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
+
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let ghostty_dir = manifest_dir.join("../../3pp/ghostty");
-    let ghostty_dir = ghostty_dir.canonicalize().expect("3pp/ghostty not found");
+    println!("cargo:rerun-if-env-changed={GHOSTTY_ENV}");
+
+    let ghostty_dir = resolve_ghostty_source();
 
     // Build libghostty via zig build
     let status = Command::new("zig")
@@ -48,13 +53,56 @@ fn main() {
         println!("cargo:rustc-link-lib=c++");
     }
 
-    // Rerun if ghostty source changes
-    println!("cargo:rerun-if-changed=../../3pp/ghostty/src");
-    println!("cargo:rerun-if-changed=../../3pp/ghostty/include/ghostty.h");
+    // If the caller provided a local Ghostty checkout, track its source changes.
+    if env::var_os(GHOSTTY_ENV).is_some() {
+        println!("cargo:rerun-if-changed={}", ghostty_dir.join("src").display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            ghostty_dir.join("include/ghostty.h").display()
+        );
+    }
 
     // Generate include path for FFI
     let include_dir = ghostty_dir.join("include");
     println!("cargo:include={}", include_dir.display());
+}
+
+fn resolve_ghostty_source() -> PathBuf {
+    if let Some(source_dir) = env::var_os(GHOSTTY_ENV) {
+        let source_dir = PathBuf::from(source_dir)
+            .canonicalize()
+            .expect("CON_GHOSTTY_SOURCE_DIR points to a missing directory");
+        return source_dir;
+    }
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR missing"));
+    let vendor_root = out_dir.join("ghostty-src");
+
+    if vendor_root.exists() && current_git_rev(&vendor_root).as_deref() == Some(GHOSTTY_REV) {
+        return vendor_root;
+    }
+
+    if vendor_root.exists() {
+        fs::remove_dir_all(&vendor_root).expect("failed to clear stale vendored ghostty source");
+    }
+
+    run(
+        Command::new("git").args([
+            "clone",
+            "--no-checkout",
+            GHOSTTY_REPO,
+            vendor_root.to_str().expect("non-utf8 ghostty vendor path"),
+        ]),
+        "failed to clone Ghostty source",
+    );
+    run(
+        Command::new("git")
+            .args(["checkout", GHOSTTY_REV])
+            .current_dir(&vendor_root),
+        "failed to checkout pinned Ghostty revision",
+    );
+
+    vendor_root
 }
 
 fn find_libghostty(ghostty_dir: &PathBuf) -> PathBuf {
@@ -98,5 +146,25 @@ fn find_libghostty(ghostty_dir: &PathBuf) -> PathBuf {
         return fallback;
     }
 
-    panic!("Could not find libghostty-fat.a — run: cd 3pp/ghostty && zig build -Dapp-runtime=none");
+    panic!("Could not find libghostty-fat.a after building pinned Ghostty source");
+}
+
+fn current_git_rev(repo_dir: &PathBuf) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let rev = String::from_utf8(output.stdout).ok()?;
+    Some(rev.trim().to_string())
+}
+
+fn run(command: &mut Command, context: &str) {
+    let status = command.status().unwrap_or_else(|err| panic!("{context}: {err}"));
+    if !status.success() {
+        panic!("{context}");
+    }
 }
