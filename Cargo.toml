@@ -1,0 +1,104 @@
+[workspace]
+members = [
+    "crates/con",
+    "crates/con-core",
+    "crates/con-terminal",
+    "crates/con-ghostty",
+    "crates/con-agent",
+    "crates/con-cli",
+    # gpui-component library (adopted into our workspace)
+    "3pp/gpui-component/crates/ui",
+    "3pp/gpui-component/crates/assets",
+    "3pp/gpui-component/crates/macros",
+]
+default-members = ["crates/con"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+
+[workspace.dependencies]
+# Internal crates
+con-core = { path = "crates/con-core" }
+con-terminal = { path = "crates/con-terminal" }
+con-ghostty = { path = "crates/con-ghostty" }
+con-agent = { path = "crates/con-agent" }
+
+# UI — mainline GPUI from Zed (required for gpui-component compatibility)
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "runtime_shaders"] }
+gpui_macros = { git = "https://github.com/zed-industries/zed" }
+
+# UI Components — shadcn/ui-style component library for GPUI
+gpui-component = { path = "3pp/gpui-component/crates/ui" }
+gpui-component-macros = { path = "3pp/gpui-component/crates/macros" }
+gpui-component-assets = { path = "3pp/gpui-component/crates/assets" }
+
+# AI Agent
+rig-core = { git = "https://github.com/wey-gu/rig.git", rev = "3193eacbe5cfadc842da48ce6df12f184931a514", default-features = false, features = ["rustls"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+smol = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_repr = "0.1"
+toml = "0.8"
+schemars = "1"
+
+# Text & Language
+ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf", "metric_utf16"] }
+sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
+rust-i18n = "3"
+lsp-types = { version = "0.97.0", features = ["proposed"] }
+
+# Utilities
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+tracing = "0.1"
+env_logger = "0.11"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+gethostname = "1"
+notify = "7.0.0"
+smallvec = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
+pulldown-cmark = "0.13"
+
+[workspace.lints.clippy]
+# Inherited by gpui-component crates
+almost_complete_range = "allow"
+arc_with_non_send_sync = "allow"
+borrowed_box = "allow"
+let_underscore_future = "allow"
+manual_is_multiple_of = "allow"
+map_entry = "allow"
+module_inception = "allow"
+non_canonical_partial_ord_impl = "allow"
+reversed_empty_ranges = "allow"
+single_range_in_vec_init = "allow"
+style = { level = "allow", priority = -1 }
+type_complexity = "allow"
+useless_conversion = "allow"
+
+[patch.crates-io]
+# Required by gpui-component for WASM compatibility
+psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
+
+[profile.dev]
+split-debuginfo = "unpacked"
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

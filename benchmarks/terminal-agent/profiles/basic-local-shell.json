@@ -1,0 +1,7 @@
+{
+  "name": "basic-local-shell",
+  "description": "Baseline local Con control-plane profile on the active macOS tab.",
+  "recommended_suite": "strict",
+  "env_checks": [],
+  "playbooks": []
+}

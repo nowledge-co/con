@@ -1,0 +1,23 @@
+{
+  "name": "basic-local-codex",
+  "description": "Local coding-CLI profile using Codex on this machine with ~/dev/temp as the project path.",
+  "recommended_suite": "all",
+  "env_checks": [
+    {
+      "name": "codex_cli",
+      "kind": "command",
+      "value": "codex"
+    },
+    {
+      "name": "temp_project_path",
+      "kind": "path_exists",
+      "value": "~/dev/temp"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Local Codex Workspace",
+      "path": "benchmarks/terminal-agent/playbooks/local-codex-workspace.md"
+    }
+  ]
+}

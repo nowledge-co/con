@@ -1,0 +1,39 @@
+{
+  "profile": "operator-ssh-dual-host-maintenance",
+  "title": "Remote Dual-Host Maintenance",
+  "release_floor": 10,
+  "target_score": 13,
+  "world_class_score": 14,
+  "dimensions": [
+    {
+      "id": "host_routing",
+      "label": "Host Routing",
+      "max": 3,
+      "description": "Keep host identity explicit and never confuse one remote host for another or for local macOS."
+    },
+    {
+      "id": "workspace_reuse",
+      "label": "Workspace Reuse",
+      "max": 3,
+      "description": "Reuse the same host workspaces across follow-up turns."
+    },
+    {
+      "id": "privilege_handling",
+      "label": "Privilege Handling",
+      "max": 3,
+      "description": "Handle package-manager and sudo boundaries safely and honestly."
+    },
+    {
+      "id": "recovery",
+      "label": "Recovery",
+      "max": 3,
+      "description": "Recover cleanly from disconnected or changed remote workspaces."
+    },
+    {
+      "id": "result_clarity",
+      "label": "Result Clarity",
+      "max": 3,
+      "description": "Present host-by-host results clearly enough that an operator can trust the summary."
+    }
+  ]
+}

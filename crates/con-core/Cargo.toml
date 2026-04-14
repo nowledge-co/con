@@ -1,0 +1,25 @@
+[package]
+name = "con-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+con-agent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+anyhow.workspace = true
+log.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+dirs.workspace = true
+uuid.workspace = true
+futures.workspace = true
+tokio.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }

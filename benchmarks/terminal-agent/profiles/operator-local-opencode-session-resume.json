@@ -1,0 +1,59 @@
+{
+  "name": "operator-local-opencode-session-resume",
+  "description": "Operator-grade local coding workflow that resumes the same OpenCode pane after intervening shell work in ~/dev/temp.",
+  "recommended_suite": "all",
+  "fresh_conversation": true,
+  "setup_visible_shell_commands": [
+    "rm -rf ~/dev/temp/con-bench-opencode-resume && mkdir -p ~/dev/temp"
+  ],
+  "env_checks": [
+    { "name": "opencode_cli", "kind": "command", "value": "opencode" },
+    { "name": "python3", "kind": "command", "value": "python3" },
+    { "name": "git", "kind": "command", "value": "git" },
+    { "name": "temp_project_root", "kind": "path_exists", "value": "~/dev/temp" }
+  ],
+  "playbooks": [
+    {
+      "name": "Local OpenCode Session Resume",
+      "path": "benchmarks/terminal-agent/playbooks/local-opencode-session-resume.md"
+    }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Local OpenCode Session Resume",
+      "case_name": "operator_local_opencode_session_resume",
+      "steps": [
+        {
+          "label": "prepare_opencode_workspace",
+          "prompt": "Please prepare an OpenCode workspace in ~/dev/temp/con-bench-opencode-resume by launching OpenCode there and preparing a paired local shell target for file, git, and test work.",
+          "timeout_secs": 90
+        },
+        {
+          "label": "bootstrap_project_and_commit",
+          "prompt": "Keep the OpenCode target prepared, but use its paired local shell target to create a tiny Python project in ~/dev/temp/con-bench-opencode-resume with greet.py and test_greet.py, initialize git, make an initial commit, and run `python3 -m unittest -q`. Only touch the OpenCode pane if a blocking trust or continue prompt must be cleared first.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "first_opencode_turn",
+          "prompt": "In the existing OpenCode pane, answer in exactly two bullets: one small repo-hygiene improvement you would make next, and one one-line commit message idea for the current initial project. Keep it concise and do not create a new target.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "shell_follow_up_change",
+          "prompt": "Back in the paired local shell target, add a greet_many helper to greet.py, update the tests, rerun `python3 -m unittest -q`, and show `git diff --stat`. Do not create a new target and do not ask OpenCode again yet.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "resumed_opencode_turn",
+          "prompt": "Return to the same existing OpenCode pane and answer in exactly two bullets: whether the greet_many change looks consistent with the earlier structure, and a revised one-line commit message proposal. Do not create a new target.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "summarize_continuity",
+          "prompt": "Summarize which target handled shell work, which target handled the first OpenCode turn, which target handled the resumed OpenCode turn, and confirm the workspace path.",
+          "timeout_secs": 60
+        }
+      ]
+    }
+  ]
+}

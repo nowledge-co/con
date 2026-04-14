@@ -1,0 +1,52 @@
+{
+  "name": "operator-ssh-dual-host-maintenance",
+  "description": "Operator-grade remote maintenance workflow across haswell and cinnamon with follow-up reuse and safe package-manager handling.",
+  "recommended_suite": "all",
+  "fresh_conversation": true,
+  "env_checks": [
+    {
+      "name": "ssh_haswell",
+      "kind": "ssh_host",
+      "value": "haswell"
+    },
+    {
+      "name": "ssh_cinnamon",
+      "kind": "ssh_host",
+      "value": "cinnamon"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Remote Dual-Host Maintenance",
+      "path": "benchmarks/terminal-agent/playbooks/remote-dual-host-maintenance.md"
+    }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Remote Dual-Host Maintenance",
+      "case_name": "operator_remote_dual_host_maintenance",
+      "steps": [
+        {
+          "label": "healthcheck",
+          "prompt": "Please connect to haswell and cinnamon and collect uptime, memory, and disk summaries.",
+          "timeout_secs": 120
+        },
+        {
+          "label": "package_manager_state",
+          "prompt": "Reuse the same host workspaces and report package manager plus whether updates appear pending, using read-only commands only. On apt hosts, prefer `apt list --upgradable` or `apt-get -s upgrade`; do not perform a real update.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "warning_logs",
+          "prompt": "Reuse the same host workspaces again and collect the last 20 lines of dmesg or an equivalent warning log on each host.",
+          "timeout_secs": 180
+        },
+        {
+          "label": "continuity_proof",
+          "prompt": "Start a short sleep on cinnamon, then prove you still know which workspace is haswell and which is cinnamon.",
+          "timeout_secs": 90
+        }
+      ]
+    }
+  ]
+}

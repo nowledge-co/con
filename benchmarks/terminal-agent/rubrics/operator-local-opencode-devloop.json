@@ -1,0 +1,39 @@
+{
+  "profile": "operator-local-opencode-devloop",
+  "title": "Local OpenCode Two Sum Dev Loop",
+  "release_floor": 10,
+  "target_score": 13,
+  "world_class_score": 14,
+  "dimensions": [
+    {
+      "id": "target_preparation",
+      "label": "Target Preparation",
+      "max": 3,
+      "description": "Prepare one OpenCode target cleanly, including any trust/interstitial prompt handling."
+    },
+    {
+      "id": "target_reuse",
+      "label": "Target Reuse",
+      "max": 3,
+      "description": "Keep using the same OpenCode target across turns instead of creating a fresh one."
+    },
+    {
+      "id": "workspace_correctness",
+      "label": "Workspace Correctness",
+      "max": 3,
+      "description": "Stay inside the requested workspace and keep path identity clear."
+    },
+    {
+      "id": "execution_loop",
+      "label": "Execution Loop",
+      "max": 3,
+      "description": "Actually create files, run tests, and complete the requested local coding loop."
+    },
+    {
+      "id": "follow_up_repair",
+      "label": "Follow-up Repair",
+      "max": 3,
+      "description": "Handle the break-and-fix follow-up in the same workspace pair with clear continuity, including any interactive OpenCode interstitial if it blocks later work."
+    }
+  ]
+}

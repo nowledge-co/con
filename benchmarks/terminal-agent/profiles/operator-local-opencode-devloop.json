@@ -1,0 +1,60 @@
+{
+  "name": "operator-local-opencode-devloop",
+  "description": "Operator-grade local coding workflow using OpenCode in ~/dev/temp with a real file-edit-test-repair loop.",
+  "recommended_suite": "all",
+  "fresh_conversation": true,
+  "setup_visible_shell_commands": [
+    "rm -rf ~/dev/temp/con-bench-opencode-twosum && mkdir -p ~/dev/temp"
+  ],
+  "env_checks": [
+    {
+      "name": "opencode_cli",
+      "kind": "command",
+      "value": "opencode"
+    },
+    {
+      "name": "python3",
+      "kind": "command",
+      "value": "python3"
+    },
+    {
+      "name": "temp_project_root",
+      "kind": "path_exists",
+      "value": "~/dev/temp"
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Local OpenCode Two Sum Dev Loop",
+      "path": "benchmarks/terminal-agent/playbooks/local-opencode-two-sum-devloop.md"
+    }
+  ],
+  "operator_scenarios": [
+    {
+      "name": "Local OpenCode Two Sum Dev Loop",
+      "case_name": "operator_local_opencode_two_sum_dev_loop",
+      "steps": [
+        {
+          "label": "prepare_opencode_workspace",
+          "prompt": "Please prepare an OpenCode workspace in ~/dev/temp/con-bench-opencode-twosum by launching OpenCode there and preparing a paired local shell target for file and test work.",
+          "timeout_secs": 90
+        },
+        {
+          "label": "create_code_and_tests",
+          "prompt": "Keep the OpenCode target prepared, but use its paired local shell target for the deterministic coding work: create a small Python two_sum implementation and a unittest-based test file in ~/dev/temp/con-bench-opencode-twosum, then run `python3 -m unittest -q`. Only touch the OpenCode pane if a blocking trust or continue prompt must be cleared first.",
+          "timeout_secs": 120
+        },
+        {
+          "label": "repair_without_new_target",
+          "prompt": "Now break one unittest on purpose in the paired local shell. If the OpenCode pane is waiting at a trust, continue, or edit-approval prompt, clear it in the same target. Then repair the failing test in the same workspace pair without creating a new target, and rerun `python3 -m unittest -q`.",
+          "timeout_secs": 150
+        },
+        {
+          "label": "summarize_target_reuse",
+          "prompt": "Summarize which pane or target you used for each step.",
+          "timeout_secs": 60
+        }
+      ]
+    }
+  ]
+}
