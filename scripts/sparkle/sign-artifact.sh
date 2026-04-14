@@ -24,5 +24,6 @@ sign_update="$SPARKLE_DIR/bin/sign_update"
 
 [[ -x "$sign_update" ]] || { echo "sign_update not found at $sign_update — run download.sh first" >&2; exit 1; }
 
-# sign_update reads the private key from -s flag (base64) or --ed-key-file
-"$sign_update" "$artifact" -s "$SPARKLE_SIGNING_KEY"
+# Pass key via stdin (--ed-key-file -) to avoid exposing it in process args.
+# The deprecated -s flag is not supported for newly generated keys.
+echo "$SPARKLE_SIGNING_KEY" | "$sign_update" "$artifact" --ed-key-file -

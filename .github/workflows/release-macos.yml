@@ -25,7 +25,7 @@ jobs:
             rust_target: x86_64-apple-darwin
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Derive release metadata
         id: meta
@@ -83,7 +83,7 @@ jobs:
         run: ./scripts/macos/release.sh
 
       - name: Upload notarized artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: macos-${{ matrix.arch }}
           path: dist/macos/${{ steps.meta.outputs.channel }}/${{ matrix.arch }}/*
@@ -95,9 +95,9 @@ jobs:
     needs: build
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: release-artifacts
 
@@ -140,7 +140,7 @@ jobs:
     needs: publish
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Derive release metadata
         id: meta
@@ -157,24 +157,40 @@ jobs:
           echo "channel=$channel" >>"$GITHUB_OUTPUT"
           echo "marketing=$marketing" >>"$GITHUB_OUTPUT"
 
+      - name: Check Sparkle signing key
+        id: sparkle
+        shell: bash
+        env:
+          SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
+        run: |
+          if [[ -z "${SPARKLE_SIGNING_KEY:-}" ]]; then
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::warning::SPARKLE_SIGNING_KEY not set — skipping appcast update"
+          else
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          fi
+
       - name: Download Sparkle tools
+        if: steps.sparkle.outputs.available == 'true'
         shell: bash
         run: ./scripts/sparkle/download.sh
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        if: steps.sparkle.outputs.available == 'true'
+        uses: actions/download-artifact@v5
         with:
           path: release-artifacts
 
-      - name: Checkout gh-pages (or create if missing)
+      - name: Checkout gh-pages
+        if: steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --heads origin gh-pages | grep -q gh-pages; then
-            git clone --single-branch --branch gh-pages \
-              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
-              gh-pages
-          else
+          # Clone existing gh-pages or create the branch inline.
+          # Uses fetch+checkout to be resilient to concurrent runs.
+          git clone --single-branch --branch gh-pages \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            gh-pages 2>/dev/null || {
             mkdir -p gh-pages/appcast
             cd gh-pages
             git init
@@ -185,20 +201,16 @@ jobs:
             touch .nojekyll
             git add CNAME .nojekyll
             git commit -m "Initialize gh-pages"
-          fi
+          }
 
       - name: Sign artifacts and update appcasts
+        if: steps.sparkle.outputs.available == 'true'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
           SPARKLE_DIR: ${{ github.workspace }}/.sparkle
         run: |
           set -euo pipefail
-
-          if [[ -z "${SPARKLE_SIGNING_KEY:-}" ]]; then
-            echo "SPARKLE_SIGNING_KEY not set — skipping appcast update"
-            exit 0
-          fi
 
           repo="${{ github.repository }}"
           tag="$GITHUB_REF_NAME"
@@ -213,13 +225,18 @@ jobs:
             # Find the DMG for this arch
             dmg=$(find release-artifacts -name "*-macos-${arch}.dmg" -type f | head -1)
             if [[ -z "$dmg" ]]; then
-              echo "No DMG found for $arch — skipping"
+              echo "::warning::No DMG found for $arch — skipping"
               continue
             fi
 
-            # Sign the artifact
+            # Sign the artifact and extract signature
             sig_output=$(./scripts/sparkle/sign-artifact.sh "$dmg")
             signature=$(echo "$sig_output" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
+            if [[ -z "$signature" ]]; then
+              echo "::error::Failed to extract Ed25519 signature for $arch"
+              echo "sign_update output: $sig_output" >&2
+              exit 1
+            fi
             length=$(stat -f%z "$dmg")
 
             # GitHub Release download URL for this artifact
@@ -240,18 +257,15 @@ jobs:
             ITEM_SIGNATURE="$signature" \
             ITEM_MIN_OS="10.15.7" \
             ./scripts/sparkle/update-appcast.sh
+
+            echo "Updated appcast: ${channel}-macos-${arch}.xml (build $build_number)"
           done
 
       - name: Push appcast to gh-pages
+        if: steps.sparkle.outputs.available == 'true'
         shell: bash
-        env:
-          SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          if [[ -z "${SPARKLE_SIGNING_KEY:-}" ]]; then
-            echo "SPARKLE_SIGNING_KEY not set — skipping gh-pages push"
-            exit 0
-          fi
           cd gh-pages
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -261,4 +275,6 @@ jobs:
             exit 0
           fi
           git commit -m "Update appcast for $GITHUB_REF_NAME"
+          # Pull-rebase to handle concurrent pushes gracefully
+          git pull --rebase origin gh-pages 2>/dev/null || true
           git push origin gh-pages
