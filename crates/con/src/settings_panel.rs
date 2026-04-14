@@ -1744,6 +1744,27 @@ impl SettingsPanel {
                                     .justify_between()
                                     .px(px(16.0))
                                     .h(px(44.0))
+                                    .child(div().text_sm().child("Version"))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .font_family(theme.mono_font_family.clone())
+                                            .text_color(theme.muted_foreground)
+                                            .child(format!(
+                                                "{} ({})",
+                                                crate::app_display_version(),
+                                                crate::app_build_number()
+                                            )),
+                                    ),
+                            )
+                            .child(row_separator(&theme))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px(px(16.0))
+                                    .h(px(44.0))
                                     .child(
                                         div()
                                             .flex()

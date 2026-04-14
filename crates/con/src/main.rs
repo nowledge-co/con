@@ -23,12 +23,13 @@ mod workspace;
 use con_core::config::KeybindingConfig;
 use con_core::session::Session;
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, WindowExt};
 use workspace::ConWorkspace;
 
 actions!(
     con,
     [
+        ShowAbout,
         Quit,
         NewWindow,
         NewTab,
@@ -108,6 +109,78 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
         }
     })
     .detach();
+}
+
+#[cfg(target_os = "macos")]
+fn bundle_info_value(key: &'static [u8]) -> Option<String> {
+    use objc::{class, msg_send, sel, sel_impl};
+    use std::ffi::CStr;
+
+    unsafe {
+        let bundle: *mut objc::runtime::Object = msg_send![class!(NSBundle), mainBundle];
+        if bundle.is_null() {
+            return None;
+        }
+        let info: *mut objc::runtime::Object = msg_send![bundle, infoDictionary];
+        if info.is_null() {
+            return None;
+        }
+        let key_ns: *mut objc::runtime::Object =
+            msg_send![class!(NSString), stringWithUTF8String: key.as_ptr()];
+        if key_ns.is_null() {
+            return None;
+        }
+        let value: *mut objc::runtime::Object = msg_send![info, objectForKey: key_ns];
+        if value.is_null() {
+            return None;
+        }
+        let utf8: *const std::os::raw::c_char = msg_send![value, UTF8String];
+        if utf8.is_null() {
+            return None;
+        }
+        CStr::from_ptr(utf8).to_str().ok().map(ToOwned::to_owned)
+    }
+}
+
+pub(crate) fn app_display_version() -> String {
+    #[cfg(target_os = "macos")]
+    let version = bundle_info_value(b"CFBundleShortVersionString\0")
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    #[cfg(not(target_os = "macos"))]
+    let version = env!("CARGO_PKG_VERSION").to_string();
+
+    version
+}
+
+pub(crate) fn app_build_number() -> String {
+    #[cfg(target_os = "macos")]
+    let build =
+        bundle_info_value(b"CFBundleVersion\0").unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    #[cfg(not(target_os = "macos"))]
+    let build = env!("CARGO_PKG_VERSION").to_string();
+
+    build
+}
+
+fn show_about_dialog(cx: &mut App) {
+    let Some(window_handle) = cx.active_window() else {
+        return;
+    };
+    let version = app_display_version();
+    let build = app_build_number();
+    let channel = con_core::release_channel::current().display_name();
+    let body = format!(
+        "Version {version}\nBuild {build}\nChannel {channel}\n\nThe terminal emulator with AI harness, nothing more."
+    );
+    let _ = window_handle.update(cx, |_view, window, cx| {
+        let body = body.clone();
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            alert
+                .title("About con")
+                .description(body.clone())
+                .width(px(440.0))
+        });
+    });
 }
 
 pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
@@ -196,6 +269,11 @@ fn main() {
         });
 
         #[cfg(target_os = "macos")]
+        cx.on_action(|_: &ShowAbout, cx: &mut App| {
+            show_about_dialog(cx);
+        });
+
+        #[cfg(target_os = "macos")]
         cx.on_action(|_: &CheckForUpdates, _cx: &mut App| {
             updater::check_for_updates();
         });
@@ -204,6 +282,8 @@ fn main() {
             Menu {
                 name: "con".into(),
                 items: vec![
+                    MenuItem::action("About con", ShowAbout),
+                    MenuItem::separator(),
                     MenuItem::action("Check for Updates…", CheckForUpdates),
                     MenuItem::separator(),
                     MenuItem::action("Settings…", settings_panel::ToggleSettings),
