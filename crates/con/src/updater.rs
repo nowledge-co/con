@@ -23,6 +23,16 @@ static CONTROLLER: OnceLock<usize> = OnceLock::new();
 /// Call once during app launch, after the main window is open.
 /// Returns `true` if Sparkle was loaded and started successfully.
 pub fn init() -> bool {
+    match std::panic::catch_unwind(init_inner) {
+        Ok(result) => result,
+        Err(_) => {
+            log::error!("updater: Sparkle init panicked — auto-update disabled");
+            false
+        }
+    }
+}
+
+fn init_inner() -> bool {
     if CONTROLLER.get().is_some() {
         return true;
     }
