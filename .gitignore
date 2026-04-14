@@ -27,6 +27,4 @@ __pycache__/
 *.pyc
 dist
 .env
-
-__pycache__
 .sparkle

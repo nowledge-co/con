@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pages: write
 
 jobs:
   build:
@@ -53,6 +54,10 @@ jobs:
           rustup default stable
           rustup target add "${{ matrix.rust_target }}"
 
+      - name: Download Sparkle framework
+        shell: bash
+        run: ./scripts/sparkle/download.sh
+
       - name: Import Developer ID certificate
         shell: bash
         env:
@@ -70,6 +75,7 @@ jobs:
           CON_ARCH: ${{ matrix.arch }}
           CON_RUST_TARGET: ${{ matrix.rust_target }}
           CON_REQUIRE_NOTARIZATION: "1"
+          CON_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
@@ -122,4 +128,135 @@ jobs:
             gh release create "$tag" --title "$tag" --generate-notes "${prerelease_flag[@]}"
           fi
 
-          find release-artifacts -type f -print0 | xargs -0 gh release upload "$tag" --clobber
+          find release-artifacts -type f \
+            \( -name '*.zip' -o -name '*.dmg' -o -name 'SHA256SUMS.txt' \) \
+            -print0 | xargs -0 gh release upload "$tag" --clobber
+
+  update-appcast:
+    name: Update Sparkle appcast
+    runs-on: macos-15
+    needs: publish
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          channel="stable"
+          if [[ "$version" == *"-beta."* ]]; then
+            channel="beta"
+          fi
+          marketing="${version%%[-+]*}"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "channel=$channel" >>"$GITHUB_OUTPUT"
+          echo "marketing=$marketing" >>"$GITHUB_OUTPUT"
+
+      - name: Download Sparkle tools
+        shell: bash
+        run: ./scripts/sparkle/download.sh
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Checkout gh-pages (or create if missing)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --heads origin gh-pages | grep -q gh-pages; then
+            git clone --single-branch --branch gh-pages \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+              gh-pages
+          else
+            mkdir -p gh-pages/appcast
+            cd gh-pages
+            git init
+            git checkout -b gh-pages
+            git remote add origin \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+            echo "con-releases.nowledge.co" > CNAME
+            touch .nojekyll
+            git add CNAME .nojekyll
+            git commit -m "Initialize gh-pages"
+          fi
+
+      - name: Sign artifacts and update appcasts
+        shell: bash
+        env:
+          SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
+          SPARKLE_DIR: ${{ github.workspace }}/.sparkle
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SPARKLE_SIGNING_KEY:-}" ]]; then
+            echo "SPARKLE_SIGNING_KEY not set — skipping appcast update"
+            exit 0
+          fi
+
+          repo="${{ github.repository }}"
+          tag="$GITHUB_REF_NAME"
+          version="${{ steps.meta.outputs.version }}"
+          channel="${{ steps.meta.outputs.channel }}"
+          marketing="${{ steps.meta.outputs.marketing }}"
+          build_number="${{ github.run_number }}"
+
+          mkdir -p gh-pages/appcast
+
+          for arch in arm64 x86_64; do
+            # Find the DMG for this arch
+            dmg=$(find release-artifacts -name "*-macos-${arch}.dmg" -type f | head -1)
+            if [[ -z "$dmg" ]]; then
+              echo "No DMG found for $arch — skipping"
+              continue
+            fi
+
+            # Sign the artifact
+            sig_output=$(./scripts/sparkle/sign-artifact.sh "$dmg")
+            signature=$(echo "$sig_output" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
+            length=$(stat -f%z "$dmg")
+
+            # GitHub Release download URL for this artifact
+            dmg_name=$(basename "$dmg")
+            download_url="https://github.com/${repo}/releases/download/${tag}/${dmg_name}"
+
+            # Update the appcast for this channel+arch
+            appcast_file="gh-pages/appcast/${channel}-macos-${arch}.xml"
+
+            APPCAST_FILE="$appcast_file" \
+            APPCAST_TITLE="con" \
+            APPCAST_LINK="https://con-releases.nowledge.co" \
+            ITEM_TITLE="Version ${marketing}" \
+            ITEM_VERSION="$build_number" \
+            ITEM_SHORT_VERSION="$marketing" \
+            ITEM_URL="$download_url" \
+            ITEM_LENGTH="$length" \
+            ITEM_SIGNATURE="$signature" \
+            ITEM_MIN_OS="10.15.7" \
+            ./scripts/sparkle/update-appcast.sh
+          done
+
+      - name: Push appcast to gh-pages
+        shell: bash
+        env:
+          SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SPARKLE_SIGNING_KEY:-}" ]]; then
+            echo "SPARKLE_SIGNING_KEY not set — skipping gh-pages push"
+            exit 0
+          fi
+          cd gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add appcast/
+          if git diff --cached --quiet; then
+            echo "No appcast changes to commit"
+            exit 0
+          fi
+          git commit -m "Update appcast for $GITHUB_REF_NAME"
+          git push origin gh-pages

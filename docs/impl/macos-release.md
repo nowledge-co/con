@@ -27,7 +27,7 @@ GitHub Actions release workflow:
 
 The website host and the bundle identifier should not use the same order.
 
-- website: `con.nowledge.co`
+- website: `con-releases.nowledge.co`
 - macOS bundle id base: `co.nowledge.con`
 
 That follows reverse-DNS convention and is the long-term correct identifier layout.
@@ -175,55 +175,114 @@ The workflow currently builds native artifacts on:
 
 That matches the current `con-ghostty` build behavior: it builds Ghostty for the host architecture in `build.rs`. This pipeline avoids pretending we have a universal build when we do not.
 
-## Updater Recommendation
+## Auto-Update Architecture
 
-### What GPUI Gives Us
+### Overview
 
-GPUI itself is not an updater framework.
+Auto-update uses Sparkle on macOS with GitHub Releases as the artifact host and GitHub Pages as the appcast host.
 
-The relevant 3pp references are:
+```
+Tag push → CI builds → signs → notarizes → uploads to GitHub Release
+                                                    ↓
+                                          signs artifact with Ed25519
+                                          generates/updates appcast XML
+                                          pushes appcast to gh-pages
+                                                    ↓
+                                          App (Sparkle) polls feed URL
+                                          compares build number
+                                          downloads DMG
+                                          verifies Ed25519 signature
+                                          installs + relaunches
+```
 
-- Zed's [`release_channel`](../../3pp/zed/crates/release_channel/src/lib.rs): useful as a pattern for app-side channel state
-- Zed's [`auto_update`](../../3pp/zed/crates/auto_update/src/auto_update.rs): custom infrastructure, not a GPUI primitive
-- Ghostty's Sparkle-based update implementation in [`3pp/ghostty/macos/Sources/Features/Update`](../../3pp/ghostty/macos/Sources/Features/Update)
+### Feed URL Scheme
 
-### Recommended Direction
+Each build targets one channel and one architecture.  The feed URL is derived deterministically and baked into `Info.plist` at build time:
 
-For `con` on macOS, use Sparkle instead of inventing a custom DMG updater inside the Rust app.
+```
+https://con-releases.nowledge.co/appcast/{channel}-macos-{arch}.xml
+```
 
-Recommended model:
+Examples:
 
-1. Use GitHub Releases as the binary host.
-2. Serve channel-specific Sparkle appcasts from `con.nowledge.co`.
-3. Keep separate feeds:
-   - `https://con.nowledge.co/appcast/stable.xml`
-   - `https://con.nowledge.co/appcast/beta.xml`
-4. Point each appcast entry at the corresponding GitHub Release asset URL.
-5. Keep stable and beta as separate bundle identifiers.
+- `https://con-releases.nowledge.co/appcast/stable-macos-arm64.xml`
+- `https://con-releases.nowledge.co/appcast/beta-macos-arm64.xml`
+- `https://con-releases.nowledge.co/appcast/stable-macos-x86_64.xml`
 
-This follows Ghostty's direction closely: separate feed URLs per channel is simpler than overloading one shared feed.
+This is stable across releases and extensible to Linux when needed.
 
-### Why Not “GitHub Releases Only” For Updating
+### Sparkle Integration
 
-GitHub Releases is a fine file host. It is not, by itself, a full macOS update protocol.
+Sparkle is loaded dynamically from `Contents/Frameworks/Sparkle.framework` at app launch.  If the framework is absent (e.g. `cargo run` dev builds), auto-update silently disables.
 
-For a real updater you still need:
+The Rust FFI bridge (`crates/con/src/updater.rs`) uses `objc` crate to:
 
-- signed update metadata
-- channel selection
-- version comparison policy
-- install/relaunch flow
-- rollback-safe behavior
+1. Load `Sparkle.framework` from the app bundle
+2. Verify `SUFeedURL` is set in Info.plist
+3. Create `SPUStandardUpdaterController` (starts automatic checking)
+4. Expose `check_for_updates()` for the manual “Check for Updates” menu action
 
-Sparkle already solves those pieces correctly on macOS.
+### Release Channel Runtime
 
-## Next Step For Auto-Update
+`con-core/src/release_channel.rs` provides a cross-platform `ReleaseChannel` enum:
 
-The release pipeline is now ready for Sparkle hosting, but the app does not embed Sparkle yet.
+- `Dev` — local builds, never polls for updates
+- `Beta` — pre-release, polls `beta-macos-{arch}.xml`
+- `Stable` — GA builds, polls `stable-macos-{arch}.xml`
 
-The next implementation step should be:
+On macOS, the channel is read from `ConReleaseChannel` in the bundle's Info.plist.
+On other platforms, it falls back to the `CON_RELEASE_CHANNEL` environment variable.
 
-1. add a small Swift/AppKit wrapper target that owns Sparkle
-2. inject `SUFeedURL` and `SUPublicEDKey` into the bundled `Info.plist`
-3. expose channel selection in Settings
-4. publish appcasts from `con.nowledge.co`
+### Required Secrets for Auto-Update
+
+In addition to the signing secrets, the updater needs:
+
+- `SPARKLE_SIGNING_KEY` — Ed25519 private key (base64) for signing appcasts
+- `SPARKLE_PUBLIC_ED_KEY` — Ed25519 public key (base64) baked into Info.plist
+
+Generate a key pair:
+
+```bash
+./scripts/sparkle/keygen.sh
+```
+
+Store them:
+
+- `SPARKLE_SIGNING_KEY` → GitHub org secret
+- `SPARKLE_PUBLIC_ED_KEY` → GitHub org secret (passed as env var during build)
+
+### Appcast Hosting
+
+Appcasts are served from GitHub Pages:
+
+- Branch: `gh-pages`
+- Custom domain: `con-releases.nowledge.co` (CNAME record → `nowledge-co.github.io`)
+
+Initialize the gh-pages branch:
+
+```bash
+./scripts/sparkle/init-gh-pages.sh
+git push -u origin gh-pages
+```
+
+Then configure GitHub Pages in repo Settings → Pages → gh-pages branch.
+
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/sparkle/download.sh` | Download Sparkle framework + CLI tools |
+| `scripts/sparkle/keygen.sh` | Generate Ed25519 key pair |
+| `scripts/sparkle/sign-artifact.sh` | Sign a release artifact |
+| `scripts/sparkle/update-appcast.sh` | Add/update entry in appcast XML |
+| `scripts/sparkle/init-gh-pages.sh` | Initialize gh-pages branch |
+
+### Build Number Policy
+
+`CFBundleVersion` (Sparkle's version comparison key) uses `GITHUB_RUN_NUMBER` — a monotonically increasing integer scoped to the workflow.  This guarantees Sparkle always sees a strictly increasing build number regardless of marketing version or channel.
+
+Local fallback: seconds since epoch.
+
+### Future: Linux
+
+The release channel enum and feed URL scheme are platform-agnostic.  On Linux, replace Sparkle with a lighter mechanism (e.g. checking the GitHub Releases API directly or a custom HTTP-based updater).  The appcast hosting infrastructure (GitHub Pages) can serve additional feed formats alongside the Sparkle XML.

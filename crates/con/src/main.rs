@@ -16,6 +16,8 @@ mod settings_panel;
 mod sidebar;
 mod terminal_pane;
 mod theme;
+#[cfg(target_os = "macos")]
+mod updater;
 mod workspace;
 
 use gpui::*;
@@ -37,6 +39,7 @@ actions!(
         SplitDown,
         FocusInput,
         CycleInputMode,
+        CheckForUpdates,
         Undo,
         Redo,
         Cut,
@@ -160,6 +163,10 @@ fn main() {
         .with_quit_mode(QuitMode::Explicit)
         .with_assets(assets::ConAssets);
     app.run(move |cx: &mut App| {
+        // Detect release channel (stable/beta/dev) from bundle Info.plist
+        let channel = con_core::release_channel::init();
+        log::info!("Release channel: {}", channel.display_name());
+
         // Set dock icon for development (cargo run)
         set_dock_icon();
 
@@ -193,10 +200,17 @@ fn main() {
             }
         });
 
+        #[cfg(target_os = "macos")]
+        cx.on_action(|_: &CheckForUpdates, _cx: &mut App| {
+            updater::check_for_updates();
+        });
+
         cx.set_menus(vec![
             Menu {
                 name: "con".into(),
                 items: vec![
+                    MenuItem::action("Check for Updates…", CheckForUpdates),
+                    MenuItem::separator(),
                     MenuItem::action("Settings…", settings_panel::ToggleSettings),
                     MenuItem::separator(),
                     MenuItem::action("Quit con", Quit),
@@ -249,5 +263,9 @@ fn main() {
             true,
             cx,
         );
+
+        // Initialize Sparkle auto-updater (loads framework from app bundle)
+        #[cfg(target_os = "macos")]
+        updater::init();
     });
 }

@@ -17,3 +17,9 @@ dirs.workspace = true
 uuid.workspace = true
 futures.workspace = true
 tokio.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }

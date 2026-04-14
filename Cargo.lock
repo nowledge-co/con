@@ -1232,6 +1232,7 @@ dependencies = [
  "dirs 6.0.0",
  "futures",
  "log",
+ "objc",
  "parking_lot",
  "serde",
  "serde_json",

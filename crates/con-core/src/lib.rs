@@ -1,6 +1,7 @@
 pub mod config;
 pub mod control;
 pub mod harness;
+pub mod release_channel;
 pub mod session;
 pub mod suggestions;
 

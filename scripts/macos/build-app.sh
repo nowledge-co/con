@@ -52,4 +52,15 @@ generate_info_plist "$contents_dir/Info.plist"
 
 printf 'APPL????' >"$contents_dir/PkgInfo"
 
+# Embed Sparkle.framework if available (downloaded by scripts/sparkle/download.sh)
+sparkle_framework="${SPARKLE_DIR:-$REPO_ROOT/.sparkle}/Sparkle.framework"
+if [[ -d "$sparkle_framework" ]]; then
+  frameworks_dir="$contents_dir/Frameworks"
+  mkdir -p "$frameworks_dir"
+  rsync -a "$sparkle_framework" "$frameworks_dir/"
+  log "Embedded Sparkle.framework"
+else
+  log "Sparkle.framework not found — auto-update will be disabled at runtime"
+fi
+
 log "App bundle ready: $CON_APP_BUNDLE_PATH"

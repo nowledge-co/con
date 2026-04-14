@@ -77,9 +77,6 @@ derive_marketing_version() {
 }
 
 derive_build_number() {
-  local version="$1"
-  local channel="$2"
-  local marketing_version="$3"
   local build_number="${CON_BUILD_NUMBER:-}"
 
   if [[ -n "$build_number" ]]; then
@@ -87,12 +84,20 @@ derive_build_number() {
     return
   fi
 
-  if [[ "$channel" == "beta" && -n "${GITHUB_RUN_NUMBER:-}" ]]; then
-    printf '%s.%s\n' "$marketing_version" "$GITHUB_RUN_NUMBER"
+  # Use GITHUB_RUN_NUMBER when available — it is a monotonically increasing
+  # integer scoped to the workflow, which gives Sparkle a reliable
+  # "always-increasing" value for CFBundleVersion regardless of channel.
+  if [[ -n "${GITHUB_RUN_NUMBER:-}" ]]; then
+    printf '%s\n' "$GITHUB_RUN_NUMBER"
     return
   fi
 
-  printf '%s\n' "$marketing_version"
+  # Local fallback: 0.  Dev channel never polls for updates, so the
+  # build number only appears in Finder "Get Info".  Using 0 ensures
+  # any CI build (GITHUB_RUN_NUMBER >= 1) is always considered newer,
+  # preventing the version-comparison trap where a local build's large
+  # epoch timestamp makes CI releases look like downgrades.
+  printf '0\n'
 }
 
 setup_release_env() {
@@ -109,7 +114,7 @@ setup_release_env() {
   export CON_RUST_TARGET="${CON_RUST_TARGET:-$(default_rust_target "$CON_ARCH")}"
   export CON_APP_VERSION="${CON_APP_VERSION:-$(read_workspace_version)}"
   export CON_MARKETING_VERSION="${CON_MARKETING_VERSION:-$(derive_marketing_version "$CON_APP_VERSION")}"
-  export CON_BUILD_NUMBER="$(derive_build_number "$CON_APP_VERSION" "$CON_CHANNEL" "$CON_MARKETING_VERSION")"
+  export CON_BUILD_NUMBER="$(derive_build_number)"
   export CON_BUNDLE_ID_BASE="${CON_BUNDLE_ID_BASE:-co.nowledge.con}"
   export CON_MINIMUM_SYSTEM_VERSION="${CON_MINIMUM_SYSTEM_VERSION:-10.15.7}"
   export CON_ICON_SOURCE="${CON_ICON_SOURCE:-$REPO_ROOT/assets/Con-macOS-Dark-1024x1024@1x.png}"
@@ -123,6 +128,12 @@ setup_release_env() {
   fi
   export CON_BUNDLE_ID="${CON_BUNDLE_ID:-$default_bundle_id}"
   export CON_APP_NAME="${CON_APP_NAME:-$default_app_name}"
+
+  # Derive Sparkle feed URL from channel + arch if not explicitly set.
+  # Pattern: https://con-releases.nowledge.co/appcast/{channel}-macos-{arch}.xml
+  if [[ -z "${CON_SPARKLE_FEED_URL:-}" && -n "${CON_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+    export CON_SPARKLE_FEED_URL="https://con-releases.nowledge.co/appcast/${CON_CHANNEL}-macos-${CON_ARCH}.xml"
+  fi
 
   export CON_APP_BUNDLE_PATH="$CON_DIST_ROOT/$CON_APP_NAME.app"
   export CON_APP_ZIP_PATH="$CON_DIST_ROOT/${CON_APP_NAME// /-}-${CON_APP_VERSION}-macos-${CON_ARCH}.zip"

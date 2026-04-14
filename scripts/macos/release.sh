@@ -32,21 +32,52 @@ sign_container() {
 
 sign_app_bundle() {
   local app_path="$1"
-  local nested_files=()
 
+  # Signing must proceed inside-out: deepest nested code first,
+  # then enclosing bundles, then the app itself.
+  #
+  # Strategy: collect every signable target with its depth, sort
+  # deepest-first, sign in that order.  This avoids recursive
+  # functions and the double-signing they risk.
+
+  local frameworks_dir="$app_path/Contents/Frameworks"
+
+  # 1. Sign all individual executables and libraries inside embedded
+  #    frameworks (XPC helpers, nested dylibs, etc.).
+  if [[ -d "$frameworks_dir" ]]; then
+    while IFS= read -r nested; do
+      sign_code "$nested"
+    done < <(
+      find "$frameworks_dir" -type f \
+        \( -name '*.dylib' -o -name '*.so' -o -perm -111 \) \
+        ! -path '*/Resources/*' \
+        | sort
+    )
+
+    # 2. Sign XPC service bundles (inside frameworks).
+    while IFS= read -r -d '' xpc; do
+      sign_code "$xpc"
+    done < <(find "$frameworks_dir" -name '*.xpc' -print0 2>/dev/null || true)
+
+    # 3. Sign framework bundles themselves.
+    while IFS= read -r -d '' fw; do
+      sign_code "$fw"
+    done < <(find "$frameworks_dir" -maxdepth 1 -name '*.framework' -print0 2>/dev/null || true)
+  fi
+
+  # 4. Sign loose executables in the app (the main binary, etc.),
+  #    excluding anything already covered by the framework pass.
   while IFS= read -r nested; do
-    nested_files+=("$nested")
+    sign_code "$nested"
   done < <(
     find "$app_path/Contents" -type f \
       \( -name '*.dylib' -o -name '*.so' -o -perm -111 \) \
       ! -path '*/Resources/*' \
+      ! -path '*/Frameworks/*' \
       | sort
   )
 
-  for nested in "${nested_files[@]}"; do
-    sign_code "$nested"
-  done
-
+  # 5. Sign the top-level app bundle.
   sign_code "$app_path"
 }
 
