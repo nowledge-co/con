@@ -3,7 +3,10 @@ use con_agent::{
     SuggestionModelConfig, authorize_oauth_provider,
 };
 use con_agent::provider::AgentPurpose;
-use con_core::Config;
+use con_core::{
+    Config,
+    config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE},
+};
 use futures::{FutureExt, StreamExt};
 use gpui::*;
 
@@ -105,6 +108,7 @@ pub struct SettingsPanel {
     terminal_font_select: Entity<SelectState<SearchableVec<String>>>,
     ui_font_select: Entity<SelectState<SearchableVec<String>>>,
     font_size_input: Entity<InputState>,
+    ui_font_size_input: Entity<InputState>,
     terminal_opacity_slider: Entity<SliderState>,
     ui_opacity_slider: Entity<SliderState>,
     background_image_input: Entity<InputState>,
@@ -167,6 +171,10 @@ struct EndpointPreset {
 }
 
 impl SettingsPanel {
+    fn clamp_ui_font_size(value: f32) -> f32 {
+        value.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE)
+    }
+
     fn clamp_terminal_opacity(value: f32) -> f32 {
         value.clamp(0.25, 1.0)
     }
@@ -792,6 +800,16 @@ impl SettingsPanel {
             s.set_value(&config.terminal.font_size.to_string(), window, cx);
             s
         });
+        let ui_font_size_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            s.set_placeholder("16.0", window, cx);
+            s.set_value(
+                &Self::clamp_ui_font_size(config.appearance.ui_font_size).to_string(),
+                window,
+                cx,
+            );
+            s
+        });
         let terminal_opacity_slider = cx.new(|_| {
             SliderState::new()
                 .min(0.25)
@@ -1043,6 +1061,7 @@ impl SettingsPanel {
             terminal_font_select,
             ui_font_select,
             font_size_input,
+            ui_font_size_input,
             terminal_opacity_slider,
             ui_opacity_slider,
             background_image_input,
@@ -1125,6 +1144,13 @@ impl SettingsPanel {
             });
             self.font_size_input.update(cx, |s, cx| {
                 s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
+            });
+            self.ui_font_size_input.update(cx, |s, cx| {
+                s.set_value(
+                    &Self::clamp_ui_font_size(self.config.appearance.ui_font_size).to_string(),
+                    window,
+                    cx,
+                )
             });
             self.terminal_opacity_slider.update(cx, |slider, cx| {
                 slider.set_value(
@@ -1446,6 +1472,7 @@ impl SettingsPanel {
             .cloned()
             .unwrap_or_default();
         let font_size_text = self.font_size_input.read(cx).value().to_string();
+        let ui_font_size_text = self.ui_font_size_input.read(cx).value().trim().to_string();
 
         // Save current provider's per-provider fields into the map
         let pc = self.read_provider_inputs(cx);
@@ -1469,6 +1496,20 @@ impl SettingsPanel {
             },
         };
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
+        let parsed_ui_font_size = if ui_font_size_text.is_empty() {
+            Some(self.config.appearance.ui_font_size)
+        } else {
+            ui_font_size_text.parse::<f32>().ok()
+        };
+        let Some(parsed_ui_font_size) = parsed_ui_font_size else {
+            self.save_error = Some(format!(
+                "UI Size must be a number between {:.1} and {:.1}.",
+                MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE
+            ));
+            cx.notify();
+            return;
+        };
+        self.config.appearance.ui_font_size = Self::clamp_ui_font_size(parsed_ui_font_size);
         self.config.appearance.terminal_opacity =
             Self::clamp_terminal_opacity(self.terminal_opacity_slider.read(cx).value().end());
         self.config.appearance.ui_opacity =
@@ -2035,6 +2076,7 @@ impl SettingsPanel {
         let terminal_font_select = self.terminal_font_select.clone();
         let ui_font_select = self.ui_font_select.clone();
         let font_size_input = self.font_size_input.clone();
+        let ui_font_size_input = self.ui_font_size_input.clone();
         let terminal_opacity_slider = self.terminal_opacity_slider.clone();
         let ui_opacity_slider = self.ui_opacity_slider.clone();
         let background_image_input = self.background_image_input.clone();
@@ -2249,6 +2291,8 @@ impl SettingsPanel {
                             "Search fonts…",
                             theme,
                         ))
+                        .child(row_separator(theme))
+                        .child(row_field("UI Size", &ui_font_size_input))
                         .child(row_separator(theme))
                         .child(row_field("Terminal Size", &font_size_input)),
                 ),

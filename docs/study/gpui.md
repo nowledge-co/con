@@ -1,8 +1,8 @@
-# Study: GPUI (Community Edition)
+# Study: GPUI
 
 ## Overview
 
-GPUI-CE is the community fork of Zed's GPU-accelerated UI framework. Apache 2.0 licensed.
+con currently builds against the upstream GPUI crates from the Zed repository, not a local GPUI-CE checkout. The framework remains Apache 2.0 licensed.
 
 ## Key Properties
 
@@ -10,7 +10,7 @@ GPUI-CE is the community fork of Zed's GPU-accelerated UI framework. Apache 2.0 
 - **Text**: Core Text (macOS), cosmic-text (Linux), DirectWrite (Windows)
 - **Layout**: taffy (flexbox/CSS Grid)
 - **IME**: Full InputHandler trait — macOS AppKit, Linux X11 xim, Windows WM_IME
-- **Version**: 0.3.3 (crate: gpui-ce, lib name: gpui)
+- **Source**: upstream `zed-industries/zed` git dependency (crate name: `gpui`)
 
 ## Programming Model
 
@@ -40,24 +40,13 @@ fn paint_terminal(grid: &Grid, cx: &mut PaintContext) {
 
 GPUI's text shaping handles ligatures, emoji, CJK — same quality as Zed's editor.
 
-## Scaffolding
+## Reference Sources
 
-`3pp/create-gpui-app` provides templates:
-- `default/` — single binary app
-- `workspace/` — multi-crate workspace
+Read these upstream or read-only reference sources when you need framework details:
 
-We'll use the workspace pattern but customize for our crate structure.
-
-## Key Files in 3pp
-
-- `3pp/gpui-ce/src/gpui.rs` — main exports
-- `3pp/gpui-ce/examples/learn/` — layout, styling, text, animation examples
-- `3pp/create-gpui-app/templates/` — project scaffolding templates
-- `3pp/awesome-gpui/README.md` — community apps including `termy` (terminal emulator)
+- upstream `gpui` crates under the Zed repository checkout
+- `3pp/` reference material in this repo, when present, as read-only study material only
 
 ## Dependency
 
-In our Cargo.toml:
-```toml
-gpui = { path = "3pp/gpui-ce", package = "gpui-ce" }
-```
+In our workspace manifest, GPUI resolves from the upstream Zed git source rather than a local path dependency.

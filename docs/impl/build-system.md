@@ -43,12 +43,20 @@ members = [
 
 | Dependency | Purpose |
 |------------|---------|
-| `gpui` | native GPU UI framework |
-| `gpui-component` | reusable UI controls |
-| `rig-core` | multi-provider agent runtime |
+| `gpui` | native GPU UI framework (upstream Zed git source) |
+| `gpui-component` | reusable UI controls (upstream Longbridge git source) |
+| `rig-core` | multi-provider agent runtime (pinned fork revision) |
 | `tokio` | async runtime for agent work |
 | `crossbeam-channel` | UI and harness event routing |
 | `reqwest` | live model list fetch from models.dev |
+
+## Dependency sourcing
+
+`con` does not build against live sources in `3pp/`.
+
+- `3pp/` is read-only reference material only.
+- Cargo dependencies resolve from crates.io or explicit git sources in the workspace manifest.
+- Ghostty source is fetched by `con-ghostty/build.rs` when needed, unless an override source directory is provided for local development.
 
 ## Platform boundary
 

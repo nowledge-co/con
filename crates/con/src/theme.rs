@@ -1,3 +1,4 @@
+use con_core::config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE};
 use con_terminal::{Color, TerminalTheme};
 use gpui::App;
 use gpui_component::highlighter::LanguageRegistry;
@@ -158,6 +159,7 @@ pub fn init_theme(
     terminal_theme: &str,
     terminal_font_family: &str,
     ui_font_family: &str,
+    ui_font_size: f32,
 ) {
     register_command_prompt_language();
     cx.text_system()
@@ -194,7 +196,7 @@ pub fn init_theme(
         ThemeMode::Dark
     };
     Theme::change(mode, None, cx);
-    apply_font_overrides(terminal_font_family, ui_font_family, cx);
+    apply_font_overrides(terminal_font_family, ui_font_family, ui_font_size, cx);
     apply_scrollbar_overrides(cx);
 }
 
@@ -219,6 +221,7 @@ pub fn sync_gpui_theme(
     terminal_theme: &TerminalTheme,
     terminal_font_family: &str,
     ui_font_family: &str,
+    ui_font_size: f32,
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) {
@@ -229,13 +232,23 @@ pub fn sync_gpui_theme(
         ThemeMode::Dark
     };
     Theme::change(mode, Some(window), cx);
-    apply_font_overrides(terminal_font_family, ui_font_family, cx);
+    apply_font_overrides(terminal_font_family, ui_font_family, ui_font_size, cx);
     apply_scrollbar_overrides(cx);
 }
 
-fn apply_font_overrides(terminal_font_family: &str, ui_font_family: &str, cx: &mut App) {
+fn apply_font_overrides(
+    terminal_font_family: &str,
+    ui_font_family: &str,
+    ui_font_size: f32,
+    cx: &mut App,
+) {
     Theme::global_mut(cx).mono_font_family = terminal_font_family.to_string().into();
     Theme::global_mut(cx).font_family = ui_font_family.to_string().into();
+    let clamped_ui_font_size = ui_font_size.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE);
+    Theme::global_mut(cx).font_size = gpui::px(clamped_ui_font_size);
+    Theme::global_mut(cx).mono_font_size = gpui::px(
+        (clamped_ui_font_size - 3.0).clamp(MIN_UI_FONT_SIZE - 1.0, MAX_UI_FONT_SIZE - 3.0),
+    );
 }
 
 /// Apply con's scrollbar overrides after any Theme::change call.

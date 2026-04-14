@@ -381,6 +381,7 @@ fn main() {
             &config.terminal.theme,
             &config.terminal.font_family,
             &config.appearance.ui_font_family,
+            config.appearance.ui_font_size,
         );
 
         // Register ghostty terminal key bindings (Tab interception, etc.)

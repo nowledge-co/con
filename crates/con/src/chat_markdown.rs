@@ -1,7 +1,10 @@
+use std::cell::RefCell;
+use std::sync::Arc;
+
 use gpui::{
     AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, IntoElement,
-    ParentElement, SharedString, Styled, StyledText, TextStyle, UnderlineStyle, WhiteSpace, div,
-    px,
+    ParentElement, SharedString, Styled, StyledText, TextStyle, TextRun, UnderlineStyle,
+    WhiteSpace, div, px,
 };
 use gpui_component::clipboard::Clipboard;
 use gpui_component::highlighter::SyntaxHighlighter;
@@ -15,7 +18,7 @@ pub enum ChatMarkdownTone {
     Thinking,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 enum MarkdownBlock {
     Paragraph(Vec<MarkdownInline>),
     Heading {
@@ -25,6 +28,7 @@ enum MarkdownBlock {
     CodeBlock {
         language: Option<String>,
         code: String,
+        highlight_cache: RefCell<Option<CachedCodeHighlightRuns>>,
     },
     BlockQuote(Vec<MarkdownBlock>),
     List {
@@ -38,6 +42,63 @@ enum MarkdownBlock {
     },
     Rule,
 }
+
+impl PartialEq for MarkdownBlock {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Paragraph(a), Self::Paragraph(b)) => a == b,
+            (
+                Self::Heading {
+                    level: level_a,
+                    inlines: inlines_a,
+                },
+                Self::Heading {
+                    level: level_b,
+                    inlines: inlines_b,
+                },
+            ) => level_a == level_b && inlines_a == inlines_b,
+            (
+                Self::CodeBlock {
+                    language: language_a,
+                    code: code_a,
+                    ..
+                },
+                Self::CodeBlock {
+                    language: language_b,
+                    code: code_b,
+                    ..
+                },
+            ) => language_a == language_b && code_a == code_b,
+            (Self::BlockQuote(a), Self::BlockQuote(b)) => a == b,
+            (
+                Self::List {
+                    ordered: ordered_a,
+                    start: start_a,
+                    items: items_a,
+                },
+                Self::List {
+                    ordered: ordered_b,
+                    start: start_b,
+                    items: items_b,
+                },
+            ) => ordered_a == ordered_b && start_a == start_b && items_a == items_b,
+            (
+                Self::Table {
+                    aligns: aligns_a,
+                    rows: rows_a,
+                },
+                Self::Table {
+                    aligns: aligns_b,
+                    rows: rows_b,
+                },
+            ) => aligns_a == aligns_b && rows_a == rows_b,
+            (Self::Rule, Self::Rule) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MarkdownBlock {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MarkdownTableAlign {
@@ -60,6 +121,19 @@ enum MarkdownInline {
     },
     SoftBreak,
     LineBreak,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodeHighlightCacheKey {
+    highlight_theme_ptr: usize,
+    mono_font_family: SharedString,
+    mono_font_size_bits: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CachedCodeHighlightRuns {
+    key: CodeHighlightCacheKey,
+    runs: Option<Vec<Vec<TextRun>>>,
 }
 
 struct ChatMarkdownStyle<'a> {
@@ -207,9 +281,26 @@ impl<'a> ChatMarkdownStyle<'a> {
     }
 }
 
-pub fn render_chat_markdown(source: &str, tone: ChatMarkdownTone, theme: &Theme) -> AnyElement {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedChatMarkdown {
+    blocks: Vec<MarkdownBlock>,
+}
+
+impl ParsedChatMarkdown {
+    pub fn parse(source: &str) -> Self {
+        Self {
+            blocks: parse_markdown(source),
+        }
+    }
+}
+
+pub fn render_parsed_chat_markdown(
+    document: &ParsedChatMarkdown,
+    tone: ChatMarkdownTone,
+    theme: &Theme,
+) -> AnyElement {
     let style = ChatMarkdownStyle::new(theme, tone);
-    let blocks = parse_markdown(source);
+    let blocks = &document.blocks;
 
     if blocks.is_empty() {
         return div().into_any_element();
@@ -221,12 +312,7 @@ pub fn render_chat_markdown(source: &str, tone: ChatMarkdownTone, theme: &Theme)
         .flex_col()
         .gap(style.block_gap)
         .max_w(style.content_width)
-        .children(
-            blocks
-                .iter()
-                .enumerate()
-                .map(|(idx, block)| render_block(block, idx, &style)),
-        )
+        .children(blocks.iter().enumerate().map(|(idx, block)| render_block(block, idx, &style)))
         .into_any_element()
 }
 
@@ -252,6 +338,7 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
         mdast::Node::Code(raw) => Some(MarkdownBlock::CodeBlock {
             language: raw.lang.clone().filter(|lang| !lang.trim().is_empty()),
             code: raw.value.clone(),
+            highlight_cache: RefCell::new(None),
         }),
         mdast::Node::Blockquote(val) => Some(MarkdownBlock::BlockQuote(
             val.children.iter().filter_map(parse_block_node).collect(),
@@ -307,14 +394,17 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
         mdast::Node::Yaml(val) => Some(MarkdownBlock::CodeBlock {
             language: Some("yml".to_string()),
             code: val.value.clone(),
+            highlight_cache: RefCell::new(None),
         }),
         mdast::Node::Toml(val) => Some(MarkdownBlock::CodeBlock {
             language: Some("toml".to_string()),
             code: val.value.clone(),
+            highlight_cache: RefCell::new(None),
         }),
         mdast::Node::Math(val) => Some(MarkdownBlock::CodeBlock {
             language: None,
             code: val.value.clone(),
+            highlight_cache: RefCell::new(None),
         }),
         mdast::Node::FootnoteDefinition(def) => Some(MarkdownBlock::Paragraph(
             std::iter::once(MarkdownInline::Text(format!("[{}]: ", def.identifier)))
@@ -461,9 +551,11 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
                 style,
             ))
             .into_any_element(),
-        MarkdownBlock::CodeBlock { language, code } => {
-            render_code_block(index, language, code, style)
-        }
+        MarkdownBlock::CodeBlock {
+            language,
+            code,
+            highlight_cache,
+        } => render_code_block(index, language, code, highlight_cache, style),
         MarkdownBlock::BlockQuote(blocks) => div()
             .w_full()
             .px(px(10.0))
@@ -664,6 +756,7 @@ fn render_code_block(
     _index: usize,
     language: &Option<String>,
     code: &str,
+    highlight_cache: &RefCell<Option<CachedCodeHighlightRuns>>,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
     let mono_style = style.code_text_style();
@@ -722,7 +815,7 @@ fn render_code_block(
         );
 
     let mut code_column = div().flex().flex_col().gap(px(0.0)).w_full();
-    let syntax_runs = highlighted_code_runs(code, language, style);
+    let syntax_runs = cached_highlighted_code_runs(code, language, highlight_cache, style);
 
     for (line_idx, line) in lines.iter().enumerate() {
         let display_line = if line.is_empty() { "\u{200B}" } else { line };
@@ -767,6 +860,38 @@ fn render_code_block(
             ),
         )
         .into_any_element()
+}
+
+fn cached_highlighted_code_runs(
+    code: &str,
+    language: &Option<String>,
+    cache: &RefCell<Option<CachedCodeHighlightRuns>>,
+    style: &ChatMarkdownStyle<'_>,
+) -> Option<Vec<Vec<TextRun>>> {
+    let key = CodeHighlightCacheKey {
+        highlight_theme_ptr: Arc::as_ptr(&style.theme.highlight_theme) as usize,
+        mono_font_family: style.theme.mono_font_family.clone(),
+        mono_font_size_bits: {
+            let size: f32 = style.code_font_size.into();
+            size.to_bits()
+        },
+    };
+
+    {
+        let cached = cache.borrow();
+        if let Some(cached) = cached.as_ref()
+            && cached.key == key
+        {
+            return cached.runs.clone();
+        }
+    }
+
+    let runs = highlighted_code_runs(code, language, style);
+    *cache.borrow_mut() = Some(CachedCodeHighlightRuns {
+        key,
+        runs: runs.clone(),
+    });
+    runs
 }
 
 fn highlighted_code_runs(

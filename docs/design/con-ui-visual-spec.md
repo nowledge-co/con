@@ -58,21 +58,20 @@ From strong terminal-native UX patterns, con should inherit:
 - keyboard-forward usability
 - clearer session and task orientation
 
-What makes con distinct is that all of these qualities must be adapted to a **dark-first, terminal-native** environment.
+What makes con distinct is that all of these qualities must be adapted to a **terminal-native** environment without losing polish in either theme.
 
 ---
 
 ## Theme Strategy
 
-### Dark-first by default
+### Light-first by default
 
-The design system should be built from dark mode outward.
-Dark mode is the primary design language, optimized for long terminal sessions.
+Flexoki Light is the default shipping theme, so the design system must hold up in light mode first.
 
-### Light mode as premium alternative
+### Dark mode as equal partner
 
-Light mode must feel equally polished, not an afterthought.
-Reference: Nowledge production UI demonstrates the quality bar.
+Dark mode must feel equally polished, not like a downgraded variant.
+The product should feel native and intentional in either theme.
 
 ### Surface philosophy
 

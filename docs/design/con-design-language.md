@@ -62,20 +62,9 @@ The goal is not to imitate any one reference. The goal is to produce a design la
 
 ## Dual Theme Philosophy
 
-con is light-first (Flexoki Light default) but must excel in both themes. Following Apple's design language.
+con is light-first (Flexoki Light default) but must excel in both themes.
 
-### Dark Mode (Primary) - Apple Style
-
-- **Base**: `#0a0a0b` (near-black, not gray)
-- **Surfaces**: White at 2-8% opacity (`bg-white/[0.02]` to `bg-white/[0.08]`)
-- **Text primary**: White at 100%
-- **Text secondary**: White at 60%
-- **Text muted**: White at 30-40%
-- **Borders**: White at 4-6% opacity (nearly invisible)
-- **Interactive hover**: White at 4-6% opacity lift
-- **Accent**: Blue `#3b82f6` for agent/AI, Amber for warnings
-
-### Light Mode - Apple Style
+### Light Mode (Default) - Apple Style
 
 - **Base**: Pure white `#ffffff`
 - **Surfaces**: Black at 2-6% opacity (`bg-black/[0.02]` to `bg-black/[0.06]`)
@@ -84,7 +73,18 @@ con is light-first (Flexoki Light default) but must excel in both themes. Follow
 - **Text muted**: Black at 25-40%
 - **Borders**: Black at 4-6% opacity (nearly invisible)
 - **Interactive hover**: Black at 3-6% opacity lift
-- **Accent**: Blue `#2563eb` for agent/AI, Amber for warnings
+- **Accent**: Blue `#2563eb` for agent/AI, amber for warnings
+
+### Dark Mode - Apple Style
+
+- **Base**: `#0a0a0b` (near-black, not gray)
+- **Surfaces**: White at 2-8% opacity (`bg-white/[0.02]` to `bg-white/[0.08]`)
+- **Text primary**: White at 100%
+- **Text secondary**: White at 60%
+- **Text muted**: White at 30-40%
+- **Borders**: White at 4-6% opacity (nearly invisible)
+- **Interactive hover**: White at 4-6% opacity lift
+- **Accent**: Blue `#3b82f6` for agent/AI, amber for warnings
 
 ### Key Rules
 
@@ -93,7 +93,7 @@ con is light-first (Flexoki Light default) but must excel in both themes. Follow
 - **Opacity-based system** - All neutrals derived from white/black with opacity
 - **Single accent color** - Blue for AI/agent, used sparingly
 
-### Light Mode (v0.6 Nowledge-inspired)
+### Light Mode Details (Nowledge-inspired)
 
 Following the Nowledge Graph Design System's **borderless, colorless** philosophy:
 
