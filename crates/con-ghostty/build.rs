@@ -14,7 +14,12 @@ fn main() {
 
     // Build libghostty via zig build
     let status = Command::new("zig")
-        .args(["build", "-Dapp-runtime=none", "-Dxcframework-target=native"])
+        .args([
+            "build",
+            "-Dapp-runtime=none",
+            "-Dxcframework-target=native",
+            "-Demit-macos-app=false",
+        ])
         .current_dir(&ghostty_dir)
         .status()
         .expect("failed to run zig build — is zig installed?");
