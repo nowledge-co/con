@@ -163,7 +163,11 @@ pub(crate) fn app_build_number() -> String {
 }
 
 fn show_about_dialog(cx: &mut App) {
-    let Some(window_handle) = cx.active_window() else {
+    let window_handle = cx
+        .active_window()
+        .or_else(|| cx.window_stack().and_then(|stack| stack.into_iter().next()));
+    let Some(window_handle) = window_handle else {
+        log::warn!("about: no active window available");
         return;
     };
     let version = app_display_version();
