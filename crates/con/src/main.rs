@@ -162,6 +162,34 @@ pub(crate) fn app_build_number() -> String {
     build
 }
 
+fn about_panel_name() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        bundle_info_value(b"CFBundleDisplayName\0")
+            .or_else(|| bundle_info_value(b"CFBundleName\0"))
+            .unwrap_or_else(|| "con".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "con".to_string()
+    }
+}
+
+fn about_panel_version_detail() -> String {
+    let version = app_display_version();
+    let build = app_build_number();
+    let channel = con_core::release_channel::current().display_name();
+
+    if build.is_empty() || build == version {
+        match con_core::release_channel::current() {
+            con_core::release_channel::ReleaseChannel::Dev => "Development Build".to_string(),
+            _ => channel.to_string(),
+        }
+    } else {
+        format!("Build {build} • {channel}")
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn show_about_panel() {
     use cocoa::appkit::NSApp;
@@ -176,10 +204,11 @@ fn show_about_panel() {
             return;
         }
 
+        let app_name = about_panel_name();
         let version = app_display_version();
-        let build = app_build_number();
-        let channel = con_core::release_channel::current().display_name();
-        let credits_text = "The terminal emulator with AI harness, nothing more.\nhttps://github.com/nowledge-co/con";
+        let version_detail = about_panel_version_detail();
+        let credits_text =
+            "The terminal emulator with AI harness, nothing more.\nOpen source at github.com/nowledge-co/con";
 
         let options: *mut objc::runtime::Object = msg_send![class!(NSMutableDictionary), new];
         let icon: *mut objc::runtime::Object = msg_send![app, applicationIconImage];
@@ -195,12 +224,33 @@ fn show_about_panel() {
         let credits_key: *mut objc::runtime::Object =
             msg_send![class!(NSString), stringWithUTF8String: b"Credits\0".as_ptr()];
 
-        let app_name = NSString::alloc(nil).init_str("con");
+        let app_name = NSString::alloc(nil).init_str(&app_name);
         let app_version = NSString::alloc(nil).init_str(&version);
-        let build_info = NSString::alloc(nil).init_str(&format!("Build {build} • {channel}"));
+        let build_info = NSString::alloc(nil).init_str(&version_detail);
         let credits = NSString::alloc(nil).init_str(credits_text);
+        let paragraph_style: *mut objc::runtime::Object =
+            msg_send![class!(NSMutableParagraphStyle), new];
+        let _: () = msg_send![paragraph_style, setAlignment: 2usize];
+        let font: *mut objc::runtime::Object =
+            msg_send![class!(NSFont), systemFontOfSize: 13.0f64];
+        let color: *mut objc::runtime::Object = msg_send![class!(NSColor), secondaryLabelColor];
+
+        let font_attr_name: *mut objc::runtime::Object =
+            msg_send![class!(NSString), stringWithUTF8String: b"NSFont\0".as_ptr()];
+        let color_attr_name: *mut objc::runtime::Object =
+            msg_send![class!(NSString), stringWithUTF8String: b"NSColor\0".as_ptr()];
+        let paragraph_attr_name: *mut objc::runtime::Object =
+            msg_send![class!(NSString), stringWithUTF8String: b"NSParagraphStyle\0".as_ptr()];
+
+        let attr_objects = [font, color, paragraph_style];
+        let attr_keys = [font_attr_name, color_attr_name, paragraph_attr_name];
+        let attributes: *mut objc::runtime::Object =
+            msg_send![class!(NSDictionary), dictionaryWithObjects: attr_objects.as_ptr()
+                                                      forKeys: attr_keys.as_ptr()
+                                                        count: attr_objects.len()];
         let credits_attr: *mut objc::runtime::Object = msg_send![class!(NSAttributedString), alloc];
-        let credits_attr: *mut objc::runtime::Object = msg_send![credits_attr, initWithString: credits];
+        let credits_attr: *mut objc::runtime::Object =
+            msg_send![credits_attr, initWithString: credits attributes: attributes];
 
         let _: () = msg_send![options, setObject: app_name forKey: app_name_key];
         if icon != nil {
