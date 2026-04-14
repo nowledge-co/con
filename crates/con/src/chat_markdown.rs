@@ -18,7 +18,7 @@ pub enum ChatMarkdownTone {
     Thinking,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 enum MarkdownBlock {
     Paragraph(Vec<MarkdownInline>),
     Heading {
@@ -42,6 +42,63 @@ enum MarkdownBlock {
     },
     Rule,
 }
+
+impl PartialEq for MarkdownBlock {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Paragraph(a), Self::Paragraph(b)) => a == b,
+            (
+                Self::Heading {
+                    level: level_a,
+                    inlines: inlines_a,
+                },
+                Self::Heading {
+                    level: level_b,
+                    inlines: inlines_b,
+                },
+            ) => level_a == level_b && inlines_a == inlines_b,
+            (
+                Self::CodeBlock {
+                    language: language_a,
+                    code: code_a,
+                    ..
+                },
+                Self::CodeBlock {
+                    language: language_b,
+                    code: code_b,
+                    ..
+                },
+            ) => language_a == language_b && code_a == code_b,
+            (Self::BlockQuote(a), Self::BlockQuote(b)) => a == b,
+            (
+                Self::List {
+                    ordered: ordered_a,
+                    start: start_a,
+                    items: items_a,
+                },
+                Self::List {
+                    ordered: ordered_b,
+                    start: start_b,
+                    items: items_b,
+                },
+            ) => ordered_a == ordered_b && start_a == start_b && items_a == items_b,
+            (
+                Self::Table {
+                    aligns: aligns_a,
+                    rows: rows_a,
+                },
+                Self::Table {
+                    aligns: aligns_b,
+                    rows: rows_b,
+                },
+            ) => aligns_a == aligns_b && rows_a == rows_b,
+            (Self::Rule, Self::Rule) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MarkdownBlock {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MarkdownTableAlign {
