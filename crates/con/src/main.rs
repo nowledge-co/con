@@ -223,9 +223,7 @@ impl Render for AboutView {
                     .child(
                         div()
                             .size(px(88.0))
-                            .rounded(px(18.0))
-                            .bg(theme.secondary.opacity(0.22))
-                            .p(px(6.0))
+                            .p(px(2.0))
                             .child(
                                 img("Con-macOS-Dark-256x256@2x.png")
                                     .size_full()
@@ -273,18 +271,11 @@ impl Render for AboutView {
                             .items_center()
                             .gap(px(6.0))
                             .child(
-                                div()
-                                    .px(px(12.0))
-                                    .py(px(8.0))
-                                    .rounded(px(10.0))
-                                    .bg(theme.secondary.opacity(0.45))
-                                    .child(
-                                        Link::new("about-repo")
-                                            .href(repo_url)
-                                            .text_size(px(12.5))
-                                            .font_family(theme.mono_font_family.clone())
-                                            .child(repo_url),
-                                    ),
+                                Link::new("about-repo")
+                                    .href(repo_url)
+                                    .text_size(px(12.5))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .child(repo_url),
                             ),
                     )
                     .child(
