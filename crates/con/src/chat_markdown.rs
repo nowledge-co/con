@@ -207,9 +207,26 @@ impl<'a> ChatMarkdownStyle<'a> {
     }
 }
 
-pub fn render_chat_markdown(source: &str, tone: ChatMarkdownTone, theme: &Theme) -> AnyElement {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedChatMarkdown {
+    blocks: Vec<MarkdownBlock>,
+}
+
+impl ParsedChatMarkdown {
+    pub fn parse(source: &str) -> Self {
+        Self {
+            blocks: parse_markdown(source),
+        }
+    }
+}
+
+pub fn render_parsed_chat_markdown(
+    document: &ParsedChatMarkdown,
+    tone: ChatMarkdownTone,
+    theme: &Theme,
+) -> AnyElement {
     let style = ChatMarkdownStyle::new(theme, tone);
-    let blocks = parse_markdown(source);
+    let blocks = &document.blocks;
 
     if blocks.is_empty() {
         return div().into_any_element();
@@ -221,12 +238,7 @@ pub fn render_chat_markdown(source: &str, tone: ChatMarkdownTone, theme: &Theme)
         .flex_col()
         .gap(style.block_gap)
         .max_w(style.content_width)
-        .children(
-            blocks
-                .iter()
-                .enumerate()
-                .map(|(idx, block)| render_block(block, idx, &style)),
-        )
+        .children(blocks.iter().enumerate().map(|(idx, block)| render_block(block, idx, &style)))
         .into_any_element()
 }
 

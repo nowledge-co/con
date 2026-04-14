@@ -11,15 +11,14 @@ use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _};
 
 /// Max lines to show for tool result previews in collapsed steps
 const TOOL_RESULT_PREVIEW_LINES: usize = 6;
-/// Max characters to show in expanded thinking section
-const THINKING_DISPLAY_LEN: usize = 2000;
-
 use con_agent::{ConversationSummary, ProviderKind, ToolApprovalDecision, conversation::AgentStep};
 use con_core::harness::HarnessEvent;
 
 use chrono::Utc;
 
-use crate::chat_markdown::{ChatMarkdownTone, render_chat_markdown};
+use crate::chat_markdown::{
+    ChatMarkdownTone, ParsedChatMarkdown, render_parsed_chat_markdown,
+};
 use crate::input_bar::SkillEntry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
 use crate::settings_panel::provider_label;
@@ -186,7 +185,7 @@ impl PanelState {
     pub fn restore_last_assistant_trace(&mut self, thinking: Option<&str>, steps: &[AgentStep]) {
         if let Some(last) = self.messages.last_mut() {
             if last.role == "assistant" {
-                last.thinking = thinking.map(ToOwned::to_owned);
+                last.set_thinking(thinking.map(ToOwned::to_owned));
                 last.steps = restored_steps_from_agent_steps(steps);
                 last.thinking_collapsed = true;
                 if !last.steps.is_empty() {
@@ -250,13 +249,12 @@ impl PanelState {
         self.status = AgentStatus::Thinking;
         if !self.streaming {
             let mut msg = PanelMessage::assistant();
-            msg.thinking = Some(String::new());
+            msg.set_thinking(Some(String::new()));
             self.messages.push(msg);
             self.streaming = true;
         }
         if let Some(last) = self.messages.last_mut() {
-            let thinking = last.thinking.get_or_insert_with(String::new);
-            thinking.push_str(text);
+            last.append_thinking(text);
         }
     }
 
@@ -267,7 +265,7 @@ impl PanelState {
             self.streaming = true;
         }
         if let Some(last) = self.messages.last_mut() {
-            last.content.push_str(token);
+            last.append_content(token);
         }
     }
 
@@ -284,7 +282,7 @@ impl PanelState {
             // in that case, keep whatever was accumulated during streaming.
             if !final_content.is_empty() {
                 if let Some(last) = self.messages.last_mut() {
-                    last.content = final_content.to_string();
+                    last.replace_content(final_content);
                 }
             }
             // Attach metadata to the last assistant message
@@ -486,8 +484,10 @@ impl SelectItem for ProviderSelectItem {
 struct PanelMessage {
     role: String,
     content: String,
+    content_markdown: Option<ParsedChatMarkdown>,
     /// Extended thinking/reasoning text from the model (collapsible)
     thinking: Option<String>,
+    thinking_markdown: Option<ParsedChatMarkdown>,
     thinking_collapsed: bool,
     steps: Vec<StepEntry>,
     steps_collapsed: bool,
@@ -524,7 +524,9 @@ impl PanelMessage {
         Self {
             role: role.to_string(),
             content: content.to_string(),
+            content_markdown: (!content.is_empty()).then(|| ParsedChatMarkdown::parse(content)),
             thinking: None,
+            thinking_markdown: None,
             thinking_collapsed: true,
             steps: Vec::new(),
             steps_collapsed: false,
@@ -535,6 +537,51 @@ impl PanelMessage {
 
     fn assistant() -> Self {
         Self::new("assistant", "")
+    }
+
+    fn append_content(&mut self, token: &str) {
+        self.content.push_str(token);
+        self.content_markdown = None;
+    }
+
+    fn replace_content(&mut self, content: &str) {
+        self.content = content.to_string();
+        self.content_markdown = (!content.is_empty()).then(|| ParsedChatMarkdown::parse(content));
+    }
+
+    fn set_thinking(&mut self, thinking: Option<String>) {
+        self.thinking_markdown = thinking
+            .as_deref()
+            .filter(|text| !text.is_empty())
+            .map(ParsedChatMarkdown::parse);
+        self.thinking = thinking;
+    }
+
+    fn append_thinking(&mut self, text: &str) {
+        let thinking = self.thinking.get_or_insert_with(String::new);
+        thinking.push_str(text);
+        self.thinking_markdown = None;
+    }
+
+    fn content_markdown(&mut self) -> Option<&ParsedChatMarkdown> {
+        if self.content.is_empty() {
+            return None;
+        }
+        if self.content_markdown.is_none() {
+            self.content_markdown = Some(ParsedChatMarkdown::parse(&self.content));
+        }
+        self.content_markdown.as_ref()
+    }
+
+    fn thinking_markdown(&mut self) -> Option<&ParsedChatMarkdown> {
+        let thinking = self.thinking.as_deref()?;
+        if thinking.is_empty() {
+            return None;
+        }
+        if self.thinking_markdown.is_none() {
+            self.thinking_markdown = Some(ParsedChatMarkdown::parse(thinking));
+        }
+        self.thinking_markdown.as_ref()
     }
 }
 
@@ -2350,7 +2397,7 @@ impl Render for AgentPanel {
             .pb(px(64.0))
             .gap(px(16.0));
 
-        for (msg_idx, msg) in self.state.messages.iter().enumerate() {
+        for (msg_idx, msg) in self.state.messages.iter_mut().enumerate() {
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
 
@@ -2635,58 +2682,48 @@ impl Render for AgentPanel {
 
                         // Expanded content
                         if !thinking_collapsed {
-                            let display_text: SharedString = if thinking.len()
-                                > THINKING_DISPLAY_LEN
-                            {
-                                format!(
-                                    "{}…",
-                                    &thinking[..thinking.floor_char_boundary(THINKING_DISPLAY_LEN)]
-                                )
-                                .into()
-                            } else {
-                                thinking.clone().into()
-                            };
-                            msg_el = msg_el.child(
-                                div()
-                                    .ml(px(23.0))
-                                    .mr(px(4.0))
-                                    .mt(px(1.0))
-                                    .mb(px(2.0))
-                                    .px(px(10.0))
-                                    .py(px(7.0))
-                                    .rounded(px(8.0))
-                                    .bg(theme.muted.opacity(0.04))
-                                    .max_h(px(200.0))
-                                    .overflow_y_hidden()
-                                    .text_size(px(12.0))
-                                    .line_height(px(18.0))
-                                    .text_color(theme.muted_foreground.opacity(0.54))
-                                    .child(render_chat_markdown(
-                                        &display_text,
-                                        ChatMarkdownTone::Thinking,
-                                        theme,
-                                    )),
-                            );
+                            let mut thinking_el = div()
+                                .ml(px(23.0))
+                                .mr(px(4.0))
+                                .mt(px(1.0))
+                                .mb(px(2.0))
+                                .px(px(10.0))
+                                .py(px(7.0))
+                                .rounded(px(8.0))
+                                .bg(theme.muted.opacity(0.04))
+                                .max_h(px(200.0))
+                                .overflow_y_hidden()
+                                .text_size(px(12.0))
+                                .line_height(px(18.0))
+                                .text_color(theme.muted_foreground.opacity(0.54));
+                            if let Some(markdown) = msg.thinking_markdown() {
+                                thinking_el = thinking_el.child(render_parsed_chat_markdown(
+                                    markdown,
+                                    ChatMarkdownTone::Thinking,
+                                    theme,
+                                ));
+                            }
+                            msg_el = msg_el.child(thinking_el);
                         }
                     }
                 }
 
                 // Message content — render as markdown
                 if !msg.content.is_empty() {
-                    let content: SharedString = msg.content.clone().into();
-                    msg_el = msg_el.child(
-                        div()
-                            .ml(px(19.0))
-                            .pr(px(4.0))
-                            .text_size(px(14.0))
-                            .line_height(px(23.0))
-                            .text_color(theme.foreground.opacity(0.88))
-                            .child(render_chat_markdown(
-                                &content,
-                                ChatMarkdownTone::Message,
-                                theme,
-                            )),
-                    );
+                    let mut content_el = div()
+                        .ml(px(19.0))
+                        .pr(px(4.0))
+                        .text_size(px(14.0))
+                        .line_height(px(23.0))
+                        .text_color(theme.foreground.opacity(0.88));
+                    if let Some(markdown) = msg.content_markdown() {
+                        content_el = content_el.child(render_parsed_chat_markdown(
+                            markdown,
+                            ChatMarkdownTone::Message,
+                            theme,
+                        ));
+                    }
+                    msg_el = msg_el.child(content_el);
 
                     // Copy button — slightly tighter
                     let content_for_clip = assistant_content_for_copy;
