@@ -91,6 +91,7 @@ pub struct ConWorkspace {
     active_tab: usize,
     terminal_font_family: String,
     ui_font_family: String,
+    ui_font_size: f32,
     font_size: f32,
     terminal_opacity: f32,
     ui_opacity: f32,
@@ -269,6 +270,7 @@ impl ConWorkspace {
         let sidebar = cx.new(|cx| SessionSidebar::new(cx));
         let terminal_font_family = config.terminal.font_family.clone();
         let ui_font_family = config.appearance.ui_font_family.clone();
+        let ui_font_size = config.appearance.ui_font_size;
         let font_size = config.terminal.font_size;
         let terminal_opacity = Self::effective_terminal_opacity(config.appearance.terminal_opacity);
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
@@ -571,6 +573,7 @@ impl ConWorkspace {
             active_tab,
             terminal_font_family,
             ui_font_family,
+            ui_font_size,
             font_size,
             terminal_opacity,
             ui_opacity,
@@ -2301,6 +2304,7 @@ impl ConWorkspace {
         let appearance_config = settings.read(cx).appearance_config().clone();
         self.terminal_font_family = term_config.font_family.clone();
         self.ui_font_family = appearance_config.ui_font_family.clone();
+        self.ui_font_size = appearance_config.ui_font_size;
         self.font_size = term_config.font_size;
         self.terminal_opacity =
             Self::effective_terminal_opacity(appearance_config.terminal_opacity);
@@ -2397,6 +2401,7 @@ impl ConWorkspace {
             &theme,
             &self.terminal_font_family,
             &self.ui_font_family,
+            self.ui_font_size,
             window,
             cx,
         );

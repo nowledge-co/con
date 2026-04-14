@@ -18,6 +18,9 @@ fn default_cursor_style() -> String {
 fn default_ui_font_family() -> String {
     ".SystemUIFont".into()
 }
+fn default_ui_font_size() -> f32 {
+    16.0
+}
 fn default_terminal_opacity() -> f32 {
     0.80
 }
@@ -60,6 +63,7 @@ pub struct AppearanceConfig {
     pub terminal_opacity: f32,
     pub ui_opacity: f32,
     pub ui_font_family: String,
+    pub ui_font_size: f32,
     pub background_image: Option<String>,
     pub background_image_opacity: f32,
     pub background_image_position: String,
@@ -73,6 +77,7 @@ impl Default for AppearanceConfig {
             terminal_opacity: default_terminal_opacity(),
             ui_opacity: default_ui_opacity(),
             ui_font_family: default_ui_font_family(),
+            ui_font_size: default_ui_font_size(),
             background_image: None,
             background_image_opacity: default_background_image_opacity(),
             background_image_position: default_background_image_position(),
