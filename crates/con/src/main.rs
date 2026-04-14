@@ -23,7 +23,11 @@ mod workspace;
 use con_core::config::KeybindingConfig;
 use con_core::session::Session;
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::{
+    ActiveTheme, WindowExt,
+    dialog::{DialogDescription, DialogHeader, DialogTitle},
+    link::Link,
+};
 use workspace::ConWorkspace;
 
 actions!(
@@ -190,82 +194,111 @@ fn about_panel_version_detail() -> String {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn show_about_panel() {
-    use cocoa::appkit::NSApp;
-    use cocoa::base::nil;
-    use cocoa::foundation::NSString;
-    use objc::{class, msg_send, sel, sel_impl};
+fn show_about_dialog(cx: &mut App) {
+    let window_handle = cx
+        .active_window()
+        .or_else(|| cx.window_stack().and_then(|stack| stack.into_iter().next()));
+    let Some(window_handle) = window_handle else {
+        log::warn!("about: no window available");
+        return;
+    };
 
-    unsafe {
-        let app = NSApp();
-        if app == nil {
-            log::warn!("about: NSApp unavailable");
-            return;
-        }
+    let app_name = about_panel_name();
+    let version = app_display_version();
+    let version_detail = about_panel_version_detail();
+    let repo_url = "https://github.com/nowledge-co/con";
 
-        let app_name = about_panel_name();
-        let version = app_display_version();
-        let version_detail = about_panel_version_detail();
-        let credits_text =
-            "The terminal emulator with AI harness, nothing more.\nOpen source at github.com/nowledge-co/con";
-
-        let options: *mut objc::runtime::Object = msg_send![class!(NSMutableDictionary), new];
-        let icon: *mut objc::runtime::Object = msg_send![app, applicationIconImage];
-
-        let app_name_key: *mut objc::runtime::Object =
-            msg_send![class!(NSString), stringWithUTF8String: b"ApplicationName\0".as_ptr()];
-        let app_icon_key: *mut objc::runtime::Object =
-            msg_send![class!(NSString), stringWithUTF8String: b"ApplicationIcon\0".as_ptr()];
-        let app_version_key: *mut objc::runtime::Object =
-            msg_send![class!(NSString), stringWithUTF8String: b"ApplicationVersion\0".as_ptr()];
-        let version_key: *mut objc::runtime::Object =
-            msg_send![class!(NSString), stringWithUTF8String: b"Version\0".as_ptr()];
-        let credits_key: *mut objc::runtime::Object =
-            msg_send![class!(NSString), stringWithUTF8String: b"Credits\0".as_ptr()];
-
-        let app_name = NSString::alloc(nil).init_str(&app_name);
-        let app_version = NSString::alloc(nil).init_str(&version);
-        let build_info = NSString::alloc(nil).init_str(&version_detail);
-        let credits = NSString::alloc(nil).init_str(credits_text);
-        let paragraph_style: *mut objc::runtime::Object =
-            msg_send![class!(NSMutableParagraphStyle), new];
-        let _: () = msg_send![paragraph_style, setAlignment: 2usize];
-        let font: *mut objc::runtime::Object =
-            msg_send![class!(NSFont), systemFontOfSize: 13.0f64];
-        let color: *mut objc::runtime::Object = msg_send![class!(NSColor), secondaryLabelColor];
-
-        let font_attr_name: *mut objc::runtime::Object =
-            msg_send![class!(NSString), stringWithUTF8String: b"NSFont\0".as_ptr()];
-        let color_attr_name: *mut objc::runtime::Object =
-            msg_send![class!(NSString), stringWithUTF8String: b"NSColor\0".as_ptr()];
-        let paragraph_attr_name: *mut objc::runtime::Object =
-            msg_send![class!(NSString), stringWithUTF8String: b"NSParagraphStyle\0".as_ptr()];
-
-        let attr_objects = [font, color, paragraph_style];
-        let attr_keys = [font_attr_name, color_attr_name, paragraph_attr_name];
-        let attributes: *mut objc::runtime::Object =
-            msg_send![class!(NSDictionary), dictionaryWithObjects: attr_objects.as_ptr()
-                                                      forKeys: attr_keys.as_ptr()
-                                                        count: attr_objects.len()];
-        let credits_attr: *mut objc::runtime::Object = msg_send![class!(NSAttributedString), alloc];
-        let credits_attr: *mut objc::runtime::Object =
-            msg_send![credits_attr, initWithString: credits attributes: attributes];
-
-        let _: () = msg_send![options, setObject: app_name forKey: app_name_key];
-        if icon != nil {
-            let _: () = msg_send![options, setObject: icon forKey: app_icon_key];
-        }
-        let _: () = msg_send![options, setObject: app_version forKey: app_version_key];
-        let _: () = msg_send![options, setObject: build_info forKey: version_key];
-        let _: () = msg_send![options, setObject: credits_attr forKey: credits_key];
-
-        let _: () = msg_send![app, orderFrontStandardAboutPanelWithOptions: options];
-    }
+    let _ = window_handle.update(cx, move |_view, window, cx| {
+        let app_name = app_name.clone();
+        let version = version.clone();
+        let version_detail = version_detail.clone();
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let theme = cx.theme();
+            dialog
+                .width(px(440.0))
+                .max_w(px(440.0))
+                .close_button(true)
+                .overlay_closable(true)
+                .title("")
+                .content({
+                    let app_name = app_name.clone();
+                    let version = version.clone();
+                    let version_detail = version_detail.clone();
+                    move |content, _window, cx| {
+                        let theme = cx.theme();
+                        content.child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(16.0))
+                                .pt(px(8.0))
+                                .pb(px(8.0))
+                                .child(
+                                    div()
+                                        .size(px(88.0))
+                                        .rounded(px(22.0))
+                                        .overflow_hidden()
+                                        .child(img("Con-macOS-Dark-256x256@2x.png").size_full()),
+                                )
+                                .child(
+                                    DialogHeader::new()
+                                        .items_center()
+                                        .gap(px(6.0))
+                                        .child(
+                                            DialogTitle::new()
+                                                .text_size(px(25.0))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(app_name.clone()),
+                                        )
+                                        .child(
+                                            DialogDescription::new()
+                                                .text_size(px(14.0))
+                                                .line_height(relative(1.35))
+                                                .text_color(theme.foreground.opacity(0.68))
+                                                .child("The terminal emulator with an AI harness."),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(11.0))
+                                        .py(px(6.0))
+                                        .rounded(px(999.0))
+                                        .bg(theme.secondary_active.opacity(0.42))
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_size(px(11.5))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.foreground.opacity(0.78))
+                                        .child(format!("{version} • {version_detail}")),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .items_center()
+                                        .gap(px(6.0))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.5))
+                                                .text_color(theme.foreground.opacity(0.52))
+                                                .child("Open source"),
+                                        )
+                                        .child(
+                                            Link::new("about-repo")
+                                                .href(repo_url)
+                                                .text_size(px(13.0))
+                                                .font_family(theme.mono_font_family.clone())
+                                                .child(repo_url),
+                                        ),
+                                ),
+                        )
+                    }
+                })
+                .border_color(theme.border.opacity(0.45))
+        });
+    });
 }
-
-#[cfg(not(target_os = "macos"))]
-fn show_about_panel() {}
 
 pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
     cx.bind_keys([
@@ -354,8 +387,7 @@ fn main() {
 
         #[cfg(target_os = "macos")]
         cx.on_action(|_: &ShowAbout, cx: &mut App| {
-            let _ = cx;
-            show_about_panel();
+            show_about_dialog(cx);
         });
 
         #[cfg(target_os = "macos")]
