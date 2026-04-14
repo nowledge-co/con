@@ -25,7 +25,7 @@ jobs:
             rust_target: x86_64-apple-darwin
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Derive release metadata
         id: meta
@@ -83,7 +83,7 @@ jobs:
         run: ./scripts/macos/release.sh
 
       - name: Upload notarized artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: macos-${{ matrix.arch }}
           path: dist/macos/${{ steps.meta.outputs.channel }}/${{ matrix.arch }}/*
@@ -95,9 +95,9 @@ jobs:
     needs: build
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: release-artifacts
 
@@ -140,7 +140,7 @@ jobs:
     needs: publish
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Derive release metadata
         id: meta
@@ -177,7 +177,7 @@ jobs:
 
       - name: Download release artifacts
         if: steps.sparkle.outputs.available == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: release-artifacts
 
