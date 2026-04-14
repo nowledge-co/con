@@ -166,6 +166,19 @@ export APPLE_NOTARY_KEY_PATH="/absolute/path/to/AuthKey_XXXXXXXXXX.p8"
 ./scripts/macos/release.sh
 ```
 
+Local beta updater test against the published beta appcast:
+
+```bash
+export CON_SPARKLE_PUBLIC_ED_KEY="...public key from your release setup..."
+
+./scripts/macos/test-update-beta.sh
+```
+
+This intentionally builds a bundled beta app with a very low `CFBundleVersion`
+so Sparkle should see any real published beta release as newer. `cargo run`
+cannot test updates because it is not running inside a bundled app and does not
+embed `Sparkle.framework`.
+
 ## CI Output
 
 The workflow currently builds native artifacts on:

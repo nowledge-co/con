@@ -7,6 +7,12 @@ use std::borrow::Cow;
 #[include = "**/*.svg"]
 struct ConIcons;
 
+/// Embeds top-level app images such as the macOS app icon PNG.
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../../assets"]
+#[include = "*.png"]
+struct ConImages;
+
 /// Asset source that serves con's icons first, then falls back to
 /// gpui-component's bundled icons (Lucide).
 pub struct ConAssets;
@@ -22,6 +28,10 @@ impl AssetSource for ConAssets {
             return Ok(Some(data.data));
         }
 
+        if let Some(data) = ConImages::get(path) {
+            return Ok(Some(data.data));
+        }
+
         // Fall back to gpui-component's bundled assets
         gpui_component_assets::Assets.load(path)
     }
@@ -31,6 +41,12 @@ impl AssetSource for ConAssets {
             .filter(|p| p.starts_with(path))
             .map(|p| p.into())
             .collect();
+
+        results.extend(
+            ConImages::iter()
+                .filter(|p| p.starts_with(path))
+                .map(|p| p.into()),
+        );
 
         if let Ok(mut component_results) = gpui_component_assets::Assets.list(path) {
             results.append(&mut component_results);
