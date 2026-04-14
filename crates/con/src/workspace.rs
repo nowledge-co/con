@@ -5198,14 +5198,6 @@ impl Render for ConWorkspace {
         let agent_panel_progress = self.agent_panel_motion.value(window);
         let input_bar_progress = self.input_bar_motion.value(window);
         let tab_strip_progress = self.tab_strip_motion.value(window);
-        let shell_chrome_animating = self.agent_panel_motion.is_animating()
-            || self.input_bar_motion.is_animating()
-            || self.tab_strip_motion.is_animating();
-        if shell_chrome_animating {
-            for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
-                terminal.notify(cx);
-            }
-        }
         let layout_matte_active = self.layout_matte_active();
         if layout_matte_active {
             window.request_animation_frame();
