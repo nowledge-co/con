@@ -24,6 +24,10 @@ export CON_BUILD_NUMBER="${CON_BUILD_NUMBER:-0}"
 export CON_ALLOW_ADHOC_SIGNING="${CON_ALLOW_ADHOC_SIGNING:-1}"
 export CON_SKIP_NOTARIZATION="${CON_SKIP_NOTARIZATION:-1}"
 
+# Derive the bundle/feed/output paths in this shell too; release.sh computes
+# them internally, but child-shell exports do not propagate back here.
+setup_release_env
+
 log "Preparing Sparkle framework"
 "$REPO_ROOT/scripts/sparkle/download.sh"
 
