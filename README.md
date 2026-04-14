@@ -41,6 +41,18 @@ Think of it like a beloved old beast with modern Bluetooth done right, or a truc
 
 Best-supported target today: **macOS**.
 
+## Screenshot
+
+<p align="center">
+  <a href="docs/screenshots.md">
+    <img width="1080" alt="con screenshot" src="https://github.com/user-attachments/assets/e1972fac-9df3-443b-be08-c0eec4697cf3" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="docs/screenshots.md">View the full screenshot gallery</a>
+</p>
+
 ## Download
 
 Grab the latest binary from [Releases](https://github.com/nowledge-co/con/releases).
@@ -51,6 +63,7 @@ If you want to build from source or hack on `con`, see `HACKING.md`.
 
 - `DESIGN.md` vision and architecture
 - `HACKING.md` build and contributor quickstart
+- `docs/screenshots.md` UI gallery
 
 ## License
 
