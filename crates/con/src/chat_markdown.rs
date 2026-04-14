@@ -1,7 +1,10 @@
+use std::cell::RefCell;
+use std::sync::Arc;
+
 use gpui::{
     AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, IntoElement,
-    ParentElement, SharedString, Styled, StyledText, TextStyle, UnderlineStyle, WhiteSpace, div,
-    px,
+    ParentElement, SharedString, Styled, StyledText, TextStyle, TextRun, UnderlineStyle,
+    WhiteSpace, div, px,
 };
 use gpui_component::clipboard::Clipboard;
 use gpui_component::highlighter::SyntaxHighlighter;
@@ -25,6 +28,7 @@ enum MarkdownBlock {
     CodeBlock {
         language: Option<String>,
         code: String,
+        highlight_cache: RefCell<Option<CachedCodeHighlightRuns>>,
     },
     BlockQuote(Vec<MarkdownBlock>),
     List {
@@ -60,6 +64,19 @@ enum MarkdownInline {
     },
     SoftBreak,
     LineBreak,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodeHighlightCacheKey {
+    highlight_theme_ptr: usize,
+    mono_font_family: SharedString,
+    mono_font_size_bits: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CachedCodeHighlightRuns {
+    key: CodeHighlightCacheKey,
+    runs: Option<Vec<Vec<TextRun>>>,
 }
 
 struct ChatMarkdownStyle<'a> {
@@ -264,6 +281,7 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
         mdast::Node::Code(raw) => Some(MarkdownBlock::CodeBlock {
             language: raw.lang.clone().filter(|lang| !lang.trim().is_empty()),
             code: raw.value.clone(),
+            highlight_cache: RefCell::new(None),
         }),
         mdast::Node::Blockquote(val) => Some(MarkdownBlock::BlockQuote(
             val.children.iter().filter_map(parse_block_node).collect(),
@@ -319,14 +337,17 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
         mdast::Node::Yaml(val) => Some(MarkdownBlock::CodeBlock {
             language: Some("yml".to_string()),
             code: val.value.clone(),
+            highlight_cache: RefCell::new(None),
         }),
         mdast::Node::Toml(val) => Some(MarkdownBlock::CodeBlock {
             language: Some("toml".to_string()),
             code: val.value.clone(),
+            highlight_cache: RefCell::new(None),
         }),
         mdast::Node::Math(val) => Some(MarkdownBlock::CodeBlock {
             language: None,
             code: val.value.clone(),
+            highlight_cache: RefCell::new(None),
         }),
         mdast::Node::FootnoteDefinition(def) => Some(MarkdownBlock::Paragraph(
             std::iter::once(MarkdownInline::Text(format!("[{}]: ", def.identifier)))
@@ -473,9 +494,11 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
                 style,
             ))
             .into_any_element(),
-        MarkdownBlock::CodeBlock { language, code } => {
-            render_code_block(index, language, code, style)
-        }
+        MarkdownBlock::CodeBlock {
+            language,
+            code,
+            highlight_cache,
+        } => render_code_block(index, language, code, highlight_cache, style),
         MarkdownBlock::BlockQuote(blocks) => div()
             .w_full()
             .px(px(10.0))
@@ -676,6 +699,7 @@ fn render_code_block(
     _index: usize,
     language: &Option<String>,
     code: &str,
+    highlight_cache: &RefCell<Option<CachedCodeHighlightRuns>>,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
     let mono_style = style.code_text_style();
@@ -734,7 +758,7 @@ fn render_code_block(
         );
 
     let mut code_column = div().flex().flex_col().gap(px(0.0)).w_full();
-    let syntax_runs = highlighted_code_runs(code, language, style);
+    let syntax_runs = cached_highlighted_code_runs(code, language, highlight_cache, style);
 
     for (line_idx, line) in lines.iter().enumerate() {
         let display_line = if line.is_empty() { "\u{200B}" } else { line };
@@ -779,6 +803,38 @@ fn render_code_block(
             ),
         )
         .into_any_element()
+}
+
+fn cached_highlighted_code_runs(
+    code: &str,
+    language: &Option<String>,
+    cache: &RefCell<Option<CachedCodeHighlightRuns>>,
+    style: &ChatMarkdownStyle<'_>,
+) -> Option<Vec<Vec<TextRun>>> {
+    let key = CodeHighlightCacheKey {
+        highlight_theme_ptr: Arc::as_ptr(&style.theme.highlight_theme) as usize,
+        mono_font_family: style.theme.mono_font_family.clone(),
+        mono_font_size_bits: {
+            let size: f32 = style.code_font_size.into();
+            size.to_bits()
+        },
+    };
+
+    {
+        let cached = cache.borrow();
+        if let Some(cached) = cached.as_ref()
+            && cached.key == key
+        {
+            return cached.runs.clone();
+        }
+    }
+
+    let runs = highlighted_code_runs(code, language, style);
+    *cache.borrow_mut() = Some(CachedCodeHighlightRuns {
+        key,
+        runs: runs.clone(),
+    });
+    runs
 }
 
 fn highlighted_code_runs(
