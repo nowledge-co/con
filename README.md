@@ -45,9 +45,10 @@ Best-supported target today: **macOS**.
 
 <p align="center">
   <a href="docs/screenshots.md">
-    <img width="1080" alt="con screenshot" src="https://github.com/user-attachments/assets/e1972fac-9df3-443b-be08-c0eec4697cf3" />
+    <img width="1080" alt="con screenshot" src="https://github.com/user-attachments/assets/81dcf6e4-6074-497e-98b8-00c884442cc2" />
   </a>
 </p>
+
 
 <p align="center">
   <a href="docs/screenshots.md">View the full screenshot gallery</a>
