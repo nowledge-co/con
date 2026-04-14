@@ -507,15 +507,22 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
                 } else {
                     "\u{2022}".to_string()
                 };
+                let marker_lane_width = if *ordered {
+                    ordered_list_marker_lane_width(start + items.len().saturating_sub(1))
+                } else {
+                    px(14.0)
+                };
 
                 div()
+                    .w_full()
                     .flex()
                     .items_start()
                     .gap(px(9.0))
                     .child(
                         div()
+                            .flex_none()
                             .pt(px(1.0))
-                            .w(px(if *ordered { 28.0 } else { 14.0 }))
+                            .w(marker_lane_width)
                             .text_right()
                             .font_family(style.theme.mono_font_family.clone())
                             .text_size(style.base_font_size)
@@ -524,14 +531,18 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
                             .child(marker),
                     )
                     .child(
-                        div().flex().flex_col().gap(px(7.0)).flex_1().children(
-                            item_blocks
-                                .iter()
-                                .enumerate()
-                                .map(|(nested_idx, nested_block)| {
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(7.0))
+                            .flex_1()
+                            .children(item_blocks.iter().enumerate().map(
+                                |(nested_idx, nested_block)| {
                                     render_block(nested_block, nested_idx, style)
-                                }),
-                        ),
+                                },
+                            )),
                     )
                     .into_any_element()
             }))
@@ -543,6 +554,11 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
             .bg(style.rule_color)
             .into_any_element(),
     }
+}
+
+fn ordered_list_marker_lane_width(max_marker: usize) -> gpui::Pixels {
+    let digits = max_marker.max(1).to_string().len() as f32;
+    px(14.0 + digits * 8.0)
 }
 
 fn render_table_block(
