@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
-const GHOSTTY_REV: &str = "da835757b0330474ec4050fa2b149a9b0c887d52";
+const GHOSTTY_REV: &str = "e740f6fc117971da9df9fc957a706e6d96554aa5";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 
 fn main() {
