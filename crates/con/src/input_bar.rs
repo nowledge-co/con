@@ -2,6 +2,7 @@ use gpui::*;
 use gpui_component::{
     ActiveTheme,
     input::{Input, InputEvent, InputState, Position},
+    tooltip::Tooltip,
 };
 
 actions!(
@@ -54,6 +55,14 @@ impl InputMode {
             Self::Smart => cx.theme().muted_foreground,
             Self::Shell => cx.theme().success,
             Self::Agent => cx.theme().primary,
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Smart => "Smart mode",
+            Self::Shell => "Shell mode",
+            Self::Agent => "Agent mode",
         }
     }
 }
@@ -1101,6 +1110,10 @@ impl Render for InputBar {
                     this.cycle_mode(window, cx);
                 }),
             )
+            .tooltip({
+                let mode_label = self.mode.tooltip().to_string();
+                move |window, cx| Tooltip::new(mode_label.clone()).build(window, cx)
+            })
             .child(
                 svg()
                     .path(self.mode.icon())
@@ -1110,29 +1123,7 @@ impl Render for InputBar {
 
         // ── Pane target control — scales to many panes without growing the row ──
         let all_selected = self.all_panes_selected();
-        let pane_row = if has_multiple_panes && self.mode == InputMode::Agent {
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .h(px(24.0))
-                    .px(px(8.0))
-                    .rounded(px(7.0))
-                    .bg(theme.muted.opacity(0.08))
-                    .text_color(theme.muted_foreground.opacity(0.7))
-                    .text_size(px(10.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(
-                        svg()
-                            .path("phosphor/app-window.svg")
-                            .size(px(11.0))
-                            .text_color(theme.muted_foreground.opacity(0.65)),
-                    )
-                    .child("Whole window")
-                    .into_any_element(),
-            )
-        } else if has_multiple_panes {
+        let pane_row = if has_multiple_panes && self.mode != InputMode::Agent {
             let (scope_label, scope_icon) = self.pane_scope_summary();
             let scope_tint =
                 if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {

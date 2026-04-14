@@ -3752,6 +3752,16 @@ impl ConWorkspace {
         } else {
             "local"
         };
+        let base_tile_surface = if theme.is_dark() {
+            theme.title_bar.opacity(if is_focused { 0.84 } else { 0.72 })
+        } else {
+            theme.background.opacity(if is_focused { 0.96 } else { 0.90 })
+        };
+        let hover_tile_surface = if theme.is_dark() {
+            theme.title_bar.opacity(0.90)
+        } else {
+            theme.background.opacity(0.98)
+        };
 
         div()
             .id(SharedString::from(format!("scope-pane-{pane_id}")))
@@ -3767,13 +3777,13 @@ impl ConWorkspace {
             .bg(if is_selected {
                 theme.primary.opacity(0.12)
             } else {
-                theme.title_bar.opacity(if is_focused { 0.84 } else { 0.72 })
+                base_tile_surface
             })
             .hover(|s| {
                 s.bg(if is_selected {
                     theme.primary.opacity(0.16)
                 } else {
-                    theme.title_bar.opacity(0.90)
+                    hover_tile_surface
                 })
             })
             .on_mouse_down(
@@ -5921,6 +5931,21 @@ impl Render for ConWorkspace {
                     cx,
                 );
                 let theme = cx.theme();
+                let popup_surface = if theme.is_dark() {
+                    theme.background.opacity(elevated_ui_surface_opacity)
+                } else {
+                    theme.background.opacity(0.98)
+                };
+                let preview_surface = if theme.is_dark() {
+                    theme.title_bar.opacity(ui_surface_opacity * 0.98)
+                } else {
+                    theme.muted.opacity(0.055)
+                };
+                let segmented_surface = if theme.is_dark() {
+                    theme.title_bar.opacity(ui_surface_opacity * 0.96)
+                } else {
+                    theme.muted.opacity(0.065)
+                };
 
                 let presets = div()
                     .flex()
@@ -6020,7 +6045,7 @@ impl Render for ConWorkspace {
                             .h(px(30.0))
                             .px(px(3.0))
                             .rounded(px(10.0))
-                            .bg(theme.title_bar.opacity(ui_surface_opacity * 0.96))
+                            .bg(segmented_surface)
                             .flex()
                             .items_center()
                             .gap(px(2.0))
@@ -6050,7 +6075,7 @@ impl Render for ConWorkspace {
                     .w_full()
                     .rounded(px(12.0))
                     .p(px(11.0))
-                    .bg(theme.title_bar.opacity(ui_surface_opacity * 0.98))
+                    .bg(preview_surface)
                     .child(preview_content);
 
                 root = root.child(
@@ -6060,7 +6085,7 @@ impl Render for ConWorkspace {
                         .bottom(popup_bottom)
                         .w(popup_width)
                         .rounded(px(14.0))
-                        .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                        .bg(popup_surface)
                         .p(px(12.0))
                         .flex()
                         .flex_col()
