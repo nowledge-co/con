@@ -2745,7 +2745,7 @@ impl SettingsPanel {
                                 .line_height(px(16.0))
                                 .text_color(theme.muted_foreground)
                                 .child(
-                                    "Choose the provider and model Con should use by default. Connection details live under Providers.",
+                                    "Default provider and model.",
                                 ),
                         ),
                 )
@@ -2848,7 +2848,7 @@ impl SettingsPanel {
 
         section_content(
             "AI",
-            "Choose how Con should use AI globally. Provider credentials and endpoint details live in Providers.",
+            "Model selection and AI harness configuration.",
             theme,
         )
         .child(ai_layout)
