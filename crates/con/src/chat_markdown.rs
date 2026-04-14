@@ -4,7 +4,7 @@ use std::sync::Arc;
 use gpui::{
     AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, IntoElement,
     ParentElement, SharedString, Styled, StyledText, TextStyle, TextRun, UnderlineStyle,
-    WhiteSpace, div, px,
+    WhiteSpace, div, px, relative,
 };
 use gpui_component::clipboard::Clipboard;
 use gpui_component::highlighter::SyntaxHighlighter;
@@ -663,25 +663,33 @@ fn render_table_block(
     }
 
     let header = &rows[0];
+    let column_count = header.len().max(1);
     let body_rows = rows.iter().skip(1).enumerate().map(|(row_idx, row)| {
-        div()
+        let row_content = div()
             .w_full()
             .flex()
-            .bg(if row_idx % 2 == 0 {
-                style.table_cell_background
-            } else {
-                style.table_cell_background.opacity(0.96)
-            })
+            .bg(style.table_cell_background)
             .children(row.iter().enumerate().map(|(column_idx, cell)| {
-                render_table_cell(cell, column_idx, aligns, false, style)
-            }))
-            .into_any_element()
+                render_table_cell(cell, column_idx, column_count, aligns, false, style)
+            }));
+
+        if row_idx == 0 {
+            row_content.into_any_element()
+        } else {
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(div().h(px(1.0)).bg(style.table_border))
+                .child(row_content)
+                .into_any_element()
+        }
     });
 
     div()
         .w_full()
         .overflow_hidden()
-        .rounded(px(11.0))
+        .rounded(px(10.0))
         .bg(style.table_border)
         .p(px(1.0))
         .child(
@@ -689,17 +697,17 @@ fn render_table_block(
                 .w_full()
                 .flex()
                 .flex_col()
-                .gap(px(1.0))
-                .bg(style.table_border)
+                .bg(style.table_cell_background)
                 .child(
                     div()
                         .w_full()
                         .flex()
                         .bg(style.table_header_background)
                         .children(header.iter().enumerate().map(|(column_idx, cell)| {
-                            render_table_cell(cell, column_idx, aligns, true, style)
+                            render_table_cell(cell, column_idx, column_count, aligns, true, style)
                         })),
                 )
+                .child(div().h(px(1.0)).bg(style.table_border))
                 .children(body_rows),
         )
         .into_any_element()
@@ -708,6 +716,7 @@ fn render_table_block(
 fn render_table_cell(
     cell: &[MarkdownInline],
     column_idx: usize,
+    column_count: usize,
     aligns: &[MarkdownTableAlign],
     is_header: bool,
     style: &ChatMarkdownStyle<'_>,
@@ -728,27 +737,41 @@ fn render_table_cell(
 
     let content = render_inline_content(cell, &base_style, style);
 
-    let cell = div()
+    let content_cell = div()
         .flex_1()
-        .min_w(px(84.0))
+        .min_w(px(68.0))
         .min_w_0()
-        .px(px(11.0))
-        .py(px(if is_header { 8.0 } else { 9.0 }))
+        .px(px(12.0))
+        .py(px(if is_header { 8.0 } else { 8.5 }))
         .child(match align {
             MarkdownTableAlign::Center => div().w_full().text_center().child(content),
             MarkdownTableAlign::Right => div().w_full().text_right().child(content),
             MarkdownTableAlign::Left | MarkdownTableAlign::None => div().w_full().child(content),
         });
 
+    let basis = relative(1.0 / column_count as f32);
+
     if column_idx > 0 {
         div()
             .flex()
+            .flex_grow()
+            .flex_shrink()
+            .flex_basis(basis)
+            .min_w(px(68.0))
+            .min_w_0()
             .bg(style.table_border)
             .child(div().w(px(1.0)).self_stretch())
-            .child(cell)
+            .child(content_cell)
             .into_any_element()
     } else {
-        cell.into_any_element()
+        div()
+            .flex_grow()
+            .flex_shrink()
+            .flex_basis(basis)
+            .min_w(px(68.0))
+            .min_w_0()
+            .child(content_cell)
+            .into_any_element()
     }
 }
 
@@ -1182,19 +1205,21 @@ fn render_inline_text_segment(content: &str, text_style: &TextStyle) -> AnyEleme
 
 fn render_inline_code_chip(
     value: &str,
-    _text_style: &TextStyle,
+    text_style: &TextStyle,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
-    let font_size = style.code_font_size - px(0.5);
-    let line_height = style.code_line_height - px(3.0);
+    let surrounding_font_size = text_style_font_size(text_style);
+    let surrounding_line_height = text_style_line_height(text_style, surrounding_font_size);
+    let font_size = style.code_font_size.min(surrounding_font_size - px(0.25));
+    let line_height = font_size + px(1.0);
+    let chip_height = (surrounding_line_height - px(2.0)).max(font_size + px(8.0));
     div()
         .flex()
         .flex_none()
         .items_center()
+        .h(chip_height)
         .mx(px(1.0))
-        .my(px(0.5))
         .px(px(6.0))
-        .py(px(2.0))
         .rounded(px(6.0))
         .bg(style.inline_code_background)
         .font_family(style.theme.mono_font_family.clone())

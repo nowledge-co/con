@@ -1765,63 +1765,130 @@ impl SettingsPanel {
                             .child(
                                 div()
                                     .flex()
-                                    .items_center()
-                                    .justify_between()
                                     .px(px(16.0))
-                                    .h(px(44.0))
-                                    .child(div().text_sm().child("Channel"))
+                                    .py(px(14.0))
+                                    .flex_col()
+                                    .gap(px(12.0))
                                     .child(
                                         div()
-                                            .text_size(px(11.0))
-                                            .text_color(theme.muted_foreground)
-                                            .child(channel.display_name()),
+                                            .flex()
+                                            .items_start()
+                                            .justify_between()
+                                            .gap(px(16.0))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(8.0))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(10.0))
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(
+                                                                theme
+                                                                    .muted_foreground
+                                                                    .opacity(0.5),
+                                                            )
+                                                            .child("Channel"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.0))
+                                                            .line_height(px(18.0))
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .child(channel.display_name()),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .items_end()
+                                                    .gap(px(8.0))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(10.0))
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(
+                                                                theme
+                                                                    .muted_foreground
+                                                                    .opacity(0.5),
+                                                            )
+                                                            .child("Version"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.0))
+                                                            .line_height(px(18.0))
+                                                            .font_family(
+                                                                theme.mono_font_family.clone(),
+                                                            )
+                                                            .text_color(
+                                                                theme
+                                                                    .muted_foreground
+                                                                    .opacity(0.82),
+                                                            )
+                                                            .child(format!(
+                                                                "{} ({})",
+                                                                crate::app_display_version(),
+                                                                crate::app_build_number()
+                                                            )),
+                                                    ),
+                                            ),
                                     ),
                             )
-                            .child(row_separator(&theme))
+                            .child(
+                                div()
+                                    .mx(px(16.0))
+                                    .h(px(1.0))
+                                    .bg(theme.muted.opacity(0.10)),
+                            )
                             .child(
                                 div()
                                     .flex()
-                                    .items_center()
+                                    .items_end()
                                     .justify_between()
+                                    .gap(px(16.0))
                                     .px(px(16.0))
-                                    .h(px(44.0))
-                                    .child(div().text_sm().child("Version"))
-                                    .child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .font_family(theme.mono_font_family.clone())
-                                            .text_color(theme.muted_foreground)
-                                            .child(format!(
-                                                "{} ({})",
-                                                crate::app_display_version(),
-                                                crate::app_build_number()
-                                            )),
-                                    ),
-                            )
-                            .child(row_separator(&theme))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .px(px(16.0))
-                                    .h(px(44.0))
+                                    .pb(px(14.0))
                                     .child(
                                         div()
                                             .flex()
                                             .flex_col()
-                                            .gap(px(2.0))
-                                            .child(div().text_sm().child("Status"))
+                                            .gap(px(3.0))
+                                            .max_w(px(420.0))
                                             .child(
                                                 div()
                                                     .text_size(px(10.0))
-                                                    .text_color(theme.muted_foreground.opacity(0.6))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(
+                                                        theme
+                                                            .muted_foreground
+                                                            .opacity(0.5),
+                                                    )
+                                                    .child("Status"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.5))
+                                                    .line_height(px(17.0))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(
+                                                        theme
+                                                            .foreground
+                                                            .opacity(0.88),
+                                                    )
                                                     .child(updater_status.summary()),
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(10.0))
-                                                    .text_color(theme.muted_foreground.opacity(0.5))
+                                                    .text_size(px(10.5))
+                                                    .line_height(px(15.0))
+                                                    .text_color(
+                                                        theme
+                                                            .muted_foreground
+                                                            .opacity(0.62),
+                                                    )
                                                     .child(updater_status.detail()),
                                             ),
                                     )
@@ -1841,23 +1908,7 @@ impl SettingsPanel {
             );
         }
 
-        container.child(
-            card(theme, card_opacity).child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(16.0))
-                    .h(px(44.0))
-                    .child(div().text_sm().child("Scrollback"))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(theme.muted_foreground)
-                            .child("Managed by Ghostty"),
-                    ),
-            ),
-        )
+        container
         // Skills paths
         .child(
             div()
@@ -2694,7 +2745,7 @@ impl SettingsPanel {
                                 .line_height(px(16.0))
                                 .text_color(theme.muted_foreground)
                                 .child(
-                                    "Choose the provider and model Con should use by default. Connection details live under Providers.",
+                                    "Default provider and model.",
                                 ),
                         ),
                 )
@@ -2797,7 +2848,7 @@ impl SettingsPanel {
 
         section_content(
             "AI",
-            "Choose how Con should use AI globally. Provider credentials and endpoint details live in Providers.",
+            "Model selection and AI harness configuration.",
             theme,
         )
         .child(ai_layout)
