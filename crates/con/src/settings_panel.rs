@@ -1916,7 +1916,7 @@ impl SettingsPanel {
                     .justify_between()
                     .px(px(16.0))
                     .h(px(44.0))
-                    .child(div().text_sm().child("Scrollback"))
+                    .child(div().text_sm().child("Terminal History"))
                     .child(
                         div()
                             .text_size(px(11.0))

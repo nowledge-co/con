@@ -4,7 +4,7 @@ use std::sync::Arc;
 use gpui::{
     AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, IntoElement,
     ParentElement, SharedString, Styled, StyledText, TextStyle, TextRun, UnderlineStyle,
-    WhiteSpace, div, px,
+    WhiteSpace, div, px, relative,
 };
 use gpui_component::clipboard::Clipboard;
 use gpui_component::highlighter::SyntaxHighlighter;
@@ -663,13 +663,14 @@ fn render_table_block(
     }
 
     let header = &rows[0];
+    let column_count = header.len().max(1);
     let body_rows = rows.iter().skip(1).enumerate().map(|(row_idx, row)| {
         let row_content = div()
             .w_full()
             .flex()
             .bg(style.table_cell_background)
             .children(row.iter().enumerate().map(|(column_idx, cell)| {
-                render_table_cell(cell, column_idx, aligns, false, style)
+                render_table_cell(cell, column_idx, column_count, aligns, false, style)
             }));
 
         if row_idx == 0 {
@@ -703,7 +704,7 @@ fn render_table_block(
                         .flex()
                         .bg(style.table_header_background)
                         .children(header.iter().enumerate().map(|(column_idx, cell)| {
-                            render_table_cell(cell, column_idx, aligns, true, style)
+                            render_table_cell(cell, column_idx, column_count, aligns, true, style)
                         })),
                 )
                 .child(div().h(px(1.0)).bg(style.table_border))
@@ -715,6 +716,7 @@ fn render_table_block(
 fn render_table_cell(
     cell: &[MarkdownInline],
     column_idx: usize,
+    column_count: usize,
     aligns: &[MarkdownTableAlign],
     is_header: bool,
     style: &ChatMarkdownStyle<'_>,
@@ -736,7 +738,9 @@ fn render_table_cell(
     let content = render_inline_content(cell, &base_style, style);
 
     let cell = div()
-        .flex_1()
+        .flex_grow()
+        .flex_shrink()
+        .flex_basis(relative(1.0 / column_count as f32))
         .min_w(px(68.0))
         .min_w_0()
         .px(px(12.0))
