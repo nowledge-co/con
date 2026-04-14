@@ -224,8 +224,13 @@ impl Render for AboutView {
                         div()
                             .size(px(92.0))
                             .rounded(px(24.0))
-                            .overflow_hidden()
-                            .child(img("Con-macOS-Dark-256x256@2x.png").size_full()),
+                            .bg(theme.secondary.opacity(0.32))
+                            .p(px(10.0))
+                            .child(
+                                img("Con-macOS-Dark-256x256@2x.png")
+                                    .size_full()
+                                    .object_fit(ObjectFit::Contain),
+                            ),
                     )
                     .child(
                         div()
