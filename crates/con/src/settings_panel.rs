@@ -1908,23 +1908,7 @@ impl SettingsPanel {
             );
         }
 
-        container.child(
-            card(theme, card_opacity).child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(16.0))
-                    .h(px(44.0))
-                    .child(div().text_sm().child("Terminal History"))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(theme.muted_foreground)
-                            .child("Managed by Ghostty"),
-                    ),
-            ),
-        )
+        container
         // Skills paths
         .child(
             div()

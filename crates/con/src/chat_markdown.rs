@@ -737,10 +737,8 @@ fn render_table_cell(
 
     let content = render_inline_content(cell, &base_style, style);
 
-    let cell = div()
-        .flex_grow()
-        .flex_shrink()
-        .flex_basis(relative(1.0 / column_count as f32))
+    let content_cell = div()
+        .flex_1()
         .min_w(px(68.0))
         .min_w_0()
         .px(px(12.0))
@@ -751,15 +749,29 @@ fn render_table_cell(
             MarkdownTableAlign::Left | MarkdownTableAlign::None => div().w_full().child(content),
         });
 
+    let basis = relative(1.0 / column_count as f32);
+
     if column_idx > 0 {
         div()
             .flex()
+            .flex_grow()
+            .flex_shrink()
+            .flex_basis(basis)
+            .min_w(px(68.0))
+            .min_w_0()
             .bg(style.table_border)
             .child(div().w(px(1.0)).self_stretch())
-            .child(cell)
+            .child(content_cell)
             .into_any_element()
     } else {
-        cell.into_any_element()
+        div()
+            .flex_grow()
+            .flex_shrink()
+            .flex_basis(basis)
+            .min_w(px(68.0))
+            .min_w_0()
+            .child(content_cell)
+            .into_any_element()
     }
 }
 
