@@ -14,7 +14,8 @@
 /// Initialize SPUStandardUpdaterController with @try/@catch.
 ///
 /// Returns the initialized controller, or NULL if an ObjC exception was thrown.
-/// Uses initForStartingUpdater:NO so the caller controls when checking begins.
+/// Uses initWithStartingUpdater:YES so Sparkle begins polling immediately after
+/// successful controller creation.
 void *con_sparkle_init_controller(void) {
     @try {
         Class cls = NSClassFromString(@"SPUStandardUpdaterController");
@@ -23,16 +24,16 @@ void *con_sparkle_init_controller(void) {
         id alloc = [cls alloc];
         if (!alloc) return NULL;
 
-        // initForStartingUpdater:(BOOL)startingUpdater
+        // initWithStartingUpdater:(BOOL)startingUpdater
         //   updaterDelegate:(id)updaterDelegate
         //   userDriverDelegate:(id)userDriverDelegate
         SEL initSel = NSSelectorFromString(
-            @"initForStartingUpdater:updaterDelegate:userDriverDelegate:");
+            @"initWithStartingUpdater:updaterDelegate:userDriverDelegate:");
 
         // Use objc_msgSend typed cast for the 3-arg init
         typedef id (*InitIMP)(id, SEL, BOOL, id, id);
         InitIMP initFunc = (InitIMP)objc_msgSend;
-        id controller = initFunc(alloc, initSel, NO, nil, nil);
+        id controller = initFunc(alloc, initSel, YES, nil, nil);
 
         if (!controller) return NULL;
         return (__bridge_retained void *)controller;
@@ -77,13 +78,8 @@ int con_sparkle_start_updater(void *controller) {
 void con_sparkle_check_for_updates(void *controller) {
     @try {
         id ctrl = (__bridge id)controller;
-
-        SEL updaterSel = NSSelectorFromString(@"updater");
-        id updater = ((id (*)(id, SEL))objc_msgSend)(ctrl, updaterSel);
-        if (!updater) return;
-
-        SEL checkSel = NSSelectorFromString(@"checkForUpdates");
-        ((void (*)(id, SEL))objc_msgSend)(updater, checkSel);
+        SEL checkSel = NSSelectorFromString(@"checkForUpdates:");
+        ((void (*)(id, SEL, id))objc_msgSend)(ctrl, checkSel, nil);
     } @catch (NSException *exception) {
         NSLog(@"[con-updater] ObjC exception in checkForUpdates: %@ — %@",
               exception.name, exception.reason);

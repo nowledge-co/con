@@ -18,7 +18,6 @@ use std::sync::OnceLock;
 // FFI to the ObjC trampoline compiled by build.rs
 unsafe extern "C" {
     fn con_sparkle_init_controller() -> *mut std::ffi::c_void;
-    fn con_sparkle_start_updater(controller: *mut std::ffi::c_void) -> i32;
     fn con_sparkle_check_for_updates(controller: *mut std::ffi::c_void);
 }
 
@@ -44,7 +43,6 @@ pub enum UpdaterDisabledReason {
     FailedToLoadSparkleFramework,
     MissingFeedUrl,
     ControllerInitFailed,
-    StartFailed,
     InitPanicked,
 }
 
@@ -83,9 +81,6 @@ impl UpdaterStatus {
             }
             Self::Disabled(UpdaterDisabledReason::ControllerInitFailed) => {
                 "Sparkle failed to initialize its updater controller."
-            }
-            Self::Disabled(UpdaterDisabledReason::StartFailed) => {
-                "Sparkle initialized, but update polling did not start."
             }
             Self::Disabled(UpdaterDisabledReason::InitPanicked) => {
                 "Updater initialization panicked and was disabled."
@@ -160,9 +155,40 @@ fn init_inner() -> bool {
             ));
             return false;
         }
-        let loaded: BOOL = msg_send![sparkle_bundle, load];
+        let mut load_error: id = nil;
+        let loaded: BOOL = msg_send![sparkle_bundle, loadAndReturnError: &mut load_error];
         if loaded != YES {
-            log::warn!("updater: failed to load Sparkle.framework");
+            if load_error != nil {
+                let localized_description: id = msg_send![load_error, localizedDescription];
+                let localized_reason: id = msg_send![load_error, localizedFailureReason];
+
+                let desc_cstr: *const std::os::raw::c_char =
+                    msg_send![localized_description, UTF8String];
+                let reason_cstr: *const std::os::raw::c_char =
+                    msg_send![localized_reason, UTF8String];
+
+                let description = if desc_cstr.is_null() {
+                    "<unknown>"
+                } else {
+                    std::ffi::CStr::from_ptr(desc_cstr)
+                        .to_str()
+                        .unwrap_or("<invalid utf8>")
+                };
+                let reason = if reason_cstr.is_null() {
+                    ""
+                } else {
+                    std::ffi::CStr::from_ptr(reason_cstr)
+                        .to_str()
+                        .unwrap_or("")
+                };
+                log::warn!(
+                    "updater: failed to load Sparkle.framework: {} {}",
+                    description,
+                    reason
+                );
+            } else {
+                log::warn!("updater: failed to load Sparkle.framework");
+            }
             let _ = STATUS.set(UpdaterStatus::Disabled(
                 UpdaterDisabledReason::FailedToLoadSparkleFramework,
             ));
@@ -183,22 +209,13 @@ fn init_inner() -> bool {
         }
 
         // Create SPUStandardUpdaterController via the ObjC trampoline.
-        // The trampoline uses initForStartingUpdater:NO and wraps in @try/@catch.
+        // The trampoline uses initWithStartingUpdater:YES and wraps in @try/@catch.
         let controller = con_sparkle_init_controller();
         if controller.is_null() {
             log::warn!("updater: SPUStandardUpdaterController init failed or threw — auto-update disabled");
             let _ = STATUS.set(UpdaterStatus::Disabled(
                 UpdaterDisabledReason::ControllerInitFailed,
             ));
-            return false;
-        }
-
-        // Start the updater (begins automatic checking).
-        // Also wrapped in @try/@catch.
-        let started = con_sparkle_start_updater(controller);
-        if started == 0 {
-            log::warn!("updater: startUpdater failed — auto-update disabled");
-            let _ = STATUS.set(UpdaterStatus::Disabled(UpdaterDisabledReason::StartFailed));
             return false;
         }
 
