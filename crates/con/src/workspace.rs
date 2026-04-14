@@ -1902,9 +1902,13 @@ impl ConWorkspace {
                 .collect(),
             conversation_id: None, // deprecated — per-tab now
         };
-        if let Err(e) = session.save() {
-            log::warn!("Failed to save session: {}", e);
-        }
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(e) = session.save() {
+                    log::warn!("Failed to save session: {}", e);
+                }
+            })
+            .detach();
     }
 
     fn restore_shell_history(
@@ -4774,18 +4778,24 @@ impl ConWorkspace {
     }
 
     fn split_right(&mut self, _: &SplitRight, window: &mut Window, cx: &mut Context<Self>) {
-        let _ = window;
         if self.has_active_tab() {
-            self.active_terminal()
-                .request_split(con_ghostty::GhosttySplitDirection::Right, cx);
+            self.split_pane(
+                SplitDirection::Horizontal,
+                SplitPlacement::After,
+                window,
+                cx,
+            );
         }
     }
 
     fn split_down(&mut self, _: &SplitDown, window: &mut Window, cx: &mut Context<Self>) {
-        let _ = window;
         if self.has_active_tab() {
-            self.active_terminal()
-                .request_split(con_ghostty::GhosttySplitDirection::Down, cx);
+            self.split_pane(
+                SplitDirection::Vertical,
+                SplitPlacement::After,
+                window,
+                cx,
+            );
         }
     }
 
