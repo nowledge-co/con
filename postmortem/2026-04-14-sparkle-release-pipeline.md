@@ -32,10 +32,19 @@ Framework symlinks are a macOS requirement: `Sparkle.framework/Sparkle` must be 
 
 **Fix:** DMG is the primary distribution format; zip is for CI/automation only. Additionally hardened the updater init to never crash.
 
-### FFI panic propagation
-The Sparkle init code ran inside GPUI's `did_finish_launching` callback. A panic in this context crosses the ObjC/Rust FFI boundary, turning into `panic_cannot_unwind` → `SIGABRT`.
+### FFI panic propagation / ObjC exception crash
+The Sparkle init code ran inside GPUI's `did_finish_launching` callback. Two failure modes:
+1. A Rust panic crosses the ObjC/Rust FFI boundary → `panic_cannot_unwind` → SIGABRT.
+2. An ObjC exception (e.g. from `SPUStandardUpdaterController` init) propagates as `__rust_foreign_exception` — `catch_unwind` does **not** catch these.
 
-**Fix:** Wrapped `updater::init()` in `catch_unwind`. Also added nil checks on every ObjC return value (alloc, updater property).
+The initial fix (`catch_unwind` + nil checks) only addressed (1). The app still crashed in CI build 9 from an ObjC exception.
+
+**Final fix:** Created an ObjC trampoline (`sparkle_trampoline.m`) compiled via `cc` in `build.rs`. All Sparkle calls now go through `@try/@catch` wrappers:
+- `con_sparkle_init_controller()` — alloc+init with `initForStartingUpdater:NO`
+- `con_sparkle_start_updater()` — deferred start via `startUpdater:`
+- `con_sparkle_check_for_updates()` — manual check
+
+Changed from `initForStartingUpdater:YES` to `NO` + explicit `startUpdater:` to separate initialization from network activity, giving the app time to finish launching before Sparkle begins polling.
 
 ## Additional issues found during review
 
@@ -48,6 +57,6 @@ The Sparkle init code ran inside GPUI's `did_finish_launching` callback. A panic
 
 1. **Never trust xcodebuild in library builds.** When building a C library from a project that also has a macOS app, explicitly opt out of the app target. Zig's `-Demit-macos-app=false` was the right lever.
 2. **DMG is the only reliable macOS distribution format.** Zip files lose framework symlinks. Serve DMG to users; zip is for programmatic consumption only.
-3. **ObjC FFI must be nil-checked at every level.** `catch_unwind` doesn't catch ObjC exceptions — the only defense is defensive nil checking on every `msg_send!` return.
+3. **ObjC exceptions require ObjC `@try/@catch` — `catch_unwind` is not enough.** Rust's `catch_unwind` only catches Rust panics. ObjC exceptions propagate as `__rust_foreign_exception` and terminate the process. The only defense is a compiled ObjC trampoline with `@try/@catch`.
 4. **First-release CI always has latent failures** — each job should be individually testable. The publish and update-appcast jobs should have been tested with a dry-run tag before the real release.
 5. **Sparkle's deprecated flags still appear in examples.** Always check `--help` on the actual downloaded binary, not old blog posts.

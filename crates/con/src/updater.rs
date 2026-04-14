@@ -5,13 +5,22 @@
 //! absent (e.g. `cargo run` dev builds), the updater silently
 //! disables itself.
 //!
-//! Sparkle reads `SUFeedURL` and `SUPublicEDKey` from Info.plist,
-//! which are injected by the release build scripts when
-//! `CON_SPARKLE_FEED_URL` and `CON_SPARKLE_PUBLIC_ED_KEY` are set.
+//! All Sparkle ObjC calls go through a C trampoline
+//! (`sparkle_trampoline.m`) that wraps them in `@try/@catch`.
+//! Rust's `catch_unwind` cannot catch ObjC exceptions — without the
+//! trampoline, any ObjC exception during Sparkle init would
+//! propagate as `__rust_foreign_exception` → SIGABRT.
 
 use cocoa::base::{BOOL, YES, id, nil};
 use objc::{class, msg_send, sel, sel_impl};
 use std::sync::OnceLock;
+
+// FFI to the ObjC trampoline compiled by build.rs
+unsafe extern "C" {
+    fn con_sparkle_init_controller() -> *mut std::ffi::c_void;
+    fn con_sparkle_start_updater(controller: *mut std::ffi::c_void) -> i32;
+    fn con_sparkle_check_for_updates(controller: *mut std::ffi::c_void);
+}
 
 /// Opaque handle to the Sparkle updater controller.
 ///
@@ -24,14 +33,10 @@ static CONTROLLER: OnceLock<usize> = OnceLock::new();
 /// Call once during app launch, after the main window is open.
 /// Returns `true` if Sparkle was loaded and started successfully.
 ///
-/// This function catches both Rust panics and ObjC exceptions so that
-/// a broken or missing Sparkle framework can never crash the app.
+/// Sparkle init and start are wrapped in ObjC `@try/@catch` so that
+/// any exception from the framework is logged and swallowed rather
+/// than crashing the app.
 pub fn init() -> bool {
-    // catch_unwind handles Rust panics (e.g. from assert!/expect!).
-    // ObjC exceptions are a separate mechanism — we guard against those
-    // by checking every return value for nil and avoiding calls that
-    // could throw (Sparkle's public API is exception-free when inputs
-    // are valid, and we validate all inputs before passing them).
     match std::panic::catch_unwind(init_inner) {
         Ok(result) => result,
         Err(_) => {
@@ -53,14 +58,13 @@ fn init_inner() -> bool {
     }
 
     unsafe {
-        // Locate Sparkle.framework inside the app bundle
+        // Verify we're running inside an app bundle with Sparkle
         let main_bundle: id = msg_send![class!(NSBundle), mainBundle];
         if main_bundle == nil {
             log::warn!("updater: no main bundle — likely running outside .app");
             return false;
         }
 
-        // Build path: <bundle>/Contents/Frameworks/Sparkle.framework
         let frameworks_path: id = msg_send![main_bundle, privateFrameworksPath];
         if frameworks_path == nil {
             log::warn!("updater: no Frameworks path");
@@ -73,7 +77,6 @@ fn init_inner() -> bool {
         let sparkle_path: id =
             msg_send![frameworks_path, stringByAppendingPathComponent: sparkle_subpath];
 
-        // Load the framework bundle
         let sparkle_bundle: id = msg_send![class!(NSBundle), bundleWithPath: sparkle_path];
         if sparkle_bundle == nil {
             log::info!("updater: Sparkle.framework not found — auto-update disabled");
@@ -85,7 +88,7 @@ fn init_inner() -> bool {
             return false;
         }
 
-        // Verify SUFeedURL is set (otherwise Sparkle will crash)
+        // Verify SUFeedURL is set (otherwise Sparkle will throw)
         let info_dict: id = msg_send![main_bundle, infoDictionary];
         let feed_key: id = msg_send![
             class!(NSString),
@@ -97,38 +100,22 @@ fn init_inner() -> bool {
             return false;
         }
 
-        // Create SPUStandardUpdaterController.
-        // `initForStartingUpdater:updaterDelegate:userDriverDelegate:`
-        //   startingUpdater: YES — start checking immediately
-        //   updaterDelegate: nil — use Sparkle defaults
-        //   userDriverDelegate: nil — use Sparkle's standard UI
-        let controller_class = objc::runtime::Class::get("SPUStandardUpdaterController");
-        let controller_class = match controller_class {
-            Some(c) => c,
-            None => {
-                log::warn!("updater: SPUStandardUpdaterController class not found");
-                return false;
-            }
-        };
-
-        let alloc: id = msg_send![controller_class, alloc];
-        if alloc == nil {
-            log::warn!("updater: SPUStandardUpdaterController alloc failed");
-            return false;
-        }
-        let controller: id = msg_send![alloc,
-            initForStartingUpdater: YES
-            updaterDelegate: nil
-            userDriverDelegate: nil
-        ];
-        if controller == nil {
-            log::warn!("updater: failed to create SPUStandardUpdaterController");
+        // Create SPUStandardUpdaterController via the ObjC trampoline.
+        // The trampoline uses initForStartingUpdater:NO and wraps in @try/@catch.
+        let controller = con_sparkle_init_controller();
+        if controller.is_null() {
+            log::warn!("updater: SPUStandardUpdaterController init failed or threw — auto-update disabled");
             return false;
         }
 
-        // alloc+init returns a +1 retained object.  We store the raw
-        // pointer as usize in a static and never release — the controller
-        // lives for the entire process lifetime.
+        // Start the updater (begins automatic checking).
+        // Also wrapped in @try/@catch.
+        let started = con_sparkle_start_updater(controller);
+        if started == 0 {
+            log::warn!("updater: startUpdater failed — auto-update disabled");
+            return false;
+        }
+
         let _ = CONTROLLER.set(controller as usize);
 
         log::info!(
@@ -142,7 +129,7 @@ fn init_inner() -> bool {
 /// Trigger a manual update check (e.g. from Settings → "Check for Updates").
 pub fn check_for_updates() {
     let controller = match CONTROLLER.get() {
-        Some(&ptr) => ptr as id,
+        Some(&ptr) => ptr as *mut std::ffi::c_void,
         None => {
             log::info!("updater: not initialized — cannot check for updates");
             return;
@@ -150,12 +137,7 @@ pub fn check_for_updates() {
     };
 
     unsafe {
-        let updater: id = msg_send![controller, updater];
-        if updater == nil {
-            log::warn!("updater: controller returned nil updater");
-            return;
-        }
-        let _: () = msg_send![updater, checkForUpdates];
+        con_sparkle_check_for_updates(controller);
     }
 }
 
