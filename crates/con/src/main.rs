@@ -166,7 +166,8 @@ pub(crate) fn app_build_number() -> String {
 fn show_about_panel() {
     use cocoa::appkit::NSApp;
     use cocoa::base::nil;
-    use objc::{msg_send, sel, sel_impl};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
 
     unsafe {
         let app = NSApp();
@@ -175,7 +176,41 @@ fn show_about_panel() {
             return;
         }
 
-        let _: () = msg_send![app, orderFrontStandardAboutPanelWithOptions: nil];
+        let version = app_display_version();
+        let build = app_build_number();
+        let channel = con_core::release_channel::current().display_name();
+        let credits_text = "The terminal emulator with AI harness, nothing more.\nhttps://github.com/nowledge-co/con";
+
+        let options: *mut objc::runtime::Object = msg_send![class!(NSMutableDictionary), new];
+        let icon: *mut objc::runtime::Object = msg_send![app, applicationIconImage];
+
+        let app_name_key: *mut objc::runtime::Object =
+            msg_send![class!(NSString), stringWithUTF8String: b"ApplicationName\0".as_ptr()];
+        let app_icon_key: *mut objc::runtime::Object =
+            msg_send![class!(NSString), stringWithUTF8String: b"ApplicationIcon\0".as_ptr()];
+        let app_version_key: *mut objc::runtime::Object =
+            msg_send![class!(NSString), stringWithUTF8String: b"ApplicationVersion\0".as_ptr()];
+        let version_key: *mut objc::runtime::Object =
+            msg_send![class!(NSString), stringWithUTF8String: b"Version\0".as_ptr()];
+        let credits_key: *mut objc::runtime::Object =
+            msg_send![class!(NSString), stringWithUTF8String: b"Credits\0".as_ptr()];
+
+        let app_name = NSString::alloc(nil).init_str("con");
+        let app_version = NSString::alloc(nil).init_str(&version);
+        let build_info = NSString::alloc(nil).init_str(&format!("Build {build} • {channel}"));
+        let credits = NSString::alloc(nil).init_str(credits_text);
+        let credits_attr: *mut objc::runtime::Object = msg_send![class!(NSAttributedString), alloc];
+        let credits_attr: *mut objc::runtime::Object = msg_send![credits_attr, initWithString: credits];
+
+        let _: () = msg_send![options, setObject: app_name forKey: app_name_key];
+        if icon != nil {
+            let _: () = msg_send![options, setObject: icon forKey: app_icon_key];
+        }
+        let _: () = msg_send![options, setObject: app_version forKey: app_version_key];
+        let _: () = msg_send![options, setObject: build_info forKey: version_key];
+        let _: () = msg_send![options, setObject: credits_attr forKey: credits_key];
+
+        let _: () = msg_send![app, orderFrontStandardAboutPanelWithOptions: options];
     }
 }
 
