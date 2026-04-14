@@ -5,6 +5,7 @@ This folder collects research notes, implementation notes, and design handoff do
 ## Start Here
 
 - `../README.md` — project overview
+- `../CHANGELOG.md` — release notes and product changes
 - `../DESIGN.md` — vision and architecture
 - `../HACKING.md` — contributor quickstart
 
@@ -18,6 +19,7 @@ This folder collects research notes, implementation notes, and design handoff do
 ## Implementation
 
 - `impl/agent-harness.md` — AI harness architecture
+- `impl/macos-release.md` — packaging, signing, notarization, and updater flow
 - `impl/terminal-agent-benchmark.md` — benchmark architecture and evaluation policy
 - `impl/terminal-rendering.md` — rendering pipeline
 - `impl/socket-api.md` — automation and control API

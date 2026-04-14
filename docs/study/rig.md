@@ -3,7 +3,7 @@
 ## Overview
 
 [Rig](https://rig.rs/) is the most mature Rust-native AI agent framework. MIT licensed.
-Using `rig-core` v0.34 from crates.io (upgraded from v0.32; API stable, feature renamed `reqwest-rustls` → `rustls`).
+The current workspace pins `rig-core` to a maintained git revision in `wey-gu/rig` rather than a crates.io release. The architecture notes here still apply, but the exact provider surface is tied to that pinned revision.
 
 ## Core Architecture
 

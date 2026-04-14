@@ -122,7 +122,7 @@ The best version of con should combine:
 - strong discoverability and compositional command UX
 - the **restraint, spacing, and typography discipline** seen in the Nowledge Labs reference UI
 
-The result should be dark-first (with an equally polished light mode), quieter, and more terminal-native than either reference.
+The result should be light-first by default (with an equally polished dark mode), quieter, and more terminal-native than either reference.
 
 ### Nowledge UI Patterns to Adopt
 

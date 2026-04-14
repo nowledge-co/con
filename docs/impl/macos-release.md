@@ -179,6 +179,13 @@ so Sparkle should see any real published beta release as newer. `cargo run`
 cannot test updates because it is not running inside a bundled app and does not
 embed `Sparkle.framework`.
 
+After the update installs, verify the result from either of these product surfaces:
+
+- `con` → `About con`
+- Settings → Updates
+
+Both should show the updated marketing version, build number, and release channel.
+
 ## CI Output
 
 The workflow currently builds native artifacts on:
@@ -234,6 +241,16 @@ The Rust FFI bridge (`crates/con/src/updater.rs`) uses `objc` crate to:
 2. Verify `SUFeedURL` is set in Info.plist
 3. Create `SPUStandardUpdaterController` (starts automatic checking)
 4. Expose `check_for_updates()` for the manual “Check for Updates” menu action
+
+### Manual Smoke Checklist
+
+Before shipping a beta or stable build, verify these flows from the bundled app:
+
+1. Open the app from Finder and confirm the terminal renders normally.
+2. Open `About con` and confirm the app icon, version, build, and channel are visible.
+3. Open Settings → Updates and confirm the same version/build information is shown there.
+4. Run `Check for Updates…` against the intended channel and confirm Sparkle presents the expected UI.
+5. After installation, reopen `About con` and confirm the build number changed.
 
 ### Release Channel Runtime
 

@@ -224,7 +224,7 @@ See `docs/study/terminal-control-plane.md`.
 | **AutoAgents** | Multi-agent focused, heavier weight. Good for orchestration but overkill for terminal agent. |
 | **Raw HTTP** | Maximum control but months of provider-specific work. |
 
-**Rig v0.34 gives us:**
+**Rig gives us:**
 
 - `CompletionClient::agent()` builder — preamble + tools + model config in one chain
 - `Tool` trait — type-safe tool definitions with `Args` (Deserialize), `Output` (Serialize), `Error`
@@ -454,8 +454,8 @@ cargo test --workspace         # test everything
 
 ### Build Pipeline
 
-1. Cargo resolves workspace deps from crates.io (gpui, rig-core 0.34)
-2. GPUI-CE compiles Metal shaders at runtime (`runtime_shaders` feature — no Xcode.app needed for dev)
+1. Cargo resolves workspace deps from upstream git sources and crates.io as declared in the workspace manifest
+2. GPUI compiles Metal shaders at runtime (`runtime_shaders` feature — no Xcode.app needed for dev)
 3. `cargo build` produces the `con` binary with all crates linked
 
 ---
@@ -519,11 +519,11 @@ new-tab = "cmd+t"
 
 ### 2. GPUI IME: Production-Ready
 
-GPUI-CE implements the full `InputHandler` trait (modeled after `NSTextInputClient`):
+GPUI implements the full `InputHandler` trait (modeled after `NSTextInputClient`):
 
 - `marked_text_range()` / `replace_and_mark_text_in_range()` for IME composition
 - `bounds_for_range()` for candidate window positioning
-- GPUI-CE has broader platform support, but con currently ships the macOS AppKit path.
+- GPUI has broader platform support, but con currently ships the macOS AppKit path.
 - CJK input works. No blocker.
 
 ### 3. GPU Fallback: Not Needed
@@ -563,7 +563,7 @@ con (Rust)  ─── Unix socket (JSON-RPC) ───  plugin process (Node/Pyt
 
 ### 5. Licensing: MIT
 
-- **GPUI-CE**: Apache 2.0 (compatible with MIT, allows sublicensing)
+- **GPUI**: Apache 2.0 (compatible with MIT, allows sublicensing)
 - **Ghostty libghostty**: MIT
 - **Rig**: MIT
 - **con**: MIT (already in LICENSE)

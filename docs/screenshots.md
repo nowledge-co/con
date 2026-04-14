@@ -1,6 +1,6 @@
 # Screenshots
 
-The README shows one representative view. This page keeps the full gallery.
+The README shows one representative view. This page keeps the full gallery in one place.
 
 ## Gallery
 
@@ -20,3 +20,6 @@ The README shows one representative view. This page keeps the full gallery.
 
 <img alt="con screenshot 4" src="https://github.com/user-attachments/assets/21e295c9-34eb-465c-90b8-5ba3163182e5" />
 
+### Main Window
+
+<img alt="con screenshot 5" src="https://github.com/user-attachments/assets/81dcf6e4-6074-497e-98b8-00c884442cc2" />

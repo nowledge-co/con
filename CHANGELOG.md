@@ -8,6 +8,13 @@ con is still pre-release, so entries may group larger areas of work while the pr
 
 ### Added
 
+**Interface**
+- A modeless `About con` window now shows the app icon, release version, build number, release channel, and repository URL.
+- Appearance settings now include a configurable UI font size, separate from terminal font size.
+- `cmd-n` now opens a real new window instead of reusing the current workspace.
+- The bottom command bar now has a pane-scope picker that can target the focused pane, all panes, or an explicit subset of panes.
+- The command bar now supports global command-history suggestions, local path completion for local panes, and an AI suggestion fallback that can be enabled independently.
+
 **Terminal — Ghostty Backend**
 - GPU-accelerated terminal rendering on macOS via Ghostty's Metal engine. Text rendering, scrollback, and compositing all run on the GPU for consistently smooth performance, even with high-throughput output.
 - Full VT compliance out of the box — Kitty keyboard protocol, hyperlinks, sixel graphics, and OSC 133 shell integration are handled natively by Ghostty. No configuration needed.
@@ -24,9 +31,13 @@ con is still pre-release, so entries may group larger areas of work while the pr
 
 ### Improved
 
+**Release and Packaging**
+- The macOS app bundle, updater, and release pipeline are now documented and exercised as real product surfaces. Local updater testing now runs from a bundled beta app instead of `cargo run`, and version metadata is visible in both Settings and the About window.
+- Workspace dependencies no longer rely on local `3pp/` checkouts at build time. GPUI, gpui-component, Rig, and Ghostty now resolve from upstream git sources or scripted fetches instead of local path dependencies.
+
 **AI Agent**
 - The agent system prompt has been restructured for sharper tool usage. Questions are answered with minimal side effects; tasks are executed carefully with verification. Each tool now has explicit guidelines so the agent picks the right one the first time.
-- con now depends directly on upstream Rig main for agent runtime behavior. The temporary fork used to carry the streaming multi-turn tool-call history fix has been removed now that the fix is merged upstream.
+- `con` currently pins `rig-core` to a maintained fork revision while provider work settles upstream. The build no longer depends on a local source checkout for Rig.
 - Busy/idle detection works on Ghostty panes — the agent waits for a running command to finish before sending another.
 - Pane-aware context is stricter and more honest. con no longer guesses SSH hosts, tmux sessions, or agent CLIs from pane titles or status-line patterns. When the foreground runtime is not proven, it stays `unknown`.
 - Visible shell execution now depends on real Ghostty command boundaries instead of stale cwd or title clues. After any unconfirmed input, con stops trusting shell metadata until shell integration proves a fresh prompt again.
@@ -111,6 +122,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 
 **Terminal**
 - New Ghostty panes now inherit the requested working directory and font size at creation time, which keeps restored tabs and newly opened panes aligned with the workspace state.
+- Split-pane creation and new-tab activation are now off the synchronous session-save path, which reduces visible latency during interactive workspace changes.
 - Split requests now flow through Ghostty's native split action path before con creates the new surface, so pane insertion follows Ghostty split direction semantics instead of treating every split as a purely external GPUI command.
 - Font size changes now apply to existing Ghostty panes immediately, so terminal text updates in place when you save Settings.
 - Terminal theme changes now apply to live Ghostty panes immediately instead of only updating the surrounding con interface.
@@ -138,6 +150,8 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed empty agent responses appearing as stuck/hanging when providers don't emit text items during streaming
 - Fixed a Unicode logging crash where long tool-result previews could be truncated at an invalid UTF-8 byte boundary
 - Fixed tmux native control helper quoting so tmux list/capture/exec commands no longer leak into the target shell as broken `quote>` input when a quoted tmux target is present
+- Fixed a visible-panel performance regression where assistant messages were reparsed as markdown on every render.
+- Fixed a second visible-panel performance regression where fenced code blocks rebuilt syntax-highlight runs on every render.
 
 **Terminal**
 - Full terminal emulation with 256-color and truecolor support
@@ -149,6 +163,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed a Ghostty theme sync regression where the Settings panel could update con's chrome but leave the terminal on an old palette after a later runtime config update
 - Fixed a shutdown crash in the workspace mouse/resize path when the active tab index outlived the tab list during window teardown
 - Fixed another shutdown-time panic where late workspace renders or actions could still assume an active pane after the last tab was already gone
+- Fixed last-window close teardown for embedded Ghostty surfaces. Closing the final tab or window now shuts down Ghostty surfaces explicitly before window removal instead of relying on late destructor cleanup.
 - Tab management — Cmd+T to open, Cmd+W to close, Cmd+1–9 to switch, Cmd+Shift+[/] to cycle
 - Session restore — your tabs, layout, and panel state are preserved when you relaunch
 - Full compatibility with terminal applications like vim, htop, and tmux (alternate screen, application cursor keys, DEC private modes, Kitty keyboard protocol)
@@ -169,6 +184,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 
 **Interface**
 - Smart input bar that auto-detects intent — shell commands go to the terminal, questions go to the agent, /skills invoke workflows
+- The single-tab state now uses a compact titlebar instead of a full tab strip, which recovers terminal space without hiding core window controls.
 - Agent panel (Cmd+L) with structured tool call cards, inline approval dialogs, code block rendering, and a resizable width you can drag to adjust
 - The agent panel now keeps live activity visible near the top while a run is in progress, shows a labeled Stop action in the header, and lets you expand long tool results instead of forcing every step into the same short preview.
 - Settings panel (Cmd+,) to configure your provider, model, and preferences
