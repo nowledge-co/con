@@ -55,3 +55,21 @@ If you want to build from source or hack on `con`, see `HACKING.md`.
 ## License
 
 [MIT](LICENSE)
+
+## Credits ♥️
+
+`con` stands on the work of several upstream projects we rely on directly and respect deeply:
+
+- [Ghostty](https://github.com/ghostty-org/ghostty) for the terminal runtime and rendering foundation that powers our embedded terminal surfaces.
+- [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) from the Zed team for the native GPU UI framework we build the shell on.
+- [gpui-component](https://github.com/longbridge/gpui-component) from the Longbridge team for the component library that accelerates much of the UI layer.
+- [Rig](https://github.com/0xPlaygrounds/rig) for the Rust AI agent framework behind Con's agent harness, along with the provider work we maintain in our own fork(before our upstream first work merged).
+- [Phosphor Icons](https://phosphoricons.com/) for the icon system used across the app.
+- [Flexoki](https://stephango.com/flexoki) for the default visual theme direction.
+- [Iosevka](https://typeof.net/Iosevka/) and [Ioskeley Mono](https://github.com/jewlexx/ioskeley) for the mono type foundation used in terminal chrome and code-heavy UI.
+
+If you build or use `con`, you are also benefiting from the care and engineering work of those communities.
+
+
+
+`con` was initially inspired of [warp.dev](http://warp.dev/), but is doing less than warp, if you need more, you proababbly should go for warp instead.
