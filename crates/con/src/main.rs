@@ -288,7 +288,6 @@ fn show_about_window(cx: &mut App) {
             appears_transparent: true,
             ..Default::default()
         }),
-        kind: WindowKind::Dialog,
         window_background: WindowBackgroundAppearance::Opaque,
         ..Default::default()
     };
