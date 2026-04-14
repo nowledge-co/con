@@ -6,10 +6,6 @@ members = [
     "crates/con-ghostty",
     "crates/con-agent",
     "crates/con-cli",
-    # gpui-component library (adopted into our workspace)
-    "3pp/gpui-component/crates/ui",
-    "3pp/gpui-component/crates/assets",
-    "3pp/gpui-component/crates/macros",
 ]
 default-members = ["crates/con"]
 resolver = "2"
@@ -26,18 +22,18 @@ con-terminal = { path = "crates/con-terminal" }
 con-ghostty = { path = "crates/con-ghostty" }
 con-agent = { path = "crates/con-agent" }
 
-# UI — mainline GPUI from Zed (required for gpui-component compatibility)
+# UI — upstream GPUI
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "runtime_shaders"] }
 gpui_macros = { git = "https://github.com/zed-industries/zed" }
 
-# UI Components — shadcn/ui-style component library for GPUI
-gpui-component = { path = "3pp/gpui-component/crates/ui" }
-gpui-component-macros = { path = "3pp/gpui-component/crates/macros" }
-gpui-component-assets = { path = "3pp/gpui-component/crates/assets" }
+# UI Components — upstream gpui-component, never local 3pp paths
+gpui-component = { git = "https://github.com/longbridge/gpui-component.git", branch = "main", package = "gpui-component" }
+gpui-component-macros = { git = "https://github.com/longbridge/gpui-component.git", branch = "main", package = "gpui-component-macros" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component.git", branch = "main", package = "gpui-component-assets" }
 
 # AI Agent
-rig-core = { git = "https://github.com/wey-gu/rig.git", rev = "3193eacbe5cfadc842da48ce6df12f184931a514", default-features = false, features = ["rustls"] }
+rig-core = { git = "https://github.com/wey-gu/rig.git", rev = "89f509b5d380c78d0e5b91bd342839f4ceb07a1f", default-features = false, features = ["rustls"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
@@ -90,10 +86,6 @@ single_range_in_vec_init = "allow"
 style = { level = "allow", priority = -1 }
 type_complexity = "allow"
 useless_conversion = "allow"
-
-[patch.crates-io]
-# Required by gpui-component for WASM compatibility
-psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
 
 [profile.dev]
 split-debuginfo = "unpacked"
