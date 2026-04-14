@@ -49,6 +49,12 @@ cargo build
 cargo run -p con
 ```
 
+> With optional arguments:
+
+```bash
+RUST_LOG=con_agent::flow=info,con_agent=warn,con_core=warn,con::suggestions=debug,con_core::suggestions=debug cargo run -p con
+```
+
 ## Test
 
 ```bash
