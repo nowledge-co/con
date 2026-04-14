@@ -24,8 +24,7 @@ use con_core::config::KeybindingConfig;
 use con_core::session::Session;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, WindowExt,
-    dialog::{DialogDescription, DialogHeader, DialogTitle},
+    ActiveTheme,
     link::Link,
 };
 use workspace::ConWorkspace;
@@ -194,110 +193,120 @@ fn about_panel_version_detail() -> String {
     }
 }
 
-fn show_about_dialog(cx: &mut App) {
-    let window_handle = cx
-        .active_window()
-        .or_else(|| cx.window_stack().and_then(|stack| stack.into_iter().next()));
-    let Some(window_handle) = window_handle else {
-        log::warn!("about: no window available");
-        return;
+struct AboutView {
+    app_name: String,
+    version: String,
+    version_detail: String,
+}
+
+impl Render for AboutView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let repo_url = "https://github.com/nowledge-co/con";
+
+        div()
+            .size_full()
+            .bg(theme.background)
+            .px(px(28.0))
+            .py(px(26.0))
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(16.0))
+                    .child(
+                        div()
+                            .size(px(88.0))
+                            .rounded(px(22.0))
+                            .overflow_hidden()
+                            .child(img("Con-macOS-Dark-256x256@2x.png").size_full()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .text_size(px(25.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(self.app_name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(14.0))
+                                    .line_height(relative(1.35))
+                                    .text_color(theme.foreground.opacity(0.68))
+                                    .child("The terminal emulator with an AI harness."),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .px(px(11.0))
+                            .py(px(6.0))
+                            .rounded(px(999.0))
+                            .bg(theme.secondary_active.opacity(0.42))
+                            .font_family(theme.mono_font_family.clone())
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.foreground.opacity(0.78))
+                            .child(format!("{} • {}", self.version, self.version_detail)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .text_color(theme.foreground.opacity(0.52))
+                                    .child("Open source"),
+                            )
+                            .child(
+                                Link::new("about-repo")
+                                    .href(repo_url)
+                                    .text_size(px(13.0))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .child(repo_url),
+                            ),
+                    ),
+            )
+    }
+}
+
+fn show_about_window(cx: &mut App) {
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::centered(size(px(420.0), px(360.0)), cx)),
+        titlebar: Some(TitlebarOptions {
+            title: Some(format!("About {}", about_panel_name()).into()),
+            appears_transparent: true,
+            ..Default::default()
+        }),
+        kind: WindowKind::Dialog,
+        window_background: WindowBackgroundAppearance::Opaque,
+        ..Default::default()
     };
 
     let app_name = about_panel_name();
     let version = app_display_version();
     let version_detail = about_panel_version_detail();
-    let repo_url = "https://github.com/nowledge-co/con";
 
-    let _ = window_handle.update(cx, move |_view, window, cx| {
-        let app_name = app_name.clone();
-        let version = version.clone();
-        let version_detail = version_detail.clone();
-        window.open_dialog(cx, move |dialog, _window, cx| {
-            let theme = cx.theme();
-            dialog
-                .width(px(440.0))
-                .max_w(px(440.0))
-                .close_button(true)
-                .overlay_closable(true)
-                .title("")
-                .content({
-                    let app_name = app_name.clone();
-                    let version = version.clone();
-                    let version_detail = version_detail.clone();
-                    move |content, _window, cx| {
-                        let theme = cx.theme();
-                        content.child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(16.0))
-                                .pt(px(8.0))
-                                .pb(px(8.0))
-                                .child(
-                                    div()
-                                        .size(px(88.0))
-                                        .rounded(px(22.0))
-                                        .overflow_hidden()
-                                        .child(img("Con-macOS-Dark-256x256@2x.png").size_full()),
-                                )
-                                .child(
-                                    DialogHeader::new()
-                                        .items_center()
-                                        .gap(px(6.0))
-                                        .child(
-                                            DialogTitle::new()
-                                                .text_size(px(25.0))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child(app_name.clone()),
-                                        )
-                                        .child(
-                                            DialogDescription::new()
-                                                .text_size(px(14.0))
-                                                .line_height(relative(1.35))
-                                                .text_color(theme.foreground.opacity(0.68))
-                                                .child("The terminal emulator with an AI harness."),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .px(px(11.0))
-                                        .py(px(6.0))
-                                        .rounded(px(999.0))
-                                        .bg(theme.secondary_active.opacity(0.42))
-                                        .font_family(theme.mono_font_family.clone())
-                                        .text_size(px(11.5))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground.opacity(0.78))
-                                        .child(format!("{version} • {version_detail}")),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .items_center()
-                                        .gap(px(6.0))
-                                        .child(
-                                            div()
-                                                .text_size(px(12.5))
-                                                .text_color(theme.foreground.opacity(0.52))
-                                                .child("Open source"),
-                                        )
-                                        .child(
-                                            Link::new("about-repo")
-                                                .href(repo_url)
-                                                .text_size(px(13.0))
-                                                .font_family(theme.mono_font_family.clone())
-                                                .child(repo_url),
-                                        ),
-                                ),
-                        )
-                    }
-                })
-                .border_color(theme.border.opacity(0.45))
+    if let Err(err) = cx.open_window(options, move |window, cx| {
+        let about = cx.new(|_| AboutView {
+            app_name: app_name.clone(),
+            version: version.clone(),
+            version_detail: version_detail.clone(),
         });
-    });
+        cx.new(|cx| gpui_component::Root::new(about, window, cx).bg(cx.theme().background))
+    }) {
+        log::error!("Failed to open About window: {err}");
+    }
 }
 
 pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
@@ -387,7 +396,7 @@ fn main() {
 
         #[cfg(target_os = "macos")]
         cx.on_action(|_: &ShowAbout, cx: &mut App| {
-            show_about_dialog(cx);
+            show_about_window(cx);
         });
 
         #[cfg(target_os = "macos")]
