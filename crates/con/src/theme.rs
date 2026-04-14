@@ -1,3 +1,4 @@
+use con_core::config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE};
 use con_terminal::{Color, TerminalTheme};
 use gpui::App;
 use gpui_component::highlighter::LanguageRegistry;
@@ -243,8 +244,11 @@ fn apply_font_overrides(
 ) {
     Theme::global_mut(cx).mono_font_family = terminal_font_family.to_string().into();
     Theme::global_mut(cx).font_family = ui_font_family.to_string().into();
-    Theme::global_mut(cx).font_size = gpui::px(ui_font_size.clamp(12.0, 24.0));
-    Theme::global_mut(cx).mono_font_size = gpui::px((ui_font_size - 3.0).clamp(11.0, 21.0));
+    let clamped_ui_font_size = ui_font_size.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE);
+    Theme::global_mut(cx).font_size = gpui::px(clamped_ui_font_size);
+    Theme::global_mut(cx).mono_font_size = gpui::px(
+        (clamped_ui_font_size - 3.0).clamp(MIN_UI_FONT_SIZE - 1.0, MAX_UI_FONT_SIZE - 3.0),
+    );
 }
 
 /// Apply con's scrollbar overrides after any Theme::change call.

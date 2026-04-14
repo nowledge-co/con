@@ -3,6 +3,9 @@ use con_agent::AgentConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub const MIN_UI_FONT_SIZE: f32 = 12.0;
+pub const MAX_UI_FONT_SIZE: f32 = 24.0;
+
 fn default_font_family() -> String {
     "Ioskeley Mono".into()
 }
@@ -19,7 +22,7 @@ fn default_ui_font_family() -> String {
     ".SystemUIFont".into()
 }
 fn default_ui_font_size() -> f32 {
-    16.0
+    16.0f32.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE)
 }
 fn default_terminal_opacity() -> f32 {
     0.80

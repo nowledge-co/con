@@ -150,6 +150,8 @@ pub struct ConWorkspace {
     workspace_handle: WeakEntity<ConWorkspace>,
     /// Ensures native window-close cleanup only runs once.
     window_close_prepared: bool,
+    /// Ordered, coalescing session persistence worker.
+    session_save_tx: crossbeam_channel::Sender<SessionSaveRequest>,
 }
 
 #[derive(Clone)]
@@ -182,6 +184,52 @@ struct PendingControlAgentRequest {
     prompt: String,
     auto_approve_tools: bool,
     response_tx: tokio::sync::oneshot::Sender<ControlResult>,
+}
+
+enum SessionSaveRequest {
+    Save(Session),
+    Flush(Session, crossbeam_channel::Sender<()>),
+}
+
+fn spawn_session_save_worker() -> crossbeam_channel::Sender<SessionSaveRequest> {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    std::thread::Builder::new()
+        .name("con-session-save".into())
+        .spawn(move || {
+            loop {
+                let request = match rx.recv() {
+                    Ok(request) => request,
+                    Err(_) => break,
+                };
+
+                let (mut latest_session, mut flush_waiters) = match request {
+                    SessionSaveRequest::Save(session) => (Some(session), Vec::new()),
+                    SessionSaveRequest::Flush(session, waiter) => (Some(session), vec![waiter]),
+                };
+
+                while let Ok(request) = rx.try_recv() {
+                    match request {
+                        SessionSaveRequest::Save(session) => latest_session = Some(session),
+                        SessionSaveRequest::Flush(session, waiter) => {
+                            latest_session = Some(session);
+                            flush_waiters.push(waiter);
+                        }
+                    }
+                }
+
+                if let Some(session) = latest_session
+                    && let Err(err) = session.save()
+                {
+                    log::warn!("Failed to save session: {}", err);
+                }
+
+                for waiter in flush_waiters {
+                    let _ = waiter.send(());
+                }
+            }
+        })
+        .expect("failed to spawn session save worker");
+    tx
 }
 
 // ── Theme conversion ──────────────────────────────────────────
@@ -305,6 +353,7 @@ impl ConWorkspace {
         });
         harness.prewarm_input_classification();
         let shell_suggestion_engine = harness.suggestion_engine(180);
+        let session_save_tx = spawn_session_save_worker();
         let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
         let (shell_suggestion_tx, shell_suggestion_rx) = crossbeam_channel::unbounded();
         let control_socket = match con_core::spawn_control_socket_server(
@@ -615,6 +664,7 @@ impl ConWorkspace {
             window_handle: window.window_handle(),
             workspace_handle: cx.weak_entity(),
             window_close_prepared: false,
+            session_save_tx,
         }
     }
 
@@ -1841,7 +1891,7 @@ impl ConWorkspace {
         state
     }
 
-    fn save_session(&self, cx: &App) {
+    fn snapshot_session(&self, cx: &App) -> Session {
         let tabs: Vec<con_core::session::TabState> = self
             .tabs
             .iter()
@@ -1886,7 +1936,7 @@ impl ConWorkspace {
             })
             .collect();
 
-        let session = Session {
+        Session {
             tabs,
             active_tab: self.active_tab,
             agent_panel_open: self.agent_panel_open,
@@ -1901,14 +1951,36 @@ impl ConWorkspace {
                 })
                 .collect(),
             conversation_id: None, // deprecated — per-tab now
-        };
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(e) = session.save() {
-                    log::warn!("Failed to save session: {}", e);
-                }
-            })
-            .detach();
+        }
+    }
+
+    fn save_session(&self, cx: &App) {
+        let session = self.snapshot_session(cx);
+        if let Err(err) = self.session_save_tx.send(SessionSaveRequest::Save(session)) {
+            log::warn!("Failed to queue session save: {}", err);
+        }
+    }
+
+    fn flush_session_save(&self, cx: &App) {
+        let session = self.snapshot_session(cx);
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        if let Err(err) = self
+            .session_save_tx
+            .send(SessionSaveRequest::Flush(session.clone(), done_tx))
+        {
+            log::warn!("Failed to flush session save queue: {}", err);
+            if let Err(save_err) = session.save() {
+                log::warn!("Failed to save session directly during flush: {}", save_err);
+            }
+            return;
+        }
+
+        if let Err(err) = done_rx.recv_timeout(Duration::from_secs(2)) {
+            log::warn!("Timed out waiting for session save flush: {}", err);
+            if let Err(save_err) = session.save() {
+                log::warn!("Failed to save session directly after flush timeout: {}", save_err);
+            }
+        }
     }
 
     fn restore_shell_history(
@@ -3965,7 +4037,7 @@ impl ConWorkspace {
 
     fn quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_all_sessions();
-        self.save_session(cx);
+        self.flush_session_save(cx);
         // Tear down ghostty surfaces before app exit to avoid Metal/NSView crashes.
         // Hide views and unfocus first, then clear the tabs vector so GhosttyTerminal
         // Drop runs (calling ghostty_surface_free) before cx.quit() exits the process.
@@ -4215,6 +4287,7 @@ impl ConWorkspace {
         self.window_close_prepared = true;
 
         self.cancel_all_sessions();
+        self.flush_session_save(cx);
 
         for request in std::mem::take(&mut self.pending_window_control_requests) {
             match request {
@@ -4761,6 +4834,13 @@ impl ConWorkspace {
             direction,
             placement,
             terminal.clone(),
+        );
+        self.record_runtime_event_for_terminal(
+            self.active_tab,
+            &terminal,
+            con_agent::context::PaneRuntimeEvent::PaneCreated {
+                startup_command: None,
+            },
         );
         terminal.ensure_surface(window, cx);
         terminal.notify(cx);

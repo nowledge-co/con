@@ -3,7 +3,10 @@ use con_agent::{
     SuggestionModelConfig, authorize_oauth_provider,
 };
 use con_agent::provider::AgentPurpose;
-use con_core::Config;
+use con_core::{
+    Config,
+    config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE},
+};
 use futures::{FutureExt, StreamExt};
 use gpui::*;
 
@@ -169,7 +172,7 @@ struct EndpointPreset {
 
 impl SettingsPanel {
     fn clamp_ui_font_size(value: f32) -> f32 {
-        value.clamp(12.0, 24.0)
+        value.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE)
     }
 
     fn clamp_terminal_opacity(value: f32) -> f32 {
@@ -1469,7 +1472,7 @@ impl SettingsPanel {
             .cloned()
             .unwrap_or_default();
         let font_size_text = self.font_size_input.read(cx).value().to_string();
-        let ui_font_size_text = self.ui_font_size_input.read(cx).value().to_string();
+        let ui_font_size_text = self.ui_font_size_input.read(cx).value().trim().to_string();
 
         // Save current provider's per-provider fields into the map
         let pc = self.read_provider_inputs(cx);
@@ -1493,11 +1496,20 @@ impl SettingsPanel {
             },
         };
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
-        self.config.appearance.ui_font_size = Self::clamp_ui_font_size(
-            ui_font_size_text
-                .parse()
-                .unwrap_or(self.config.appearance.ui_font_size),
-        );
+        let parsed_ui_font_size = if ui_font_size_text.is_empty() {
+            Some(self.config.appearance.ui_font_size)
+        } else {
+            ui_font_size_text.parse::<f32>().ok()
+        };
+        let Some(parsed_ui_font_size) = parsed_ui_font_size else {
+            self.save_error = Some(format!(
+                "UI Size must be a number between {:.1} and {:.1}.",
+                MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE
+            ));
+            cx.notify();
+            return;
+        };
+        self.config.appearance.ui_font_size = Self::clamp_ui_font_size(parsed_ui_font_size);
         self.config.appearance.terminal_opacity =
             Self::clamp_terminal_opacity(self.terminal_opacity_slider.read(cx).value().end());
         self.config.appearance.ui_opacity =
