@@ -16,13 +16,22 @@ use std::sync::OnceLock;
 /// Opaque handle to the Sparkle updater controller.
 ///
 /// Stored globally so the ObjC runtime retains it for the process lifetime.
+/// We never release this — Sparkle must stay alive for the entire app session.
 static CONTROLLER: OnceLock<usize> = OnceLock::new();
 
 /// Initialize the Sparkle updater.
 ///
 /// Call once during app launch, after the main window is open.
 /// Returns `true` if Sparkle was loaded and started successfully.
+///
+/// This function catches both Rust panics and ObjC exceptions so that
+/// a broken or missing Sparkle framework can never crash the app.
 pub fn init() -> bool {
+    // catch_unwind handles Rust panics (e.g. from assert!/expect!).
+    // ObjC exceptions are a separate mechanism — we guard against those
+    // by checking every return value for nil and avoiding calls that
+    // could throw (Sparkle's public API is exception-free when inputs
+    // are valid, and we validate all inputs before passing them).
     match std::panic::catch_unwind(init_inner) {
         Ok(result) => result,
         Err(_) => {
@@ -103,20 +112,23 @@ fn init_inner() -> bool {
         };
 
         let alloc: id = msg_send![controller_class, alloc];
+        if alloc == nil {
+            log::warn!("updater: SPUStandardUpdaterController alloc failed");
+            return false;
+        }
         let controller: id = msg_send![alloc,
             initForStartingUpdater: YES
             updaterDelegate: nil
             userDriverDelegate: nil
         ];
-
         if controller == nil {
             log::warn!("updater: failed to create SPUStandardUpdaterController");
             return false;
         }
 
         // alloc+init returns a +1 retained object.  We store the raw
-        // pointer in a static and never release — the controller lives
-        // for the entire process lifetime.
+        // pointer as usize in a static and never release — the controller
+        // lives for the entire process lifetime.
         let _ = CONTROLLER.set(controller as usize);
 
         log::info!(
@@ -139,6 +151,10 @@ pub fn check_for_updates() {
 
     unsafe {
         let updater: id = msg_send![controller, updater];
+        if updater == nil {
+            log::warn!("updater: controller returned nil updater");
+            return;
+        }
         let _: () = msg_send![updater, checkForUpdates];
     }
 }

@@ -281,7 +281,15 @@ Then configure GitHub Pages in repo Settings → Pages → gh-pages branch.
 
 `CFBundleVersion` (Sparkle's version comparison key) uses `GITHUB_RUN_NUMBER` — a monotonically increasing integer scoped to the workflow.  This guarantees Sparkle always sees a strictly increasing build number regardless of marketing version or channel.
 
-Local fallback: seconds since epoch.
+Local fallback: 0 (dev builds never poll, so the value only appears in Finder "Get Info").
+
+### Distribution Format
+
+**DMG is the primary distribution artifact.**  The zip file is produced for CI automation and programmatic consumption only.
+
+macOS framework bundles (like Sparkle.framework) rely on symlinks (`Versions/Current -> B`).  Zip extraction via macOS Archive Utility dereferences these symlinks, producing a broken bundle that Gatekeeper rejects as "ambiguous (could be app or framework)."  The DMG preserves the full HFS+ structure including symlinks.
+
+Sparkle's auto-updater downloads the DMG from GitHub Releases and handles installation — users never need to extract zip files.
 
 ### Future: Linux
 

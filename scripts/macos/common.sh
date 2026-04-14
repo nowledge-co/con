@@ -22,6 +22,10 @@ require_cmd() {
 decode_base64_to_file() {
   local output_path="$1"
 
+  # Pre-create with restricted permissions to avoid exposing secrets
+  # between write and chmod.
+  install -m 600 /dev/null "$output_path"
+
   if printf 'TQ==' | base64 --decode >/dev/null 2>&1; then
     base64 --decode >"$output_path"
     return
