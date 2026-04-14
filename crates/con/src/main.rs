@@ -203,12 +203,15 @@ impl Render for AboutView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let repo_url = "https://github.com/nowledge-co/con";
+        let detail_surface = theme.secondary_active.opacity(0.34);
+        let quiet_text = theme.foreground.opacity(0.64);
+        let muted_text = theme.foreground.opacity(0.48);
 
         div()
             .size_full()
             .bg(theme.background)
             .px(px(28.0))
-            .py(px(26.0))
+            .py(px(24.0))
             .child(
                 div()
                     .size_full()
@@ -216,11 +219,11 @@ impl Render for AboutView {
                     .flex_col()
                     .items_center()
                     .justify_center()
-                    .gap(px(16.0))
+                    .gap(px(18.0))
                     .child(
                         div()
-                            .size(px(88.0))
-                            .rounded(px(22.0))
+                            .size(px(92.0))
+                            .rounded(px(24.0))
                             .overflow_hidden()
                             .child(img("Con-macOS-Dark-256x256@2x.png").size_full()),
                     )
@@ -229,10 +232,11 @@ impl Render for AboutView {
                             .flex()
                             .flex_col()
                             .items_center()
-                            .gap(px(6.0))
+                            .max_w(px(310.0))
+                            .gap(px(7.0))
                             .child(
                                 div()
-                                    .text_size(px(25.0))
+                                    .text_size(px(26.0))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(self.app_name.clone()),
                             )
@@ -240,20 +244,21 @@ impl Render for AboutView {
                                 div()
                                     .text_size(px(14.0))
                                     .line_height(relative(1.35))
-                                    .text_color(theme.foreground.opacity(0.68))
-                                    .child("The terminal emulator with an AI harness."),
+                                    .text_align(TextAlign::Center)
+                                    .text_color(quiet_text)
+                                    .child("A GPU-accelerated terminal with a built-in AI harness."),
                             ),
                     )
                     .child(
                         div()
-                            .px(px(11.0))
-                            .py(px(6.0))
+                            .px(px(12.0))
+                            .py(px(7.0))
                             .rounded(px(999.0))
-                            .bg(theme.secondary_active.opacity(0.42))
+                            .bg(detail_surface)
                             .font_family(theme.mono_font_family.clone())
                             .text_size(px(11.5))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.foreground.opacity(0.78))
+                            .text_color(theme.foreground.opacity(0.8))
                             .child(format!("{} • {}", self.version, self.version_detail)),
                     )
                     .child(
@@ -261,20 +266,33 @@ impl Render for AboutView {
                             .flex()
                             .flex_col()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(px(8.0))
                             .child(
                                 div()
                                     .text_size(px(12.5))
-                                    .text_color(theme.foreground.opacity(0.52))
+                                    .text_color(muted_text)
                                     .child("Open source"),
                             )
                             .child(
-                                Link::new("about-repo")
-                                    .href(repo_url)
-                                    .text_size(px(13.0))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .child(repo_url),
+                                div()
+                                    .px(px(12.0))
+                                    .py(px(8.0))
+                                    .rounded(px(10.0))
+                                    .bg(theme.secondary.opacity(0.45))
+                                    .child(
+                                        Link::new("about-repo")
+                                            .href(repo_url)
+                                            .text_size(px(12.5))
+                                            .font_family(theme.mono_font_family.clone())
+                                            .child(repo_url),
+                                    ),
                             ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(muted_text)
+                            .child("Copyright © 2026 Nowledge"),
                     ),
             )
     }
@@ -282,7 +300,7 @@ impl Render for AboutView {
 
 fn show_about_window(cx: &mut App) {
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(420.0), px(360.0)), cx)),
+        window_bounds: Some(WindowBounds::centered(size(px(432.0), px(372.0)), cx)),
         titlebar: Some(TitlebarOptions {
             title: Some(format!("About {}", about_panel_name()).into()),
             appears_transparent: true,
