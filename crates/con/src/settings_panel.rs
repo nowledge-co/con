@@ -1704,16 +1704,13 @@ impl SettingsPanel {
         );
 
         if show_updates {
-            let updater_active = {
+            let updater_status = {
                 #[cfg(target_os = "macos")]
-                { crate::updater::is_active() }
+                { crate::updater::status() }
                 #[cfg(not(target_os = "macos"))]
-                { false }
-            };
-            let update_status = if updater_active {
-                "Auto-update enabled"
-            } else {
-                "Auto-update disabled"
+                {
+                    unreachable!("updates card is only rendered on macOS")
+                }
             };
 
             container = container.child(
@@ -1757,13 +1754,20 @@ impl SettingsPanel {
                                                 div()
                                                     .text_size(px(10.0))
                                                     .text_color(theme.muted_foreground.opacity(0.6))
-                                                    .child(update_status),
+                                                    .child(updater_status.summary()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.0))
+                                                    .text_color(theme.muted_foreground.opacity(0.5))
+                                                    .child(updater_status.detail()),
                                             ),
                                     )
                                     .child(
                                         Button::new("check-updates")
                                             .small()
                                             .ghost()
+                                            .disabled(!updater_status.can_check_manually())
                                             .label("Check for Updates")
                                             .on_click(cx.listener(|_this, _, _window, _cx| {
                                                 #[cfg(target_os = "macos")]

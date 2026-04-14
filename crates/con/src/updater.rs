@@ -27,6 +27,72 @@ unsafe extern "C" {
 /// Stored globally so the ObjC runtime retains it for the process lifetime.
 /// We never release this — Sparkle must stay alive for the entire app session.
 static CONTROLLER: OnceLock<usize> = OnceLock::new();
+static STATUS: OnceLock<UpdaterStatus> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdaterStatus {
+    Active,
+    Disabled(UpdaterDisabledReason),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdaterDisabledReason {
+    ChannelDoesNotPoll,
+    NotBundled,
+    MissingFrameworksPath,
+    MissingSparkleFramework,
+    FailedToLoadSparkleFramework,
+    MissingFeedUrl,
+    ControllerInitFailed,
+    StartFailed,
+    InitPanicked,
+}
+
+impl UpdaterStatus {
+    pub fn can_check_manually(self) -> bool {
+        matches!(self, Self::Active)
+    }
+
+    pub fn summary(self) -> &'static str {
+        match self {
+            Self::Active => "Auto-update enabled",
+            Self::Disabled(_) => "Auto-update unavailable",
+        }
+    }
+
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Active => "Sparkle is loaded and polling this release channel.",
+            Self::Disabled(UpdaterDisabledReason::ChannelDoesNotPoll) => {
+                "Development builds do not poll for updates."
+            }
+            Self::Disabled(UpdaterDisabledReason::NotBundled) => {
+                "Updates only work from the bundled app, not cargo run."
+            }
+            Self::Disabled(UpdaterDisabledReason::MissingFrameworksPath) => {
+                "The app bundle has no Frameworks directory."
+            }
+            Self::Disabled(UpdaterDisabledReason::MissingSparkleFramework) => {
+                "Sparkle.framework is not embedded in the app bundle."
+            }
+            Self::Disabled(UpdaterDisabledReason::FailedToLoadSparkleFramework) => {
+                "Sparkle.framework exists but failed to load."
+            }
+            Self::Disabled(UpdaterDisabledReason::MissingFeedUrl) => {
+                "SUFeedURL is missing from the app bundle metadata."
+            }
+            Self::Disabled(UpdaterDisabledReason::ControllerInitFailed) => {
+                "Sparkle failed to initialize its updater controller."
+            }
+            Self::Disabled(UpdaterDisabledReason::StartFailed) => {
+                "Sparkle initialized, but update polling did not start."
+            }
+            Self::Disabled(UpdaterDisabledReason::InitPanicked) => {
+                "Updater initialization panicked and was disabled."
+            }
+        }
+    }
+}
 
 /// Initialize the Sparkle updater.
 ///
@@ -41,6 +107,7 @@ pub fn init() -> bool {
         Ok(result) => result,
         Err(_) => {
             log::error!("updater: Sparkle init panicked — auto-update disabled");
+            let _ = STATUS.set(UpdaterStatus::Disabled(UpdaterDisabledReason::InitPanicked));
             false
         }
     }
@@ -48,12 +115,16 @@ pub fn init() -> bool {
 
 fn init_inner() -> bool {
     if CONTROLLER.get().is_some() {
+        let _ = STATUS.set(UpdaterStatus::Active);
         return true;
     }
 
     let channel = con_core::release_channel::current();
     if !channel.polls_for_updates() {
         log::info!("updater: channel={} — skipping Sparkle init", channel.name());
+        let _ = STATUS.set(UpdaterStatus::Disabled(
+            UpdaterDisabledReason::ChannelDoesNotPoll,
+        ));
         return false;
     }
 
@@ -62,12 +133,16 @@ fn init_inner() -> bool {
         let main_bundle: id = msg_send![class!(NSBundle), mainBundle];
         if main_bundle == nil {
             log::warn!("updater: no main bundle — likely running outside .app");
+            let _ = STATUS.set(UpdaterStatus::Disabled(UpdaterDisabledReason::NotBundled));
             return false;
         }
 
         let frameworks_path: id = msg_send![main_bundle, privateFrameworksPath];
         if frameworks_path == nil {
             log::warn!("updater: no Frameworks path");
+            let _ = STATUS.set(UpdaterStatus::Disabled(
+                UpdaterDisabledReason::MissingFrameworksPath,
+            ));
             return false;
         }
         let sparkle_subpath: id = msg_send![
@@ -80,11 +155,17 @@ fn init_inner() -> bool {
         let sparkle_bundle: id = msg_send![class!(NSBundle), bundleWithPath: sparkle_path];
         if sparkle_bundle == nil {
             log::info!("updater: Sparkle.framework not found — auto-update disabled");
+            let _ = STATUS.set(UpdaterStatus::Disabled(
+                UpdaterDisabledReason::MissingSparkleFramework,
+            ));
             return false;
         }
         let loaded: BOOL = msg_send![sparkle_bundle, load];
         if loaded != YES {
             log::warn!("updater: failed to load Sparkle.framework");
+            let _ = STATUS.set(UpdaterStatus::Disabled(
+                UpdaterDisabledReason::FailedToLoadSparkleFramework,
+            ));
             return false;
         }
 
@@ -97,6 +178,7 @@ fn init_inner() -> bool {
         let feed_url: id = msg_send![info_dict, objectForKey: feed_key];
         if feed_url == nil {
             log::info!("updater: SUFeedURL not set in Info.plist — auto-update disabled");
+            let _ = STATUS.set(UpdaterStatus::Disabled(UpdaterDisabledReason::MissingFeedUrl));
             return false;
         }
 
@@ -105,6 +187,9 @@ fn init_inner() -> bool {
         let controller = con_sparkle_init_controller();
         if controller.is_null() {
             log::warn!("updater: SPUStandardUpdaterController init failed or threw — auto-update disabled");
+            let _ = STATUS.set(UpdaterStatus::Disabled(
+                UpdaterDisabledReason::ControllerInitFailed,
+            ));
             return false;
         }
 
@@ -113,10 +198,12 @@ fn init_inner() -> bool {
         let started = con_sparkle_start_updater(controller);
         if started == 0 {
             log::warn!("updater: startUpdater failed — auto-update disabled");
+            let _ = STATUS.set(UpdaterStatus::Disabled(UpdaterDisabledReason::StartFailed));
             return false;
         }
 
         let _ = CONTROLLER.set(controller as usize);
+        let _ = STATUS.set(UpdaterStatus::Active);
 
         log::info!(
             "updater: Sparkle initialized — channel={}, polling=true",
@@ -141,7 +228,12 @@ pub fn check_for_updates() {
     }
 }
 
-/// Whether the updater is active (Sparkle was loaded and is polling).
-pub fn is_active() -> bool {
-    CONTROLLER.get().is_some()
+pub fn status() -> UpdaterStatus {
+    *STATUS.get_or_init(|| {
+        if CONTROLLER.get().is_some() {
+            UpdaterStatus::Active
+        } else {
+            UpdaterStatus::Disabled(UpdaterDisabledReason::ChannelDoesNotPoll)
+        }
+    })
 }
