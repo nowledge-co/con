@@ -12,12 +12,11 @@
 </p>
 
 <p align="center">
-  <a href="https://opensource.org/licenses/MIT">
-    <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg">
-  </a>
-  <a href="https://github.com/nowledge-co/con/releases">
-    <img alt="Releases" src="https://img.shields.io/badge/Releases-download-black">
-  </a>
+  <a href="https://opensource.org/licenses/MIT"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue?style=flat"></a>
+  <a href="https://github.com/nowledge-co/con/releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/nowledge-co/con?sort=semver&logo=github&style=flat"></a>
+  <a href="https://developer.apple.com/macos/"><img alt="Native on macOS (Metal)" src="https://img.shields.io/badge/native-Metal-3D3D3D?logo=apple&logoColor=white&style=flat"></a>
+  <a href="https://github.com/nowledge-co/con/issues/18"><img alt="Linux support planned (tracker)" src="https://img.shields.io/badge/Linux-planned-1D4ED8?logo=linux&logoColor=white&style=flat"></a>
+  <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-CE422B?logo=rust&logoColor=white&style=flat"></a>
 </p>
 
 ## Why con?
