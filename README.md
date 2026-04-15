@@ -53,11 +53,15 @@ Best-supported target today: **macOS**.
   <a href="docs/screenshots.md">View the full screenshot gallery</a>
 </p>
 
-## Download
+## Install
 
-Download the latest beta from [Releases](https://github.com/nowledge-co/con/releases).
+```sh
+curl -fsSL https://con-releases.nowledge.co/install.sh | sh
+```
 
-If you want to build from source or work on `con`, see `HACKING.md`.
+Or download the DMG directly from [Releases](https://github.com/nowledge-co/con/releases).
+
+To build from source, see `HACKING.md`.
 
 ## Docs
 
