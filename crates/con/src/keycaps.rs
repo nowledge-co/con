@@ -36,17 +36,18 @@ fn key_label(key: &str) -> String {
 fn keycap(label: String, theme: &gpui_component::Theme) -> Div {
     let wide = label.chars().count() > 1;
     div()
-        .h(px(22.0))
-        .min_w(if wide { px(38.0) } else { px(22.0) })
-        .px(px(if wide { 7.0 } else { 0.0 }))
-        .rounded(px(6.0))
+        .h(px(19.0))
+        .min_w(if wide { px(31.0) } else { px(19.0) })
+        .px(px(if wide { 6.0 } else { 0.0 }))
+        .rounded(px(5.0))
         .flex()
         .items_center()
         .justify_center()
-        .bg(theme.muted.opacity(0.12))
-        .text_color(theme.foreground.opacity(0.82))
-        .text_size(px(11.0))
-        .line_height(px(12.0))
+        .bg(theme.muted.opacity(0.16))
+        .font_family(theme.mono_font_family.clone())
+        .text_color(theme.foreground.opacity(0.78))
+        .text_size(px(10.5))
+        .line_height(px(11.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .child(label)
 }
@@ -71,7 +72,7 @@ pub(crate) fn keycaps_for_stroke(stroke: &Keystroke, theme: &gpui_component::The
         .flex()
         .items_center()
         .justify_end()
-        .gap(px(3.0))
+        .gap(px(2.0))
         .children(parts.into_iter().map(|part| keycap(part, theme)))
 }
 

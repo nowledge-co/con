@@ -31,6 +31,18 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Terminal",
     },
     PaletteAction {
+        id: "next-tab",
+        label: "Next Tab",
+        shortcut: "ctrl-tab",
+        category: "Terminal",
+    },
+    PaletteAction {
+        id: "previous-tab",
+        label: "Previous Tab",
+        shortcut: "ctrl-shift-tab",
+        category: "Terminal",
+    },
+    PaletteAction {
         id: "close-tab",
         label: "Close Tab",
         shortcut: "cmd-w",

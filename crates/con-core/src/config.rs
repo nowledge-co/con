@@ -110,6 +110,12 @@ fn default_new_window() -> String {
 fn default_close_tab() -> String {
     "cmd-w".into()
 }
+fn default_next_tab() -> String {
+    "ctrl-tab".into()
+}
+fn default_previous_tab() -> String {
+    "ctrl-shift-tab".into()
+}
 fn default_settings() -> String {
     "cmd-,".into()
 }
@@ -149,6 +155,8 @@ pub struct KeybindingConfig {
     pub new_window: String,
     pub new_tab: String,
     pub close_tab: String,
+    pub next_tab: String,
+    pub previous_tab: String,
     pub settings: String,
     pub quit: String,
     pub split_right: String,
@@ -169,6 +177,8 @@ impl Default for KeybindingConfig {
             new_window: default_new_window(),
             new_tab: default_new_tab(),
             close_tab: default_close_tab(),
+            next_tab: default_next_tab(),
+            previous_tab: default_previous_tab(),
             settings: default_settings(),
             quit: default_quit(),
             split_right: default_split_right(),

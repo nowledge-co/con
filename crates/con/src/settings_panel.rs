@@ -1691,6 +1691,8 @@ impl SettingsPanel {
             "new_window" => self.config.keybindings.new_window = binding,
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
+            "next_tab" => self.config.keybindings.next_tab = binding,
+            "previous_tab" => self.config.keybindings.previous_tab = binding,
             "settings" => self.config.keybindings.settings = binding,
             "command_palette" => self.config.keybindings.command_palette = binding,
             "toggle_agent" => self.config.keybindings.toggle_agent = binding,
@@ -1714,6 +1716,8 @@ impl SettingsPanel {
             "new_window" => &self.config.keybindings.new_window,
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
+            "next_tab" => &self.config.keybindings.next_tab,
+            "previous_tab" => &self.config.keybindings.previous_tab,
             "settings" => &self.config.keybindings.settings,
             "command_palette" => &self.config.keybindings.command_palette,
             "toggle_agent" => &self.config.keybindings.toggle_agent,
@@ -2080,6 +2084,8 @@ impl SettingsPanel {
                                 )
                                 .child(
                                     div()
+                                        .max_w(px(500.0))
+                                        .whitespace_normal()
                                         .text_size(px(11.5))
                                         .line_height(px(17.0))
                                         .text_color(theme.muted_foreground.opacity(0.65))
@@ -2095,7 +2101,6 @@ impl SettingsPanel {
                                 .gap(px(6.0))
                                 .px(px(16.0))
                                 .py(px(12.0))
-                                .hover(|s| s.bg(theme.muted.opacity(0.035)))
                                 .child(
                                     div()
                                         .flex()
@@ -2127,7 +2132,6 @@ impl SettingsPanel {
                                 .gap(px(6.0))
                                 .px(px(16.0))
                                 .py(px(12.0))
-                                .hover(|s| s.bg(theme.muted.opacity(0.035)))
                                 .child(
                                     div()
                                         .flex()
@@ -2162,8 +2166,8 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = cx.theme();
-        let chip_bg = theme.muted.opacity(0.12);
-        let chip_hover_bg = theme.muted.opacity(0.18);
+        let chip_bg = theme.muted.opacity(0.06);
+        let chip_hover_bg = theme.muted.opacity(0.10);
         let fg = theme.foreground;
         let muted = theme.muted_foreground.opacity(0.5);
         let danger = theme.danger;
@@ -2181,7 +2185,7 @@ impl SettingsPanel {
                     .items_center()
                     .gap(px(4.0))
                     .h(px(24.0))
-                    .px(px(8.0))
+                    .px(px(7.0))
                     .rounded(px(5.0))
                     .bg(chip_bg)
                     .hover(move |s| s.bg(chip_hover_bg))
@@ -3475,6 +3479,8 @@ impl SettingsPanel {
         let general_keys: &[(&str, &str)] = &[
             ("New Window", "new_window"),
             ("New Tab", "new_tab"),
+            ("Next Tab", "next_tab"),
+            ("Previous Tab", "previous_tab"),
             ("Close Tab", "close_tab"),
             ("Settings", "settings"),
             ("Command Palette", "command_palette"),
@@ -3519,14 +3525,21 @@ impl SettingsPanel {
                         .items_center()
                         .justify_between()
                         .px(px(16.0))
-                        .h(px(36.0))
-                        .hover(|s| s.bg(theme.muted.opacity(0.035)))
-                        .child(div().text_sm().child(label.to_string()))
+                        .h(px(34.0))
+                        .hover(|s| s.bg(theme.muted.opacity(0.025)))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .line_height(px(16.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.foreground.opacity(0.86))
+                                .child(label.to_string()),
+                        )
                         .child(
                             div()
                                 .id(SharedString::from(format!("key-badge-{field}")))
-                                .min_h(px(24.0))
-                                .px(px(6.0))
+                                .min_h(px(23.0))
+                                .px(px(4.0))
                                 .flex()
                                 .items_center()
                                 .rounded(px(5.0))
@@ -3541,7 +3554,7 @@ impl SettingsPanel {
                                 } else {
                                     theme.muted_foreground
                                 })
-                                .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                                .hover(|s| s.bg(theme.muted.opacity(0.055)))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -4368,9 +4381,16 @@ fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
         .items_center()
         .justify_between()
         .px(px(16.0))
-        .h(px(36.0))
-        .hover(|s| s.bg(theme.muted.opacity(0.035)))
-        .child(div().text_sm().child(action.to_string()))
+        .h(px(34.0))
+        .hover(|s| s.bg(theme.muted.opacity(0.025)))
+        .child(
+            div()
+                .text_size(px(12.0))
+                .line_height(px(16.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.foreground.opacity(0.86))
+                .child(action.to_string()),
+        )
         .child(crate::keycaps::keycaps_for_binding(shortcut, theme))
 }
 

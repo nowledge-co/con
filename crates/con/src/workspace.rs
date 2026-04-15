@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
-    ActiveTheme, kbd::Kbd, tooltip::Tooltip,
-};
+use gpui_component::{ActiveTheme, tooltip::Tooltip};
 use serde_json::json;
 use tokio::sync::oneshot;
 
@@ -27,7 +25,7 @@ fn chrome_tooltip(label: &str, stroke: Option<Keystroke>, window: &mut Window, c
         let mut content = div()
             .flex()
             .items_center()
-            .gap(px(10.0))
+            .gap(px(7.0))
             .child(
                 div()
                     .text_size(px(12.0))
@@ -69,8 +67,8 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    CloseTab, CycleInputMode, FocusInput, NewTab, Quit, SplitDown, SplitRight, ToggleAgentPanel,
-    TogglePaneScopePicker,
+    CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit, SplitDown,
+    SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
 };
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
@@ -2568,6 +2566,12 @@ impl ConWorkspace {
             "new-tab" => {
                 self.new_tab(&NewTab, window, cx);
             }
+            "next-tab" => {
+                self.next_tab(&NextTab, window, cx);
+            }
+            "previous-tab" => {
+                self.previous_tab(&PreviousTab, window, cx);
+            }
             "close-tab" => {
                 self.close_tab(&CloseTab, window, cx);
             }
@@ -4120,13 +4124,13 @@ impl ConWorkspace {
             pane.name.clone()
         };
         let status_text = if !pane.is_alive {
-            "offline"
+            Some("offline")
         } else if pane.is_busy {
-            "busy"
+            Some("busy")
         } else if pane.hostname.is_some() {
-            "remote"
+            Some("remote")
         } else {
-            "local"
+            None
         };
         let base_tile_surface = if theme.is_dark() {
             theme.title_bar.opacity(if is_focused { 0.84 } else { 0.72 })
@@ -4205,7 +4209,7 @@ impl ConWorkspace {
                                             .child(label),
                                     ),
                             )
-                            .child(
+                            .children(status_text.map(|text| {
                                 div()
                                     .text_size(px(10.5))
                                     .line_height(px(13.0))
@@ -4215,8 +4219,8 @@ impl ConWorkspace {
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .text_ellipsis()
-                                    .child(status_text),
-                            ),
+                                    .child(text)
+                            })),
                     )
                     .child(
                         div().flex().items_center().gap(px(4.0)).child(
@@ -5324,6 +5328,26 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn next_tab(&mut self, _: &NextTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        let next = (self.active_tab + 1) % self.tabs.len();
+        self.activate_tab(next, window, cx);
+    }
+
+    fn previous_tab(&mut self, _: &PreviousTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        let prev = if self.active_tab == 0 {
+            self.tabs.len() - 1
+        } else {
+            self.active_tab - 1
+        };
+        self.activate_tab(prev, window, cx);
+    }
+
     /// Focus the active terminal (used after modal close, etc.)
     fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
         self.active_terminal().focus(window, cx);
@@ -6167,6 +6191,8 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::toggle_command_palette))
             .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::next_tab))
+            .on_action(cx.listener(Self::previous_tab))
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(Self::split_right))
             .on_action(cx.listener(Self::split_down))
@@ -6219,25 +6245,14 @@ impl Render for ConWorkspace {
                     }
                 }
 
-                // Cmd+Shift+[ — previous tab
+                // Browser-style fallbacks. The configurable actions also bind
+                // Control-Tab / Control-Shift-Tab by default.
                 if mods.platform && mods.shift && key == "[" {
-                    if this.active_tab > 0 {
-                        let prev = this.active_tab - 1;
-                        this.activate_tab(prev, window, cx);
-                    } else if !this.tabs.is_empty() {
-                        let last = this.tabs.len() - 1;
-                        this.activate_tab(last, window, cx);
-                    }
+                    this.previous_tab(&PreviousTab, window, cx);
                 }
 
-                // Cmd+Shift+] — next tab
                 if mods.platform && mods.shift && key == "]" {
-                    let next = this.active_tab + 1;
-                    if next < this.tabs.len() {
-                        this.activate_tab(next, window, cx);
-                    } else {
-                        this.activate_tab(0, window, cx);
-                    }
+                    this.next_tab(&NextTab, window, cx);
                 }
             }))
             .child(top_bar)
@@ -6463,7 +6478,6 @@ impl Render for ConWorkspace {
                 let popup_width =
                     px((window.bounds().size.width.as_f32() * 0.38).clamp(360.0, 520.0));
                 let popup_bottom = px(58.0 + (43.0 * input_bar_progress.max(0.01)));
-                let scope_kbd = Keystroke::parse("cmd-'").ok().map(Kbd::new);
                 let preview_content = self.render_scope_node(
                     &layout,
                     &pane_map,
@@ -6493,27 +6507,27 @@ impl Render for ConWorkspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap(px(8.0))
+                    .gap(px(12.0))
                     .child(
                         div().flex().items_center().gap(px(6.0)).child(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap(px(1.0))
+                                .gap(px(2.0))
                                 .child(
                                     div()
-                                        .text_size(px(11.5))
+                                        .text_size(px(12.0))
                                         .font_family(theme.mono_font_family.clone())
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child("Command scope"),
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("Pane scope"),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(10.0))
+                                        .text_size(px(10.5))
                                         .line_height(px(13.0))
                                         .font_family(theme.mono_font_family.clone())
-                                        .text_color(theme.muted_foreground.opacity(0.56))
-                                        .child("Broadcast by default"),
+                                        .text_color(theme.muted_foreground.opacity(0.58))
+                                        .child("Choose where command-mode input is sent"),
                                 ),
                         ),
                     )
@@ -6521,14 +6535,21 @@ impl Render for ConWorkspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
-                            .when_some(scope_kbd.clone(), |this, kbd| this.child(kbd.outline()))
+                            .gap(px(5.0))
+                            .child(crate::keycaps::keycaps_for_binding("cmd-'", theme))
                             .child(
                                 div()
+                                    .h(px(19.0))
+                                    .px(px(7.0))
+                                    .rounded(px(5.0))
+                                    .flex()
+                                    .items_center()
+                                    .bg(theme.muted.opacity(0.12))
                                     .text_size(px(10.5))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.58))
-                                    .child("1..9"),
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.foreground.opacity(0.66))
+                                    .child("1-9"),
                             ),
                     );
 
@@ -6583,8 +6604,8 @@ impl Render for ConWorkspace {
                     .gap(px(8.0))
                     .child(
                         div()
-                            .w(px(206.0))
-                            .h(px(30.0))
+                            .w_full()
+                            .h(px(32.0))
                             .px(px(3.0))
                             .rounded(px(10.0))
                             .bg(segmented_surface)
@@ -6615,8 +6636,8 @@ impl Render for ConWorkspace {
                 let preview = div()
                     .h(px(224.0))
                     .w_full()
-                    .rounded(px(12.0))
-                    .p(px(11.0))
+                    .rounded(px(10.0))
+                    .p(px(10.0))
                     .bg(preview_surface)
                     .child(preview_content);
 
