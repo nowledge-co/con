@@ -75,6 +75,9 @@ pub struct GhosttyView {
     pending_write: Option<Vec<u8>>,
     /// Desired native view visibility, including before the NSView exists.
     native_view_visible: Cell<bool>,
+    /// Desired Ghostty focus state. This is independent from GPUI keyboard
+    /// focus so broadcast/custom pane scopes can light multiple cursors.
+    surface_focused: Cell<bool>,
     /// When a surface was created before a real layout pass, keep it hidden until
     /// update_frame commits an actual pane geometry.
     awaiting_first_layout_visibility: bool,
@@ -166,6 +169,7 @@ impl GhosttyView {
             last_title: None,
             pending_write: None,
             native_view_visible: Cell::new(true),
+            surface_focused: Cell::new(true),
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
             next_surface_init_retry_at: None,
@@ -245,6 +249,18 @@ impl GhosttyView {
         self.ime_marked_text = None;
     }
 
+    pub fn set_surface_focus_state(&mut self, focused: bool) {
+        let changed = self.surface_focused.replace(focused) != focused;
+        if !changed {
+            return;
+        }
+
+        if let Some(ref terminal) = self.terminal {
+            terminal.set_focus(focused);
+            terminal.refresh();
+        }
+    }
+
     #[cfg(target_os = "macos")]
     fn ensure_initialized(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
         if self.initialized {
@@ -320,7 +336,7 @@ impl GhosttyView {
                 let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
                 terminal.set_size(width_px, height_px);
                 terminal.set_content_scale(scale);
-                terminal.set_focus(true);
+                terminal.set_focus(self.surface_focused.get());
                 self.terminal = Some(Arc::new(terminal));
                 self.host_view = Some(host_view);
                 self.nsview = Some(nsview);
@@ -483,10 +499,10 @@ impl GhosttyView {
     /// mode-dependent sequences (application cursor mode, kitty protocol, etc.)
     /// correctly. Falls back to `ghostty_surface_text` for composed/IME text
     /// when no keycode mapping exists.
-    fn handle_key_down(&self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn handle_key_down(&self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let terminal = match self.terminal.as_ref() {
             Some(t) => t,
-            None => return,
+            None => return false,
         };
 
         let keystroke = &event.keystroke;
@@ -499,7 +515,7 @@ impl GhosttyView {
                             cx.write_to_clipboard(ClipboardItem::new_string(selection));
                         }
                     }
-                    return;
+                    return true;
                 }
                 "v" => {
                     if let Some(text) = cx
@@ -511,7 +527,7 @@ impl GhosttyView {
                             cx.notify();
                         }
                     }
-                    return;
+                    return true;
                 }
                 _ => {}
             }
@@ -522,15 +538,15 @@ impl GhosttyView {
         if keystroke.modifiers.platform {
             match keystroke.key.as_str() {
                 // Tab management
-                "q" | "w" | "t" | "," => return,
+                "q" | "w" | "t" | "," => return false,
                 // Splits (cmd-d, cmd-shift-d)
-                "d" => return,
+                "d" => return false,
                 // Agent & input
-                "l" | "i" => return,
+                "l" | "i" => return false,
                 // Edit menu (handled by OS)
-                "c" | "v" | "x" | "z" | "a" => return,
+                "c" | "v" | "x" | "z" | "a" => return false,
                 // Command palette (cmd-shift-p)
-                "p" if keystroke.modifiers.shift => return,
+                "p" if keystroke.modifiers.shift => return false,
                 // Everything else (including cmd-k) passes to terminal
                 _ => {}
             }
@@ -538,7 +554,7 @@ impl GhosttyView {
 
         // Ctrl+` is reserved for toggle-input-bar (app shortcut).
         if keystroke.modifiers.control && keystroke.key == "`" {
-            return;
+            return false;
         }
 
         let mods = gpui_mods_to_ghostty(&keystroke.modifiers);
@@ -572,7 +588,7 @@ impl GhosttyView {
             };
 
             terminal.send_key(key_event);
-            return;
+            return true;
         }
 
         // No keycode mapping — fall back to text input.
@@ -580,18 +596,19 @@ impl GhosttyView {
         if let Some(ref key_char) = keystroke.key_char {
             if !key_char.is_empty() {
                 terminal.send_text(key_char);
-                return;
+                return true;
             }
         }
         if key_name.len() == 1 {
             terminal.send_text(key_name);
+            return true;
         }
+        false
     }
 }
 
 struct GhosttyInputHandler {
     view: WeakEntity<GhosttyView>,
-    ime_bounds: Option<Bounds<Pixels>>,
 }
 
 impl InputHandler for GhosttyInputHandler {
@@ -681,9 +698,26 @@ impl InputHandler for GhosttyInputHandler {
         &mut self,
         _range_utf16: Range<usize>,
         _window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Option<Bounds<Pixels>> {
-        self.ime_bounds
+        self.view
+            .read_with(cx, |view, _| {
+                let terminal = view.terminal.as_ref()?;
+                let bounds = view.last_bounds?;
+                let ime_point = terminal.ime_point();
+                Some(Bounds::new(
+                    point(
+                        bounds.origin.x + px(ime_point.x as f32),
+                        bounds.origin.y + px(ime_point.y as f32),
+                    ),
+                    size(
+                        px((ime_point.width as f32).max(1.0)),
+                        px((ime_point.height as f32).max(1.0)),
+                    ),
+                ))
+            })
+            .ok()
+            .flatten()
     }
 
     fn character_index_for_point(
@@ -938,8 +972,11 @@ impl Render for GhosttyView {
                     terminal.send_mouse_scroll(delta.0, delta.1, 0);
                 }
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                this.handle_key_down(event, cx);
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.handle_key_down(event, cx) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
                 // Force repaint — some ghostty key bindings (e.g. cmd-k clear screen)
                 // modify the terminal without emitting GHOSTTY_ACTION_RENDER.
                 cx.notify();
@@ -958,17 +995,10 @@ impl Render for GhosttyView {
                     {
                         let focus = input_focus.clone();
                         let entity = entity.clone();
-                        move |bounds, _state, window, cx| {
-                            let candidate_anchor = Bounds::new(
-                                point(bounds.origin.x, bounds.origin.y + bounds.size.height),
-                                size(px(1.0), px(1.0)),
-                            );
+                        move |_bounds, _state, window, cx| {
                             window.handle_input(
                                 &focus,
-                                GhosttyInputHandler {
-                                    view: entity.clone(),
-                                    ime_bounds: Some(candidate_anchor),
-                                },
+                                GhosttyInputHandler { view: entity.clone() },
                                 cx,
                             );
                         }

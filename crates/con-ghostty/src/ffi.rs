@@ -519,6 +519,13 @@ unsafe extern "C" {
     // Surface input
     pub fn ghostty_surface_key(surface: ghostty_surface_t, key: ghostty_input_key_s) -> bool;
     pub fn ghostty_surface_text(surface: ghostty_surface_t, text: *const c_char, len: usize);
+    pub fn ghostty_surface_ime_point(
+        surface: ghostty_surface_t,
+        x: *mut c_double,
+        y: *mut c_double,
+        width: *mut c_double,
+        height: *mut c_double,
+    );
     pub fn ghostty_surface_mouse_button(
         surface: ghostty_surface_t,
         state: ghostty_input_mouse_state_e,

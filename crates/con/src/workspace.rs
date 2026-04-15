@@ -18,6 +18,7 @@ const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
+const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
 
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
@@ -27,8 +28,8 @@ use crate::agent_panel::{
 };
 use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
 use crate::input_bar::{
-    EscapeInput, InputBar, InputEdited, InputMode, PaneInfo, SkillAutocompleteChanged, SubmitInput,
-    TogglePaneScopePicker as TogglePaneScopePickerRequested,
+    EscapeInput, InputBar, InputEdited, InputMode, InputScopeChanged, PaneInfo,
+    SkillAutocompleteChanged, SubmitInput, TogglePaneScopePicker as TogglePaneScopePickerRequested,
 };
 use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
@@ -72,6 +73,14 @@ struct CommandSuggestionEntry {
     cwd: Option<String>,
 }
 
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct NSOperatingSystemVersion {
+    major_version: isize,
+    minor_version: isize,
+    patch_version: isize,
+}
+
 #[derive(Clone)]
 struct ShellSuggestionResult {
     tab_idx: usize,
@@ -94,6 +103,7 @@ pub struct ConWorkspace {
     ui_font_family: String,
     ui_font_size: f32,
     font_size: f32,
+    terminal_cursor_style: String,
     terminal_opacity: f32,
     terminal_blur: bool,
     ui_opacity: f32,
@@ -110,6 +120,7 @@ pub struct ConWorkspace {
     harness: AgentHarness,
     shell_suggestion_engine: SuggestionEngine,
     global_shell_history: VecDeque<CommandSuggestionEntry>,
+    global_input_history: VecDeque<String>,
     pane_scope_picker_open: bool,
     agent_panel_open: bool,
     agent_panel_motion: MotionValue,
@@ -288,9 +299,41 @@ impl ConWorkspace {
         output_floor + (1.0 - output_floor) * normalized.powf(exponent)
     }
 
+    #[cfg(target_os = "macos")]
+    fn macos_major_version() -> Option<isize> {
+        use objc::{class, msg_send, sel, sel_impl};
+
+        unsafe {
+            let process_info: *mut objc::runtime::Object =
+                msg_send![class!(NSProcessInfo), processInfo];
+            if process_info.is_null() {
+                return None;
+            }
+
+            let version: NSOperatingSystemVersion = msg_send![process_info, operatingSystemVersion];
+            Some(version.major_version)
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn macos_major_version() -> Option<isize> {
+        None
+    }
+
+    fn supports_terminal_glass() -> bool {
+        Self::macos_major_version().is_none_or(|major| major >= 13)
+    }
+
     fn effective_terminal_opacity(value: f32) -> f32 {
+        if !Self::supports_terminal_glass() {
+            return 1.0;
+        }
         let clamped = Self::clamp_terminal_opacity(value);
         Self::remap_opacity(clamped, 0.25, 0.72, 1.55)
+    }
+
+    fn effective_terminal_blur(value: bool) -> bool {
+        value && Self::supports_terminal_glass()
     }
 
     fn effective_ui_opacity(value: f32) -> f32 {
@@ -321,8 +364,9 @@ impl ConWorkspace {
         let ui_font_family = config.appearance.ui_font_family.clone();
         let ui_font_size = config.appearance.ui_font_size;
         let font_size = config.terminal.font_size;
+        let terminal_cursor_style = config.terminal.cursor_style.clone();
         let terminal_opacity = Self::effective_terminal_opacity(config.appearance.terminal_opacity);
-        let terminal_blur = config.appearance.terminal_blur;
+        let terminal_blur = Self::effective_terminal_blur(config.appearance.terminal_blur);
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
         let effective_ui_opacity = Self::effective_ui_opacity(ui_opacity);
         let background_image = config.appearance.background_image.clone();
@@ -339,6 +383,7 @@ impl ConWorkspace {
             Some(font_size),
             Some(terminal_opacity),
             Some(terminal_blur),
+            Some(&terminal_cursor_style),
             background_image.as_deref(),
             Some(background_image_opacity),
             Some(&background_image_position),
@@ -450,6 +495,8 @@ impl ConWorkspace {
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
         let global_shell_history = Self::restore_global_shell_history(&session, &tabs);
+        let global_input_history =
+            Self::restore_global_input_history(&session, &global_shell_history);
         let agent_panel_open = session.agent_panel_open;
         let agent_panel_width = session
             .agent_panel_width
@@ -476,6 +523,8 @@ impl ConWorkspace {
         cx.subscribe_in(&input_bar, window, Self::on_input_submit)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_edited)
+            .detach();
+        cx.subscribe_in(&input_bar, window, Self::on_input_scope_changed)
             .detach();
         cx.subscribe_in(&input_bar, window, Self::on_input_escape)
             .detach();
@@ -627,6 +676,7 @@ impl ConWorkspace {
             ui_font_family,
             ui_font_size,
             font_size,
+            terminal_cursor_style,
             terminal_opacity,
             terminal_blur,
             ui_opacity,
@@ -643,6 +693,7 @@ impl ConWorkspace {
             harness,
             shell_suggestion_engine,
             global_shell_history,
+            global_input_history,
             pane_scope_picker_open: false,
             agent_panel_open,
             agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
@@ -700,6 +751,49 @@ impl ConWorkspace {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
     }
 
+    fn sync_active_terminal_focus_states(&self, cx: &mut App) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let pane_terminals = pane_tree.pane_terminals();
+        let focused_id = pane_tree.focused_pane_id();
+        let (mode, is_broadcast, is_focused, selected_ids) = {
+            let input_bar = self.input_bar.read(cx);
+            (
+                input_bar.mode(),
+                input_bar.is_broadcast_scope(),
+                input_bar.is_focused_scope(),
+                input_bar.scope_selected_ids(),
+            )
+        };
+        let all_ids = pane_terminals
+            .iter()
+            .map(|(pane_id, _)| *pane_id)
+            .collect::<HashSet<_>>();
+
+        let target_ids: HashSet<usize> = if mode == InputMode::Agent || is_focused {
+            [focused_id].into_iter().collect()
+        } else if is_broadcast {
+            all_ids
+        } else {
+            let selected = selected_ids
+                .into_iter()
+                .filter(|pane_id| all_ids.contains(pane_id))
+                .collect::<HashSet<_>>();
+            if selected.is_empty() {
+                [focused_id].into_iter().collect()
+            } else {
+                selected
+            }
+        };
+
+        for (pane_id, terminal) in pane_terminals {
+            terminal.set_focus_state(target_ids.contains(&pane_id), cx);
+        }
+    }
+
     fn schedule_terminal_bootstrap_reassert(
         terminal: &TerminalPane,
         should_focus: bool,
@@ -723,9 +817,11 @@ impl ConWorkspace {
                             terminal.ensure_surface(window, cx);
                             terminal.notify(cx);
                             terminal.set_native_view_visible(true, cx);
-                            terminal.set_focus_state(should_focus, cx);
                             if should_focus {
+                                _workspace.sync_active_terminal_focus_states(cx);
                                 terminal.focus(window, cx);
+                            } else {
+                                terminal.set_focus_state(false, cx);
                             }
                             if terminal.surface_ready(cx) {
                                 terminal.recover_shell_prompt_state(cx);
@@ -839,9 +935,11 @@ impl ConWorkspace {
             terminal.ensure_surface(window, cx);
             terminal.notify(cx);
             let should_focus = req.tab_idx == self.active_tab;
-            terminal.set_focus_state(should_focus, cx);
             if should_focus {
                 terminal.focus(window, cx);
+                self.sync_active_terminal_focus_states(cx);
+            } else {
+                terminal.set_focus_state(false, cx);
             }
             Self::schedule_terminal_bootstrap_reassert(
                 &terminal,
@@ -1944,6 +2042,7 @@ impl ConWorkspace {
                     cwd: entry.cwd.clone(),
                 })
                 .collect(),
+            input_history: self.global_input_history.iter().cloned().collect(),
             conversation_id: None, // deprecated — per-tab now
         }
     }
@@ -2043,6 +2142,28 @@ impl ConWorkspace {
             }
         }
         aggregated
+    }
+
+    fn restore_global_input_history(
+        session: &con_core::session::Session,
+        shell_history: &VecDeque<CommandSuggestionEntry>,
+    ) -> VecDeque<String> {
+        let from_session = session
+            .input_history
+            .iter()
+            .filter_map(|entry| {
+                let trimmed = entry.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            })
+            .collect::<VecDeque<_>>();
+        if !from_session.is_empty() {
+            return from_session;
+        }
+
+        shell_history
+            .iter()
+            .map(|entry| entry.command.clone())
+            .collect()
     }
 
     fn on_new_conversation(
@@ -2343,6 +2464,7 @@ impl ConWorkspace {
                 self.input_bar.update(cx, |bar, cx| {
                     bar.cycle_mode(window, cx);
                 });
+                self.sync_active_terminal_focus_states(cx);
             }
             "quit" => {
                 self.cancel_all_sessions();
@@ -2391,9 +2513,10 @@ impl ConWorkspace {
         self.ui_font_family = appearance_config.ui_font_family.clone();
         self.ui_font_size = appearance_config.ui_font_size;
         self.font_size = term_config.font_size;
+        self.terminal_cursor_style = term_config.cursor_style.clone();
         self.terminal_opacity =
             Self::effective_terminal_opacity(appearance_config.terminal_opacity);
-        self.terminal_blur = appearance_config.terminal_blur;
+        self.terminal_blur = Self::effective_terminal_blur(appearance_config.terminal_blur);
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
         let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
         self.background_image = appearance_config.background_image.clone();
@@ -2463,6 +2586,7 @@ impl ConWorkspace {
                     self.font_size,
                     self.terminal_opacity,
                     self.terminal_blur,
+                    &self.terminal_cursor_style,
                     self.background_image.as_deref(),
                     self.background_image_opacity,
                     Some(&self.background_image_position),
@@ -2478,6 +2602,7 @@ impl ConWorkspace {
             self.font_size,
             self.terminal_opacity,
             self.terminal_blur,
+            &self.terminal_cursor_style,
             self.background_image.as_deref(),
             self.background_image_opacity,
             Some(&self.background_image_position),
@@ -2546,6 +2671,17 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn on_input_scope_changed(
+        &mut self,
+        _input_bar: &Entity<InputBar>,
+        _event: &InputScopeChanged,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_active_terminal_focus_states(cx);
+        cx.notify();
+    }
+
     fn on_input_submit(
         &mut self,
         input_bar: &Entity<InputBar>,
@@ -2563,6 +2699,10 @@ impl ConWorkspace {
         if content.trim().is_empty() {
             return;
         }
+
+        self.record_input_history(&content);
+        let recent_inputs = self.recent_input_history(80);
+        input_bar.update(cx, |bar, _cx| bar.set_recent_commands(recent_inputs));
 
         match mode {
             InputMode::Shell => {
@@ -3765,6 +3905,7 @@ impl ConWorkspace {
         self.input_bar.update(cx, |bar, cx| {
             bar.set_broadcast_scope(window, cx);
         });
+        self.sync_active_terminal_focus_states(cx);
         self.input_bar.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
@@ -3773,6 +3914,7 @@ impl ConWorkspace {
         self.input_bar.update(cx, |bar, cx| {
             bar.set_focused_scope(cx);
         });
+        self.sync_active_terminal_focus_states(cx);
         self.input_bar.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
@@ -3786,6 +3928,7 @@ impl ConWorkspace {
         self.input_bar.update(cx, |bar, cx| {
             bar.toggle_scope_pane(pane_id, window, cx);
         });
+        self.sync_active_terminal_focus_states(cx);
         self.input_bar.focus_handle(cx).focus(window, cx);
     }
 
@@ -4089,6 +4232,7 @@ impl ConWorkspace {
         if self.input_bar.read(cx).mode() == InputMode::Agent {
             self.pane_scope_picker_open = false;
         }
+        self.sync_active_terminal_focus_states(cx);
         cx.notify();
     }
 
@@ -4185,8 +4329,8 @@ impl ConWorkspace {
                 terminal.set_native_view_visible(false, cx);
             }
         });
-        terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
             true,
@@ -4201,24 +4345,25 @@ impl ConWorkspace {
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
-        let tab = &mut self.tabs[self.active_tab];
-        if tab.pane_tree.pane_count() > 1 {
-            let closing = tab.pane_tree.focused_terminal().clone();
+        if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
+            let (closing, surviving_terminals, new_focus) = {
+                let tab = &mut self.tabs[self.active_tab];
+                let closing = tab.pane_tree.focused_terminal().clone();
+                tab.pane_tree.close_focused();
+                let surviving_terminals: Vec<TerminalPane> =
+                    tab.pane_tree.all_terminals().into_iter().cloned().collect();
+                let new_focus = tab.pane_tree.focused_terminal().clone();
+                (closing, surviving_terminals, new_focus)
+            };
 
-            tab.pane_tree.close_focused();
-
-            let surviving_terminals: Vec<TerminalPane> =
-                tab.pane_tree.all_terminals().into_iter().cloned().collect();
             for terminal in &surviving_terminals {
                 terminal.set_native_view_visible(true, cx);
                 terminal.ensure_surface(window, cx);
                 terminal.notify(cx);
             }
 
-            // Focus the new focused pane
-            let new_focus = tab.pane_tree.focused_terminal();
-            new_focus.set_focus_state(true, cx);
             new_focus.focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
             cx.on_next_frame(window, move |_workspace, _window, cx| {
                 closing.shutdown_surface(cx);
                 for terminal in &surviving_terminals {
@@ -4281,8 +4426,8 @@ impl ConWorkspace {
             }
         });
         let focused = self.tabs[self.active_tab].pane_tree.focused_terminal();
-        focused.set_focus_state(true, cx);
         focused.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
         Self::schedule_terminal_bootstrap_reassert(
             focused,
             true,
@@ -4416,12 +4561,40 @@ impl ConWorkspace {
         }
     }
 
+    fn record_input_history(&mut self, input: &str) {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        if let Some(existing_idx) = self
+            .global_input_history
+            .iter()
+            .position(|entry| entry == trimmed)
+        {
+            self.global_input_history.remove(existing_idx);
+        }
+        self.global_input_history.push_back(trimmed.to_string());
+        while self.global_input_history.len() > MAX_GLOBAL_INPUT_HISTORY {
+            self.global_input_history.pop_front();
+        }
+    }
+
     fn recent_shell_commands(&self, limit: usize) -> Vec<String> {
         self.global_shell_history
             .iter()
             .rev()
             .take(limit)
             .map(|entry| entry.command.clone())
+            .collect()
+    }
+
+    fn recent_input_history(&self, limit: usize) -> Vec<String> {
+        self.global_input_history
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
             .collect()
     }
 
@@ -4828,6 +5001,7 @@ impl ConWorkspace {
         if !self.has_active_tab() {
             return;
         }
+        self.record_input_history(content);
         if !self.agent_panel_open {
             self.agent_panel_open = true;
         }
@@ -4838,6 +5012,7 @@ impl ConWorkspace {
         let session = &self.tabs[self.active_tab].session;
         self.harness
             .send_message(session, content.to_string(), context);
+        self.save_session(cx);
     }
 
     fn split_pane(
@@ -4866,8 +5041,8 @@ impl ConWorkspace {
         );
         terminal.ensure_surface(window, cx);
         terminal.notify(cx);
-        terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
             true,
@@ -4939,8 +5114,8 @@ impl ConWorkspace {
             }
         });
         let focused = self.tabs[index].pane_tree.focused_terminal();
-        focused.set_focus_state(true, cx);
         focused.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
         Self::schedule_terminal_bootstrap_reassert(
             focused,
             true,
@@ -4956,6 +5131,7 @@ impl ConWorkspace {
     /// Focus the active terminal (used after modal close, etc.)
     fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
         self.active_terminal().focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
     }
 
     /// Cancel all pending agent operations across all tabs.
@@ -4999,6 +5175,7 @@ impl ConWorkspace {
         if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
             pane_tree.focus(pane_id);
             entity.focus_handle(cx).focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
         }
         cx.notify();
     }
@@ -5030,36 +5207,42 @@ impl ConWorkspace {
             );
         }
 
-        let pane_tree = &mut self.tabs[tab_idx].pane_tree;
-        if pane_tree.pane_count() > 1 {
-            // Close the specific pane whose process exited, not the focused pane.
-            if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
-                let closing = pane_tree
-                    .all_terminals()
-                    .into_iter()
-                    .find(|terminal| terminal.entity_id() == entity_id)
-                    .cloned();
-                pane_tree.close_pane(pane_id);
-                let surviving_terminals: Vec<TerminalPane> =
-                    pane_tree.all_terminals().into_iter().cloned().collect();
-                for terminal in &surviving_terminals {
-                    terminal.set_native_view_visible(true, cx);
-                    terminal.ensure_surface(window, cx);
-                    terminal.notify(cx);
+        if self.tabs[tab_idx].pane_tree.pane_count() > 1 {
+            let mut focus_after_close = None;
+            {
+                let pane_tree = &mut self.tabs[tab_idx].pane_tree;
+                // Close the specific pane whose process exited, not the focused pane.
+                if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
+                    let closing = pane_tree
+                        .all_terminals()
+                        .into_iter()
+                        .find(|terminal| terminal.entity_id() == entity_id)
+                        .cloned();
+                    pane_tree.close_pane(pane_id);
+                    let surviving_terminals: Vec<TerminalPane> =
+                        pane_tree.all_terminals().into_iter().cloned().collect();
+                    for terminal in &surviving_terminals {
+                        terminal.set_native_view_visible(true, cx);
+                        terminal.ensure_surface(window, cx);
+                        terminal.notify(cx);
+                    }
+                    if let Some(closing) = closing {
+                        cx.on_next_frame(window, move |_workspace, _window, cx| {
+                            closing.shutdown_surface(cx);
+                            for terminal in &surviving_terminals {
+                                terminal.notify(cx);
+                            }
+                        });
+                    }
                 }
-                if let Some(closing) = closing {
-                    cx.on_next_frame(window, move |_workspace, _window, cx| {
-                        closing.shutdown_surface(cx);
-                        for terminal in &surviving_terminals {
-                            terminal.notify(cx);
-                        }
-                    });
+                if tab_idx == self.active_tab {
+                    focus_after_close = Some(pane_tree.focused_terminal().clone());
                 }
             }
-            if tab_idx == self.active_tab {
-                let focused = pane_tree.focused_terminal();
-                focused.set_focus_state(true, cx);
+
+            if let Some(focused) = focus_after_close {
                 focused.focus(window, cx);
+                self.sync_active_terminal_focus_states(cx);
             }
         } else if self.tabs.len() > 1 {
             // Last pane in this tab — close the tab.
@@ -5138,8 +5321,8 @@ impl ConWorkspace {
         );
         terminal.ensure_surface(window, cx);
         terminal.notify(cx);
-        terminal.set_focus_state(true, cx);
         terminal.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
             true,

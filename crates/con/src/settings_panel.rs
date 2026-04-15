@@ -107,6 +107,7 @@ pub struct SettingsPanel {
 
     terminal_font_select: Entity<SelectState<SearchableVec<String>>>,
     ui_font_select: Entity<SelectState<SearchableVec<String>>>,
+    cursor_style_select: Entity<SelectState<Vec<String>>>,
     font_size_input: Entity<InputState>,
     ui_font_size_input: Entity<InputState>,
     terminal_opacity_slider: Entity<SliderState>,
@@ -212,6 +213,24 @@ impl SettingsPanel {
             .position(|item| item == current_value)
             .map(IndexPath::new);
         cx.new(|cx| SelectState::new(items, selected_index, window, cx))
+    }
+
+    fn cursor_style_label(value: &str) -> &'static str {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "block" => "Block",
+            "underline" => "Underline",
+            "block_hollow" | "block-hollow" | "hollow" => "Hollow Block",
+            _ => "Bar",
+        }
+    }
+
+    fn cursor_style_from_label(label: &str) -> &'static str {
+        match label {
+            "Block" => "block",
+            "Underline" => "underline",
+            "Hollow Block" => "block_hollow",
+            _ => "bar",
+        }
     }
 
     fn prepare_font_families(config: &Config, mut font_families: Vec<String>) -> Vec<String> {
@@ -862,6 +881,12 @@ impl SettingsPanel {
             window,
             cx,
         );
+        let cursor_style_select = Self::make_string_select(
+            &["Bar", "Block", "Underline", "Hollow Block"],
+            Self::cursor_style_label(&config.terminal.cursor_style),
+            window,
+            cx,
+        );
         let font_size_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("14.0", window, cx);
@@ -1079,6 +1104,18 @@ impl SettingsPanel {
         )
         .detach();
         cx.subscribe_in(
+            &cursor_style_select,
+            window,
+            |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.config.terminal.cursor_style =
+                        Self::cursor_style_from_label(value).to_string();
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
             &background_image_position_select,
             window,
             |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
@@ -1128,6 +1165,7 @@ impl SettingsPanel {
             oauth_states: HashMap::new(),
             terminal_font_select,
             ui_font_select,
+            cursor_style_select,
             font_size_input,
             ui_font_size_input,
             terminal_opacity_slider,
@@ -1209,6 +1247,13 @@ impl SettingsPanel {
             });
             self.ui_font_select.update(cx, |select, cx| {
                 select.set_selected_value(&self.config.appearance.ui_font_family, window, cx);
+            });
+            self.cursor_style_select.update(cx, |select, cx| {
+                select.set_selected_value(
+                    &Self::cursor_style_label(&self.config.terminal.cursor_style).to_string(),
+                    window,
+                    cx,
+                );
             });
             self.font_size_input.update(cx, |s, cx| {
                 s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
@@ -2449,6 +2494,24 @@ impl SettingsPanel {
                         .child(row_field("UI Size", &ui_font_size_input))
                         .child(row_separator(theme))
                         .child(row_field("Terminal Size", &font_size_input)),
+                ),
+        );
+
+        content = content.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Cursor", &theme))
+                .child(
+                    card(theme, card_opacity).child(
+                        div().px(px(16.0)).child(select_row(
+                            "Cursor Style",
+                            "Choose how the terminal insertion point is drawn.",
+                            &self.cursor_style_select,
+                            theme,
+                        )),
+                    ),
                 ),
         );
 
@@ -4073,58 +4136,56 @@ fn slider_row(
 ) -> Div {
     div()
         .flex()
-        .flex_col()
-        .gap(px(12.0))
+        .items_center()
+        .justify_between()
+        .gap(px(18.0))
         .px(px(16.0))
         .py(px(12.0))
         .child(
             div()
                 .flex()
-                .items_start()
-                .justify_between()
-                .gap(px(16.0))
+                .flex_col()
+                .gap(px(3.0))
+                .flex_1()
+                .min_w_0()
+                .max_w(px(380.0))
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.0))
-                        .flex_1()
-                        .max_w(px(380.0))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(label.to_string()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .line_height(px(17.0))
-                                .text_color(theme.muted_foreground.opacity(0.65))
-                                .child(hint.to_string()),
-                        ),
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label.to_string()),
                 )
                 .child(
                     div()
-                        .flex_shrink_0()
-                        .min_w(px(58.0))
-                        .px(px(8.0))
-                        .py(px(4.0))
-                        .rounded(px(999.0))
-                        .bg(theme.muted.opacity(0.10))
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_align(TextAlign::Center)
-                        .text_color(theme.foreground)
-                        .child(format!("{:.0}%", value * 100.0)),
+                        .text_size(px(11.5))
+                        .line_height(px(17.0))
+                        .text_color(theme.muted_foreground.opacity(0.65))
+                        .child(hint.to_string()),
                 ),
         )
         .child(
             div()
                 .flex()
-                .items_center()
-                .w_full()
-                .child(Slider::new(slider).w_full()),
+                .flex_col()
+                .gap(px(8.0))
+                .w(px(260.0))
+                .flex_shrink_0()
+                .child(
+                    div().flex().justify_end().child(
+                        div()
+                            .min_w(px(58.0))
+                            .px(px(8.0))
+                            .py(px(4.0))
+                            .rounded(px(999.0))
+                            .bg(theme.muted.opacity(0.10))
+                            .text_size(px(11.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_align(TextAlign::Center)
+                            .text_color(theme.foreground)
+                            .child(format!("{:.0}%", value * 100.0)),
+                    ),
+                )
+                .child(div().w_full().child(Slider::new(slider).w_full())),
         )
 }
 
