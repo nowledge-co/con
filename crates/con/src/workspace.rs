@@ -2496,6 +2496,11 @@ impl ConWorkspace {
         ) {
             log::error!("Failed to update Ghostty appearance: {}", e);
         }
+        for tab in &self.tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                terminal.sync_window_background_blur(cx);
+            }
+        }
         // Sync GPUI UI theme colors with terminal theme
         crate::theme::sync_gpui_theme(
             &theme,

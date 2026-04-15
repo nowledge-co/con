@@ -196,6 +196,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The agent panel now keeps live activity visible near the top while a run is in progress, shows a labeled Stop action in the header, and lets you expand long tool results instead of forcing every step into the same short preview.
 - Settings panel (Cmd+,) to configure your provider, model, and preferences
 - Appearance settings now expose terminal blur separately from terminal opacity, so Ghostty glass and blur can be tuned independently.
+- Fixed terminal blur on macOS so changing the blur setting now reapplies Ghostty's window blur to existing terminal windows, instead of only updating the stored config.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

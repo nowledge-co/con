@@ -133,6 +133,11 @@ impl TerminalPane {
         }
     }
 
+    pub fn sync_window_background_blur(&self, cx: &mut App) {
+        self.entity
+            .update(cx, |view, _| view.sync_window_background_blur());
+    }
+
     pub fn release_mouse_selection(&self, cx: &App) {
         if let Some(terminal) = self.entity.read(cx).terminal() {
             terminal.send_mouse_button(false, con_ghostty::MouseButton::Left, 0);
