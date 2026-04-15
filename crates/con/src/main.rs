@@ -23,7 +23,7 @@ mod updater;
 mod workspace;
 
 use con_core::config::KeybindingConfig;
-use con_core::session::Session;
+use con_core::session::{GlobalHistoryState, Session};
 use gpui::*;
 use gpui_component::{
     ActiveTheme,
@@ -122,10 +122,24 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
 
 fn fresh_window_session_with_history() -> Session {
     let persisted = Session::load().unwrap_or_default();
+    let persisted_history = GlobalHistoryState::load().unwrap_or_default();
     let mut session = Session::default();
 
-    session.global_shell_history = persisted.global_shell_history;
-    session.input_history = if persisted.input_history.is_empty() {
+    session.global_shell_history = if persisted_history.global_shell_history.is_empty() {
+        persisted.global_shell_history
+    } else {
+        persisted_history.global_shell_history
+    };
+    session.input_history = if !persisted_history.input_history.is_empty() {
+        persisted_history
+            .input_history
+            .into_iter()
+            .filter_map(|entry| {
+                let command = entry.trim();
+                (!command.is_empty()).then(|| command.to_string())
+            })
+            .collect()
+    } else if persisted.input_history.is_empty() {
         session
             .global_shell_history
             .iter()

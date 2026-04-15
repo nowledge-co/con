@@ -54,7 +54,7 @@ use con_core::control::{
     SystemIdentifyResult, TabInfo,
 };
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
-use con_core::session::{PaneLayoutState, PaneSplitDirection, Session};
+use con_core::session::{GlobalHistoryState, PaneLayoutState, PaneSplitDirection, Session};
 use con_core::{SuggestionContext, SuggestionEngine};
 
 struct Tab {
@@ -199,8 +199,8 @@ struct PendingControlAgentRequest {
 }
 
 enum SessionSaveRequest {
-    Save(Session),
-    Flush(Session, crossbeam_channel::Sender<()>),
+    Save(Session, GlobalHistoryState),
+    Flush(Session, GlobalHistoryState, crossbeam_channel::Sender<()>),
 }
 
 fn spawn_session_save_worker() -> crossbeam_channel::Sender<SessionSaveRequest> {
@@ -214,16 +214,24 @@ fn spawn_session_save_worker() -> crossbeam_channel::Sender<SessionSaveRequest> 
                     Err(_) => break,
                 };
 
-                let (mut latest_session, mut flush_waiters) = match request {
-                    SessionSaveRequest::Save(session) => (Some(session), Vec::new()),
-                    SessionSaveRequest::Flush(session, waiter) => (Some(session), vec![waiter]),
+                let (mut latest_session, mut latest_history, mut flush_waiters) = match request {
+                    SessionSaveRequest::Save(session, history) => {
+                        (Some(session), Some(history), Vec::new())
+                    }
+                    SessionSaveRequest::Flush(session, history, waiter) => {
+                        (Some(session), Some(history), vec![waiter])
+                    }
                 };
 
                 while let Ok(request) = rx.try_recv() {
                     match request {
-                        SessionSaveRequest::Save(session) => latest_session = Some(session),
-                        SessionSaveRequest::Flush(session, waiter) => {
+                        SessionSaveRequest::Save(session, history) => {
                             latest_session = Some(session);
+                            latest_history = Some(history);
+                        }
+                        SessionSaveRequest::Flush(session, history, waiter) => {
+                            latest_session = Some(session);
+                            latest_history = Some(history);
                             flush_waiters.push(waiter);
                         }
                     }
@@ -233,6 +241,11 @@ fn spawn_session_save_worker() -> crossbeam_channel::Sender<SessionSaveRequest> 
                     && let Err(err) = session.save()
                 {
                     log::warn!("Failed to save session: {}", err);
+                }
+                if let Some(history) = latest_history
+                    && let Err(err) = history.save()
+                {
+                    log::warn!("Failed to save command history: {}", err);
                 }
 
                 for waiter in flush_waiters {
@@ -494,9 +507,15 @@ impl ConWorkspace {
             });
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
+        let persisted_history = GlobalHistoryState::load().unwrap_or_else(|err| {
+            log::warn!("Failed to load command history: {}", err);
+            GlobalHistoryState::default()
+        });
         let global_shell_history = Self::restore_global_shell_history(&session, &tabs);
+        let global_shell_history =
+            Self::merge_shell_histories(global_shell_history, &persisted_history);
         let global_input_history =
-            Self::restore_global_input_history(&session, &global_shell_history);
+            Self::restore_global_input_history(&session, &persisted_history, &global_shell_history);
         let agent_panel_open = session.agent_panel_open;
         let agent_panel_width = session
             .agent_panel_width
@@ -515,8 +534,20 @@ impl ConWorkspace {
         let settings_panel =
             cx.new(|cx| SettingsPanel::new(&config, registry, oauth_runtime, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
-        agent_panel.update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
-        input_bar.update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
+        let initial_recent_inputs = global_input_history
+            .iter()
+            .rev()
+            .take(80)
+            .cloned()
+            .collect::<Vec<_>>();
+        agent_panel.update(cx, |panel, _cx| {
+            panel.set_ui_opacity(effective_ui_opacity);
+            panel.set_recent_inputs(initial_recent_inputs.clone());
+        });
+        input_bar.update(cx, |bar, _cx| {
+            bar.set_ui_opacity(effective_ui_opacity);
+            bar.set_recent_commands(initial_recent_inputs);
+        });
         command_palette.update(cx, |palette, _cx| {
             palette.set_ui_opacity(effective_ui_opacity)
         });
@@ -2047,23 +2078,52 @@ impl ConWorkspace {
         }
     }
 
+    fn snapshot_global_history(&self) -> GlobalHistoryState {
+        GlobalHistoryState {
+            global_shell_history: self
+                .global_shell_history
+                .iter()
+                .map(|entry| con_core::session::CommandHistoryEntryState {
+                    command: entry.command.clone(),
+                    cwd: entry.cwd.clone(),
+                })
+                .collect(),
+            input_history: self.global_input_history.iter().cloned().collect(),
+        }
+    }
+
     fn save_session(&self, cx: &App) {
         let session = self.snapshot_session(cx);
-        if let Err(err) = self.session_save_tx.send(SessionSaveRequest::Save(session)) {
+        let history = self.snapshot_global_history();
+        if let Err(err) = self
+            .session_save_tx
+            .send(SessionSaveRequest::Save(session, history))
+        {
             log::warn!("Failed to queue session save: {}", err);
         }
     }
 
     fn flush_session_save(&self, cx: &App) {
         let session = self.snapshot_session(cx);
+        let history = self.snapshot_global_history();
         let (done_tx, done_rx) = crossbeam_channel::bounded(1);
         if let Err(err) = self
             .session_save_tx
-            .send(SessionSaveRequest::Flush(session.clone(), done_tx))
+            .send(SessionSaveRequest::Flush(
+                session.clone(),
+                history.clone(),
+                done_tx,
+            ))
         {
             log::warn!("Failed to flush session save queue: {}", err);
             if let Err(save_err) = session.save() {
                 log::warn!("Failed to save session directly during flush: {}", save_err);
+            }
+            if let Err(save_err) = history.save() {
+                log::warn!(
+                    "Failed to save command history directly during flush: {}",
+                    save_err
+                );
             }
             return;
         }
@@ -2072,6 +2132,12 @@ impl ConWorkspace {
             log::warn!("Timed out waiting for session save flush: {}", err);
             if let Err(save_err) = session.save() {
                 log::warn!("Failed to save session directly after flush timeout: {}", save_err);
+            }
+            if let Err(save_err) = history.save() {
+                log::warn!(
+                    "Failed to save command history directly after flush timeout: {}",
+                    save_err
+                );
             }
         }
     }
@@ -2144,25 +2210,69 @@ impl ConWorkspace {
         aggregated
     }
 
+    fn merge_shell_histories(
+        mut restored: VecDeque<CommandSuggestionEntry>,
+        persisted_history: &GlobalHistoryState,
+    ) -> VecDeque<CommandSuggestionEntry> {
+        for entry in &persisted_history.global_shell_history {
+            let command = entry.command.trim();
+            if command.is_empty() {
+                continue;
+            }
+            if let Some(existing_idx) = restored
+                .iter()
+                .position(|existing| existing.command == command)
+            {
+                restored.remove(existing_idx);
+            }
+            restored.push_back(CommandSuggestionEntry {
+                command: command.to_string(),
+                cwd: entry.cwd.clone(),
+            });
+            while restored.len() > MAX_GLOBAL_SHELL_HISTORY {
+                restored.pop_front();
+            }
+        }
+        restored
+    }
+
     fn restore_global_input_history(
         session: &con_core::session::Session,
+        persisted_history: &GlobalHistoryState,
         shell_history: &VecDeque<CommandSuggestionEntry>,
     ) -> VecDeque<String> {
-        let from_session = session
+        let mut restored = VecDeque::new();
+        for entry in session
             .input_history
             .iter()
-            .filter_map(|entry| {
-                let trimmed = entry.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            })
-            .collect::<VecDeque<_>>();
-        if !from_session.is_empty() {
-            return from_session;
+            .chain(persisted_history.input_history.iter())
+        {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(existing_idx) = restored
+                .iter()
+                .position(|existing: &String| existing == trimmed)
+            {
+                restored.remove(existing_idx);
+            }
+            restored.push_back(trimmed.to_string());
+            while restored.len() > MAX_GLOBAL_INPUT_HISTORY {
+                restored.pop_front();
+            }
+        }
+
+        if !restored.is_empty() {
+            return restored;
         }
 
         shell_history
             .iter()
-            .map(|entry| entry.command.clone())
+            .filter_map(|entry| {
+                let trimmed = entry.command.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            })
             .collect()
     }
 

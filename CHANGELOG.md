@@ -216,6 +216,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed Up/Down recall so the command bar and side-panel composer recover history even when the underlying input component consumes arrow keys. Render-time shell suggestion sync no longer overwrites persisted global input history.
 - Restored history ghost suggestions from persisted submitted input when per-pane shell command history is incomplete, while keeping AI suggestions separate.
 - Fixed fresh windows and Dock/global-hotkey reopen so they start with persisted command history instead of an empty command bar history.
+- Moved app-wide command history into its own persistence file and hydrated input components during workspace construction, so a fresh app launch does not depend on the first render or a healthy layout session to restore history.
 - Polished Agent-mode command bar text alignment and foreground styling so it lines up with Smart and Shell modes.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs

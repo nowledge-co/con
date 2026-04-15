@@ -12,6 +12,8 @@ Those fresh-window paths intentionally used `Session::default()` to avoid clonin
 
 Fresh-window creation now builds a default layout while copying persisted global shell and input histories from the saved session. If the newer input-history field is empty, it falls back to persisted shell command history so older session files still provide recall.
 
+The follow-up fix moved app-wide command history into a separate `history.json` store and hydrates the bottom command bar and side-panel composer during workspace construction. The session file remains a migration fallback, but history no longer depends on window-layout restore or the first render pass.
+
 ## What we learned
 
 Session data has two different lifetimes: window layout is per-window, while command history is global app memory. New-window code should preserve global memory without restoring old window topology.
