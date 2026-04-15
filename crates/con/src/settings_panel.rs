@@ -1639,6 +1639,7 @@ impl SettingsPanel {
 
         // Write directly into config
         match field.as_str() {
+            "global_summon" => self.config.keybindings.global_summon = binding,
             "new_window" => self.config.keybindings.new_window = binding,
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
@@ -1661,6 +1662,7 @@ impl SettingsPanel {
     /// Get the current value of a keybinding by field name.
     fn binding_value(&self, field: &str) -> &str {
         match field {
+            "global_summon" => &self.config.keybindings.global_summon,
             "new_window" => &self.config.keybindings.new_window,
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
@@ -3372,6 +3374,7 @@ impl SettingsPanel {
 
         // Editable keybinding definitions: (label, field_name)
         let general_keys: &[(&str, &str)] = &[
+            ("Summon / Hide Con", "global_summon"),
             ("New Window", "new_window"),
             ("New Tab", "new_tab"),
             ("Close Tab", "close_tab"),

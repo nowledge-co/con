@@ -2427,6 +2427,8 @@ impl ConWorkspace {
         // Re-apply keybindings at runtime so changes take effect immediately
         let kb = settings.read(cx).keybinding_config().clone();
         crate::bind_app_keybindings(cx, &kb);
+        #[cfg(target_os = "macos")]
+        crate::global_hotkey::update_from_keybindings(&kb);
 
         // Settings panel closes on save — restore terminal focus
         self.focus_terminal(window, cx);

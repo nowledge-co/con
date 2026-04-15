@@ -129,6 +129,10 @@ fn default_cycle_input_mode() -> String {
 fn default_toggle_pane_scope() -> String {
     "cmd-'".into()
 }
+fn default_global_summon() -> String {
+    // Match the muscle-memory many iTerm2 users rely on for summon/hide.
+    "alt-space".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -146,6 +150,7 @@ pub struct KeybindingConfig {
     pub cycle_input_mode: String,
     pub toggle_input_bar: String,
     pub toggle_pane_scope: String,
+    pub global_summon: String,
 }
 
 impl Default for KeybindingConfig {
@@ -164,6 +169,7 @@ impl Default for KeybindingConfig {
             cycle_input_mode: default_cycle_input_mode(),
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
+            global_summon: default_global_summon(),
         }
     }
 }

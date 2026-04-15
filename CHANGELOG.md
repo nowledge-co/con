@@ -11,6 +11,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 **Interface**
 - A modeless `About con` window now shows the app icon, release version, build number, release channel, and repository URL.
 - Appearance settings now include a configurable UI font size, separate from terminal font size.
+- con now supports a system-wide summon/hide shortcut on macOS, defaulting to `⌥Space` for iTerm2-style muscle memory.
 - `cmd-n` now opens a real new window instead of reusing the current workspace.
 - The bottom command bar now has a pane-scope picker that can target the focused pane, all panes, or an explicit subset of panes.
 - The command bar now supports global command-history suggestions, local path completion for local panes, and an AI suggestion fallback that can be enabled independently.
@@ -150,6 +151,9 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed empty agent responses appearing as stuck/hanging when providers don't emit text items during streaming
 - Fixed a Unicode logging crash where long tool-result previews could be truncated at an invalid UTF-8 byte boundary
 - Fixed inline `<think>...</think>` reasoning from some models so it now renders in the collapsible reasoning section instead of leaking raw tags into chat output.
+- Fixed MiniMax and Z.AI provider settings so Anthropic API mode, transport toggles, and matching endpoint presets survive Settings reopen instead of silently falling back.
+- Fixed configured-provider filtering in the agent panel so the session provider picker only shows providers you have actually set up.
+- Fixed conversation history title truncation for CJK text so opening history no longer panics on multibyte characters.
 - Fixed tmux native control helper quoting so tmux list/capture/exec commands no longer leak into the target shell as broken `quote>` input when a quoted tmux target is present
 - Fixed a visible-panel performance regression where assistant messages were reparsed as markdown on every render.
 - Fixed a second visible-panel performance regression where fenced code blocks rebuilt syntax-highlight runs on every render.
