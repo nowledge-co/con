@@ -199,6 +199,8 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed terminal blur on macOS so changing the blur setting now reapplies Ghostty's window blur to existing terminal windows, instead of only updating the stored config.
 - Fixed shifted punctuation in embedded terminal key handling, so `:` and related keys work correctly in Vim and other TUI apps.
 - Fixed Chinese and other IME text input in embedded terminal panes by routing committed composition text through GPUI's native text-input handler.
+- Clicking Con's Dock icon now reopens a window when the app is still running with zero open windows, instead of forcing `cmd-n`.
+- Added standard macOS app-menu commands for Hide con, Hide Others, and Show All, including their native system shortcuts.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

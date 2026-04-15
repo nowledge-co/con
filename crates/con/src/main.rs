@@ -48,6 +48,9 @@ actions!(
         CycleInputMode,
         TogglePaneScopePicker,
         CheckForUpdates,
+        HideApp,
+        HideOtherApps,
+        ShowAllApps,
         Undo,
         Redo,
         Cut,
@@ -366,6 +369,9 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, None),
         KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
         KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, None),
+        KeyBinding::new("cmd-h", HideApp, None),
+        KeyBinding::new("cmd-alt-h", HideOtherApps, None),
+        KeyBinding::new("cmd-alt-shift-h", ShowAllApps, None),
         KeyBinding::new(&kb.quit, Quit, Some("Input")),
         KeyBinding::new(&kb.new_window, NewWindow, Some("Input")),
         KeyBinding::new(&kb.new_tab, NewTab, Some("Input")),
@@ -383,6 +389,9 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, Some("Input")),
         KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, Some("Input")),
         KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, Some("Input")),
+        KeyBinding::new("cmd-h", HideApp, Some("Input")),
+        KeyBinding::new("cmd-alt-h", HideOtherApps, Some("Input")),
+        KeyBinding::new("cmd-alt-shift-h", ShowAllApps, Some("Input")),
     ]);
 }
 
@@ -394,6 +403,20 @@ fn main() {
     let app = gpui_platform::application()
         .with_quit_mode(QuitMode::Explicit)
         .with_assets(assets::ConAssets);
+    app.on_reopen(|cx| {
+        let has_windows = cx
+            .window_stack()
+            .map(|windows| !windows.is_empty())
+            .unwrap_or(false);
+        if has_windows {
+            cx.activate(true);
+            return;
+        }
+
+        let config = con_core::Config::load().unwrap_or_default();
+        open_con_window(config, Session::default(), false, cx);
+        cx.activate(true);
+    });
     app.run(move |cx: &mut App| {
         // Detect release channel (stable/beta/dev) from bundle Info.plist
         let channel = con_core::release_channel::init();
@@ -447,6 +470,15 @@ fn main() {
         cx.on_action(|_: &CheckForUpdates, _cx: &mut App| {
             updater::check_for_updates();
         });
+        cx.on_action(|_: &HideApp, cx: &mut App| {
+            cx.hide();
+        });
+        cx.on_action(|_: &HideOtherApps, cx: &mut App| {
+            cx.hide_other_apps();
+        });
+        cx.on_action(|_: &ShowAllApps, cx: &mut App| {
+            cx.unhide_other_apps();
+        });
 
         cx.set_menus(vec![
             Menu {
@@ -457,6 +489,10 @@ fn main() {
                     MenuItem::action("Check for Updates…", CheckForUpdates),
                     MenuItem::separator(),
                     MenuItem::action("Settings…", settings_panel::ToggleSettings),
+                    MenuItem::separator(),
+                    MenuItem::action("Hide con", HideApp),
+                    MenuItem::action("Hide Others", HideOtherApps),
+                    MenuItem::action("Show All", ShowAllApps),
                     MenuItem::separator(),
                     MenuItem::action("Quit con", Quit),
                 ],
