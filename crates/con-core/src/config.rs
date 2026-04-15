@@ -130,8 +130,7 @@ fn default_toggle_pane_scope() -> String {
     "cmd-'".into()
 }
 fn default_global_summon() -> String {
-    // Match the muscle-memory many iTerm2 users rely on for summon/hide.
-    "alt-space".into()
+    String::new()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

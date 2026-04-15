@@ -11,7 +11,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 **Interface**
 - A modeless `About con` window now shows the app icon, release version, build number, release channel, and repository URL.
 - Appearance settings now include a configurable UI font size, separate from terminal font size.
-- con now supports a system-wide summon/hide shortcut on macOS, defaulting to `⌥Space` for iTerm2-style muscle memory.
+- con now supports an optional system-wide summon/hide shortcut on macOS. It ships disabled by default so it does not conflict with launchers or existing global shortcuts.
 - `cmd-n` now opens a real new window instead of reusing the current workspace.
 - The bottom command bar now has a pane-scope picker that can target the focused pane, all panes, or an explicit subset of panes.
 - The command bar now supports global command-history suggestions, local path completion for local panes, and an AI suggestion fallback that can be enabled independently.
