@@ -541,7 +541,7 @@ impl GhosttyView {
         let key_name = keystroke.key.as_str();
 
         // Try to map GPUI key name to macOS virtual keycode.
-        if let Some(keycode) = gpui_key_to_keycode(key_name) {
+        if let Some((keycode, unshifted_codepoint)) = gpui_key_to_keycode(key_name) {
             // Build the text field: the character this key produces (if printable).
             // For non-printable keys (arrows, F-keys), text is null.
             let text_string = keystroke.key_char.as_deref().or_else(|| {
@@ -556,14 +556,6 @@ impl GhosttyView {
                 .as_ref()
                 .map(|c| c.as_ptr())
                 .unwrap_or(std::ptr::null());
-
-            // unshifted_codepoint: the unicode codepoint of the key without shift.
-            // GPUI's `key` field is the unshifted key label.
-            let unshifted_codepoint = if key_name.len() == 1 {
-                key_name.chars().next().unwrap() as u32
-            } else {
-                0
-            };
 
             let key_event = ffi::ghostty_input_key_s {
                 action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
@@ -619,86 +611,86 @@ fn gpui_mods_to_ghostty(mods: &Modifiers) -> i32 {
 // so it can process them through its key binding and terminal
 // mode pipeline (DECCKM, kitty keyboard protocol, etc.)
 
-fn gpui_key_to_keycode(key: &str) -> Option<u32> {
+fn gpui_key_to_keycode(key: &str) -> Option<(u32, u32)> {
     Some(match key {
         // Letters (macOS kVK_ANSI_* — NOT sequential, based on QWERTY position)
-        "a" => 0x00,
-        "s" => 0x01,
-        "d" => 0x02,
-        "f" => 0x03,
-        "h" => 0x04,
-        "g" => 0x05,
-        "z" => 0x06,
-        "x" => 0x07,
-        "c" => 0x08,
-        "v" => 0x09,
-        "b" => 0x0B,
-        "q" => 0x0C,
-        "w" => 0x0D,
-        "e" => 0x0E,
-        "r" => 0x0F,
-        "y" => 0x10,
-        "t" => 0x11,
-        "o" => 0x1F,
-        "u" => 0x20,
-        "i" => 0x22,
-        "p" => 0x23,
-        "l" => 0x25,
-        "j" => 0x26,
-        "k" => 0x28,
-        "n" => 0x2D,
-        "m" => 0x2E,
+        "a" => (0x00, 'a' as u32),
+        "s" => (0x01, 's' as u32),
+        "d" => (0x02, 'd' as u32),
+        "f" => (0x03, 'f' as u32),
+        "h" => (0x04, 'h' as u32),
+        "g" => (0x05, 'g' as u32),
+        "z" => (0x06, 'z' as u32),
+        "x" => (0x07, 'x' as u32),
+        "c" => (0x08, 'c' as u32),
+        "v" => (0x09, 'v' as u32),
+        "b" => (0x0B, 'b' as u32),
+        "q" => (0x0C, 'q' as u32),
+        "w" => (0x0D, 'w' as u32),
+        "e" => (0x0E, 'e' as u32),
+        "r" => (0x0F, 'r' as u32),
+        "y" => (0x10, 'y' as u32),
+        "t" => (0x11, 't' as u32),
+        "o" => (0x1F, 'o' as u32),
+        "u" => (0x20, 'u' as u32),
+        "i" => (0x22, 'i' as u32),
+        "p" => (0x23, 'p' as u32),
+        "l" => (0x25, 'l' as u32),
+        "j" => (0x26, 'j' as u32),
+        "k" => (0x28, 'k' as u32),
+        "n" => (0x2D, 'n' as u32),
+        "m" => (0x2E, 'm' as u32),
         // Numbers
-        "1" => 0x12,
-        "2" => 0x13,
-        "3" => 0x14,
-        "4" => 0x15,
-        "5" => 0x17,
-        "6" => 0x16,
-        "7" => 0x1A,
-        "8" => 0x1C,
-        "9" => 0x19,
-        "0" => 0x1D,
+        "1" | "!" => (0x12, '1' as u32),
+        "2" | "@" => (0x13, '2' as u32),
+        "3" | "#" => (0x14, '3' as u32),
+        "4" | "$" => (0x15, '4' as u32),
+        "5" | "%" => (0x17, '5' as u32),
+        "6" | "^" => (0x16, '6' as u32),
+        "7" | "&" => (0x1A, '7' as u32),
+        "8" | "*" => (0x1C, '8' as u32),
+        "9" | "(" => (0x19, '9' as u32),
+        "0" | ")" => (0x1D, '0' as u32),
         // Punctuation
-        "-" => 0x1B,
-        "=" => 0x18,
-        "[" => 0x21,
-        "]" => 0x1E,
-        "\\" => 0x2A,
-        ";" => 0x29,
-        "'" => 0x27,
-        "`" => 0x32,
-        "," => 0x2B,
-        "." => 0x2F,
-        "/" => 0x2C,
+        "-" | "_" => (0x1B, '-' as u32),
+        "=" | "+" => (0x18, '=' as u32),
+        "[" | "{" => (0x21, '[' as u32),
+        "]" | "}" => (0x1E, ']' as u32),
+        "\\" | "|" => (0x2A, '\\' as u32),
+        ";" | ":" => (0x29, ';' as u32),
+        "'" | "\"" => (0x27, '\'' as u32),
+        "`" | "~" => (0x32, '`' as u32),
+        "," | "<" => (0x2B, ',' as u32),
+        "." | ">" => (0x2F, '.' as u32),
+        "/" | "?" => (0x2C, '/' as u32),
         // Special keys
-        "enter" | "return" => 0x24,
-        "tab" => 0x30,
-        "space" => 0x31,
-        "backspace" => 0x33,
-        "escape" => 0x35,
-        "delete" => 0x75,
-        "home" => 0x73,
-        "end" => 0x77,
-        "pageup" => 0x74,
-        "pagedown" => 0x79,
-        "up" => 0x7E,
-        "down" => 0x7D,
-        "left" => 0x7B,
-        "right" => 0x7C,
+        "enter" | "return" => (0x24, 0),
+        "tab" => (0x30, '\t' as u32),
+        "space" => (0x31, ' ' as u32),
+        "backspace" => (0x33, 0),
+        "escape" => (0x35, 0),
+        "delete" => (0x75, 0),
+        "home" => (0x73, 0),
+        "end" => (0x77, 0),
+        "pageup" => (0x74, 0),
+        "pagedown" => (0x79, 0),
+        "up" => (0x7E, 0),
+        "down" => (0x7D, 0),
+        "left" => (0x7B, 0),
+        "right" => (0x7C, 0),
         // Function keys
-        "f1" => 0x7A,
-        "f2" => 0x78,
-        "f3" => 0x63,
-        "f4" => 0x76,
-        "f5" => 0x60,
-        "f6" => 0x61,
-        "f7" => 0x62,
-        "f8" => 0x64,
-        "f9" => 0x65,
-        "f10" => 0x6D,
-        "f11" => 0x67,
-        "f12" => 0x6F,
+        "f1" => (0x7A, 0),
+        "f2" => (0x78, 0),
+        "f3" => (0x63, 0),
+        "f4" => (0x76, 0),
+        "f5" => (0x60, 0),
+        "f6" => (0x61, 0),
+        "f7" => (0x62, 0),
+        "f8" => (0x64, 0),
+        "f9" => (0x65, 0),
+        "f10" => (0x6D, 0),
+        "f11" => (0x67, 0),
+        "f12" => (0x6F, 0),
         _ => return None,
     })
 }
