@@ -56,11 +56,13 @@ jobs:
             arm64)  ZIG_ARCH="aarch64" ;;
             x86_64) ZIG_ARCH="x86_64" ;;
           esac
-          ZIG_TARBALL="zig-${ZIG_ARCH}-macos-${ZIG_VERSION}.tar.xz"
+          ZIG_DIR="zig-${ZIG_ARCH}-macos-${ZIG_VERSION}"
+          ZIG_TARBALL="${ZIG_DIR}.tar.xz"
           curl -sSfL "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_TARBALL}" -o "/tmp/${ZIG_TARBALL}"
-          tar -xf "/tmp/${ZIG_TARBALL}" -C /usr/local
-          ln -sf "/usr/local/zig-${ZIG_ARCH}-macos-${ZIG_VERSION}/zig" /usr/local/bin/zig
-          zig version
+          mkdir -p "$HOME/.local"
+          tar -xf "/tmp/${ZIG_TARBALL}" -C "$HOME/.local"
+          echo "$HOME/.local/${ZIG_DIR}" >> "$GITHUB_PATH"
+          "$HOME/.local/${ZIG_DIR}/zig" version
 
       - name: Configure Rust toolchain
         shell: bash
@@ -290,7 +292,9 @@ jobs:
           cd gh-pages
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add appcast/
+          # Keep install.sh in sync from main repo
+          cp "${{ github.workspace }}/scripts/install.sh" install.sh
+          git add appcast/ install.sh
           if git diff --cached --quiet; then
             echo "No appcast changes to commit"
             exit 0
