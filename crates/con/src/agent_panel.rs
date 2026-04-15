@@ -3688,7 +3688,8 @@ impl Render for AgentPanel {
                     Select::new(&self.session_provider_select)
                         .placeholder("Provider")
                         .xsmall()
-                        .menu_width(px(200.0)),
+                        .menu_width(px(200.0))
+                        .menu_max_h(px(240.0)),
                 ),
             );
 
@@ -3696,7 +3697,8 @@ impl Render for AgentPanel {
             Select::new(&self.session_model_select)
                 .placeholder("Model")
                 .xsmall()
-                .menu_width(px(280.0)),
+                .menu_width(px(280.0))
+                .menu_max_h(px(240.0)),
         );
 
         let header = div()
