@@ -124,12 +124,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          prerelease="false"
-          if [[ "$version" == *"-beta."* ]]; then
-            prerelease="true"
-          fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
 
       - name: Create or update GitHub release
         env:
@@ -138,13 +133,9 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          prerelease_flag=()
-          if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
-            prerelease_flag+=(--prerelease)
-          fi
 
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes "${prerelease_flag[@]}"
+            gh release create "$tag" --title "$tag" --generate-notes
           fi
 
           # Upload files one at a time to avoid GitHub API race conditions.

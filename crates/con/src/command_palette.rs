@@ -31,6 +31,18 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Terminal",
     },
     PaletteAction {
+        id: "next-tab",
+        label: "Next Tab",
+        shortcut: "ctrl-tab",
+        category: "Terminal",
+    },
+    PaletteAction {
+        id: "previous-tab",
+        label: "Previous Tab",
+        shortcut: "ctrl-shift-tab",
+        category: "Terminal",
+    },
+    PaletteAction {
         id: "close-tab",
         label: "Close Tab",
         shortcut: "cmd-w",
@@ -109,7 +121,11 @@ pub struct PaletteSelect {
     pub action_id: String,
 }
 
+/// Emitted when the palette is dismissed without selecting an action.
+pub struct PaletteDismissed;
+
 impl EventEmitter<PaletteSelect> for CommandPalette {}
+impl EventEmitter<PaletteDismissed> for CommandPalette {}
 
 impl CommandPalette {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -147,6 +163,17 @@ impl CommandPalette {
             self.overlay_motion
                 .set_target(0.0, std::time::Duration::from_millis(150));
         }
+        cx.notify();
+    }
+
+    fn dismiss(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
+        self.visible = false;
+        self.overlay_motion
+            .set_target(0.0, std::time::Duration::from_millis(150));
+        cx.emit(PaletteDismissed);
         cx.notify();
     }
 
@@ -324,10 +351,7 @@ impl Render for CommandPalette {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    this.visible = false;
-                    this.overlay_motion
-                        .set_target(0.0, std::time::Duration::from_millis(150));
-                    cx.notify();
+                    this.dismiss(cx);
                 }),
             );
 
@@ -352,10 +376,7 @@ impl Render for CommandPalette {
                 let count = actions.len();
                 match event.keystroke.key.as_str() {
                     "escape" => {
-                        this.visible = false;
-                        this.overlay_motion
-                            .set_target(0.0, std::time::Duration::from_millis(150));
-                        cx.notify();
+                        this.dismiss(cx);
                     }
                     "enter" => {
                         this.select_action(cx);

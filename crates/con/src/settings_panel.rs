@@ -1,6 +1,6 @@
 use con_agent::{
     AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind,
-    SuggestionModelConfig, authorize_oauth_provider,
+    SuggestionModelConfig, authorize_oauth_provider, oauth_token_dir,
 };
 use con_agent::provider::{AgentPurpose, ProviderTransport};
 use con_core::{
@@ -13,7 +13,6 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::clipboard::Clipboard;
 use gpui_component::input::InputState;
-use gpui_component::kbd::Kbd;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::slider::{Slider, SliderEvent, SliderState};
 use gpui_component::switch::Switch;
@@ -345,6 +344,79 @@ impl SettingsPanel {
     fn protocol_switch_hint(provider: &ProviderKind) -> Option<&'static str> {
         Self::protocol_pair(provider)
             .map(|_| "OpenAI or Anthropic API compatible")
+    }
+
+    fn provider_icon_path(provider: &ProviderKind) -> &'static str {
+        match Self::sidebar_provider_kind(provider) {
+            ProviderKind::Anthropic => "providers/anthropic.svg",
+            ProviderKind::OpenAI => "providers/openai.svg",
+            ProviderKind::ChatGPT => "providers/openai.svg",
+            ProviderKind::GitHubCopilot => "providers/githubcopilot.svg",
+            ProviderKind::OpenAICompatible => "phosphor/plugs-connected.svg",
+            ProviderKind::MiniMax => "providers/minimax.svg",
+            ProviderKind::Moonshot => "providers/moonshot.svg",
+            ProviderKind::ZAI => "providers/zai.svg",
+            ProviderKind::DeepSeek => "providers/deepseek.svg",
+            ProviderKind::Groq => "providers/groq.svg",
+            ProviderKind::Gemini => "providers/gemini.svg",
+            ProviderKind::Ollama => "providers/ollama.svg",
+            ProviderKind::OpenRouter => "providers/openrouter.svg",
+            ProviderKind::Mistral => "providers/mistral.svg",
+            ProviderKind::Together => "providers/together.svg",
+            ProviderKind::Cohere => "providers/cohere.svg",
+            ProviderKind::Perplexity => "providers/perplexity.svg",
+            ProviderKind::XAI => "providers/xai.svg",
+            _ => "phosphor/plugs-connected.svg",
+        }
+    }
+
+    fn provider_config_is_meaningful(config: &ProviderConfig) -> bool {
+        config.model.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || config.api_key.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || config
+                .api_key_env
+                .as_ref()
+                .is_some_and(|v| !v.trim().is_empty())
+            || config.base_url.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || config.max_tokens.is_some()
+    }
+
+    fn provider_is_configured(&self, provider: &ProviderKind, cx: &App) -> bool {
+        let sidebar_provider = Self::sidebar_provider_kind(provider);
+        if oauth_token_dir(&sidebar_provider).is_some_and(|dir| dir.exists()) {
+            return true;
+        }
+        if self
+            .oauth_state(&sidebar_provider)
+            .is_some_and(|state| state.connected || state.in_progress)
+        {
+            return true;
+        }
+
+        let current_provider =
+            Self::sidebar_provider_kind(&self.selected_provider) == sidebar_provider;
+        if current_provider {
+            let current = self.read_provider_inputs(cx);
+            if Self::provider_config_is_meaningful(&current) {
+                return true;
+            }
+        }
+
+        let has_config = |kind: &ProviderKind| {
+            self.config
+                .agent
+                .providers
+                .get(kind)
+                .is_some_and(Self::provider_config_is_meaningful)
+        };
+
+        has_config(&sidebar_provider)
+            || match sidebar_provider {
+                ProviderKind::MiniMax => has_config(&ProviderKind::MiniMaxAnthropic),
+                ProviderKind::Moonshot => has_config(&ProviderKind::MoonshotAnthropic),
+                ProviderKind::ZAI => has_config(&ProviderKind::ZAIAnthropic),
+                _ => false,
+            }
     }
 
     fn sidebar_selection_target(
@@ -1692,6 +1764,8 @@ impl SettingsPanel {
             "new_window" => self.config.keybindings.new_window = binding,
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
+            "next_tab" => self.config.keybindings.next_tab = binding,
+            "previous_tab" => self.config.keybindings.previous_tab = binding,
             "settings" => self.config.keybindings.settings = binding,
             "command_palette" => self.config.keybindings.command_palette = binding,
             "toggle_agent" => self.config.keybindings.toggle_agent = binding,
@@ -1715,6 +1789,8 @@ impl SettingsPanel {
             "new_window" => &self.config.keybindings.new_window,
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
+            "next_tab" => &self.config.keybindings.next_tab,
+            "previous_tab" => &self.config.keybindings.previous_tab,
             "settings" => &self.config.keybindings.settings,
             "command_palette" => &self.config.keybindings.command_palette,
             "toggle_agent" => &self.config.keybindings.toggle_agent,
@@ -2066,6 +2142,30 @@ impl SettingsPanel {
                 .child(group_label("Skills", &theme))
                 .child(
                     card(theme, card_opacity)
+                        .child(
+                            div()
+                                .px(px(16.0))
+                                .py(px(13.0))
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Skill Sources"),
+                                )
+                                .child(
+                                    div()
+                                        .max_w(px(500.0))
+                                        .whitespace_normal()
+                                        .text_size(px(11.5))
+                                        .line_height(px(17.0))
+                                        .text_color(theme.muted_foreground.opacity(0.65))
+                                        .child("Con scans these folders for slash-command skills. Project paths follow the active working directory; global paths are always available."),
+                                ),
+                        )
+                        .child(row_separator(theme))
                         // Project paths row
                         .child(
                             div()
@@ -2139,7 +2239,8 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = cx.theme();
-        let chip_bg = theme.muted.opacity(0.12);
+        let chip_bg = theme.muted.opacity(0.06);
+        let chip_hover_bg = theme.muted.opacity(0.10);
         let fg = theme.foreground;
         let muted = theme.muted_foreground.opacity(0.5);
         let danger = theme.danger;
@@ -2157,9 +2258,10 @@ impl SettingsPanel {
                     .items_center()
                     .gap(px(4.0))
                     .h(px(24.0))
-                    .px(px(8.0))
+                    .px(px(7.0))
                     .rounded(px(5.0))
                     .bg(chip_bg)
+                    .hover(move |s| s.bg(chip_hover_bg))
                     .child(
                         div()
                             .text_size(px(11.0))
@@ -2177,7 +2279,7 @@ impl SettingsPanel {
                             .rounded(px(3.0))
                             .cursor_pointer()
                             .text_color(muted)
-                            .hover(|s| s.text_color(danger))
+                            .hover(|s| s.bg(danger.opacity(0.10)).text_color(danger))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _, cx| {
@@ -2900,51 +3002,46 @@ impl SettingsPanel {
         let active_model_select = self.active_model_select.clone();
         let suggestion_provider_select = self.suggestion_provider_select.clone();
         let suggestion_model_select = self.suggestion_model_select.clone();
-        let routing_card = card(theme, card_opacity).child(
-            div()
-                .px(px(14.0))
-                .py(px(12.0))
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.0))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Routing"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.0))
-                                .line_height(px(16.0))
-                                .text_color(theme.muted_foreground)
-                                .child(
-                                    "Default provider and model.",
-                                ),
-                        ),
-                )
-                .child(searchable_select_row(
+        let routing_card = card(theme, card_opacity)
+            .child(
+                div()
+                    .px(px(16.0))
+                    .py(px(13.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Routing"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .line_height(px(17.0))
+                            .text_color(theme.muted_foreground.opacity(0.65))
+                            .child("Choose a default model for agent and the fast path for inline command suggestions."),
+                    ),
+            )
+            .child(row_separator(theme))
+            .child(searchable_select_row(
                     "Active Provider",
                     "Default provider for the agent panel, command palette actions, and AI fallback suggestions.",
                     &active_provider_select,
                     "Select a provider…",
                     theme,
                 ))
-                .child(searchable_select_row(
+            .child(searchable_select_row(
                     "Active Model",
                     "Model override for the currently active provider.",
                     &active_model_select,
                     "Select a model…",
                     theme,
                 ))
-                .child(toggle_row(
+            .child(toggle_row(
                     "Auto-Approve Tools",
-                    "Allow the agent to run tools without per-action confirmation in this app session.",
+                    "Allow the agent to run tools without per-action approval.",
                     Switch::new("auto-approve-toggle")
                         .checked(self.auto_approve)
                         .small()
@@ -2954,7 +3051,7 @@ impl SettingsPanel {
                         })),
                     theme,
                 ))
-                .child(toggle_row(
+            .child(toggle_row(
                     "AI Command Suggestions",
                     "Use the suggestion provider only when local command history has no strong match.",
                     Switch::new("ai-suggestion-toggle")
@@ -2966,7 +3063,7 @@ impl SettingsPanel {
                         })),
                     theme,
                 ))
-                .child(
+            .child(
                     div()
                         .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
                         .child(searchable_select_row(
@@ -2977,7 +3074,7 @@ impl SettingsPanel {
                             theme,
                         )),
                 )
-                .child(
+            .child(
                     div()
                         .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
                         .child(searchable_select_row(
@@ -2987,8 +3084,7 @@ impl SettingsPanel {
                             "Select a suggestion model…",
                             theme,
                         )),
-                ),
-        );
+                );
 
         let behavior_card = card(theme, card_opacity).child(
             div()
@@ -3052,18 +3148,39 @@ impl SettingsPanel {
         let active_sidebar_provider = Self::sidebar_provider_kind(&self.selected_provider);
         for provider in SIDEBAR_PROVIDERS.iter() {
             let is_selected = *provider == active_sidebar_provider;
+            let is_configured = self.provider_is_configured(provider, cx);
             let label = provider_label(provider);
+            let icon_path = Self::provider_icon_path(provider);
+            let icon_color = if is_selected {
+                theme.primary
+            } else if is_configured {
+                theme.foreground.opacity(0.76)
+            } else {
+                theme.muted_foreground.opacity(0.38)
+            };
+            let label_color = if is_selected {
+                theme.foreground
+            } else if is_configured {
+                theme.foreground.opacity(0.74)
+            } else {
+                theme.muted_foreground.opacity(0.52)
+            };
+            let status_color = if is_configured {
+                theme.success.opacity(if is_selected { 0.92 } else { 0.74 })
+            } else {
+                theme.muted_foreground.opacity(0.18)
+            };
             let provider_clone = provider.clone();
 
             provider_list = provider_list.child(
                 div()
                     .id(SharedString::from(format!("prov-{label}")))
-                    .h(px(32.0))
-                    .px(px(10.0))
+                    .h(px(34.0))
+                    .px(px(8.0))
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .rounded(px(7.0))
+                    .gap(px(7.0))
+                    .rounded(px(8.0))
                     .cursor_pointer()
                     .bg(if is_selected {
                         theme.primary.opacity(0.08)
@@ -3086,7 +3203,7 @@ impl SettingsPanel {
                     .child(
                         div()
                             .w(px(2.0))
-                            .h(px(14.0))
+                            .h(px(16.0))
                             .rounded(px(1.0))
                             .bg(if is_selected {
                                 theme.primary
@@ -3096,20 +3213,38 @@ impl SettingsPanel {
                     )
                     .child(
                         div()
+                            .size(px(22.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.0))
+                            .bg(if is_selected {
+                                theme.primary.opacity(0.11)
+                            } else if is_configured {
+                                theme.muted.opacity(0.08)
+                            } else {
+                                theme.transparent
+                            })
+                            .child(svg().path(icon_path).size(px(13.0)).text_color(icon_color)),
+                    )
+                    .child(
+                        div()
                             .flex_1()
+                            .min_w_0()
                             .text_size(px(12.0))
+                            .line_height(px(14.0))
                             .font_weight(if is_selected {
                                 FontWeight::MEDIUM
                             } else {
                                 FontWeight::NORMAL
                             })
-                            .text_color(if is_selected {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            })
+                            .text_color(label_color)
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .child(label),
-                    ),
+                    )
+                    .child(div().size(px(6.0)).rounded_full().bg(status_color)),
             );
         }
 
@@ -3456,6 +3591,8 @@ impl SettingsPanel {
         let general_keys: &[(&str, &str)] = &[
             ("New Window", "new_window"),
             ("New Tab", "new_tab"),
+            ("Next Tab", "next_tab"),
+            ("Previous Tab", "previous_tab"),
             ("Close Tab", "close_tab"),
             ("Settings", "settings"),
             ("Command Palette", "command_palette"),
@@ -3487,17 +3624,10 @@ impl SettingsPanel {
                     div()
                         .text_size(px(11.5))
                         .font_weight(FontWeight::MEDIUM)
-                        .child("Press shortcut...")
+                        .child("Press shortcut…")
                         .into_any_element()
-                } else if let Ok(stroke) = Keystroke::parse(&value) {
-                    Kbd::new(stroke).outline().into_any_element()
                 } else {
-                    div()
-                        .text_size(px(11.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.muted_foreground)
-                        .child(value.clone())
-                        .into_any_element()
+                    crate::keycaps::keycaps_for_binding(&value, theme)
                 };
                 let field_str = field.to_string();
                 c = c.child(
@@ -3507,13 +3637,21 @@ impl SettingsPanel {
                         .items_center()
                         .justify_between()
                         .px(px(16.0))
-                        .h(px(36.0))
-                        .child(div().text_sm().child(label.to_string()))
+                        .h(px(34.0))
+                        .hover(|s| s.bg(theme.muted.opacity(0.025)))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .line_height(px(16.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.foreground.opacity(0.86))
+                                .child(label.to_string()),
+                        )
                         .child(
                             div()
                                 .id(SharedString::from(format!("key-badge-{field}")))
-                                .min_h(px(24.0))
-                                .px(px(6.0))
+                                .min_h(px(23.0))
+                                .px(px(4.0))
                                 .flex()
                                 .items_center()
                                 .rounded(px(5.0))
@@ -3528,7 +3666,7 @@ impl SettingsPanel {
                                 } else {
                                     theme.muted_foreground
                                 })
-                                .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                                .hover(|s| s.bg(theme.muted.opacity(0.055)))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
@@ -3564,8 +3702,8 @@ impl SettingsPanel {
                 .font_weight(FontWeight::MEDIUM)
                 .child("Press shortcut…")
                 .into_any_element()
-        } else if let Ok(stroke) = Keystroke::parse(&global_summon_value) {
-            Kbd::new(stroke).outline().into_any_element()
+        } else if !global_summon_value.trim().is_empty() {
+            crate::keycaps::keycaps_for_binding(&global_summon_value, theme)
         } else {
             div()
                 .min_h(px(28.0))
@@ -3584,124 +3722,113 @@ impl SettingsPanel {
         let global_summon_card = card(theme, card_opacity).child(
             div()
                 .px(px(16.0))
-                .py(px(14.0))
+                .py(px(13.0))
                 .flex()
-                .flex_col()
-                .gap(px(12.0))
+                .items_start()
+                .justify_between()
+                .gap(px(16.0))
                 .child(
                     div()
                         .flex()
-                        .items_start()
-                        .justify_between()
-                        .gap(px(16.0))
+                        .flex_col()
+                        .gap(px(4.0))
+                        .flex_1()
+                        .max_w(px(430.0))
                         .child(
                             div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.0))
-                                .flex_1()
-                                .max_w(px(400.0))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child("Summon / Hide Con"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.5))
-                                        .line_height(px(17.0))
-                                        .text_color(theme.muted_foreground.opacity(0.68))
-                                        .child(
-                                            "Bring Con forward from anywhere in macOS, or hide it when it is already frontmost.",
-                                        ),
-                                ),
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Global Hotkey"),
                         )
                         .child(
-                            div().pt(px(1.0)).child(
-                                Switch::new("global-summon-enabled")
-                                    .checked(global_summon_enabled)
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.config.keybindings.global_summon_enabled = *checked;
-                                        if *checked
-                                            && this.config.keybindings.global_summon.trim().is_empty()
-                                        {
-                                            this.config.keybindings.global_summon =
-                                                "alt-space".to_string();
-                                        }
-                                        cx.notify();
-                                    })),
-                            ),
+                            div()
+                                .text_size(px(11.5))
+                                .line_height(px(17.0))
+                                .text_color(theme.muted_foreground.opacity(0.68))
+                                .child(
+                                    "Show Con from anywhere in macOS. Press it again while Con is frontmost to hide the app.",
+                                ),
+                        ),
+                )
+                .child(
+                    div().pt(px(1.0)).child(
+                        Switch::new("global-summon-enabled")
+                            .checked(global_summon_enabled)
+                            .small()
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.config.keybindings.global_summon_enabled = *checked;
+                                if *checked
+                                    && this.config.keybindings.global_summon.trim().is_empty()
+                                {
+                                    this.config.keybindings.global_summon =
+                                        "alt-space".to_string();
+                                }
+                                cx.notify();
+                            })),
+                    ),
+                )
+        )
+        .child(row_separator(theme))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(16.0))
+                .px(px(16.0))
+                .py(px(11.0))
+                .hover(|s| s.bg(theme.muted.opacity(0.035)))
+                .text_color(if global_summon_enabled {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground
+                })
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Shortcut"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .line_height(px(15.0))
+                                .text_color(theme.muted_foreground.opacity(0.62))
+                                .child(if global_summon_enabled {
+                                    "Use a low-conflict system shortcut. Option-Space is familiar, but may collide with launchers."
+                                } else {
+                                    "Off by default to avoid conflicts with other global shortcuts."
+                                }),
                         ),
                 )
                 .child(
                     div()
+                        .id("key-badge-global-summon")
+                        .min_w(px(112.0))
                         .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(14.0))
-                        .px(px(12.0))
-                        .py(px(10.0))
-                        .rounded(px(10.0))
-                        .bg(if global_summon_enabled {
-                            theme.muted.opacity(0.08)
-                        } else {
-                            theme.muted.opacity(0.05)
-                        })
-                        .text_color(if global_summon_enabled {
-                            theme.foreground
-                        } else {
-                            theme.muted_foreground
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.0))
-                                .child(
-                                    div()
-                                        .text_size(px(11.5))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child("Shortcut"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.5))
-                                        .line_height(px(15.0))
-                                        .text_color(theme.muted_foreground.opacity(0.62))
-                                        .child(if global_summon_enabled {
-                                            "System-wide shortcut. Choose one that does not conflict with Spotlight, launchers, or input methods."
-                                        } else {
-                                            "Disabled by default to avoid conflicts with other global shortcuts."
-                                        }),
-                                ),
+                        .justify_end()
+                        .opacity(if global_summon_enabled { 1.0 } else { 0.45 })
+                        .cursor_pointer()
+                        .rounded(px(7.0))
+                        .px(px(4.0))
+                        .py(px(3.0))
+                        .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                if this.config.keybindings.global_summon_enabled {
+                                    this.recording_key = Some("global_summon".to_string());
+                                    cx.notify();
+                                }
+                            }),
                         )
-                        .child(
-                            div()
-                                .min_w(px(108.0))
-                                .flex()
-                                .justify_end()
-                                .child(if global_summon_enabled {
-                                    div()
-                                        .id("key-badge-global-summon")
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(theme.muted.opacity(0.08)))
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, _, cx| {
-                                                this.recording_key =
-                                                    Some("global_summon".to_string());
-                                                cx.notify();
-                                            }),
-                                        )
-                                        .child(global_summon_badge)
-                                } else {
-                                    div()
-                                        .id("key-badge-global-summon")
-                                        .opacity(0.45)
-                                        .child(global_summon_badge)
-                                }),
-                        ),
+                        .child(global_summon_badge),
                 ),
         );
 
@@ -4366,17 +4493,17 @@ fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
         .items_center()
         .justify_between()
         .px(px(16.0))
-        .h(px(36.0))
-        .child(div().text_sm().child(action.to_string()))
-        .child(if let Ok(stroke) = Keystroke::parse(shortcut) {
-            Kbd::new(stroke).outline().into_any_element()
-        } else {
+        .h(px(34.0))
+        .hover(|s| s.bg(theme.muted.opacity(0.025)))
+        .child(
             div()
-                .text_size(px(11.0))
-                .text_color(theme.muted_foreground)
-                .child(shortcut.to_string())
-                .into_any_element()
-        })
+                .text_size(px(12.0))
+                .line_height(px(16.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.foreground.opacity(0.86))
+                .child(action.to_string()),
+        )
+        .child(crate::keycaps::keycaps_for_binding(shortcut, theme))
 }
 
 pub(crate) fn provider_label(provider: &ProviderKind) -> &'static str {

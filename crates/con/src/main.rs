@@ -11,6 +11,7 @@ mod global_hotkey;
 #[cfg(target_os = "macos")]
 mod ghostty_view;
 mod input_bar;
+mod keycaps;
 mod model_registry;
 mod motion;
 mod pane_tree;
@@ -23,7 +24,7 @@ mod updater;
 mod workspace;
 
 use con_core::config::KeybindingConfig;
-use con_core::session::Session;
+use con_core::session::{GlobalHistoryState, Session};
 use gpui::*;
 use gpui_component::{
     ActiveTheme,
@@ -38,6 +39,8 @@ actions!(
         Quit,
         NewWindow,
         NewTab,
+        NextTab,
+        PreviousTab,
         ToggleSummon,
         ToggleAgentPanel,
         ToggleInputBar,
@@ -120,6 +123,48 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
     .detach();
 }
 
+fn fresh_window_session_with_history() -> Session {
+    let persisted = Session::load().unwrap_or_default();
+    let persisted_history = GlobalHistoryState::load().unwrap_or_default();
+    let mut session = Session::default();
+
+    session.global_shell_history = if persisted_history.global_shell_history.is_empty() {
+        persisted.global_shell_history
+    } else {
+        persisted_history.global_shell_history
+    };
+    session.input_history = if !persisted_history.input_history.is_empty() {
+        persisted_history
+            .input_history
+            .into_iter()
+            .filter_map(|entry| {
+                let command = entry.trim();
+                (!command.is_empty()).then(|| command.to_string())
+            })
+            .collect()
+    } else if persisted.input_history.is_empty() {
+        session
+            .global_shell_history
+            .iter()
+            .filter_map(|entry| {
+                let command = entry.command.trim();
+                (!command.is_empty()).then(|| command.to_string())
+            })
+            .collect()
+    } else {
+        persisted
+            .input_history
+            .into_iter()
+            .filter_map(|entry| {
+                let command = entry.trim();
+                (!command.is_empty()).then(|| command.to_string())
+            })
+            .collect()
+    };
+
+    session
+}
+
 pub(crate) fn toggle_global_summon(cx: &mut App) {
     let frontmost_window = cx.window_stack().and_then(|windows| windows.last().cloned());
     let has_windows = frontmost_window.is_some();
@@ -131,7 +176,7 @@ pub(crate) fn toggle_global_summon(cx: &mut App) {
 
     if !has_windows {
         let config = con_core::Config::load().unwrap_or_default();
-        open_con_window(config, Session::default(), false, cx);
+        open_con_window(config, fresh_window_session_with_history(), false, cx);
         cx.activate(true);
         return;
     }
@@ -355,6 +400,10 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.quit, Quit, None),
         KeyBinding::new(&kb.new_window, NewWindow, None),
         KeyBinding::new(&kb.new_tab, NewTab, None),
+        KeyBinding::new(&kb.next_tab, NextTab, None),
+        KeyBinding::new(&kb.previous_tab, PreviousTab, None),
+        KeyBinding::new("cmd-shift-]", NextTab, None),
+        KeyBinding::new("cmd-shift-[", PreviousTab, None),
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
         KeyBinding::new(&kb.close_tab, CloseTab, None),
         KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
@@ -375,6 +424,10 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.quit, Quit, Some("Input")),
         KeyBinding::new(&kb.new_window, NewWindow, Some("Input")),
         KeyBinding::new(&kb.new_tab, NewTab, Some("Input")),
+        KeyBinding::new(&kb.next_tab, NextTab, Some("Input")),
+        KeyBinding::new(&kb.previous_tab, PreviousTab, Some("Input")),
+        KeyBinding::new("cmd-shift-]", NextTab, Some("Input")),
+        KeyBinding::new("cmd-shift-[", PreviousTab, Some("Input")),
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, Some("Input")),
         KeyBinding::new(&kb.close_tab, CloseTab, Some("Input")),
         KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, Some("Input")),
@@ -414,7 +467,7 @@ fn main() {
         }
 
         let config = con_core::Config::load().unwrap_or_default();
-        open_con_window(config, Session::default(), false, cx);
+        open_con_window(config, fresh_window_session_with_history(), false, cx);
         cx.activate(true);
     });
     app.run(move |cx: &mut App| {
@@ -449,7 +502,7 @@ fn main() {
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             let config = con_core::Config::load().unwrap_or_default();
-            open_con_window(config, Session::default(), false, cx);
+            open_con_window(config, fresh_window_session_with_history(), false, cx);
         });
         cx.on_action(|_: &ToggleSummon, cx: &mut App| {
             toggle_global_summon(cx);
@@ -457,7 +510,7 @@ fn main() {
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
                 let config = con_core::Config::load().unwrap_or_default();
-                open_con_window(config, Session::default(), false, cx);
+                open_con_window(config, fresh_window_session_with_history(), false, cx);
             }
         });
 

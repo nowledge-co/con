@@ -321,6 +321,65 @@ impl InputBar {
         })
     }
 
+    fn is_current_input_focused(&self, window: &Window, cx: &App) -> bool {
+        self.current_input_state()
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }
+
+    fn should_fallback_handle_history_key(event: &KeystrokeEvent) -> bool {
+        let key = event.keystroke.key.as_str();
+        if key != "up" && key != "down" {
+            return false;
+        }
+
+        let mods = event.keystroke.modifiers;
+        if mods.control || mods.platform || mods.alt || mods.shift {
+            return false;
+        }
+
+        event.action.as_ref().is_none_or(|action| {
+            action.partial_eq(&gpui_component::input::MoveUp)
+                || action.partial_eq(&gpui_component::input::MoveDown)
+        })
+    }
+
+    fn handle_history_navigation_key(
+        &mut self,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let matches = self.filtered_skills(cx);
+        let has_completions = !matches.is_empty();
+
+        match key {
+            "up" if has_completions => {
+                self.skill_selection = self.skill_selection.saturating_sub(1);
+                cx.emit(SkillAutocompleteChanged);
+                cx.notify();
+                true
+            }
+            "up" if self.has_path_completion_candidates() => {
+                self.navigate_path_completion(true, cx)
+            }
+            "up" => self.navigate_history(true, window, cx),
+            "down" if has_completions => {
+                self.skill_selection =
+                    (self.skill_selection + 1).min(matches.len().saturating_sub(1));
+                cx.emit(SkillAutocompleteChanged);
+                cx.notify();
+                true
+            }
+            "down" if self.has_path_completion_candidates() => {
+                self.navigate_path_completion(false, cx)
+            }
+            "down" => self.navigate_history(false, window, cx),
+            _ => false,
+        }
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let agent_input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -348,6 +407,16 @@ impl InputBar {
                 if event.keystroke.key == "enter" {
                     this.shift_enter = event.keystroke.modifiers.shift;
                 }
+            }),
+            cx.observe_keystrokes(|this, event, window, cx| {
+                if !Self::should_fallback_handle_history_key(event)
+                    || !this.is_current_input_focused(window, cx)
+                {
+                    return;
+                }
+
+                let key = event.keystroke.key.clone();
+                let _ = this.handle_history_navigation_key(key.as_str(), window, cx);
             }),
             Self::subscribe_input_state(&agent_input_state, window, cx),
             Self::subscribe_input_state(&shell_input_state, window, cx),
@@ -1249,7 +1318,7 @@ impl Render for InputBar {
             _ => rems(1.25),
         };
         let input_vertical_offset = match self.mode {
-            InputMode::Agent => px(-2.0),
+            InputMode::Agent => px(-4.0),
             _ => px(0.0),
         };
         let show_inline_suggestion = self.mode != InputMode::Agent
@@ -1369,41 +1438,8 @@ impl Render for InputBar {
                             cx.stop_propagation();
                         }
                     }
-                    "up" if has_completions => {
-                        this.skill_selection = this.skill_selection.saturating_sub(1);
-                        cx.emit(SkillAutocompleteChanged);
-                        cx.notify();
-                        window.prevent_default();
-                        cx.stop_propagation();
-                    }
-                    "up" if this.has_path_completion_candidates() => {
-                        if this.navigate_path_completion(true, cx) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
-                    }
-                    "up" => {
-                        if this.navigate_history(true, window, cx) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
-                    }
-                    "down" if has_completions => {
-                        this.skill_selection =
-                            (this.skill_selection + 1).min(matches.len().saturating_sub(1));
-                        cx.emit(SkillAutocompleteChanged);
-                        cx.notify();
-                        window.prevent_default();
-                        cx.stop_propagation();
-                    }
-                    "down" if this.has_path_completion_candidates() => {
-                        if this.navigate_path_completion(false, cx) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
-                    }
-                    "down" => {
-                        if this.navigate_history(false, window, cx) {
+                    "up" | "down" => {
+                        if this.handle_history_navigation_key(key, window, cx) {
                             window.prevent_default();
                             cx.stop_propagation();
                         }
@@ -1502,9 +1538,14 @@ impl Render for InputBar {
                         .appearance(false)
                         .cleanable(false)
                         .font_family(input_font)
+                        .text_color(if input_value.is_empty() {
+                            theme.muted_foreground.opacity(0.88)
+                        } else {
+                            theme.foreground.opacity(0.94)
+                        })
                         .text_size(input_text_size)
                         .line_height(input_line_height)
-                        .pl(px(0.0))
+                        .pl(px(12.0))
                         .h(px(24.0))
                         .into_any_element()
                 } else {

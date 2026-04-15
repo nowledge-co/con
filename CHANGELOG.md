@@ -212,6 +212,16 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Restored terminal cursor blinking and tied Ghostty cursor focus visuals to Con's pane scope, including broadcast and custom multi-pane targets.
 - Fixed Chinese IME composition leaving pinyin/preedit text behind in terminal panes.
 - Fixed typing ASCII while a Chinese IME is in English mode by consuming terminal key events explicitly instead of dropping ASCII IME commits.
+- Fixed the side agent-panel composer focus boundary so terminal key forwarding no longer steals typing from the inline agent input after the panel opens.
+- Fixed Up/Down recall so the command bar and side-panel composer recover history even when the underlying input component consumes arrow keys. Render-time shell suggestion sync no longer overwrites persisted global input history.
+- Restored history ghost suggestions from persisted submitted input when per-pane shell command history is incomplete, while keeping AI suggestions separate.
+- Fixed fresh windows and Dock/global-hotkey reopen so they start with persisted command history instead of an empty command bar history.
+- Moved app-wide command history into its own persistence file and hydrated input components during workspace construction, so a fresh app launch does not depend on the first render or a healthy layout session to restore history.
+- Polished Agent-mode command bar text alignment and foreground styling so it lines up with Smart and Shell modes.
+- Polished Settings and chrome controls: Skills rows now have clearer hierarchy and hover feedback, AI Routing rows are aligned with the card grid, Keyboard Shortcuts use separate keycaps per key, and titlebar controls now show shortcut-aware tooltips.
+- Refined the Settings keycap typography and pane-scope picker, removed the misleading "local" pane label, and added configurable Control-Tab / Control-Shift-Tab tab cycling with Cmd-Shift-[ / ] fallbacks.
+- Polished provider setup and pane scope controls for the beta. The provider list now shows provider icons with clear configured/unconfigured state, and the pane-scope picker uses matched frame geometry between the mode switcher and minimap.
+- Fixed command palette dismissal focus. Pressing Escape now returns focus to the active terminal so Cmd-Shift-P can reopen the palette immediately without clicking the terminal first.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

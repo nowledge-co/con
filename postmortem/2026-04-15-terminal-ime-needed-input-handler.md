@@ -32,3 +32,5 @@ The first repair also exposed a second ordering problem. If printable keys were 
 Terminal key events and IME text input are separate platform paths. A native terminal embed needs both: raw key events for TUI correctness, and an input handler for composed text.
 
 The key invariant is: raw terminal key events should consume the GPUI key event once forwarded, while AppKit `insertText` should remain the source of truth for IME commits. Heuristics like "drop ASCII commits" break real IME modes.
+
+The paired focus invariant is just as important: raw terminal forwarding is only valid while the terminal view's GPUI focus handle is actually focused. Side-panel and command-bar composers must be allowed to own focus independently, including the frame after their input state is created lazily during render.

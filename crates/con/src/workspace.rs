@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
-    ActiveTheme, kbd::Kbd,
-};
+use gpui_component::{ActiveTheme, tooltip::Tooltip};
 use serde_json::json;
 use tokio::sync::oneshot;
 
@@ -20,13 +18,40 @@ const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
 
+fn chrome_tooltip(label: &str, stroke: Option<Keystroke>, window: &mut Window, cx: &mut App) -> AnyView {
+    let label = label.to_string();
+    Tooltip::element(move |_, cx| {
+        let theme = cx.theme();
+        let mut content = div()
+            .flex()
+            .items_center()
+            .gap(px(7.0))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .line_height(px(16.0))
+                    .text_color(theme.popover_foreground)
+                    .child(label.clone()),
+            );
+
+        if let Some(stroke) = stroke.as_ref() {
+            content = content.child(crate::keycaps::keycaps_for_stroke(stroke, theme));
+        }
+
+        content
+    })
+    .build(window, cx)
+}
+
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
     InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
     RerunFromMessage, SelectSessionModel, SelectSessionProvider,
     SetAutoApprove,
 };
-use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
+use crate::command_palette::{
+    CommandPalette, PaletteDismissed, PaletteSelect, ToggleCommandPalette,
+};
 use crate::input_bar::{
     EscapeInput, InputBar, InputEdited, InputMode, InputScopeChanged, PaneInfo,
     SkillAutocompleteChanged, SubmitInput, TogglePaneScopePicker as TogglePaneScopePickerRequested,
@@ -44,8 +69,8 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    CloseTab, CycleInputMode, FocusInput, NewTab, Quit, SplitDown, SplitRight, ToggleAgentPanel,
-    TogglePaneScopePicker,
+    CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit, SplitDown,
+    SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
 };
 use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
@@ -54,7 +79,7 @@ use con_core::control::{
     SystemIdentifyResult, TabInfo,
 };
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
-use con_core::session::{PaneLayoutState, PaneSplitDirection, Session};
+use con_core::session::{GlobalHistoryState, PaneLayoutState, PaneSplitDirection, Session};
 use con_core::{SuggestionContext, SuggestionEngine};
 
 struct Tab {
@@ -199,8 +224,8 @@ struct PendingControlAgentRequest {
 }
 
 enum SessionSaveRequest {
-    Save(Session),
-    Flush(Session, crossbeam_channel::Sender<()>),
+    Save(Session, GlobalHistoryState),
+    Flush(Session, GlobalHistoryState, crossbeam_channel::Sender<()>),
 }
 
 fn spawn_session_save_worker() -> crossbeam_channel::Sender<SessionSaveRequest> {
@@ -214,16 +239,24 @@ fn spawn_session_save_worker() -> crossbeam_channel::Sender<SessionSaveRequest> 
                     Err(_) => break,
                 };
 
-                let (mut latest_session, mut flush_waiters) = match request {
-                    SessionSaveRequest::Save(session) => (Some(session), Vec::new()),
-                    SessionSaveRequest::Flush(session, waiter) => (Some(session), vec![waiter]),
+                let (mut latest_session, mut latest_history, mut flush_waiters) = match request {
+                    SessionSaveRequest::Save(session, history) => {
+                        (Some(session), Some(history), Vec::new())
+                    }
+                    SessionSaveRequest::Flush(session, history, waiter) => {
+                        (Some(session), Some(history), vec![waiter])
+                    }
                 };
 
                 while let Ok(request) = rx.try_recv() {
                     match request {
-                        SessionSaveRequest::Save(session) => latest_session = Some(session),
-                        SessionSaveRequest::Flush(session, waiter) => {
+                        SessionSaveRequest::Save(session, history) => {
                             latest_session = Some(session);
+                            latest_history = Some(history);
+                        }
+                        SessionSaveRequest::Flush(session, history, waiter) => {
+                            latest_session = Some(session);
+                            latest_history = Some(history);
                             flush_waiters.push(waiter);
                         }
                     }
@@ -233,6 +266,11 @@ fn spawn_session_save_worker() -> crossbeam_channel::Sender<SessionSaveRequest> 
                     && let Err(err) = session.save()
                 {
                     log::warn!("Failed to save session: {}", err);
+                }
+                if let Some(history) = latest_history
+                    && let Err(err) = history.save()
+                {
+                    log::warn!("Failed to save command history: {}", err);
                 }
 
                 for waiter in flush_waiters {
@@ -494,9 +532,15 @@ impl ConWorkspace {
             });
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
+        let persisted_history = GlobalHistoryState::load().unwrap_or_else(|err| {
+            log::warn!("Failed to load command history: {}", err);
+            GlobalHistoryState::default()
+        });
         let global_shell_history = Self::restore_global_shell_history(&session, &tabs);
+        let global_shell_history =
+            Self::merge_shell_histories(global_shell_history, &persisted_history);
         let global_input_history =
-            Self::restore_global_input_history(&session, &global_shell_history);
+            Self::restore_global_input_history(&session, &persisted_history, &global_shell_history);
         let agent_panel_open = session.agent_panel_open;
         let agent_panel_width = session
             .agent_panel_width
@@ -515,8 +559,20 @@ impl ConWorkspace {
         let settings_panel =
             cx.new(|cx| SettingsPanel::new(&config, registry, oauth_runtime, window, cx));
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
-        agent_panel.update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
-        input_bar.update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
+        let initial_recent_inputs = global_input_history
+            .iter()
+            .rev()
+            .take(80)
+            .cloned()
+            .collect::<Vec<_>>();
+        agent_panel.update(cx, |panel, _cx| {
+            panel.set_ui_opacity(effective_ui_opacity);
+            panel.set_recent_inputs(initial_recent_inputs.clone());
+        });
+        input_bar.update(cx, |bar, _cx| {
+            bar.set_ui_opacity(effective_ui_opacity);
+            bar.set_recent_commands(initial_recent_inputs);
+        });
         command_palette.update(cx, |palette, _cx| {
             palette.set_ui_opacity(effective_ui_opacity)
         });
@@ -543,6 +599,8 @@ impl ConWorkspace {
         // Re-render workspace when settings panel visibility changes (e.g. X close button)
         cx.observe(&settings_panel, |_, _, cx| cx.notify()).detach();
         cx.subscribe_in(&command_palette, window, Self::on_palette_select)
+            .detach();
+        cx.subscribe_in(&command_palette, window, Self::on_palette_dismissed)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_new_conversation)
             .detach();
@@ -2047,23 +2105,52 @@ impl ConWorkspace {
         }
     }
 
+    fn snapshot_global_history(&self) -> GlobalHistoryState {
+        GlobalHistoryState {
+            global_shell_history: self
+                .global_shell_history
+                .iter()
+                .map(|entry| con_core::session::CommandHistoryEntryState {
+                    command: entry.command.clone(),
+                    cwd: entry.cwd.clone(),
+                })
+                .collect(),
+            input_history: self.global_input_history.iter().cloned().collect(),
+        }
+    }
+
     fn save_session(&self, cx: &App) {
         let session = self.snapshot_session(cx);
-        if let Err(err) = self.session_save_tx.send(SessionSaveRequest::Save(session)) {
+        let history = self.snapshot_global_history();
+        if let Err(err) = self
+            .session_save_tx
+            .send(SessionSaveRequest::Save(session, history))
+        {
             log::warn!("Failed to queue session save: {}", err);
         }
     }
 
     fn flush_session_save(&self, cx: &App) {
         let session = self.snapshot_session(cx);
+        let history = self.snapshot_global_history();
         let (done_tx, done_rx) = crossbeam_channel::bounded(1);
         if let Err(err) = self
             .session_save_tx
-            .send(SessionSaveRequest::Flush(session.clone(), done_tx))
+            .send(SessionSaveRequest::Flush(
+                session.clone(),
+                history.clone(),
+                done_tx,
+            ))
         {
             log::warn!("Failed to flush session save queue: {}", err);
             if let Err(save_err) = session.save() {
                 log::warn!("Failed to save session directly during flush: {}", save_err);
+            }
+            if let Err(save_err) = history.save() {
+                log::warn!(
+                    "Failed to save command history directly during flush: {}",
+                    save_err
+                );
             }
             return;
         }
@@ -2072,6 +2159,12 @@ impl ConWorkspace {
             log::warn!("Timed out waiting for session save flush: {}", err);
             if let Err(save_err) = session.save() {
                 log::warn!("Failed to save session directly after flush timeout: {}", save_err);
+            }
+            if let Err(save_err) = history.save() {
+                log::warn!(
+                    "Failed to save command history directly after flush timeout: {}",
+                    save_err
+                );
             }
         }
     }
@@ -2144,25 +2237,69 @@ impl ConWorkspace {
         aggregated
     }
 
+    fn merge_shell_histories(
+        mut restored: VecDeque<CommandSuggestionEntry>,
+        persisted_history: &GlobalHistoryState,
+    ) -> VecDeque<CommandSuggestionEntry> {
+        for entry in &persisted_history.global_shell_history {
+            let command = entry.command.trim();
+            if command.is_empty() {
+                continue;
+            }
+            if let Some(existing_idx) = restored
+                .iter()
+                .position(|existing| existing.command == command)
+            {
+                restored.remove(existing_idx);
+            }
+            restored.push_back(CommandSuggestionEntry {
+                command: command.to_string(),
+                cwd: entry.cwd.clone(),
+            });
+            while restored.len() > MAX_GLOBAL_SHELL_HISTORY {
+                restored.pop_front();
+            }
+        }
+        restored
+    }
+
     fn restore_global_input_history(
         session: &con_core::session::Session,
+        persisted_history: &GlobalHistoryState,
         shell_history: &VecDeque<CommandSuggestionEntry>,
     ) -> VecDeque<String> {
-        let from_session = session
+        let mut restored = VecDeque::new();
+        for entry in session
             .input_history
             .iter()
-            .filter_map(|entry| {
-                let trimmed = entry.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            })
-            .collect::<VecDeque<_>>();
-        if !from_session.is_empty() {
-            return from_session;
+            .chain(persisted_history.input_history.iter())
+        {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(existing_idx) = restored
+                .iter()
+                .position(|existing: &String| existing == trimmed)
+            {
+                restored.remove(existing_idx);
+            }
+            restored.push_back(trimmed.to_string());
+            while restored.len() > MAX_GLOBAL_INPUT_HISTORY {
+                restored.pop_front();
+            }
+        }
+
+        if !restored.is_empty() {
+            return restored;
         }
 
         shell_history
             .iter()
-            .map(|entry| entry.command.clone())
+            .filter_map(|entry| {
+                let trimmed = entry.command.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            })
             .collect()
     }
 
@@ -2433,6 +2570,12 @@ impl ConWorkspace {
             "new-tab" => {
                 self.new_tab(&NewTab, window, cx);
             }
+            "next-tab" => {
+                self.next_tab(&NextTab, window, cx);
+            }
+            "previous-tab" => {
+                self.previous_tab(&PreviousTab, window, cx);
+            }
             "close-tab" => {
                 self.close_tab(&CloseTab, window, cx);
             }
@@ -2473,6 +2616,16 @@ impl ConWorkspace {
             _ => {}
         }
         cx.notify();
+    }
+
+    fn on_palette_dismissed(
+        &mut self,
+        _palette: &Entity<CommandPalette>,
+        _event: &PaletteDismissed,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.restore_terminal_focus_after_modal(window, cx);
     }
 
     fn on_settings_saved(
@@ -3829,7 +3982,7 @@ impl ConWorkspace {
                     .agent_panel
                     .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
                 if !focused_inline {
-                    self.focus_terminal(window, cx);
+                    self.focus_agent_inline_input_next_frame(window, cx);
                 }
             }
         } else {
@@ -3860,7 +4013,7 @@ impl ConWorkspace {
                 .agent_panel
                 .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
             if !focused_inline {
-                self.active_terminal().focus(window, cx);
+                self.focus_agent_inline_input_next_frame(window, cx);
             }
         } else {
             self.active_terminal().focus(window, cx);
@@ -3985,13 +4138,13 @@ impl ConWorkspace {
             pane.name.clone()
         };
         let status_text = if !pane.is_alive {
-            "offline"
+            Some("offline")
         } else if pane.is_busy {
-            "busy"
+            Some("busy")
         } else if pane.hostname.is_some() {
-            "remote"
+            Some("remote")
         } else {
-            "local"
+            None
         };
         let base_tile_surface = if theme.is_dark() {
             theme.title_bar.opacity(if is_focused { 0.84 } else { 0.72 })
@@ -4070,7 +4223,7 @@ impl ConWorkspace {
                                             .child(label),
                                     ),
                             )
-                            .child(
+                            .children(status_text.map(|text| {
                                 div()
                                     .text_size(px(10.5))
                                     .line_height(px(13.0))
@@ -4080,8 +4233,8 @@ impl ConWorkspace {
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .text_ellipsis()
-                                    .child(status_text),
-                            ),
+                                    .child(text)
+                            })),
                     )
                     .child(
                         div().flex().items_center().gap(px(4.0)).child(
@@ -4342,6 +4495,24 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn focus_agent_inline_input_next_frame(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.on_next_frame(window, |workspace, window, cx| {
+            if !workspace.agent_panel_open || workspace.input_bar_visible {
+                return;
+            }
+            let focused = workspace
+                .agent_panel
+                .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
+            if !focused {
+                workspace.focus_terminal(window, cx);
+            }
+        });
+    }
+
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
@@ -4598,7 +4769,13 @@ impl ConWorkspace {
             .collect()
     }
 
-    fn history_completion_for_prefix(&self, prefix: &str, cwd: Option<&str>) -> Option<String> {
+    fn history_completion_for_prefix(
+        &self,
+        prefix: &str,
+        cwd: Option<&str>,
+        mode: InputMode,
+        is_remote: bool,
+    ) -> Option<String> {
         let mut fallback: Option<String> = None;
 
         for entry in self.global_shell_history.iter().rev() {
@@ -4615,7 +4792,23 @@ impl ConWorkspace {
             }
         }
 
-        fallback
+        if fallback.is_some() {
+            return fallback;
+        }
+
+        self.global_input_history
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.as_str() != prefix
+                    && entry.starts_with(prefix)
+                    && (mode == InputMode::Shell
+                        || matches!(
+                            self.harness.classify_input(entry, is_remote),
+                            InputKind::ShellCommand(_)
+                        ))
+            })
+            .cloned()
     }
 
     fn local_path_completion_for_prefix(
@@ -4785,6 +4978,12 @@ impl ConWorkspace {
             .into_iter()
             .find_map(|(id, terminal)| (id == pane_id).then_some(terminal));
         let cwd = pane.as_ref().and_then(|pane| pane.current_dir(cx));
+        let is_remote = pane
+            .as_ref()
+            .is_some_and(|terminal| {
+                self.effective_remote_host_for_tab(self.active_tab, terminal, cx)
+                    .is_some()
+            });
 
         if let Some(path_match) =
             self.local_path_completion_for_prefix(self.active_tab, pane_id, &text, cx)
@@ -4817,7 +5016,9 @@ impl ConWorkspace {
             return;
         }
 
-        if let Some(history_match) = self.history_completion_for_prefix(&text, cwd.as_deref()) {
+        if let Some(history_match) =
+            self.history_completion_for_prefix(&text, cwd.as_deref(), mode, is_remote)
+        {
             log::debug!(
                 target: "con::suggestions",
                 "use history suggestion prefix={:?} completion={:?}",
@@ -4846,9 +5047,6 @@ impl ConWorkspace {
                     );
                     false
                 } else {
-                    let is_remote = self
-                        .effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
-                        .is_some();
                     matches!(
                         self.harness.classify_input(&text, is_remote),
                         InputKind::ShellCommand(_)
@@ -4940,8 +5138,24 @@ impl ConWorkspace {
             .find_map(|(id, terminal)| (id == result.pane_id).then(|| terminal.current_dir(cx)))
             .flatten();
 
+        let is_remote = self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|tab| {
+                tab.pane_tree
+                    .pane_terminals()
+                    .into_iter()
+                    .find_map(|(id, terminal)| {
+                        (id == result.pane_id).then(|| {
+                            self.effective_remote_host_for_tab(self.active_tab, &terminal, cx)
+                                .is_some()
+                        })
+                    })
+            })
+            .unwrap_or(false);
+
         if self
-            .history_completion_for_prefix(&text, cwd.as_deref())
+            .history_completion_for_prefix(&text, cwd.as_deref(), mode, is_remote)
             .is_some()
         {
             log::debug!(
@@ -5128,10 +5342,43 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn next_tab(&mut self, _: &NextTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        let next = (self.active_tab + 1) % self.tabs.len();
+        self.activate_tab(next, window, cx);
+    }
+
+    fn previous_tab(&mut self, _: &PreviousTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        let prev = if self.active_tab == 0 {
+            self.tabs.len() - 1
+        } else {
+            self.active_tab - 1
+        };
+        self.activate_tab(prev, window, cx);
+    }
+
     /// Focus the active terminal (used after modal close, etc.)
     fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
         self.active_terminal().focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
+    }
+
+    fn restore_terminal_focus_after_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_active_tab() {
+            return;
+        }
+        self.focus_terminal(window, cx);
+        cx.on_next_frame(window, |workspace, window, cx| {
+            if workspace.has_active_tab() && !workspace.settings_panel.read(cx).is_visible() {
+                workspace.focus_terminal(window, cx);
+                cx.notify();
+            }
+        });
     }
 
     /// Cancel all pending agent operations across all tabs.
@@ -5458,11 +5705,9 @@ impl Render for ConWorkspace {
             bar.set_cwd(display_cwd);
             bar.set_skills(skill_entries);
         });
-        let recent_commands = if self.input_bar.read(cx).mode() == InputMode::Agent {
-            Vec::new()
-        } else {
-            self.recent_shell_commands(40)
-        };
+        // Up/Down is command-bar recall, not shell suggestion ranking. Keep it
+        // backed by the global submitted-input history across all modes.
+        let recent_commands = self.recent_input_history(80);
         self.input_bar
             .update(cx, |bar, _cx| bar.set_recent_commands(recent_commands));
 
@@ -5491,6 +5736,7 @@ impl Render for ConWorkspace {
             panel.set_session_model_options(available_models, window, cx);
             panel.set_show_inline_input(show_inline);
             panel.set_skills(panel_skills);
+            panel.set_recent_inputs(self.recent_input_history(80));
         });
 
         let agent_panel_progress = self.agent_panel_motion.value(window);
@@ -5759,6 +6005,14 @@ impl Render for ConWorkspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                .tooltip(|window, cx| {
+                    chrome_tooltip(
+                        "New tab",
+                        crate::keycaps::first_action_keystroke(&NewTab, window),
+                        window,
+                        cx,
+                    )
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
@@ -5772,6 +6026,11 @@ impl Render for ConWorkspace {
         );
 
         // Input bar toggle
+        let input_bar_tooltip = if self.input_bar_visible {
+            "Hide input bar"
+        } else {
+            "Show input bar"
+        };
         tab_controls = tab_controls.child(
             div()
                 .id("toggle-input-bar")
@@ -5782,6 +6041,14 @@ impl Render for ConWorkspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                .tooltip(move |window, cx| {
+                    chrome_tooltip(
+                        input_bar_tooltip,
+                        crate::keycaps::first_action_keystroke(&crate::ToggleInputBar, window),
+                        window,
+                        cx,
+                    )
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_input_bar(&crate::ToggleInputBar, window, cx);
                 }))
@@ -5798,6 +6065,11 @@ impl Render for ConWorkspace {
         );
 
         // Agent panel toggle
+        let agent_panel_tooltip = if self.agent_panel_open {
+            "Hide agent panel"
+        } else {
+            "Show agent panel"
+        };
         tab_controls = tab_controls.child(
             div()
                 .id("toggle-agent-panel")
@@ -5808,6 +6080,14 @@ impl Render for ConWorkspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                .tooltip(move |window, cx| {
+                    chrome_tooltip(
+                        agent_panel_tooltip,
+                        crate::keycaps::first_action_keystroke(&ToggleAgentPanel, window),
+                        window,
+                        cx,
+                    )
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
                 }))
@@ -5938,6 +6218,8 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::toggle_command_palette))
             .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::next_tab))
+            .on_action(cx.listener(Self::previous_tab))
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(Self::split_right))
             .on_action(cx.listener(Self::split_down))
@@ -5990,25 +6272,14 @@ impl Render for ConWorkspace {
                     }
                 }
 
-                // Cmd+Shift+[ — previous tab
+                // Browser-style fallbacks. The configurable actions also bind
+                // Control-Tab / Control-Shift-Tab by default.
                 if mods.platform && mods.shift && key == "[" {
-                    if this.active_tab > 0 {
-                        let prev = this.active_tab - 1;
-                        this.activate_tab(prev, window, cx);
-                    } else if !this.tabs.is_empty() {
-                        let last = this.tabs.len() - 1;
-                        this.activate_tab(last, window, cx);
-                    }
+                    this.previous_tab(&PreviousTab, window, cx);
                 }
 
-                // Cmd+Shift+] — next tab
                 if mods.platform && mods.shift && key == "]" {
-                    let next = this.active_tab + 1;
-                    if next < this.tabs.len() {
-                        this.activate_tab(next, window, cx);
-                    } else {
-                        this.activate_tab(0, window, cx);
-                    }
+                    this.next_tab(&NextTab, window, cx);
                 }
             }))
             .child(top_bar)
@@ -6234,7 +6505,6 @@ impl Render for ConWorkspace {
                 let popup_width =
                     px((window.bounds().size.width.as_f32() * 0.38).clamp(360.0, 520.0));
                 let popup_bottom = px(58.0 + (43.0 * input_bar_progress.max(0.01)));
-                let scope_kbd = Keystroke::parse("cmd-'").ok().map(Kbd::new);
                 let preview_content = self.render_scope_node(
                     &layout,
                     &pane_map,
@@ -6259,32 +6529,34 @@ impl Render for ConWorkspace {
                 } else {
                     theme.muted.opacity(0.065)
                 };
+                let scope_frame_inset = px(4.0);
+                let scope_frame_radius = px(10.0);
 
                 let presets = div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap(px(8.0))
+                    .gap(px(12.0))
                     .child(
                         div().flex().items_center().gap(px(6.0)).child(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap(px(1.0))
+                                .gap(px(2.0))
                                 .child(
                                     div()
-                                        .text_size(px(11.5))
+                                        .text_size(px(12.0))
                                         .font_family(theme.mono_font_family.clone())
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child("Command scope"),
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("Pane scope"),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(10.0))
+                                        .text_size(px(10.5))
                                         .line_height(px(13.0))
                                         .font_family(theme.mono_font_family.clone())
-                                        .text_color(theme.muted_foreground.opacity(0.56))
-                                        .child("Broadcast by default"),
+                                        .text_color(theme.muted_foreground.opacity(0.58))
+                                        .child("Choose where command-mode input is sent"),
                                 ),
                         ),
                     )
@@ -6292,14 +6564,21 @@ impl Render for ConWorkspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
-                            .when_some(scope_kbd.clone(), |this, kbd| this.child(kbd.outline()))
+                            .gap(px(5.0))
+                            .child(crate::keycaps::keycaps_for_binding("cmd-'", theme))
                             .child(
                                 div()
+                                    .h(px(19.0))
+                                    .px(px(7.0))
+                                    .rounded(px(5.0))
+                                    .flex()
+                                    .items_center()
+                                    .bg(theme.muted.opacity(0.12))
                                     .text_size(px(10.5))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.58))
-                                    .child("1..9"),
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.foreground.opacity(0.66))
+                                    .child("1-9"),
                             ),
                     );
 
@@ -6354,10 +6633,10 @@ impl Render for ConWorkspace {
                     .gap(px(8.0))
                     .child(
                         div()
-                            .w(px(206.0))
-                            .h(px(30.0))
-                            .px(px(3.0))
-                            .rounded(px(10.0))
+                            .w_full()
+                            .h(px(32.0))
+                            .p(scope_frame_inset)
+                            .rounded(scope_frame_radius)
                             .bg(segmented_surface)
                             .flex()
                             .items_center()
@@ -6386,8 +6665,8 @@ impl Render for ConWorkspace {
                 let preview = div()
                     .h(px(224.0))
                     .w_full()
-                    .rounded(px(12.0))
-                    .p(px(11.0))
+                    .rounded(scope_frame_radius)
+                    .p(scope_frame_inset)
                     .bg(preview_surface)
                     .child(preview_content);
 

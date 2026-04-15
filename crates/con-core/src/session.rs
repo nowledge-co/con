@@ -19,6 +19,16 @@ pub struct Session {
     pub conversation_id: Option<String>,
 }
 
+/// App-wide command history, stored separately from window layout so it survives
+/// fresh-window starts and recoverable session-layout load failures.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GlobalHistoryState {
+    #[serde(default)]
+    pub global_shell_history: Vec<CommandHistoryEntryState>,
+    #[serde(default)]
+    pub input_history: Vec<String>,
+}
+
 fn default_input_bar_visible() -> bool {
     true
 }
@@ -126,7 +136,7 @@ impl Session {
         }
     }
 
-    fn session_path() -> PathBuf {
+    pub fn session_path() -> PathBuf {
         if let Some(path) = std::env::var_os("CON_SESSION_PATH") {
             return PathBuf::from(path);
         }
@@ -135,5 +145,39 @@ impl Session {
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("con")
             .join("session.json")
+    }
+}
+
+impl GlobalHistoryState {
+    pub fn save(&self) -> anyhow::Result<()> {
+        let path = Self::history_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(self)?;
+        std::fs::write(&path, content)?;
+        Ok(())
+    }
+
+    pub fn load() -> anyhow::Result<Self> {
+        let path = Self::history_path();
+        if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            let history: GlobalHistoryState = serde_json::from_str(&content)?;
+            Ok(history)
+        } else {
+            Ok(GlobalHistoryState::default())
+        }
+    }
+
+    pub fn history_path() -> PathBuf {
+        if let Some(path) = std::env::var_os("CON_HISTORY_PATH") {
+            return PathBuf::from(path);
+        }
+        dirs::data_dir()
+            .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("con")
+            .join("history.json")
     }
 }

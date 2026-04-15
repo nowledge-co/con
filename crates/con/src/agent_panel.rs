@@ -3,7 +3,7 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::clipboard::Clipboard;
 use gpui_component::divider::Divider;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, Position};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
@@ -418,6 +418,10 @@ pub struct AgentPanel {
     inline_input_state: Option<Entity<InputState>>,
     /// Skills available for /slash-command completion in inline input
     skills: Vec<SkillEntry>,
+    /// Global submitted-input history for the inline composer.
+    recent_inputs: Vec<String>,
+    inline_history_nav_index: Option<usize>,
+    inline_history_nav_draft: Option<String>,
     /// Currently highlighted skill in inline autocomplete
     inline_skill_selection: usize,
     /// Tracks whether shift was held on the last enter keystroke (for inline input)
@@ -700,6 +704,9 @@ impl AgentPanel {
             show_inline_input: false,
             inline_input_state: None,
             skills: Vec::new(),
+            recent_inputs: Vec::new(),
+            inline_history_nav_index: None,
+            inline_history_nav_draft: None,
             inline_skill_selection: 0,
             inline_shift_enter: false,
             ui_opacity: 0.90,
@@ -771,6 +778,9 @@ impl AgentPanel {
             show_inline_input: false,
             inline_input_state: None,
             skills: Vec::new(),
+            recent_inputs: Vec::new(),
+            inline_history_nav_index: None,
+            inline_history_nav_draft: None,
             inline_skill_selection: 0,
             inline_shift_enter: false,
             ui_opacity: 0.90,
@@ -878,6 +888,15 @@ impl AgentPanel {
         self.skills = skills;
     }
 
+    pub fn set_recent_inputs(&mut self, inputs: Vec<String>) {
+        if self.recent_inputs == inputs {
+            return;
+        }
+        self.recent_inputs = inputs;
+        self.inline_history_nav_index = None;
+        self.inline_history_nav_draft = None;
+    }
+
     pub fn focus_inline_input(&self, window: &mut Window, cx: &mut App) -> bool {
         let Some(ref input) = self.inline_input_state else {
             return false;
@@ -932,6 +951,102 @@ impl AgentPanel {
         self.inline_skill_selection = 0;
         cx.emit(InlineSkillAutocompleteChanged);
         cx.notify();
+    }
+
+    fn navigate_inline_history(
+        &mut self,
+        previous: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.recent_inputs.is_empty() {
+            return false;
+        }
+
+        let Some(ref input) = self.inline_input_state else {
+            return false;
+        };
+
+        let next_index = match (previous, self.inline_history_nav_index) {
+            (true, None) => {
+                self.inline_history_nav_draft = Some(input.read(cx).value().to_string());
+                Some(0)
+            }
+            (true, Some(ix)) if ix + 1 < self.recent_inputs.len() => Some(ix + 1),
+            (true, Some(ix)) => Some(ix),
+            (false, Some(0)) => None,
+            (false, Some(ix)) => Some(ix - 1),
+            (false, None) => None,
+        };
+
+        self.inline_history_nav_index = next_index;
+        let replacement = next_index
+            .and_then(|ix| self.recent_inputs.get(ix).cloned())
+            .or_else(|| self.inline_history_nav_draft.clone())
+            .unwrap_or_default();
+        let cursor = replacement.chars().count() as u32;
+
+        input.update(cx, |state, cx| {
+            state.set_value(&replacement, window, cx);
+            state.set_cursor_position(Position::new(0, cursor), window, cx);
+        });
+        self.inline_skill_selection = 0;
+        cx.emit(InlineSkillAutocompleteChanged);
+        cx.notify();
+        true
+    }
+
+    fn is_inline_input_focused(&self, window: &Window, cx: &App) -> bool {
+        self.inline_input_state.as_ref().is_some_and(|input| {
+            input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        })
+    }
+
+    fn should_fallback_handle_inline_history_key(event: &KeystrokeEvent) -> bool {
+        let key = event.keystroke.key.as_str();
+        if key != "up" && key != "down" {
+            return false;
+        }
+
+        let mods = event.keystroke.modifiers;
+        if mods.control || mods.platform || mods.alt || mods.shift {
+            return false;
+        }
+
+        event.action.as_ref().is_none_or(|action| {
+            action.partial_eq(&gpui_component::input::MoveUp)
+                || action.partial_eq(&gpui_component::input::MoveDown)
+        })
+    }
+
+    fn handle_inline_navigation_key(
+        &mut self,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let has_completions = !self.filtered_inline_skills(cx).is_empty();
+        match key {
+            "up" if has_completions => {
+                self.inline_skill_selection = self.inline_skill_selection.saturating_sub(1);
+                cx.emit(InlineSkillAutocompleteChanged);
+                cx.notify();
+                true
+            }
+            "down" if has_completions => {
+                let max = self.filtered_inline_skills(cx).len().saturating_sub(1);
+                self.inline_skill_selection = (self.inline_skill_selection + 1).min(max);
+                cx.emit(InlineSkillAutocompleteChanged);
+                cx.notify();
+                true
+            }
+            "up" => self.navigate_inline_history(true, window, cx),
+            "down" => self.navigate_inline_history(false, window, cx),
+            _ => false,
+        }
     }
 
     fn scroll_to_bottom(&self) {
@@ -2246,12 +2361,39 @@ impl Render for AgentPanel {
                 }
             })
             .detach();
+            cx.observe_keystrokes(|this, event, window, cx| {
+                if !Self::should_fallback_handle_inline_history_key(event)
+                    || !this.show_inline_input
+                    || !this.is_inline_input_focused(window, cx)
+                {
+                    return;
+                }
+
+                let key = event.keystroke.key.clone();
+                let _ = this.handle_inline_navigation_key(key.as_str(), window, cx);
+            })
+            .detach();
             cx.subscribe_in(
                 &state,
                 window,
                 |this: &mut Self, _, ev: &InputEvent, window, cx| {
                     match ev {
                         InputEvent::Change => {
+                            if let Some(history_ix) = this.inline_history_nav_index {
+                                let current_value = this
+                                    .inline_input_state
+                                    .as_ref()
+                                    .map(|input| input.read(cx).value().to_string())
+                                    .unwrap_or_default();
+                                let matches_current = this
+                                    .recent_inputs
+                                    .get(history_ix)
+                                    .is_some_and(|entry| entry == &current_value);
+                                if !matches_current {
+                                    this.inline_history_nav_index = None;
+                                    this.inline_history_nav_draft = None;
+                                }
+                            }
                             let skills = this.filtered_inline_skills(cx);
                             if skills.is_empty() {
                                 this.inline_skill_selection = 0;
@@ -3974,21 +4116,11 @@ impl Render for AgentPanel {
                             return;
                         }
 
-                        if key == "up" && has_completions {
-                            this.inline_skill_selection =
-                                this.inline_skill_selection.saturating_sub(1);
-                            cx.emit(InlineSkillAutocompleteChanged);
-                            cx.notify();
-                            cx.stop_propagation();
-                            return;
-                        }
-                        if key == "down" && has_completions {
-                            let max = this.filtered_inline_skills(cx).len().saturating_sub(1);
-                            this.inline_skill_selection =
-                                (this.inline_skill_selection + 1).min(max);
-                            cx.emit(InlineSkillAutocompleteChanged);
-                            cx.notify();
-                            cx.stop_propagation();
+                        if key == "up" || key == "down" {
+                            if this.handle_inline_navigation_key(key, window, cx) {
+                                window.prevent_default();
+                                cx.stop_propagation();
+                            }
                             return;
                         }
 
@@ -3999,6 +4131,7 @@ impl Render for AgentPanel {
                             this.inline_skill_selection = 0;
                             cx.emit(InlineSkillAutocompleteChanged);
                             cx.notify();
+                            window.prevent_default();
                             cx.stop_propagation();
                         }
                     }))
@@ -4013,6 +4146,17 @@ impl Render for AgentPanel {
                             .py(px(8.0))
                             .rounded(px(14.0))
                             .bg(theme.background)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    if let Some(ref input) = this.inline_input_state {
+                                        input
+                                            .read(cx)
+                                            .focus_handle(cx)
+                                            .focus(window, cx);
+                                    }
+                                }),
+                            )
                             // Text field
                             .child(
                                 div()
