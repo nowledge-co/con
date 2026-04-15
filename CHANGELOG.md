@@ -149,6 +149,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed agent hanging after receiving a final response from certain providers
 - Fixed empty agent responses appearing as stuck/hanging when providers don't emit text items during streaming
 - Fixed a Unicode logging crash where long tool-result previews could be truncated at an invalid UTF-8 byte boundary
+- Fixed inline `<think>...</think>` reasoning from some models so it now renders in the collapsible reasoning section instead of leaking raw tags into chat output.
 - Fixed tmux native control helper quoting so tmux list/capture/exec commands no longer leak into the target shell as broken `quote>` input when a quoted tmux target is present
 - Fixed a visible-panel performance regression where assistant messages were reparsed as markdown on every render.
 - Fixed a second visible-panel performance regression where fenced code blocks rebuilt syntax-highlight runs on every render.
