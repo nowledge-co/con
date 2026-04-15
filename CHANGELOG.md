@@ -192,6 +192,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Smart input bar that auto-detects intent — shell commands go to the terminal, questions go to the agent, /skills invoke workflows
 - The single-tab state now uses a compact titlebar instead of a full tab strip, which recovers terminal space without hiding core window controls.
 - Agent panel (Cmd+L) with structured tool call cards, inline approval dialogs, code block rendering, and a resizable width you can drag to adjust
+- Fixed the agent-panel provider and model menus so long provider/model catalogs open in a bounded scrollable popup instead of getting stuck in an unscrollable header dropdown.
 - The agent panel now keeps live activity visible near the top while a run is in progress, shows a labeled Stop action in the header, and lets you expand long tool results instead of forcing every step into the same short preview.
 - Settings panel (Cmd+,) to configure your provider, model, and preferences
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
