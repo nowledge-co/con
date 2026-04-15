@@ -130,7 +130,10 @@ fn default_toggle_pane_scope() -> String {
     "cmd-'".into()
 }
 fn default_global_summon() -> String {
-    String::new()
+    "alt-space".into()
+}
+fn default_global_summon_enabled() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +152,7 @@ pub struct KeybindingConfig {
     pub cycle_input_mode: String,
     pub toggle_input_bar: String,
     pub toggle_pane_scope: String,
+    pub global_summon_enabled: bool,
     pub global_summon: String,
 }
 
@@ -168,6 +172,7 @@ impl Default for KeybindingConfig {
             cycle_input_mode: default_cycle_input_mode(),
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
+            global_summon_enabled: default_global_summon_enabled(),
             global_summon: default_global_summon(),
         }
     }

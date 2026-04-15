@@ -23,14 +23,20 @@ pub fn init(cx: &App, keybindings: &KeybindingConfig) {
     GLOBAL_HOTKEY_APP.with(|app| {
         *app.borrow_mut() = Some(cx.to_async());
     });
-    update_registration(&keybindings.global_summon);
+    update_registration(keybindings);
 }
 
 pub fn update_from_keybindings(keybindings: &KeybindingConfig) {
-    update_registration(&keybindings.global_summon);
+    update_registration(keybindings);
 }
 
-fn update_registration(binding: &str) {
+fn update_registration(keybindings: &KeybindingConfig) {
+    if !keybindings.global_summon_enabled {
+        unsafe { con_unregister_global_hotkey() };
+        return;
+    }
+
+    let binding = &keybindings.global_summon;
     let Some(keystroke) = parse_global_hotkey(binding) else {
         unsafe { con_unregister_global_hotkey() };
         if !binding.trim().is_empty() {

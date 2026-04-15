@@ -3374,7 +3374,6 @@ impl SettingsPanel {
 
         // Editable keybinding definitions: (label, field_name)
         let general_keys: &[(&str, &str)] = &[
-            ("Summon / Hide Con", "global_summon"),
             ("New Window", "new_window"),
             ("New Tab", "new_tab"),
             ("Close Tab", "close_tab"),
@@ -3467,8 +3466,165 @@ impl SettingsPanel {
         let general_card = build_card(general_keys, &recording, self, cx);
         let pane_card_keys = pane_keys;
         let pane_card = build_card(pane_card_keys, &recording, self, cx);
-
+        let global_summon_enabled = self.config.keybindings.global_summon_enabled;
+        let global_summon_value = self.config.keybindings.global_summon.clone();
+        let global_summon_recording = recording.as_deref() == Some("global_summon");
         let theme = cx.theme();
+
+        let global_summon_badge = if global_summon_recording {
+            div()
+                .min_h(px(28.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .bg(theme.primary.opacity(0.10))
+                .text_color(theme.primary)
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .child("Press shortcut…")
+                .into_any_element()
+        } else if let Ok(stroke) = Keystroke::parse(&global_summon_value) {
+            Kbd::new(stroke).outline().into_any_element()
+        } else {
+            div()
+                .min_h(px(28.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .bg(theme.muted.opacity(0.08))
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.muted_foreground)
+                .child("Not set")
+                .into_any_element()
+        };
+
+        let global_summon_card = card(theme, card_opacity).child(
+            div()
+                .px(px(16.0))
+                .py(px(14.0))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .justify_between()
+                        .gap(px(16.0))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .flex_1()
+                                .max_w(px(400.0))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Summon / Hide Con"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .line_height(px(17.0))
+                                        .text_color(theme.muted_foreground.opacity(0.68))
+                                        .child(
+                                            "Bring Con forward from anywhere in macOS, or hide it when it is already frontmost.",
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div().pt(px(1.0)).child(
+                                Switch::new("global-summon-enabled")
+                                    .checked(global_summon_enabled)
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        this.config.keybindings.global_summon_enabled = *checked;
+                                        if *checked
+                                            && this.config.keybindings.global_summon.trim().is_empty()
+                                        {
+                                            this.config.keybindings.global_summon =
+                                                "alt-space".to_string();
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(14.0))
+                        .px(px(12.0))
+                        .py(px(10.0))
+                        .rounded(px(10.0))
+                        .bg(if global_summon_enabled {
+                            theme.muted.opacity(0.08)
+                        } else {
+                            theme.muted.opacity(0.05)
+                        })
+                        .text_color(if global_summon_enabled {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Shortcut"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .line_height(px(15.0))
+                                        .text_color(theme.muted_foreground.opacity(0.62))
+                                        .child(if global_summon_enabled {
+                                            "System-wide shortcut. Choose one that does not conflict with Spotlight, launchers, or input methods."
+                                        } else {
+                                            "Disabled by default to avoid conflicts with other global shortcuts."
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .min_w(px(108.0))
+                                .flex()
+                                .justify_end()
+                                .child(if global_summon_enabled {
+                                    div()
+                                        .id("key-badge-global-summon")
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.recording_key =
+                                                    Some("global_summon".to_string());
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(global_summon_badge)
+                                } else {
+                                    div()
+                                        .id("key-badge-global-summon")
+                                        .opacity(0.45)
+                                        .child(global_summon_badge)
+                                }),
+                        ),
+                ),
+        );
+
         section_content(
             "Keyboard Shortcuts",
             "Click a shortcut to record a new key combination.",
@@ -3479,6 +3635,9 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
+                .child(group_label("Global", &theme))
+                .child(global_summon_card)
+                .child(div().h(px(8.0)))
                 .child(group_label("General", &theme))
                 .child(general_card),
         )
