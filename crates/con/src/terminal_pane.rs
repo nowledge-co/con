@@ -72,6 +72,7 @@ impl TerminalPane {
         font_family: &str,
         font_size: f32,
         background_opacity: f32,
+        background_blur: bool,
         background_image: Option<&str>,
         background_image_opacity: f32,
         background_image_position: Option<&str>,
@@ -86,6 +87,7 @@ impl TerminalPane {
                 font_family,
                 font_size,
                 background_opacity,
+                background_blur,
                 background_image,
                 background_image_opacity,
                 background_image_position,
@@ -129,6 +131,11 @@ impl TerminalPane {
         if let Some(terminal) = self.entity.read(cx).terminal() {
             terminal.refresh();
         }
+    }
+
+    pub fn sync_window_background_blur(&self, cx: &mut App) {
+        self.entity
+            .update(cx, |view, _| view.sync_window_background_blur());
     }
 
     pub fn release_mouse_selection(&self, cx: &App) {

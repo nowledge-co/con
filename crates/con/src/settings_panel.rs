@@ -2,7 +2,7 @@ use con_agent::{
     AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind,
     SuggestionModelConfig, authorize_oauth_provider,
 };
-use con_agent::provider::AgentPurpose;
+use con_agent::provider::{AgentPurpose, ProviderTransport};
 use con_core::{
     Config,
     config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE},
@@ -110,6 +110,7 @@ pub struct SettingsPanel {
     font_size_input: Entity<InputState>,
     ui_font_size_input: Entity<InputState>,
     terminal_opacity_slider: Entity<SliderState>,
+    terminal_blur: bool,
     ui_opacity_slider: Entity<SliderState>,
     background_image_input: Entity<InputState>,
     background_image_opacity_slider: Entity<SliderState>,
@@ -353,6 +354,23 @@ impl SettingsPanel {
         })
     }
 
+    fn provider_for_transport(
+        provider: &ProviderKind,
+        transport: ProviderTransport,
+    ) -> Option<ProviderKind> {
+        Self::protocol_pair(provider).map(|(openai_kind, anthropic_kind)| match transport {
+            ProviderTransport::OpenAI => openai_kind,
+            ProviderTransport::Anthropic => anthropic_kind,
+        })
+    }
+
+    fn preferred_sidebar_provider(config: &Config, clicked_provider: &ProviderKind) -> ProviderKind {
+        let sidebar_provider = Self::sidebar_provider_kind(clicked_provider);
+        let transport = config.agent.provider_transport_for(&sidebar_provider);
+        Self::provider_for_transport(&sidebar_provider, transport.unwrap_or(ProviderTransport::OpenAI))
+            .unwrap_or(sidebar_provider)
+    }
+
     fn oauth_state(&self, provider: &ProviderKind) -> Option<&ProviderOAuthState> {
         self.oauth_states.get(provider)
     }
@@ -540,6 +558,56 @@ impl SettingsPanel {
         }
 
         ENDPOINT_CUSTOM_LABEL
+    }
+
+    fn mapped_protocol_base_url(
+        source_provider: &ProviderKind,
+        target_provider: &ProviderKind,
+        source_base_url: Option<&str>,
+    ) -> Option<String> {
+        let source_label = Self::endpoint_label_for_base_url(source_provider, source_base_url);
+        if matches!(source_label, ENDPOINT_DEFAULT_LABEL | ENDPOINT_CUSTOM_LABEL) {
+            let target_presets = Self::provider_endpoint_presets(target_provider);
+            return (target_presets.len() == 1).then(|| target_presets[0].base_url.to_string());
+        }
+
+        if let Some(preset) = Self::provider_endpoint_presets(target_provider)
+            .iter()
+            .find(|preset| preset.label == source_label)
+        {
+            return Some(preset.base_url.to_string());
+        }
+
+        let target_presets = Self::provider_endpoint_presets(target_provider);
+        (target_presets.len() == 1).then(|| target_presets[0].base_url.to_string())
+    }
+
+    fn seed_protocol_variant_config(
+        source_provider: &ProviderKind,
+        target_provider: &ProviderKind,
+        source: &ProviderConfig,
+        target: &ProviderConfig,
+    ) -> ProviderConfig {
+        let mut seeded = target.clone();
+
+        if seeded.model.is_none() {
+            seeded.model = source.model.clone();
+        }
+        if seeded.api_key.is_none() {
+            seeded.api_key = source.api_key.clone();
+        }
+        if seeded.api_key_env.is_none() {
+            seeded.api_key_env = source.api_key_env.clone();
+        }
+        if seeded.max_tokens.is_none() {
+            seeded.max_tokens = source.max_tokens;
+        }
+        if seeded.base_url.as_deref().is_none_or(|value| value.trim().is_empty()) {
+            seeded.base_url =
+                Self::mapped_protocol_base_url(source_provider, target_provider, source.base_url.as_deref());
+        }
+
+        seeded
     }
 
     fn make_endpoint_preset_select(
@@ -1063,6 +1131,7 @@ impl SettingsPanel {
             font_size_input,
             ui_font_size_input,
             terminal_opacity_slider,
+            terminal_blur: config.appearance.terminal_blur,
             ui_opacity_slider,
             background_image_input,
             background_image_opacity_slider,
@@ -1085,7 +1154,6 @@ impl SettingsPanel {
         );
         if self.visible {
             let agent = &self.config.agent;
-            self.selected_provider = agent.provider.clone();
             let pc = agent.providers.get_or_default(&self.selected_provider);
             self.load_provider_inputs(&pc, window, cx);
             self.sync_provider_placeholders(&self.selected_provider, window, cx);
@@ -1159,6 +1227,7 @@ impl SettingsPanel {
                     cx,
                 );
             });
+            self.terminal_blur = self.config.appearance.terminal_blur;
             self.ui_opacity_slider.update(cx, |slider, cx| {
                 slider.set_value(
                     Self::clamp_ui_opacity(self.config.appearance.ui_opacity),
@@ -1512,6 +1581,7 @@ impl SettingsPanel {
         self.config.appearance.ui_font_size = Self::clamp_ui_font_size(parsed_ui_font_size);
         self.config.appearance.terminal_opacity =
             Self::clamp_terminal_opacity(self.terminal_opacity_slider.read(cx).value().end());
+        self.config.appearance.terminal_blur = self.terminal_blur;
         self.config.appearance.ui_opacity =
             Self::clamp_ui_opacity(self.ui_opacity_slider.read(cx).value().end());
         let background_image_text = self
@@ -1573,6 +1643,7 @@ impl SettingsPanel {
 
         // Write directly into config
         match field.as_str() {
+            "global_summon" => self.config.keybindings.global_summon = binding,
             "new_window" => self.config.keybindings.new_window = binding,
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
@@ -1595,6 +1666,7 @@ impl SettingsPanel {
     /// Get the current value of a keybinding by field name.
     fn binding_value(&self, field: &str) -> &str {
         match field {
+            "global_summon" => &self.config.keybindings.global_summon,
             "new_window" => &self.config.keybindings.new_window,
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
@@ -1652,7 +1724,15 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let provider = Self::sidebar_selection_target(&provider, &self.selected_provider);
+        let provider = if Self::protocol_pair(&provider).is_some() {
+            if Self::sidebar_provider_kind(&self.selected_provider) == Self::sidebar_provider_kind(&provider) {
+                self.selected_provider.clone()
+            } else {
+                Self::preferred_sidebar_provider(&self.config, &provider)
+            }
+        } else {
+            Self::sidebar_selection_target(&provider, &self.selected_provider)
+        };
         self.transition_provider(provider, window, cx);
     }
 
@@ -1692,11 +1772,34 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let source_provider = self.selected_provider.clone();
+        let source_config = self.read_provider_inputs(cx);
+        self.config
+            .agent
+            .providers
+            .set(&source_provider, source_config.clone());
+
         let Some(provider) =
             Self::protocol_toggled_provider(&self.selected_provider, use_anthropic)
         else {
             return;
         };
+        self.config.agent.set_provider_transport(
+            &self.selected_provider,
+            Some(if use_anthropic {
+                ProviderTransport::Anthropic
+            } else {
+                ProviderTransport::OpenAI
+            }),
+        );
+        let target_config = self.config.agent.providers.get_or_default(&provider);
+        let seeded_target = Self::seed_protocol_variant_config(
+            &source_provider,
+            &provider,
+            &source_config,
+            &target_config,
+        );
+        self.config.agent.providers.set(&provider, seeded_target);
         self.transition_provider(provider, window, cx);
     }
 
@@ -2359,15 +2462,28 @@ impl SettingsPanel {
                     card(theme, card_opacity)
                         .child(slider_row(
                             "Terminal Glass",
-                            "Terminal opacity. Restart needed on macOS.",
+                            "How much of the desktop shows through the terminal.",
                             &terminal_opacity_slider,
                             terminal_opacity,
                             theme,
                         ))
                         .child(row_separator(theme))
+                        .child(toggle_row(
+                            "Terminal Blur",
+                            "Blur the desktop behind transparent terminal surfaces.",
+                            Switch::new("terminal-blur-toggle")
+                                .checked(self.terminal_blur)
+                                .small()
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.terminal_blur = *checked;
+                                    cx.notify();
+                                })),
+                            theme,
+                        ))
+                        .child(row_separator(theme))
                         .child(slider_row(
                             "Window Chrome",
-                            "UI opacity. Restart needed on macOS.",
+                            "Opacity for tabs, panels, and window controls.",
                             &ui_opacity_slider,
                             ui_opacity,
                             theme,
@@ -3367,8 +3483,165 @@ impl SettingsPanel {
         let general_card = build_card(general_keys, &recording, self, cx);
         let pane_card_keys = pane_keys;
         let pane_card = build_card(pane_card_keys, &recording, self, cx);
-
+        let global_summon_enabled = self.config.keybindings.global_summon_enabled;
+        let global_summon_value = self.config.keybindings.global_summon.clone();
+        let global_summon_recording = recording.as_deref() == Some("global_summon");
         let theme = cx.theme();
+
+        let global_summon_badge = if global_summon_recording {
+            div()
+                .min_h(px(28.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .bg(theme.primary.opacity(0.10))
+                .text_color(theme.primary)
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .child("Press shortcut…")
+                .into_any_element()
+        } else if let Ok(stroke) = Keystroke::parse(&global_summon_value) {
+            Kbd::new(stroke).outline().into_any_element()
+        } else {
+            div()
+                .min_h(px(28.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .bg(theme.muted.opacity(0.08))
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.muted_foreground)
+                .child("Not set")
+                .into_any_element()
+        };
+
+        let global_summon_card = card(theme, card_opacity).child(
+            div()
+                .px(px(16.0))
+                .py(px(14.0))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .justify_between()
+                        .gap(px(16.0))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .flex_1()
+                                .max_w(px(400.0))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Summon / Hide Con"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .line_height(px(17.0))
+                                        .text_color(theme.muted_foreground.opacity(0.68))
+                                        .child(
+                                            "Bring Con forward from anywhere in macOS, or hide it when it is already frontmost.",
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div().pt(px(1.0)).child(
+                                Switch::new("global-summon-enabled")
+                                    .checked(global_summon_enabled)
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        this.config.keybindings.global_summon_enabled = *checked;
+                                        if *checked
+                                            && this.config.keybindings.global_summon.trim().is_empty()
+                                        {
+                                            this.config.keybindings.global_summon =
+                                                "alt-space".to_string();
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(14.0))
+                        .px(px(12.0))
+                        .py(px(10.0))
+                        .rounded(px(10.0))
+                        .bg(if global_summon_enabled {
+                            theme.muted.opacity(0.08)
+                        } else {
+                            theme.muted.opacity(0.05)
+                        })
+                        .text_color(if global_summon_enabled {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Shortcut"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .line_height(px(15.0))
+                                        .text_color(theme.muted_foreground.opacity(0.62))
+                                        .child(if global_summon_enabled {
+                                            "System-wide shortcut. Choose one that does not conflict with Spotlight, launchers, or input methods."
+                                        } else {
+                                            "Disabled by default to avoid conflicts with other global shortcuts."
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .min_w(px(108.0))
+                                .flex()
+                                .justify_end()
+                                .child(if global_summon_enabled {
+                                    div()
+                                        .id("key-badge-global-summon")
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.recording_key =
+                                                    Some("global_summon".to_string());
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(global_summon_badge)
+                                } else {
+                                    div()
+                                        .id("key-badge-global-summon")
+                                        .opacity(0.45)
+                                        .child(global_summon_badge)
+                                }),
+                        ),
+                ),
+        );
+
         section_content(
             "Keyboard Shortcuts",
             "Click a shortcut to record a new key combination.",
@@ -3379,6 +3652,9 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
+                .child(group_label("Global", &theme))
+                .child(global_summon_card)
+                .child(div().h(px(8.0)))
                 .child(group_label("General", &theme))
                 .child(general_card),
         )

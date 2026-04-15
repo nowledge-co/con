@@ -30,6 +30,9 @@ fn default_terminal_opacity() -> f32 {
 fn default_ui_opacity() -> f32 {
     0.90
 }
+fn default_terminal_blur() -> bool {
+    true
+}
 fn default_background_image_opacity() -> f32 {
     0.55
 }
@@ -64,6 +67,7 @@ impl Default for TerminalConfig {
 #[serde(default)]
 pub struct AppearanceConfig {
     pub terminal_opacity: f32,
+    pub terminal_blur: bool,
     pub ui_opacity: f32,
     pub ui_font_family: String,
     pub ui_font_size: f32,
@@ -78,6 +82,7 @@ impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
             terminal_opacity: default_terminal_opacity(),
+            terminal_blur: default_terminal_blur(),
             ui_opacity: default_ui_opacity(),
             ui_font_family: default_ui_font_family(),
             ui_font_size: default_ui_font_size(),
@@ -129,6 +134,12 @@ fn default_cycle_input_mode() -> String {
 fn default_toggle_pane_scope() -> String {
     "cmd-'".into()
 }
+fn default_global_summon() -> String {
+    "alt-space".into()
+}
+fn default_global_summon_enabled() -> bool {
+    false
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -146,6 +157,8 @@ pub struct KeybindingConfig {
     pub cycle_input_mode: String,
     pub toggle_input_bar: String,
     pub toggle_pane_scope: String,
+    pub global_summon_enabled: bool,
+    pub global_summon: String,
 }
 
 impl Default for KeybindingConfig {
@@ -164,6 +177,8 @@ impl Default for KeybindingConfig {
             cycle_input_mode: default_cycle_input_mode(),
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
+            global_summon_enabled: default_global_summon_enabled(),
+            global_summon: default_global_summon(),
         }
     }
 }

@@ -325,6 +325,7 @@ impl GhosttyView {
                 self.set_visible(
                     self.native_view_visible.get() && !self.awaiting_first_layout_visibility,
                 );
+                self.sync_window_background_blur();
                 // Don't set last_bounds here — let update_frame() handle
                 // the coordinate flip and position the NSView correctly.
                 log::info!(
@@ -440,6 +441,24 @@ impl GhosttyView {
             }
         }
     }
+
+    #[cfg(target_os = "macos")]
+    pub fn sync_window_background_blur(&self) {
+        let Some(host_view) = self.host_view else {
+            return;
+        };
+
+        unsafe {
+            let nswindow: id = msg_send![host_view, window];
+            if nswindow.is_null() {
+                return;
+            }
+            ffi::ghostty_set_window_background_blur(self.app.raw(), nswindow as *mut c_void);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn sync_window_background_blur(&self) {}
 
     /// Convert GPUI window-global position to view-local logical coordinates.
     /// Ghostty expects logical pixels (it scales internally via content_scale).

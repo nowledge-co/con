@@ -484,6 +484,7 @@ unsafe extern "C" {
     pub fn ghostty_app_set_focus(app: ghostty_app_t, focused: bool);
     pub fn ghostty_app_update_config(app: ghostty_app_t, config: ghostty_config_t);
     pub fn ghostty_app_set_color_scheme(app: ghostty_app_t, scheme: ghostty_color_scheme_e);
+    pub fn ghostty_set_window_background_blur(app: ghostty_app_t, window: *mut c_void);
 
     // Surface config
     pub fn ghostty_surface_config_new() -> ghostty_surface_config_s;

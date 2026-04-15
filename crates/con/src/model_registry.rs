@@ -35,6 +35,15 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
             "gpt-4.1-nano",
         ],
         ProviderKind::ChatGPT => &[
+            "o4-mini",
+            "o3",
+            "o3-pro",
+            "o3-mini",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
             "gpt-5.4",
             "gpt-5.4-pro",
             "gpt-5.3-codex",
@@ -109,7 +118,7 @@ fn canonical_models_provider(provider: &ProviderKind) -> ProviderKind {
 fn models_dev_id_to_providers(id: &str) -> &'static [ProviderKind] {
     match id {
         "anthropic" => &[ProviderKind::Anthropic],
-        "openai" => &[ProviderKind::OpenAI],
+        "openai" => &[ProviderKind::OpenAI, ProviderKind::ChatGPT],
         "chatgpt" => &[ProviderKind::ChatGPT],
         "github-copilot" => &[ProviderKind::GitHubCopilot],
         "minimax" => &[ProviderKind::MiniMax, ProviderKind::MiniMaxAnthropic],
@@ -289,6 +298,10 @@ mod tests {
 
     #[test]
     fn models_dev_aliases_cover_live_provider_ids() {
+        assert_eq!(
+            models_dev_id_to_providers("openai"),
+            &[ProviderKind::OpenAI, ProviderKind::ChatGPT]
+        );
         assert_eq!(
             models_dev_id_to_providers("minimax"),
             &[ProviderKind::MiniMax, ProviderKind::MiniMaxAnthropic]

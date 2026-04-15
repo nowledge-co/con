@@ -141,6 +141,210 @@ fn truncate_utf8_for_log(text: &str, max_bytes: usize) -> String {
     format!("{}...", &text[..end])
 }
 
+const THINK_OPEN_TAG: &str = "<think>";
+const THINK_CLOSE_TAG: &str = "</think>";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThinkParseMode {
+    Normal,
+    InThink,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ThinkParseOutput {
+    visible: String,
+    reasoning: String,
+}
+
+#[derive(Debug, Default)]
+struct ThinkTagStreamParser {
+    pending: String,
+    mode: ThinkParseMode,
+}
+
+impl Default for ThinkParseMode {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
+impl ThinkTagStreamParser {
+    fn push(&mut self, chunk: &str) -> ThinkParseOutput {
+        self.pending.push_str(chunk);
+        self.drain(false)
+    }
+
+    fn finish(&mut self) -> ThinkParseOutput {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, flush_all: bool) -> ThinkParseOutput {
+        let mut out = ThinkParseOutput::default();
+
+        loop {
+            match self.mode {
+                ThinkParseMode::Normal => {
+                    if let Some(idx) = self.pending.find(THINK_OPEN_TAG) {
+                        out.visible.push_str(&self.pending[..idx]);
+                        self.pending.drain(..idx + THINK_OPEN_TAG.len());
+                        self.mode = ThinkParseMode::InThink;
+                        continue;
+                    }
+
+                    let keep = if flush_all {
+                        0
+                    } else {
+                        partial_suffix_len(&self.pending, THINK_OPEN_TAG)
+                    };
+                    let flush_len = self.pending.len().saturating_sub(keep);
+                    if flush_len > 0 {
+                        out.visible.push_str(&self.pending[..flush_len]);
+                        self.pending.drain(..flush_len);
+                    }
+                    break;
+                }
+                ThinkParseMode::InThink => {
+                    if let Some(idx) = self.pending.find(THINK_CLOSE_TAG) {
+                        out.reasoning.push_str(&self.pending[..idx]);
+                        self.pending.drain(..idx + THINK_CLOSE_TAG.len());
+                        self.mode = ThinkParseMode::Normal;
+                        continue;
+                    }
+
+                    let keep = if flush_all {
+                        0
+                    } else {
+                        partial_suffix_len(&self.pending, THINK_CLOSE_TAG)
+                    };
+                    let flush_len = self.pending.len().saturating_sub(keep);
+                    if flush_len > 0 {
+                        out.reasoning.push_str(&self.pending[..flush_len]);
+                        self.pending.drain(..flush_len);
+                    }
+                    break;
+                }
+            }
+        }
+
+        out
+    }
+}
+
+fn partial_suffix_len(text: &str, marker: &str) -> usize {
+    let max_len = text.len().min(marker.len().saturating_sub(1));
+    for len in (1..=max_len).rev() {
+        if text.ends_with(&marker[..len]) {
+            return len;
+        }
+    }
+    0
+}
+
+fn apply_stream_text_chunk(
+    parser: &mut ThinkTagStreamParser,
+    response_text: &mut String,
+    event_tx: &Sender<AgentEvent>,
+    chunk: &str,
+    allow_thinking_emit: bool,
+) -> bool {
+    let parsed = parser.push(chunk);
+    if !parsed.visible.is_empty() {
+        response_text.push_str(&parsed.visible);
+    }
+    if allow_thinking_emit && !parsed.reasoning.is_empty() {
+        let _ = event_tx.send(AgentEvent::ThinkingDelta(parsed.reasoning));
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_legacy_infers_anthropic_transport_preferences() {
+        let mut config = AgentConfig {
+            provider: ProviderKind::Anthropic,
+            ..AgentConfig::default()
+        };
+        config.providers.set(
+            &ProviderKind::MiniMaxAnthropic,
+            ProviderConfig {
+                model: Some("MiniMax-M2.7".into()),
+                api_key: None,
+                api_key_env: None,
+                base_url: Some("https://api.minimaxi.com/anthropic".into()),
+                max_tokens: None,
+            },
+        );
+        config.providers.set(
+            &ProviderKind::ZAIAnthropic,
+            ProviderConfig {
+                model: Some("glm-4.6".into()),
+                api_key: None,
+                api_key_env: None,
+                base_url: Some("https://api.z.ai/api/anthropic".into()),
+                max_tokens: None,
+            },
+        );
+
+        config.migrate_legacy();
+
+        assert_eq!(
+            config.provider_transport_for(&ProviderKind::MiniMax),
+            Some(ProviderTransport::Anthropic)
+        );
+        assert_eq!(
+            config.provider_transport_for(&ProviderKind::ZAI),
+            Some(ProviderTransport::Anthropic)
+        );
+    }
+
+    #[test]
+    fn think_parser_extracts_inline_reasoning() {
+        let mut parser = ThinkTagStreamParser::default();
+        let out = parser.push("before<think>reasoning</think>after");
+        let tail = parser.finish();
+
+        assert_eq!(out.visible, "beforeafter");
+        assert_eq!(out.reasoning, "reasoning");
+        assert_eq!(tail, ThinkParseOutput::default());
+    }
+
+    #[test]
+    fn think_parser_handles_split_tags_across_chunks() {
+        let mut parser = ThinkTagStreamParser::default();
+
+        let a = parser.push("brew<th");
+        let b = parser.push("ink>install");
+        let c = parser.push(" the tool</th");
+        let d = parser.push("ink> now");
+        let tail = parser.finish();
+
+        assert_eq!(a.visible, "brew");
+        assert_eq!(a.reasoning, "");
+        assert_eq!(b.visible, "");
+        assert_eq!(b.reasoning, "install");
+        assert_eq!(c.visible, "");
+        assert_eq!(c.reasoning, " the tool");
+        assert_eq!(d.visible, " now");
+        assert_eq!(d.reasoning, "");
+        assert_eq!(tail, ThinkParseOutput::default());
+    }
+
+    #[test]
+    fn think_parser_keeps_plain_text_unchanged() {
+        let mut parser = ThinkTagStreamParser::default();
+        let out = parser.push("plain output only");
+        let tail = parser.finish();
+
+        assert_eq!(out.visible, "plain output only");
+        assert_eq!(out.reasoning, "");
+        assert_eq!(tail, ThinkParseOutput::default());
+    }
+}
+
 impl ProviderKind {
     pub fn default_api_key_env(&self) -> &str {
         match self {
@@ -446,6 +650,21 @@ impl AgentPurpose {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderTransport {
+    OpenAI,
+    Anthropic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ProviderProtocolPreferences {
+    pub minimax: Option<ProviderTransport>,
+    pub moonshot: Option<ProviderTransport>,
+    pub zai: Option<ProviderTransport>,
+}
+
 /// Agent configuration from config.toml
 ///
 /// ```toml
@@ -477,6 +696,8 @@ pub struct AgentConfig {
     pub purpose: AgentPurpose,
     /// Per-provider settings (model, key, endpoint, max_tokens).
     pub providers: ProviderMap,
+    /// Remember provider-specific transport choice for providers that expose both OpenAI and Anthropic-compatible APIs.
+    pub provider_protocols: ProviderProtocolPreferences,
     /// Global: max agent turns per request.
     pub max_turns: usize,
     /// Global: sampling temperature (applied to all providers).
@@ -504,6 +725,7 @@ impl Default for AgentConfig {
             provider: ProviderKind::default(),
             purpose: AgentPurpose::default(),
             providers: ProviderMap::default(),
+            provider_protocols: ProviderProtocolPreferences::default(),
             max_turns: 30,
             temperature: None,
             auto_context: true,
@@ -530,6 +752,36 @@ impl Default for SuggestionModelConfig {
 }
 
 impl AgentConfig {
+    pub fn provider_transport_for(&self, provider: &ProviderKind) -> Option<ProviderTransport> {
+        match provider {
+            ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => self.provider_protocols.minimax,
+            ProviderKind::Moonshot | ProviderKind::MoonshotAnthropic => {
+                self.provider_protocols.moonshot
+            }
+            ProviderKind::ZAI | ProviderKind::ZAIAnthropic => self.provider_protocols.zai,
+            _ => None,
+        }
+    }
+
+    pub fn set_provider_transport(
+        &mut self,
+        provider: &ProviderKind,
+        transport: Option<ProviderTransport>,
+    ) {
+        match provider {
+            ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
+                self.provider_protocols.minimax = transport;
+            }
+            ProviderKind::Moonshot | ProviderKind::MoonshotAnthropic => {
+                self.provider_protocols.moonshot = transport;
+            }
+            ProviderKind::ZAI | ProviderKind::ZAIAnthropic => {
+                self.provider_protocols.zai = transport;
+            }
+            _ => {}
+        }
+    }
+
     /// Migrate legacy flat fields into the per-provider map.
     /// Called once after deserialization. Safe to call multiple times.
     pub fn migrate_legacy(&mut self) {
@@ -549,6 +801,49 @@ impl AgentConfig {
                     base_url: self.base_url.take(),
                     max_tokens: self.max_tokens.take(),
                 },
+            );
+        }
+
+        let infer_transport = |openai_kind: ProviderKind,
+                               anthropic_kind: ProviderKind,
+                               active_provider: &ProviderKind,
+                               providers: &ProviderMap|
+         -> Option<ProviderTransport> {
+            if active_provider == &anthropic_kind {
+                Some(ProviderTransport::Anthropic)
+            } else if active_provider == &openai_kind {
+                Some(ProviderTransport::OpenAI)
+            } else if providers.get(&anthropic_kind).is_some() && providers.get(&openai_kind).is_none() {
+                Some(ProviderTransport::Anthropic)
+            } else if providers.get(&openai_kind).is_some() && providers.get(&anthropic_kind).is_none() {
+                Some(ProviderTransport::OpenAI)
+            } else {
+                None
+            }
+        };
+
+        if self.provider_protocols.minimax.is_none() {
+            self.provider_protocols.minimax = infer_transport(
+                ProviderKind::MiniMax,
+                ProviderKind::MiniMaxAnthropic,
+                &self.provider,
+                &self.providers,
+            );
+        }
+        if self.provider_protocols.moonshot.is_none() {
+            self.provider_protocols.moonshot = infer_transport(
+                ProviderKind::Moonshot,
+                ProviderKind::MoonshotAnthropic,
+                &self.provider,
+                &self.providers,
+            );
+        }
+        if self.provider_protocols.zai.is_none() {
+            self.provider_protocols.zai = infer_transport(
+                ProviderKind::ZAI,
+                ProviderKind::ZAIAnthropic,
+                &self.provider,
+                &self.providers,
             );
         }
     }
@@ -609,6 +904,7 @@ impl AgentConfig {
             provider: suggestion_provider,
             purpose: self.purpose,
             providers,
+            provider_protocols: ProviderProtocolPreferences::default(),
             max_turns: 1,
             temperature: Some(0.0),
             auto_context: false,
@@ -1384,9 +1680,11 @@ async fn consume_stream<R: Send + 'static>(
     let stream_start = std::time::Instant::now();
     let mut tool_call_count = 0u32;
     let mut response_text = String::new();
+    let mut think_parser = ThinkTagStreamParser::default();
     // Track whether we received streaming reasoning deltas.
     // If so, the final Reasoning block is redundant (it contains the same text).
     let mut had_reasoning_deltas = false;
+    let mut had_embedded_think_reasoning = false;
 
     while let Some(item) = stream.next().await {
         if cancelled.load(Ordering::Relaxed) {
@@ -1396,13 +1694,25 @@ async fn consume_stream<R: Send + 'static>(
         match item {
             Ok(MultiTurnStreamItem::StreamAssistantItem(content)) => match content {
                 StreamedAssistantContent::Text(text) => {
-                    response_text.push_str(&text.text);
+                    had_embedded_think_reasoning |= apply_stream_text_chunk(
+                        &mut think_parser,
+                        &mut response_text,
+                        event_tx,
+                        &text.text,
+                        !had_reasoning_deltas,
+                    );
                 }
                 StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                    if had_embedded_think_reasoning {
+                        continue;
+                    }
                     had_reasoning_deltas = true;
                     let _ = event_tx.send(AgentEvent::ThinkingDelta(reasoning));
                 }
                 StreamedAssistantContent::Reasoning(reasoning) => {
+                    if had_embedded_think_reasoning {
+                        continue;
+                    }
                     // Only emit if we didn't get streaming deltas (avoids duplication).
                     // Some providers send only the full block without deltas.
                     if !had_reasoning_deltas {
@@ -1458,7 +1768,13 @@ async fn consume_stream<R: Send + 'static>(
                 // FinalResponse contains the last turn's text; response_text has
                 // all turns. Prefer response_text when available.
                 if response_text.is_empty() && !final_resp.response().is_empty() {
-                    response_text = final_resp.response().to_string();
+                    let _ = apply_stream_text_chunk(
+                        &mut think_parser,
+                        &mut response_text,
+                        event_tx,
+                        final_resp.response(),
+                        !had_reasoning_deltas,
+                    );
                 }
                 // FinalResponse is the terminal item — do NOT wait for None.
                 // Rig's async_stream generator may not yield None promptly after
@@ -1490,6 +1806,13 @@ async fn consume_stream<R: Send + 'static>(
                 return Err(anyhow::anyhow!("Streaming error: {e}"));
             }
         }
+    }
+    let tail = think_parser.finish();
+    if !tail.visible.is_empty() {
+        response_text.push_str(&tail.visible);
+    }
+    if !had_reasoning_deltas && !tail.reasoning.is_empty() {
+        let _ = event_tx.send(AgentEvent::ThinkingDelta(tail.reasoning));
     }
     log::info!(
         target: "con_agent::flow",

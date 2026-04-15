@@ -7,6 +7,8 @@ mod assets;
 mod chat_markdown;
 mod command_palette;
 #[cfg(target_os = "macos")]
+mod global_hotkey;
+#[cfg(target_os = "macos")]
 mod ghostty_view;
 mod input_bar;
 mod model_registry;
@@ -36,6 +38,7 @@ actions!(
         Quit,
         NewWindow,
         NewTab,
+        ToggleSummon,
         ToggleAgentPanel,
         ToggleInputBar,
         CloseTab,
@@ -112,6 +115,34 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
         }
     })
     .detach();
+}
+
+pub(crate) fn toggle_global_summon(cx: &mut App) {
+    let frontmost_window = cx.window_stack().and_then(|windows| windows.last().cloned());
+    let has_windows = frontmost_window.is_some();
+
+    #[cfg(target_os = "macos")]
+    let app_is_active = global_hotkey::is_app_active();
+    #[cfg(not(target_os = "macos"))]
+    let app_is_active = cx.active_window().is_some();
+
+    if !has_windows {
+        let config = con_core::Config::load().unwrap_or_default();
+        open_con_window(config, Session::default(), false, cx);
+        cx.activate(true);
+        return;
+    }
+
+    if app_is_active {
+        cx.hide();
+    } else {
+        cx.activate(true);
+        if let Some(window_handle) = frontmost_window {
+            let _ = cx.update_window(window_handle, |_, window, _| {
+                window.activate_window();
+            });
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -390,10 +421,15 @@ fn main() {
 
         // Register global keybindings from user config
         bind_app_keybindings(cx, &config.keybindings);
+        #[cfg(target_os = "macos")]
+        global_hotkey::init(cx, &config.keybindings);
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             let config = con_core::Config::load().unwrap_or_default();
             open_con_window(config, Session::default(), false, cx);
+        });
+        cx.on_action(|_: &ToggleSummon, cx: &mut App| {
+            toggle_global_summon(cx);
         });
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {

@@ -11,6 +11,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 **Interface**
 - A modeless `About con` window now shows the app icon, release version, build number, release channel, and repository URL.
 - Appearance settings now include a configurable UI font size, separate from terminal font size.
+- con now supports an optional system-wide summon/hide shortcut on macOS. It ships disabled by default so it does not conflict with launchers or existing global shortcuts.
 - `cmd-n` now opens a real new window instead of reusing the current workspace.
 - The bottom command bar now has a pane-scope picker that can target the focused pane, all panes, or an explicit subset of panes.
 - The command bar now supports global command-history suggestions, local path completion for local panes, and an AI suggestion fallback that can be enabled independently.
@@ -149,6 +150,11 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed agent hanging after receiving a final response from certain providers
 - Fixed empty agent responses appearing as stuck/hanging when providers don't emit text items during streaming
 - Fixed a Unicode logging crash where long tool-result previews could be truncated at an invalid UTF-8 byte boundary
+- Fixed inline `<think>...</think>` reasoning from some models so it now renders in the collapsible reasoning section instead of leaking raw tags into chat output.
+- Fixed ChatGPT Subscription model discovery so it now inherits the full OpenAI `models.dev` catalog instead of falling back to a much shorter local list.
+- Fixed MiniMax and Z.AI provider settings so Anthropic API mode, transport toggles, and matching endpoint presets survive Settings reopen instead of silently falling back.
+- Fixed configured-provider filtering in the agent panel so the session provider picker only shows providers you have actually set up.
+- Fixed conversation history title truncation for CJK text so opening history no longer panics on multibyte characters.
 - Fixed tmux native control helper quoting so tmux list/capture/exec commands no longer leak into the target shell as broken `quote>` input when a quoted tmux target is present
 - Fixed a visible-panel performance regression where assistant messages were reparsed as markdown on every render.
 - Fixed a second visible-panel performance regression where fenced code blocks rebuilt syntax-highlight runs on every render.
@@ -186,8 +192,11 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Smart input bar that auto-detects intent — shell commands go to the terminal, questions go to the agent, /skills invoke workflows
 - The single-tab state now uses a compact titlebar instead of a full tab strip, which recovers terminal space without hiding core window controls.
 - Agent panel (Cmd+L) with structured tool call cards, inline approval dialogs, code block rendering, and a resizable width you can drag to adjust
+- Fixed the agent-panel provider and model menus so long provider/model catalogs open in a bounded scrollable popup instead of getting stuck in an unscrollable header dropdown.
 - The agent panel now keeps live activity visible near the top while a run is in progress, shows a labeled Stop action in the header, and lets you expand long tool results instead of forcing every step into the same short preview.
 - Settings panel (Cmd+,) to configure your provider, model, and preferences
+- Appearance settings now expose terminal blur separately from terminal opacity, so Ghostty glass and blur can be tuned independently.
+- Fixed terminal blur on macOS so changing the blur setting now reapplies Ghostty's window blur to existing terminal windows, instead of only updating the stored config.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.
