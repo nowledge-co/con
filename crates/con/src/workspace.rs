@@ -49,7 +49,9 @@ use crate::agent_panel::{
     RerunFromMessage, SelectSessionModel, SelectSessionProvider,
     SetAutoApprove,
 };
-use crate::command_palette::{CommandPalette, PaletteSelect, ToggleCommandPalette};
+use crate::command_palette::{
+    CommandPalette, PaletteDismissed, PaletteSelect, ToggleCommandPalette,
+};
 use crate::input_bar::{
     EscapeInput, InputBar, InputEdited, InputMode, InputScopeChanged, PaneInfo,
     SkillAutocompleteChanged, SubmitInput, TogglePaneScopePicker as TogglePaneScopePickerRequested,
@@ -597,6 +599,8 @@ impl ConWorkspace {
         // Re-render workspace when settings panel visibility changes (e.g. X close button)
         cx.observe(&settings_panel, |_, _, cx| cx.notify()).detach();
         cx.subscribe_in(&command_palette, window, Self::on_palette_select)
+            .detach();
+        cx.subscribe_in(&command_palette, window, Self::on_palette_dismissed)
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_new_conversation)
             .detach();
@@ -2612,6 +2616,16 @@ impl ConWorkspace {
             _ => {}
         }
         cx.notify();
+    }
+
+    fn on_palette_dismissed(
+        &mut self,
+        _palette: &Entity<CommandPalette>,
+        _event: &PaletteDismissed,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.restore_terminal_focus_after_modal(window, cx);
     }
 
     fn on_settings_saved(
@@ -5352,6 +5366,19 @@ impl ConWorkspace {
     fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
         self.active_terminal().focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
+    }
+
+    fn restore_terminal_focus_after_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_active_tab() {
+            return;
+        }
+        self.focus_terminal(window, cx);
+        cx.on_next_frame(window, |workspace, window, cx| {
+            if workspace.has_active_tab() && !workspace.settings_panel.read(cx).is_visible() {
+                workspace.focus_terminal(window, cx);
+                cx.notify();
+            }
+        });
     }
 
     /// Cancel all pending agent operations across all tabs.
