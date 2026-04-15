@@ -55,6 +55,14 @@ Best-supported target today: **macOS**.
 
 ## Install
 
+**Homebrew**
+
+```sh
+brew install --cask nowledge-co/tap/con-beta
+```
+
+**Shell**
+
 ```sh
 curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 ```
