@@ -220,6 +220,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Polished Agent-mode command bar text alignment and foreground styling so it lines up with Smart and Shell modes.
 - Polished Settings and chrome controls: Skills rows now have clearer hierarchy and hover feedback, AI Routing rows are aligned with the card grid, Keyboard Shortcuts use separate keycaps per key, and titlebar controls now show shortcut-aware tooltips.
 - Refined the Settings keycap typography and pane-scope picker, removed the misleading "local" pane label, and added configurable Control-Tab / Control-Shift-Tab tab cycling with Cmd-Shift-[ / ] fallbacks.
+- Polished provider setup and pane scope controls for the beta. The provider list now shows provider icons with clear configured/unconfigured state, and the pane-scope picker uses matched frame geometry between the mode switcher and minimap.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

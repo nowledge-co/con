@@ -1,6 +1,6 @@
 use con_agent::{
     AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind,
-    SuggestionModelConfig, authorize_oauth_provider,
+    SuggestionModelConfig, authorize_oauth_provider, oauth_token_dir,
 };
 use con_agent::provider::{AgentPurpose, ProviderTransport};
 use con_core::{
@@ -344,6 +344,79 @@ impl SettingsPanel {
     fn protocol_switch_hint(provider: &ProviderKind) -> Option<&'static str> {
         Self::protocol_pair(provider)
             .map(|_| "OpenAI or Anthropic API compatible")
+    }
+
+    fn provider_icon_path(provider: &ProviderKind) -> &'static str {
+        match Self::sidebar_provider_kind(provider) {
+            ProviderKind::Anthropic => "providers/anthropic.svg",
+            ProviderKind::OpenAI => "providers/openai.svg",
+            ProviderKind::ChatGPT => "providers/openai.svg",
+            ProviderKind::GitHubCopilot => "providers/githubcopilot.svg",
+            ProviderKind::OpenAICompatible => "phosphor/plugs-connected.svg",
+            ProviderKind::MiniMax => "providers/minimax.svg",
+            ProviderKind::Moonshot => "providers/moonshot.svg",
+            ProviderKind::ZAI => "providers/zai.svg",
+            ProviderKind::DeepSeek => "providers/deepseek.svg",
+            ProviderKind::Groq => "providers/groq.svg",
+            ProviderKind::Gemini => "providers/gemini.svg",
+            ProviderKind::Ollama => "providers/ollama.svg",
+            ProviderKind::OpenRouter => "providers/openrouter.svg",
+            ProviderKind::Mistral => "providers/mistral.svg",
+            ProviderKind::Together => "providers/together.svg",
+            ProviderKind::Cohere => "providers/cohere.svg",
+            ProviderKind::Perplexity => "providers/perplexity.svg",
+            ProviderKind::XAI => "providers/xai.svg",
+            _ => "phosphor/plugs-connected.svg",
+        }
+    }
+
+    fn provider_config_is_meaningful(config: &ProviderConfig) -> bool {
+        config.model.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || config.api_key.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || config
+                .api_key_env
+                .as_ref()
+                .is_some_and(|v| !v.trim().is_empty())
+            || config.base_url.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || config.max_tokens.is_some()
+    }
+
+    fn provider_is_configured(&self, provider: &ProviderKind, cx: &App) -> bool {
+        let sidebar_provider = Self::sidebar_provider_kind(provider);
+        if oauth_token_dir(&sidebar_provider).is_some_and(|dir| dir.exists()) {
+            return true;
+        }
+        if self
+            .oauth_state(&sidebar_provider)
+            .is_some_and(|state| state.connected || state.in_progress)
+        {
+            return true;
+        }
+
+        let current_provider =
+            Self::sidebar_provider_kind(&self.selected_provider) == sidebar_provider;
+        if current_provider {
+            let current = self.read_provider_inputs(cx);
+            if Self::provider_config_is_meaningful(&current) {
+                return true;
+            }
+        }
+
+        let has_config = |kind: &ProviderKind| {
+            self.config
+                .agent
+                .providers
+                .get(kind)
+                .is_some_and(Self::provider_config_is_meaningful)
+        };
+
+        has_config(&sidebar_provider)
+            || match sidebar_provider {
+                ProviderKind::MiniMax => has_config(&ProviderKind::MiniMaxAnthropic),
+                ProviderKind::Moonshot => has_config(&ProviderKind::MoonshotAnthropic),
+                ProviderKind::ZAI => has_config(&ProviderKind::ZAIAnthropic),
+                _ => false,
+            }
     }
 
     fn sidebar_selection_target(
@@ -3075,18 +3148,39 @@ impl SettingsPanel {
         let active_sidebar_provider = Self::sidebar_provider_kind(&self.selected_provider);
         for provider in SIDEBAR_PROVIDERS.iter() {
             let is_selected = *provider == active_sidebar_provider;
+            let is_configured = self.provider_is_configured(provider, cx);
             let label = provider_label(provider);
+            let icon_path = Self::provider_icon_path(provider);
+            let icon_color = if is_selected {
+                theme.primary
+            } else if is_configured {
+                theme.foreground.opacity(0.76)
+            } else {
+                theme.muted_foreground.opacity(0.38)
+            };
+            let label_color = if is_selected {
+                theme.foreground
+            } else if is_configured {
+                theme.foreground.opacity(0.74)
+            } else {
+                theme.muted_foreground.opacity(0.52)
+            };
+            let status_color = if is_configured {
+                theme.success.opacity(if is_selected { 0.92 } else { 0.74 })
+            } else {
+                theme.muted_foreground.opacity(0.18)
+            };
             let provider_clone = provider.clone();
 
             provider_list = provider_list.child(
                 div()
                     .id(SharedString::from(format!("prov-{label}")))
-                    .h(px(32.0))
-                    .px(px(10.0))
+                    .h(px(34.0))
+                    .px(px(8.0))
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .rounded(px(7.0))
+                    .gap(px(7.0))
+                    .rounded(px(8.0))
                     .cursor_pointer()
                     .bg(if is_selected {
                         theme.primary.opacity(0.08)
@@ -3109,7 +3203,7 @@ impl SettingsPanel {
                     .child(
                         div()
                             .w(px(2.0))
-                            .h(px(14.0))
+                            .h(px(16.0))
                             .rounded(px(1.0))
                             .bg(if is_selected {
                                 theme.primary
@@ -3119,20 +3213,38 @@ impl SettingsPanel {
                     )
                     .child(
                         div()
+                            .size(px(22.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.0))
+                            .bg(if is_selected {
+                                theme.primary.opacity(0.11)
+                            } else if is_configured {
+                                theme.muted.opacity(0.08)
+                            } else {
+                                theme.transparent
+                            })
+                            .child(svg().path(icon_path).size(px(13.0)).text_color(icon_color)),
+                    )
+                    .child(
+                        div()
                             .flex_1()
+                            .min_w_0()
                             .text_size(px(12.0))
+                            .line_height(px(14.0))
                             .font_weight(if is_selected {
                                 FontWeight::MEDIUM
                             } else {
                                 FontWeight::NORMAL
                             })
-                            .text_color(if is_selected {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            })
+                            .text_color(label_color)
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .child(label),
-                    ),
+                    )
+                    .child(div().size(px(6.0)).rounded_full().bg(status_color)),
             );
         }
 

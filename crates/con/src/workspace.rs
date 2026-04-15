@@ -6502,6 +6502,8 @@ impl Render for ConWorkspace {
                 } else {
                     theme.muted.opacity(0.065)
                 };
+                let scope_frame_inset = px(4.0);
+                let scope_frame_radius = px(10.0);
 
                 let presets = div()
                     .flex()
@@ -6606,8 +6608,8 @@ impl Render for ConWorkspace {
                         div()
                             .w_full()
                             .h(px(32.0))
-                            .px(px(3.0))
-                            .rounded(px(10.0))
+                            .p(scope_frame_inset)
+                            .rounded(scope_frame_radius)
                             .bg(segmented_surface)
                             .flex()
                             .items_center()
@@ -6636,8 +6638,8 @@ impl Render for ConWorkspace {
                 let preview = div()
                     .h(px(224.0))
                     .w_full()
-                    .rounded(px(10.0))
-                    .p(px(10.0))
+                    .rounded(scope_frame_radius)
+                    .p(scope_frame_inset)
                     .bg(preview_surface)
                     .child(preview_content);
 
