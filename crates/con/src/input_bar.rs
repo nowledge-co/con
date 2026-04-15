@@ -1318,7 +1318,7 @@ impl Render for InputBar {
             _ => rems(1.25),
         };
         let input_vertical_offset = match self.mode {
-            InputMode::Agent => px(-3.0),
+            InputMode::Agent => px(-4.0),
             _ => px(0.0),
         };
         let show_inline_suggestion = self.mode != InputMode::Agent

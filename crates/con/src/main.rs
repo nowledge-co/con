@@ -120,6 +120,34 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
     .detach();
 }
 
+fn fresh_window_session_with_history() -> Session {
+    let persisted = Session::load().unwrap_or_default();
+    let mut session = Session::default();
+
+    session.global_shell_history = persisted.global_shell_history;
+    session.input_history = if persisted.input_history.is_empty() {
+        session
+            .global_shell_history
+            .iter()
+            .filter_map(|entry| {
+                let command = entry.command.trim();
+                (!command.is_empty()).then(|| command.to_string())
+            })
+            .collect()
+    } else {
+        persisted
+            .input_history
+            .into_iter()
+            .filter_map(|entry| {
+                let command = entry.trim();
+                (!command.is_empty()).then(|| command.to_string())
+            })
+            .collect()
+    };
+
+    session
+}
+
 pub(crate) fn toggle_global_summon(cx: &mut App) {
     let frontmost_window = cx.window_stack().and_then(|windows| windows.last().cloned());
     let has_windows = frontmost_window.is_some();
@@ -131,7 +159,7 @@ pub(crate) fn toggle_global_summon(cx: &mut App) {
 
     if !has_windows {
         let config = con_core::Config::load().unwrap_or_default();
-        open_con_window(config, Session::default(), false, cx);
+        open_con_window(config, fresh_window_session_with_history(), false, cx);
         cx.activate(true);
         return;
     }
@@ -414,7 +442,7 @@ fn main() {
         }
 
         let config = con_core::Config::load().unwrap_or_default();
-        open_con_window(config, Session::default(), false, cx);
+        open_con_window(config, fresh_window_session_with_history(), false, cx);
         cx.activate(true);
     });
     app.run(move |cx: &mut App| {
@@ -449,7 +477,7 @@ fn main() {
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             let config = con_core::Config::load().unwrap_or_default();
-            open_con_window(config, Session::default(), false, cx);
+            open_con_window(config, fresh_window_session_with_history(), false, cx);
         });
         cx.on_action(|_: &ToggleSummon, cx: &mut App| {
             toggle_global_summon(cx);
@@ -457,7 +485,7 @@ fn main() {
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
                 let config = con_core::Config::load().unwrap_or_default();
-                open_con_window(config, Session::default(), false, cx);
+                open_con_window(config, fresh_window_session_with_history(), false, cx);
             }
         });
 
