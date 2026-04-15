@@ -45,7 +45,22 @@ jobs:
         run: |
           set -euo pipefail
           brew update
-          brew install zig cmake
+          brew install cmake
+
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION="0.15.2"
+          case "${{ matrix.arch }}" in
+            arm64)  ZIG_ARCH="aarch64" ;;
+            x86_64) ZIG_ARCH="x86_64" ;;
+          esac
+          ZIG_TARBALL="zig-${ZIG_ARCH}-macos-${ZIG_VERSION}.tar.xz"
+          curl -sSfL "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_TARBALL}" -o "/tmp/${ZIG_TARBALL}"
+          tar -xf "/tmp/${ZIG_TARBALL}" -C /usr/local
+          ln -sf "/usr/local/zig-${ZIG_ARCH}-macos-${ZIG_VERSION}/zig" /usr/local/bin/zig
+          zig version
 
       - name: Configure Rust toolchain
         shell: bash
