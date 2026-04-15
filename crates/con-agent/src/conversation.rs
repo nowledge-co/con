@@ -274,13 +274,7 @@ impl Conversation {
                     .messages
                     .iter()
                     .find(|m| m.role == MessageRole::User)
-                    .map(|m| {
-                        if m.content.len() > 60 {
-                            format!("{}...", &m.content[..57])
-                        } else {
-                            m.content.clone()
-                        }
-                    })
+                    .map(|m| truncate_summary_title(&m.content, 60))
                     .unwrap_or_else(|| "Empty conversation".to_string());
                 let model = conv
                     .messages
@@ -317,6 +311,15 @@ impl Conversation {
     }
 }
 
+fn truncate_summary_title(content: &str, max_chars: usize) -> String {
+    if content.chars().count() <= max_chars {
+        return content.to_string();
+    }
+
+    let truncated: String = content.chars().take(max_chars.saturating_sub(3)).collect();
+    format!("{truncated}...")
+}
+
 impl Default for Conversation {
     fn default() -> Self {
         Self::new()
@@ -326,6 +329,15 @@ impl Default for Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncates_history_titles_on_char_boundaries() {
+        let title = "请 ssh 到 sandy 和 cinnamon 检查一下内存、硬盘情况最后给我出一个表格";
+        let truncated = truncate_summary_title(title, 20);
+
+        assert!(truncated.ends_with("..."));
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
 
     #[test]
     fn message_serialization_round_trips_thinking_and_steps() {
