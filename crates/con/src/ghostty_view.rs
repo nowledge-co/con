@@ -12,6 +12,7 @@
 //! ghostty key bindings all work correctly.
 
 use std::cell::Cell;
+use std::ops::Range;
 #[cfg(target_os = "macos")]
 use std::os::raw::c_void;
 use std::sync::Arc;
@@ -81,6 +82,7 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     /// Retry surface creation after transient libghostty initialization failures.
     next_surface_init_retry_at: Option<Instant>,
+    ime_marked_text: Option<String>,
 }
 
 /// Register ghostty key bindings. Call once at startup.
@@ -167,6 +169,7 @@ impl GhosttyView {
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
             next_surface_init_retry_at: None,
+            ime_marked_text: None,
         }
     }
 
@@ -239,6 +242,7 @@ impl GhosttyView {
         self.last_title = None;
         self.pending_write = None;
         self.next_surface_init_retry_at = None;
+        self.ime_marked_text = None;
     }
 
     #[cfg(target_os = "macos")]
@@ -585,6 +589,117 @@ impl GhosttyView {
     }
 }
 
+struct GhosttyInputHandler {
+    view: WeakEntity<GhosttyView>,
+    ime_bounds: Option<Bounds<Pixels>>,
+}
+
+impl InputHandler for GhosttyInputHandler {
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: 0..0,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(&mut self, _window: &mut Window, cx: &mut App) -> Option<Range<usize>> {
+        self.view
+            .read_with(cx, |view, _| {
+                view.ime_marked_text
+                    .as_ref()
+                    .map(|text| 0..text.encode_utf16().count())
+            })
+            .ok()
+            .flatten()
+    }
+
+    fn text_for_range(
+        &mut self,
+        _range_utf16: Range<usize>,
+        adjusted_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Option<String> {
+        *adjusted_range = Some(0..0);
+        Some(String::new())
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _replacement_range: Option<Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let _ = self.view.update(cx, |view, _| {
+            view.ime_marked_text = None;
+            if let Some(terminal) = &view.terminal {
+                terminal.send_text(text);
+                terminal.refresh();
+            }
+        });
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        _new_selected_range: Option<Range<usize>>,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        let _ = self.view.update(cx, |view, _| {
+            view.ime_marked_text = if new_text.is_empty() {
+                None
+            } else {
+                Some(new_text.to_string())
+            };
+            if let Some(terminal) = &view.terminal {
+                terminal.refresh();
+            }
+        });
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut App) {
+        let _ = self.view.update(cx, |view, _| {
+            view.ime_marked_text = None;
+            if let Some(terminal) = &view.terminal {
+                terminal.refresh();
+            }
+        });
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _range_utf16: Range<usize>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Option<Bounds<Pixels>> {
+        self.ime_bounds
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Option<usize> {
+        Some(0)
+    }
+
+    fn prefers_ime_for_printable_keys(&mut self, _window: &mut Window, _cx: &mut App) -> bool {
+        true
+    }
+}
+
 // ── GPUI → ghostty modifier mapping ─────────────────────────
 
 fn gpui_mods_to_ghostty(mods: &Modifiers) -> i32 {
@@ -714,6 +829,7 @@ impl Focusable for GhosttyView {
 impl Render for GhosttyView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.focus_handle.clone();
+        let input_focus = focus.clone();
         let entity = cx.entity().downgrade();
 
         div()
@@ -839,7 +955,24 @@ impl Render for GhosttyView {
                             });
                         }
                     },
-                    |_bounds, _state, _window, _cx| {},
+                    {
+                        let focus = input_focus.clone();
+                        let entity = entity.clone();
+                        move |bounds, _state, window, cx| {
+                            let candidate_anchor = Bounds::new(
+                                point(bounds.origin.x, bounds.origin.y + bounds.size.height),
+                                size(px(1.0), px(1.0)),
+                            );
+                            window.handle_input(
+                                &focus,
+                                GhosttyInputHandler {
+                                    view: entity.clone(),
+                                    ime_bounds: Some(candidate_anchor),
+                                },
+                                cx,
+                            );
+                        }
+                    },
                 )
                 .size_full(),
             )
