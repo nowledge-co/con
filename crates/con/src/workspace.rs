@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
@@ -110,7 +110,6 @@ pub struct ConWorkspace {
     harness: AgentHarness,
     shell_suggestion_engine: SuggestionEngine,
     global_shell_history: VecDeque<CommandSuggestionEntry>,
-    layout_matte_until: Option<Instant>,
     pane_scope_picker_open: bool,
     agent_panel_open: bool,
     agent_panel_motion: MotionValue,
@@ -644,7 +643,6 @@ impl ConWorkspace {
             harness,
             shell_suggestion_engine,
             global_shell_history,
-            layout_matte_until: None,
             pane_scope_picker_open: false,
             agent_panel_open,
             agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
@@ -688,15 +686,6 @@ impl ConWorkspace {
             if self.tabs.len() > 1 { 1.0 } else { 0.0 },
             std::time::Duration::from_millis(180),
         );
-    }
-
-    fn prime_layout_matte(&mut self, duration: Duration) {
-        self.layout_matte_until = Some(Instant::now() + duration);
-    }
-
-    fn layout_matte_active(&self) -> bool {
-        self.layout_matte_until
-            .is_some_and(|deadline| Instant::now() < deadline)
     }
 
     fn current_top_bar_height(&self) -> f32 {
@@ -5021,7 +5010,6 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.prime_layout_matte(Duration::from_millis(220));
         // Find which tab contains the dead pane (may not be the active tab).
         let entity_id = entity.entity_id();
         let tab_idx = self
@@ -5327,10 +5315,6 @@ impl Render for ConWorkspace {
         let tab_strip_progress = self.tab_strip_motion.value(window);
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
-        let layout_matte_active = self.layout_matte_active();
-        if layout_matte_active {
-            window.request_animation_frame();
-        }
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
@@ -5361,11 +5345,7 @@ impl Render for ConWorkspace {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .bg(if layout_matte_active {
-                theme.background.opacity(0.96)
-            } else {
-                theme.transparent
-            })
+            .bg(theme.transparent)
             .child(pane_tree_rendered);
 
         let mut main_area = div().flex().flex_1().min_h_0().child(terminal_area);
