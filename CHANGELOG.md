@@ -218,6 +218,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed fresh windows and Dock/global-hotkey reopen so they start with persisted command history instead of an empty command bar history.
 - Moved app-wide command history into its own persistence file and hydrated input components during workspace construction, so a fresh app launch does not depend on the first render or a healthy layout session to restore history.
 - Polished Agent-mode command bar text alignment and foreground styling so it lines up with Smart and Shell modes.
+- Polished Settings and chrome controls: Skills rows now have clearer hierarchy and hover feedback, AI Routing rows are aligned with the card grid, Keyboard Shortcuts use separate keycaps per key, and titlebar controls now show shortcut-aware tooltips.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

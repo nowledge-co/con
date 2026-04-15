@@ -11,6 +11,7 @@ mod global_hotkey;
 #[cfg(target_os = "macos")]
 mod ghostty_view;
 mod input_bar;
+mod keycaps;
 mod model_registry;
 mod motion;
 mod pane_tree;

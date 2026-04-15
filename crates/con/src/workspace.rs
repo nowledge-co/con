@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme, kbd::Kbd,
+    ActiveTheme, kbd::Kbd, tooltip::Tooltip,
 };
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -19,6 +19,31 @@ const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
+
+fn chrome_tooltip(label: &str, stroke: Option<Keystroke>, window: &mut Window, cx: &mut App) -> AnyView {
+    let label = label.to_string();
+    Tooltip::element(move |_, cx| {
+        let theme = cx.theme();
+        let mut content = div()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .line_height(px(16.0))
+                    .text_color(theme.popover_foreground)
+                    .child(label.clone()),
+            );
+
+        if let Some(stroke) = stroke.as_ref() {
+            content = content.child(crate::keycaps::keycaps_for_stroke(stroke, theme));
+        }
+
+        content
+    })
+    .build(window, cx)
+}
 
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
@@ -5929,6 +5954,14 @@ impl Render for ConWorkspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                .tooltip(|window, cx| {
+                    chrome_tooltip(
+                        "New tab",
+                        crate::keycaps::first_action_keystroke(&NewTab, window),
+                        window,
+                        cx,
+                    )
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
@@ -5942,6 +5975,11 @@ impl Render for ConWorkspace {
         );
 
         // Input bar toggle
+        let input_bar_tooltip = if self.input_bar_visible {
+            "Hide input bar"
+        } else {
+            "Show input bar"
+        };
         tab_controls = tab_controls.child(
             div()
                 .id("toggle-input-bar")
@@ -5952,6 +5990,14 @@ impl Render for ConWorkspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                .tooltip(move |window, cx| {
+                    chrome_tooltip(
+                        input_bar_tooltip,
+                        crate::keycaps::first_action_keystroke(&crate::ToggleInputBar, window),
+                        window,
+                        cx,
+                    )
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_input_bar(&crate::ToggleInputBar, window, cx);
                 }))
@@ -5968,6 +6014,11 @@ impl Render for ConWorkspace {
         );
 
         // Agent panel toggle
+        let agent_panel_tooltip = if self.agent_panel_open {
+            "Hide agent panel"
+        } else {
+            "Show agent panel"
+        };
         tab_controls = tab_controls.child(
             div()
                 .id("toggle-agent-panel")
@@ -5978,6 +6029,14 @@ impl Render for ConWorkspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                .tooltip(move |window, cx| {
+                    chrome_tooltip(
+                        agent_panel_tooltip,
+                        crate::keycaps::first_action_keystroke(&ToggleAgentPanel, window),
+                        window,
+                        cx,
+                    )
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
                 }))
