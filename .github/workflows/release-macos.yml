@@ -303,3 +303,119 @@ jobs:
           # Pull-rebase to handle concurrent pushes gracefully
           git pull --rebase origin gh-pages 2>/dev/null || true
           git push origin gh-pages
+
+  update-homebrew:
+    name: Update Homebrew cask
+    runs-on: macos-15
+    needs: publish
+
+    steps:
+      - name: Derive release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          channel="stable"
+          if [[ "$version" == *"-beta."* ]]; then
+            channel="beta"
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "channel=$channel" >>"$GITHUB_OUTPUT"
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: release-artifacts
+
+      - name: Update cask formula
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.meta.outputs.version }}"
+          channel="${{ steps.meta.outputs.channel }}"
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN not set — skipping cask update"
+            exit 0
+          fi
+
+          # Determine cask name
+          if [[ "$channel" == "beta" ]]; then
+            cask="con-beta"
+            app_name="con Beta"
+          else
+            cask="con"
+            app_name="con"
+          fi
+
+          # Compute SHA256 for each arch DMG
+          arm64_dmg=$(find release-artifacts -name "*-macos-arm64.dmg" -type f | head -1)
+          x86_64_dmg=$(find release-artifacts -name "*-macos-x86_64.dmg" -type f | head -1)
+
+          arm64_sha=""
+          x86_64_sha=""
+          [[ -n "$arm64_dmg" ]] && arm64_sha=$(shasum -a 256 "$arm64_dmg" | cut -d' ' -f1)
+          [[ -n "$x86_64_dmg" ]] && x86_64_sha=$(shasum -a 256 "$x86_64_dmg" | cut -d' ' -f1)
+
+          if [[ -z "$arm64_sha" && -z "$x86_64_sha" ]]; then
+            echo "::warning::No DMGs found — skipping cask update"
+            exit 0
+          fi
+
+          # Clone tap and update cask
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/nowledge-co/homebrew-tap.git" tap
+          cd tap
+
+          cat > "Casks/${cask}.rb" << RUBY
+          cask "${cask}" do
+            version "${version}"
+
+            on_arm do
+              sha256 "${arm64_sha}"
+              url "https://github.com/nowledge-co/con/releases/download/v#{version}/${app_name// /-}-#{version}-macos-arm64.dmg"
+            end
+
+            on_intel do
+              sha256 "${x86_64_sha}"
+              url "https://github.com/nowledge-co/con/releases/download/v#{version}/${app_name// /-}-#{version}-macos-x86_64.dmg"
+            end
+
+            name "${app_name}"
+            desc "GPU-accelerated terminal emulator with built-in AI agent"
+            homepage "https://github.com/nowledge-co/con"
+
+            livecheck do
+              url "https://github.com/nowledge-co/con/releases?q=prerelease%3Atrue"
+              regex(/v?(\d+(?:\.\d+)*-beta\.\d+)/i)
+              strategy :page_match
+            end
+
+            auto_updates true
+            depends_on macos: ">= :catalina"
+
+            app "${app_name}.app"
+
+            zap trash: [
+              "~/.config/con",
+              "~/Library/Caches/co.nowledge.con${channel == "beta" ? ".beta" : ""}",
+              "~/Library/Preferences/co.nowledge.con${channel == "beta" ? ".beta" : ""}.plist",
+            ]
+          end
+          RUBY
+
+          # Remove leading whitespace from heredoc
+          sed -i '' 's/^          //' "Casks/${cask}.rb"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "Casks/${cask}.rb"
+          if git diff --cached --quiet; then
+            echo "No cask changes"
+            exit 0
+          fi
+          git commit -m "Update ${cask} to ${version}"
+          git push origin main
