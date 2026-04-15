@@ -198,6 +198,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Appearance settings now expose terminal blur separately from terminal opacity, so Ghostty glass and blur can be tuned independently.
 - Fixed terminal blur on macOS so changing the blur setting now reapplies Ghostty's window blur to existing terminal windows, instead of only updating the stored config.
 - Fixed shifted punctuation in embedded terminal key handling, so `:` and related keys work correctly in Vim and other TUI apps.
+- Fixed Chinese and other IME text input in embedded terminal panes by routing committed composition text through GPUI's native text-input handler.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.
