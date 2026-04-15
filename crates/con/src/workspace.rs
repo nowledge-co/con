@@ -15,6 +15,7 @@ const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
+const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 
@@ -3686,7 +3687,6 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.prime_layout_matte(Duration::from_millis(220));
         self.agent_panel_open = !self.agent_panel_open;
         self.agent_panel_motion.set_target(
             if self.agent_panel_open { 1.0 } else { 0.0 },
@@ -3716,7 +3716,6 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.prime_layout_matte(Duration::from_millis(220));
         self.input_bar_visible = !self.input_bar_visible;
         if !self.input_bar_visible {
             self.pane_scope_picker_open = false;
@@ -4153,7 +4152,6 @@ impl ConWorkspace {
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
-        self.prime_layout_matte(Duration::from_millis(220));
         let terminal = self.create_terminal(None, window, cx);
         let tab_number = self.tabs.len() + 1;
         let old_active = self.active_tab;
@@ -4212,7 +4210,6 @@ impl ConWorkspace {
     }
 
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
-        self.prime_layout_matte(Duration::from_millis(220));
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
         let tab = &mut self.tabs[self.active_tab];
@@ -4254,14 +4251,16 @@ impl ConWorkspace {
             self.close_window_from_last_tab(window, cx);
             return;
         }
+        let closing_terminals: Vec<TerminalPane> = self.tabs[index]
+            .pane_tree
+            .all_terminals()
+            .into_iter()
+            .cloned()
+            .collect();
         // Save the closing tab's conversation
         {
             let conv = self.tabs[index].session.conversation();
             let _ = conv.lock().save();
-        }
-        // Hide closing tab's ghostty NSViews
-        for t in self.tabs[index].pane_tree.all_terminals() {
-            t.shutdown_surface(cx);
         }
         let was_active = index == self.active_tab;
         self.reindex_pending_control_agent_requests_after_tab_close(index);
@@ -4287,6 +4286,11 @@ impl ConWorkspace {
             t.set_native_view_visible(true, cx);
             t.ensure_surface(window, cx);
         }
+        cx.on_next_frame(window, move |_workspace, _window, cx| {
+            for terminal in &closing_terminals {
+                terminal.shutdown_surface(cx);
+            }
+        });
         let focused = self.tabs[self.active_tab].pane_tree.focused_terminal();
         focused.set_focus_state(true, cx);
         focused.focus(window, cx);
@@ -4912,7 +4916,6 @@ impl ConWorkspace {
         if index >= self.tabs.len() || index == self.active_tab {
             return;
         }
-        self.prime_layout_matte(Duration::from_millis(220));
         let old_active = self.active_tab;
 
         // Take the incoming tab's panel state
@@ -5322,6 +5325,8 @@ impl Render for ConWorkspace {
         let agent_panel_progress = self.agent_panel_motion.value(window);
         let input_bar_progress = self.input_bar_motion.value(window);
         let tab_strip_progress = self.tab_strip_motion.value(window);
+        let agent_panel_transitioning = self.agent_panel_motion.is_animating();
+        let input_bar_transitioning = self.input_bar_motion.is_animating();
         let layout_matte_active = self.layout_matte_active();
         if layout_matte_active {
             window.request_animation_frame();
@@ -5336,6 +5341,7 @@ impl Render for ConWorkspace {
             .clamp(0.0, 1.0)
             .powf(0.92);
         let compact_titlebar_progress = 1.0 - tab_strip_progress;
+        let animated_panel_width = self.agent_panel_width * agent_panel_progress;
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -5365,7 +5371,6 @@ impl Render for ConWorkspace {
         let mut main_area = div().flex().flex_1().min_h_0().child(terminal_area);
 
         if agent_panel_progress > 0.01 {
-            let animated_panel_width = self.agent_panel_width * agent_panel_progress;
             main_area = main_area.child(
                 div()
                     .w(px(animated_panel_width + 1.0))
@@ -5845,6 +5850,30 @@ impl Render for ConWorkspace {
             }))
             .child(top_bar)
             .child(main_area);
+
+        if agent_panel_transitioning && agent_panel_progress > 0.01 {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(top_bar_height))
+                    .bottom(px(43.0 * input_bar_progress))
+                    .right(px(animated_panel_width))
+                    .w(px(CHROME_TRANSITION_SEAM_COVER))
+                    .bg(theme.background.opacity(elevated_ui_surface_opacity)),
+            );
+        }
+
+        if input_bar_transitioning && input_bar_progress > 0.01 {
+            root = root.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(43.0 * input_bar_progress))
+                    .h(px(CHROME_TRANSITION_SEAM_COVER))
+                    .bg(theme.title_bar.opacity(ui_surface_opacity)),
+            );
+        }
 
         if input_bar_progress > 0.01 {
             root = root.child(
