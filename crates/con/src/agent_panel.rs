@@ -11,7 +11,10 @@ use gpui_component::{ActiveTheme, Icon, IndexPath, Sizable as _};
 
 /// Max lines to show for tool result previews in collapsed steps
 const TOOL_RESULT_PREVIEW_LINES: usize = 6;
-use con_agent::{ConversationSummary, ProviderKind, ToolApprovalDecision, conversation::AgentStep};
+use con_agent::{
+    AgentConfig, ConversationSummary, ProviderKind, ToolApprovalDecision, conversation::AgentStep,
+    oauth_token_dir,
+};
 use con_core::harness::HarnessEvent;
 
 use chrono::Utc;
@@ -645,7 +648,7 @@ impl AgentPanel {
         }
     }
 
-    fn provider_options() -> SearchableVec<ProviderSelectItem> {
+    fn default_provider_options() -> SearchableVec<ProviderSelectItem> {
         SearchableVec::new(
             vec![
                 ProviderKind::Anthropic,
@@ -669,14 +672,67 @@ impl AgentPanel {
         )
     }
 
+    fn provider_is_configured(config: &AgentConfig, provider: &ProviderKind) -> bool {
+        let sidebar_provider = Self::session_sidebar_provider_kind(provider);
+        if oauth_token_dir(&sidebar_provider).is_some_and(|dir| dir.exists()) {
+            return true;
+        }
+
+        let has_meaningful_config = |kind: &ProviderKind| {
+            config.providers.get(kind).is_some_and(|provider| {
+                provider.model.as_ref().is_some_and(|v| !v.trim().is_empty())
+                    || provider.api_key.as_ref().is_some_and(|v| !v.trim().is_empty())
+                    || provider
+                        .api_key_env
+                        .as_ref()
+                        .is_some_and(|v| !v.trim().is_empty())
+                    || provider.base_url.as_ref().is_some_and(|v| !v.trim().is_empty())
+                    || provider.max_tokens.is_some()
+            })
+        };
+
+        has_meaningful_config(&sidebar_provider)
+            || match sidebar_provider {
+                ProviderKind::MiniMax => has_meaningful_config(&ProviderKind::MiniMaxAnthropic),
+                ProviderKind::Moonshot => has_meaningful_config(&ProviderKind::MoonshotAnthropic),
+                ProviderKind::ZAI => has_meaningful_config(&ProviderKind::ZAIAnthropic),
+                _ => false,
+            }
+    }
+
+    pub fn configured_session_providers(config: &AgentConfig) -> Vec<ProviderKind> {
+        let mut providers = vec![Self::session_sidebar_provider_kind(&config.provider)];
+        for provider in [
+            ProviderKind::Anthropic,
+            ProviderKind::OpenAI,
+            ProviderKind::ChatGPT,
+            ProviderKind::GitHubCopilot,
+            ProviderKind::OpenAICompatible,
+            ProviderKind::MiniMax,
+            ProviderKind::Moonshot,
+            ProviderKind::ZAI,
+            ProviderKind::DeepSeek,
+            ProviderKind::Groq,
+            ProviderKind::Gemini,
+            ProviderKind::Ollama,
+            ProviderKind::OpenRouter,
+            ProviderKind::Mistral,
+        ] {
+            if Self::provider_is_configured(config, &provider) && !providers.contains(&provider) {
+                providers.push(provider);
+            }
+        }
+        providers
+    }
+
     fn build_provider_select(
         current: Option<ProviderKind>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SelectState<SearchableVec<ProviderSelectItem>>> {
         cx.new(|cx| {
-            let mut state =
-                SelectState::new(Self::provider_options(), None, window, cx).searchable(true);
+            let mut state = SelectState::new(Self::default_provider_options(), None, window, cx)
+                .searchable(true);
             if let Some(current) = current {
                 state.set_selected_value(&current, window, cx);
             }
@@ -771,6 +827,27 @@ impl AgentPanel {
         self.session_provider_select.update(cx, |select, cx| {
             if let Some(current_provider) = self.current_provider.clone() {
                 select.set_selected_value(&current_provider, window, cx);
+            }
+        });
+    }
+
+    pub fn set_session_provider_options(
+        &mut self,
+        providers: Vec<ProviderKind>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let items = SearchableVec::new(
+            providers
+                .into_iter()
+                .map(Self::provider_option)
+                .collect::<Vec<_>>(),
+        );
+        let current = self.current_provider.clone();
+        self.session_provider_select.update(cx, |select, cx| {
+            select.set_items(items, window, cx);
+            if let Some(current) = current.as_ref() {
+                select.set_selected_value(current, window, cx);
             }
         });
     }

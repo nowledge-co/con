@@ -2161,6 +2161,11 @@ impl ConWorkspace {
         self.harness.update_config(config.clone());
 
         self.agent_panel.update(cx, |panel, cx| {
+            panel.set_session_provider_options(
+                AgentPanel::configured_session_providers(&config),
+                window,
+                cx,
+            );
             panel.set_model_name(event.model.clone());
             panel.set_session_model_options(self.model_registry.models_for(&provider), window, cx);
         });
@@ -2190,6 +2195,11 @@ impl ConWorkspace {
         let available_models = self.model_registry.models_for(&provider);
 
         self.agent_panel.update(cx, |panel, cx| {
+            panel.set_session_provider_options(
+                AgentPanel::configured_session_providers(&config),
+                window,
+                cx,
+            );
             panel.set_provider_name(provider.clone(), window, cx);
             panel.set_model_name(model_name);
             panel.set_session_model_options(available_models, window, cx);
@@ -2363,8 +2373,13 @@ impl ConWorkspace {
         self.shell_suggestion_engine.clear_cache();
 
         // Sync auto-approve to agent panel UI
-        self.agent_panel.update(cx, |panel, _cx| {
+        self.agent_panel.update(cx, |panel, cx| {
             panel.set_auto_approve(auto_approve);
+            panel.set_session_provider_options(
+                AgentPanel::configured_session_providers(self.harness.config()),
+                window,
+                cx,
+            );
         });
 
         // Apply updated skills paths (forces rescan on next cwd check)
@@ -5278,6 +5293,11 @@ impl Render for ConWorkspace {
             })
             .collect();
         self.agent_panel.update(cx, |panel, cx| {
+            panel.set_session_provider_options(
+                AgentPanel::configured_session_providers(self.harness.config()),
+                window,
+                cx,
+            );
             panel.set_provider_name(provider, window, cx);
             panel.set_model_name(model_name);
             panel.set_session_model_options(available_models, window, cx);
