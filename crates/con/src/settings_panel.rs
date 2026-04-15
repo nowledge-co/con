@@ -3021,7 +3021,7 @@ impl SettingsPanel {
                             .text_size(px(11.5))
                             .line_height(px(17.0))
                             .text_color(theme.muted_foreground.opacity(0.65))
-                            .child("Choose the default model for agent work and the fast path for inline command suggestions."),
+                            .child("Choose a default model for agent and the fast path for inline command suggestions."),
                     ),
             )
             .child(row_separator(theme))
@@ -3041,7 +3041,7 @@ impl SettingsPanel {
                 ))
             .child(toggle_row(
                     "Auto-Approve Tools",
-                    "Allow the agent to run tools without per-action confirmation in this app session.",
+                    "Allow the agent to run tools without per-action approval.",
                     Switch::new("auto-approve-toggle")
                         .checked(self.auto_approve)
                         .small()
