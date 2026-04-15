@@ -3829,7 +3829,7 @@ impl ConWorkspace {
                     .agent_panel
                     .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
                 if !focused_inline {
-                    self.focus_terminal(window, cx);
+                    self.focus_agent_inline_input_next_frame(window, cx);
                 }
             }
         } else {
@@ -3860,7 +3860,7 @@ impl ConWorkspace {
                 .agent_panel
                 .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
             if !focused_inline {
-                self.active_terminal().focus(window, cx);
+                self.focus_agent_inline_input_next_frame(window, cx);
             }
         } else {
             self.active_terminal().focus(window, cx);
@@ -4342,6 +4342,24 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn focus_agent_inline_input_next_frame(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.on_next_frame(window, |workspace, window, cx| {
+            if !workspace.agent_panel_open || workspace.input_bar_visible {
+                return;
+            }
+            let focused = workspace
+                .agent_panel
+                .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
+            if !focused {
+                workspace.focus_terminal(window, cx);
+            }
+        });
+    }
+
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
@@ -4598,7 +4616,13 @@ impl ConWorkspace {
             .collect()
     }
 
-    fn history_completion_for_prefix(&self, prefix: &str, cwd: Option<&str>) -> Option<String> {
+    fn history_completion_for_prefix(
+        &self,
+        prefix: &str,
+        cwd: Option<&str>,
+        mode: InputMode,
+        is_remote: bool,
+    ) -> Option<String> {
         let mut fallback: Option<String> = None;
 
         for entry in self.global_shell_history.iter().rev() {
@@ -4615,7 +4639,23 @@ impl ConWorkspace {
             }
         }
 
-        fallback
+        if fallback.is_some() {
+            return fallback;
+        }
+
+        self.global_input_history
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.as_str() != prefix
+                    && entry.starts_with(prefix)
+                    && (mode == InputMode::Shell
+                        || matches!(
+                            self.harness.classify_input(entry, is_remote),
+                            InputKind::ShellCommand(_)
+                        ))
+            })
+            .cloned()
     }
 
     fn local_path_completion_for_prefix(
@@ -4785,6 +4825,12 @@ impl ConWorkspace {
             .into_iter()
             .find_map(|(id, terminal)| (id == pane_id).then_some(terminal));
         let cwd = pane.as_ref().and_then(|pane| pane.current_dir(cx));
+        let is_remote = pane
+            .as_ref()
+            .is_some_and(|terminal| {
+                self.effective_remote_host_for_tab(self.active_tab, terminal, cx)
+                    .is_some()
+            });
 
         if let Some(path_match) =
             self.local_path_completion_for_prefix(self.active_tab, pane_id, &text, cx)
@@ -4817,7 +4863,9 @@ impl ConWorkspace {
             return;
         }
 
-        if let Some(history_match) = self.history_completion_for_prefix(&text, cwd.as_deref()) {
+        if let Some(history_match) =
+            self.history_completion_for_prefix(&text, cwd.as_deref(), mode, is_remote)
+        {
             log::debug!(
                 target: "con::suggestions",
                 "use history suggestion prefix={:?} completion={:?}",
@@ -4846,9 +4894,6 @@ impl ConWorkspace {
                     );
                     false
                 } else {
-                    let is_remote = self
-                        .effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
-                        .is_some();
                     matches!(
                         self.harness.classify_input(&text, is_remote),
                         InputKind::ShellCommand(_)
@@ -4940,8 +4985,24 @@ impl ConWorkspace {
             .find_map(|(id, terminal)| (id == result.pane_id).then(|| terminal.current_dir(cx)))
             .flatten();
 
+        let is_remote = self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|tab| {
+                tab.pane_tree
+                    .pane_terminals()
+                    .into_iter()
+                    .find_map(|(id, terminal)| {
+                        (id == result.pane_id).then(|| {
+                            self.effective_remote_host_for_tab(self.active_tab, &terminal, cx)
+                                .is_some()
+                        })
+                    })
+            })
+            .unwrap_or(false);
+
         if self
-            .history_completion_for_prefix(&text, cwd.as_deref())
+            .history_completion_for_prefix(&text, cwd.as_deref(), mode, is_remote)
             .is_some()
         {
             log::debug!(
@@ -5458,11 +5519,9 @@ impl Render for ConWorkspace {
             bar.set_cwd(display_cwd);
             bar.set_skills(skill_entries);
         });
-        let recent_commands = if self.input_bar.read(cx).mode() == InputMode::Agent {
-            Vec::new()
-        } else {
-            self.recent_shell_commands(40)
-        };
+        // Up/Down is command-bar recall, not shell suggestion ranking. Keep it
+        // backed by the global submitted-input history across all modes.
+        let recent_commands = self.recent_input_history(80);
         self.input_bar
             .update(cx, |bar, _cx| bar.set_recent_commands(recent_commands));
 
@@ -5491,6 +5550,7 @@ impl Render for ConWorkspace {
             panel.set_session_model_options(available_models, window, cx);
             panel.set_show_inline_input(show_inline);
             panel.set_skills(panel_skills);
+            panel.set_recent_inputs(self.recent_input_history(80));
         });
 
         let agent_panel_progress = self.agent_panel_motion.value(window);

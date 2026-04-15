@@ -212,6 +212,10 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Restored terminal cursor blinking and tied Ghostty cursor focus visuals to Con's pane scope, including broadcast and custom multi-pane targets.
 - Fixed Chinese IME composition leaving pinyin/preedit text behind in terminal panes.
 - Fixed typing ASCII while a Chinese IME is in English mode by consuming terminal key events explicitly instead of dropping ASCII IME commits.
+- Fixed the side agent-panel composer focus boundary so terminal key forwarding no longer steals typing from the inline agent input after the panel opens.
+- Fixed Up/Down recall so the command bar and side-panel composer recover history even when the underlying input component consumes arrow keys. Render-time shell suggestion sync no longer overwrites persisted global input history.
+- Restored history ghost suggestions from persisted submitted input when per-pane shell command history is incomplete, while keeping AI suggestions separate.
+- Polished Agent-mode command bar text alignment and foreground styling so it lines up with Smart and Shell modes.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

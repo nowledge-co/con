@@ -872,7 +872,10 @@ impl Render for GhosttyView {
             .track_focus(&focus)
             // Consume Tab/Shift-Tab so Root's focus cycling doesn't intercept them.
             // The actual Tab key is forwarded to ghostty via on_key_down below.
-            .on_action(cx.listener(|this, _: &ConsumeTab, _window, _cx| {
+            .on_action(cx.listener(|this, _: &ConsumeTab, window, _cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
                 // Send Tab to terminal
                 if let Some(terminal) = &this.terminal {
                     let key_event = ffi::ghostty_input_key_s {
@@ -887,7 +890,10 @@ impl Render for GhosttyView {
                     terminal.send_key(key_event);
                 }
             }))
-            .on_action(cx.listener(|this, _: &ConsumeTabPrev, _window, _cx| {
+            .on_action(cx.listener(|this, _: &ConsumeTabPrev, window, _cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
                 // Send Shift-Tab (backtab) to terminal
                 if let Some(terminal) = &this.terminal {
                     let key_event = ffi::ghostty_input_key_s {
@@ -973,6 +979,9 @@ impl Render for GhosttyView {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
                 if this.handle_key_down(event, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
