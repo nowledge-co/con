@@ -141,6 +141,50 @@ fn truncate_utf8_for_log(text: &str, max_bytes: usize) -> String {
     format!("{}...", &text[..end])
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_legacy_infers_anthropic_transport_preferences() {
+        let mut config = AgentConfig {
+            provider: ProviderKind::Anthropic,
+            ..AgentConfig::default()
+        };
+        config.providers.set(
+            &ProviderKind::MiniMaxAnthropic,
+            ProviderConfig {
+                model: Some("MiniMax-M2.7".into()),
+                api_key: None,
+                api_key_env: None,
+                base_url: Some("https://api.minimaxi.com/anthropic".into()),
+                max_tokens: None,
+            },
+        );
+        config.providers.set(
+            &ProviderKind::ZAIAnthropic,
+            ProviderConfig {
+                model: Some("glm-4.6".into()),
+                api_key: None,
+                api_key_env: None,
+                base_url: Some("https://api.z.ai/api/anthropic".into()),
+                max_tokens: None,
+            },
+        );
+
+        config.migrate_legacy();
+
+        assert_eq!(
+            config.provider_transport_for(&ProviderKind::MiniMax),
+            Some(ProviderTransport::Anthropic)
+        );
+        assert_eq!(
+            config.provider_transport_for(&ProviderKind::ZAI),
+            Some(ProviderTransport::Anthropic)
+        );
+    }
+}
+
 impl ProviderKind {
     pub fn default_api_key_env(&self) -> &str {
         match self {
@@ -446,6 +490,21 @@ impl AgentPurpose {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderTransport {
+    OpenAI,
+    Anthropic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ProviderProtocolPreferences {
+    pub minimax: Option<ProviderTransport>,
+    pub moonshot: Option<ProviderTransport>,
+    pub zai: Option<ProviderTransport>,
+}
+
 /// Agent configuration from config.toml
 ///
 /// ```toml
@@ -477,6 +536,8 @@ pub struct AgentConfig {
     pub purpose: AgentPurpose,
     /// Per-provider settings (model, key, endpoint, max_tokens).
     pub providers: ProviderMap,
+    /// Remember provider-specific transport choice for providers that expose both OpenAI and Anthropic-compatible APIs.
+    pub provider_protocols: ProviderProtocolPreferences,
     /// Global: max agent turns per request.
     pub max_turns: usize,
     /// Global: sampling temperature (applied to all providers).
@@ -504,6 +565,7 @@ impl Default for AgentConfig {
             provider: ProviderKind::default(),
             purpose: AgentPurpose::default(),
             providers: ProviderMap::default(),
+            provider_protocols: ProviderProtocolPreferences::default(),
             max_turns: 30,
             temperature: None,
             auto_context: true,
@@ -530,6 +592,36 @@ impl Default for SuggestionModelConfig {
 }
 
 impl AgentConfig {
+    pub fn provider_transport_for(&self, provider: &ProviderKind) -> Option<ProviderTransport> {
+        match provider {
+            ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => self.provider_protocols.minimax,
+            ProviderKind::Moonshot | ProviderKind::MoonshotAnthropic => {
+                self.provider_protocols.moonshot
+            }
+            ProviderKind::ZAI | ProviderKind::ZAIAnthropic => self.provider_protocols.zai,
+            _ => None,
+        }
+    }
+
+    pub fn set_provider_transport(
+        &mut self,
+        provider: &ProviderKind,
+        transport: Option<ProviderTransport>,
+    ) {
+        match provider {
+            ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
+                self.provider_protocols.minimax = transport;
+            }
+            ProviderKind::Moonshot | ProviderKind::MoonshotAnthropic => {
+                self.provider_protocols.moonshot = transport;
+            }
+            ProviderKind::ZAI | ProviderKind::ZAIAnthropic => {
+                self.provider_protocols.zai = transport;
+            }
+            _ => {}
+        }
+    }
+
     /// Migrate legacy flat fields into the per-provider map.
     /// Called once after deserialization. Safe to call multiple times.
     pub fn migrate_legacy(&mut self) {
@@ -549,6 +641,49 @@ impl AgentConfig {
                     base_url: self.base_url.take(),
                     max_tokens: self.max_tokens.take(),
                 },
+            );
+        }
+
+        let infer_transport = |openai_kind: ProviderKind,
+                               anthropic_kind: ProviderKind,
+                               active_provider: &ProviderKind,
+                               providers: &ProviderMap|
+         -> Option<ProviderTransport> {
+            if active_provider == &anthropic_kind {
+                Some(ProviderTransport::Anthropic)
+            } else if active_provider == &openai_kind {
+                Some(ProviderTransport::OpenAI)
+            } else if providers.get(&anthropic_kind).is_some() && providers.get(&openai_kind).is_none() {
+                Some(ProviderTransport::Anthropic)
+            } else if providers.get(&openai_kind).is_some() && providers.get(&anthropic_kind).is_none() {
+                Some(ProviderTransport::OpenAI)
+            } else {
+                None
+            }
+        };
+
+        if self.provider_protocols.minimax.is_none() {
+            self.provider_protocols.minimax = infer_transport(
+                ProviderKind::MiniMax,
+                ProviderKind::MiniMaxAnthropic,
+                &self.provider,
+                &self.providers,
+            );
+        }
+        if self.provider_protocols.moonshot.is_none() {
+            self.provider_protocols.moonshot = infer_transport(
+                ProviderKind::Moonshot,
+                ProviderKind::MoonshotAnthropic,
+                &self.provider,
+                &self.providers,
+            );
+        }
+        if self.provider_protocols.zai.is_none() {
+            self.provider_protocols.zai = infer_transport(
+                ProviderKind::ZAI,
+                ProviderKind::ZAIAnthropic,
+                &self.provider,
+                &self.providers,
             );
         }
     }
@@ -609,6 +744,7 @@ impl AgentConfig {
             provider: suggestion_provider,
             purpose: self.purpose,
             providers,
+            provider_protocols: ProviderProtocolPreferences::default(),
             max_turns: 1,
             temperature: Some(0.0),
             auto_context: false,

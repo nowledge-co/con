@@ -2,7 +2,7 @@ use con_agent::{
     AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind,
     SuggestionModelConfig, authorize_oauth_provider,
 };
-use con_agent::provider::AgentPurpose;
+use con_agent::provider::{AgentPurpose, ProviderTransport};
 use con_core::{
     Config,
     config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE},
@@ -351,6 +351,23 @@ impl SettingsPanel {
                 openai_kind
             }
         })
+    }
+
+    fn provider_for_transport(
+        provider: &ProviderKind,
+        transport: ProviderTransport,
+    ) -> Option<ProviderKind> {
+        Self::protocol_pair(provider).map(|(openai_kind, anthropic_kind)| match transport {
+            ProviderTransport::OpenAI => openai_kind,
+            ProviderTransport::Anthropic => anthropic_kind,
+        })
+    }
+
+    fn preferred_sidebar_provider(config: &Config, clicked_provider: &ProviderKind) -> ProviderKind {
+        let sidebar_provider = Self::sidebar_provider_kind(clicked_provider);
+        let transport = config.agent.provider_transport_for(&sidebar_provider);
+        Self::provider_for_transport(&sidebar_provider, transport.unwrap_or(ProviderTransport::OpenAI))
+            .unwrap_or(sidebar_provider)
     }
 
     fn oauth_state(&self, provider: &ProviderKind) -> Option<&ProviderOAuthState> {
@@ -1652,7 +1669,15 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let provider = Self::sidebar_selection_target(&provider, &self.selected_provider);
+        let provider = if Self::protocol_pair(&provider).is_some() {
+            if Self::sidebar_provider_kind(&self.selected_provider) == Self::sidebar_provider_kind(&provider) {
+                self.selected_provider.clone()
+            } else {
+                Self::preferred_sidebar_provider(&self.config, &provider)
+            }
+        } else {
+            Self::sidebar_selection_target(&provider, &self.selected_provider)
+        };
         self.transition_provider(provider, window, cx);
     }
 
@@ -1697,6 +1722,14 @@ impl SettingsPanel {
         else {
             return;
         };
+        self.config.agent.set_provider_transport(
+            &self.selected_provider,
+            Some(if use_anthropic {
+                ProviderTransport::Anthropic
+            } else {
+                ProviderTransport::OpenAI
+            }),
+        );
         self.transition_provider(provider, window, cx);
     }
 
