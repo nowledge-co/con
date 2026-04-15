@@ -151,6 +151,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed empty agent responses appearing as stuck/hanging when providers don't emit text items during streaming
 - Fixed a Unicode logging crash where long tool-result previews could be truncated at an invalid UTF-8 byte boundary
 - Fixed inline `<think>...</think>` reasoning from some models so it now renders in the collapsible reasoning section instead of leaking raw tags into chat output.
+- Fixed ChatGPT Subscription model discovery so it now inherits the full OpenAI `models.dev` catalog instead of falling back to a much shorter local list.
 - Fixed MiniMax and Z.AI provider settings so Anthropic API mode, transport toggles, and matching endpoint presets survive Settings reopen instead of silently falling back.
 - Fixed configured-provider filtering in the agent panel so the session provider picker only shows providers you have actually set up.
 - Fixed conversation history title truncation for CJK text so opening history no longer panics on multibyte characters.
