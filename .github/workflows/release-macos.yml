@@ -292,7 +292,9 @@ jobs:
           cd gh-pages
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add appcast/
+          # Keep install.sh in sync from main repo
+          cp "${{ github.workspace }}/scripts/install.sh" install.sh
+          git add appcast/ install.sh
           if git diff --cached --quiet; then
             echo "No appcast changes to commit"
             exit 0
