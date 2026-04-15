@@ -1152,7 +1152,6 @@ impl SettingsPanel {
         );
         if self.visible {
             let agent = &self.config.agent;
-            self.selected_provider = agent.provider.clone();
             let pc = agent.providers.get_or_default(&self.selected_provider);
             self.load_provider_inputs(&pc, window, cx);
             self.sync_provider_placeholders(&self.selected_provider, window, cx);
