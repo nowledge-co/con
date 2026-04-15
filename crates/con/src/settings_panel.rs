@@ -110,6 +110,7 @@ pub struct SettingsPanel {
     font_size_input: Entity<InputState>,
     ui_font_size_input: Entity<InputState>,
     terminal_opacity_slider: Entity<SliderState>,
+    terminal_blur: bool,
     ui_opacity_slider: Entity<SliderState>,
     background_image_input: Entity<InputState>,
     background_image_opacity_slider: Entity<SliderState>,
@@ -1130,6 +1131,7 @@ impl SettingsPanel {
             font_size_input,
             ui_font_size_input,
             terminal_opacity_slider,
+            terminal_blur: config.appearance.terminal_blur,
             ui_opacity_slider,
             background_image_input,
             background_image_opacity_slider,
@@ -1225,6 +1227,7 @@ impl SettingsPanel {
                     cx,
                 );
             });
+            self.terminal_blur = self.config.appearance.terminal_blur;
             self.ui_opacity_slider.update(cx, |slider, cx| {
                 slider.set_value(
                     Self::clamp_ui_opacity(self.config.appearance.ui_opacity),
@@ -1578,6 +1581,7 @@ impl SettingsPanel {
         self.config.appearance.ui_font_size = Self::clamp_ui_font_size(parsed_ui_font_size);
         self.config.appearance.terminal_opacity =
             Self::clamp_terminal_opacity(self.terminal_opacity_slider.read(cx).value().end());
+        self.config.appearance.terminal_blur = self.terminal_blur;
         self.config.appearance.ui_opacity =
             Self::clamp_ui_opacity(self.ui_opacity_slider.read(cx).value().end());
         let background_image_text = self
@@ -2458,15 +2462,28 @@ impl SettingsPanel {
                     card(theme, card_opacity)
                         .child(slider_row(
                             "Terminal Glass",
-                            "Terminal opacity. Restart needed on macOS.",
+                            "How much of the desktop shows through the terminal.",
                             &terminal_opacity_slider,
                             terminal_opacity,
                             theme,
                         ))
                         .child(row_separator(theme))
+                        .child(toggle_row(
+                            "Terminal Blur",
+                            "Blur the desktop behind transparent terminal surfaces.",
+                            Switch::new("terminal-blur-toggle")
+                                .checked(self.terminal_blur)
+                                .small()
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.terminal_blur = *checked;
+                                    cx.notify();
+                                })),
+                            theme,
+                        ))
+                        .child(row_separator(theme))
                         .child(slider_row(
                             "Window Chrome",
-                            "UI opacity. Restart needed on macOS.",
+                            "Opacity for tabs, panels, and window controls.",
                             &ui_opacity_slider,
                             ui_opacity,
                             theme,

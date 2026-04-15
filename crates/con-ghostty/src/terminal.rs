@@ -180,6 +180,12 @@ fn build_ghostty_config(patch: &GhosttyConfigPatch) -> Result<ffi::ghostty_confi
         || patch.font_family.is_some()
         || patch.font_size.is_some()
         || patch.background_opacity.is_some()
+        || patch.background_blur.is_some()
+        || patch.background_image.is_some()
+        || patch.background_image_opacity.is_some()
+        || patch.background_image_position.is_some()
+        || patch.background_image_fit.is_some()
+        || patch.background_image_repeat.is_some()
     {
         let path = patch.write_config_file()?;
         let path_str = path.to_str().ok_or("non-UTF8 path")?;
@@ -311,6 +317,7 @@ impl GhosttyApp {
         font_family: Option<&str>,
         font_size: Option<f32>,
         background_opacity: Option<f32>,
+        background_blur: Option<bool>,
         background_image: Option<&str>,
         background_image_opacity: Option<f32>,
         background_image_position: Option<&str>,
@@ -325,7 +332,7 @@ impl GhosttyApp {
             font_size,
             background_opacity,
             background_opacity_cells: background_opacity.map(|opacity| opacity < 0.999),
-            background_blur: background_opacity.map(|opacity| opacity < 0.999),
+            background_blur,
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity,
             background_image_position: background_image_position.map(ToOwned::to_owned),
@@ -395,6 +402,7 @@ impl GhosttyApp {
         font_family: &str,
         font_size: f32,
         background_opacity: f32,
+        background_blur: bool,
         background_image: Option<&str>,
         background_image_opacity: f32,
         background_image_position: Option<&str>,
@@ -407,7 +415,7 @@ impl GhosttyApp {
             font_size: Some(font_size),
             background_opacity: Some(background_opacity),
             background_opacity_cells: Some(background_opacity < 0.999),
-            background_blur: Some(background_opacity < 0.999),
+            background_blur: Some(background_blur),
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity: background_image.map(|_| background_image_opacity),
             background_image_position: background_image_position.map(ToOwned::to_owned),
@@ -631,6 +639,7 @@ impl GhosttyTerminal {
         font_family: &str,
         font_size: f32,
         background_opacity: f32,
+        background_blur: bool,
         background_image: Option<&str>,
         background_image_opacity: f32,
         background_image_position: Option<&str>,
@@ -643,7 +652,7 @@ impl GhosttyTerminal {
             font_size: Some(font_size),
             background_opacity: Some(background_opacity),
             background_opacity_cells: Some(background_opacity < 0.999),
-            background_blur: Some(background_opacity < 0.999),
+            background_blur: Some(background_blur),
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity: background_image.map(|_| background_image_opacity),
             background_image_position: background_image_position.map(ToOwned::to_owned),

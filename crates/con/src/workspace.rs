@@ -94,6 +94,7 @@ pub struct ConWorkspace {
     ui_font_size: f32,
     font_size: f32,
     terminal_opacity: f32,
+    terminal_blur: bool,
     ui_opacity: f32,
     background_image: Option<String>,
     background_image_opacity: f32,
@@ -321,6 +322,7 @@ impl ConWorkspace {
         let ui_font_size = config.appearance.ui_font_size;
         let font_size = config.terminal.font_size;
         let terminal_opacity = Self::effective_terminal_opacity(config.appearance.terminal_opacity);
+        let terminal_blur = config.appearance.terminal_blur;
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
         let effective_ui_opacity = Self::effective_ui_opacity(ui_opacity);
         let background_image = config.appearance.background_image.clone();
@@ -336,6 +338,7 @@ impl ConWorkspace {
             Some(&terminal_font_family),
             Some(font_size),
             Some(terminal_opacity),
+            Some(terminal_blur),
             background_image.as_deref(),
             Some(background_image_opacity),
             Some(&background_image_position),
@@ -625,6 +628,7 @@ impl ConWorkspace {
             ui_font_size,
             font_size,
             terminal_opacity,
+            terminal_blur,
             ui_opacity,
             background_image,
             background_image_opacity,
@@ -2399,6 +2403,7 @@ impl ConWorkspace {
         self.font_size = term_config.font_size;
         self.terminal_opacity =
             Self::effective_terminal_opacity(appearance_config.terminal_opacity);
+        self.terminal_blur = appearance_config.terminal_blur;
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
         let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
         self.background_image = appearance_config.background_image.clone();
@@ -2467,6 +2472,7 @@ impl ConWorkspace {
                     &self.terminal_font_family,
                     self.font_size,
                     self.terminal_opacity,
+                    self.terminal_blur,
                     self.background_image.as_deref(),
                     self.background_image_opacity,
                     Some(&self.background_image_position),
@@ -2481,6 +2487,7 @@ impl ConWorkspace {
             &self.terminal_font_family,
             self.font_size,
             self.terminal_opacity,
+            self.terminal_blur,
             self.background_image.as_deref(),
             self.background_image_opacity,
             Some(&self.background_image_position),
