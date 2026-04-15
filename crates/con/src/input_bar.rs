@@ -23,6 +23,8 @@ pub struct SkillAutocompleteChanged;
 impl EventEmitter<SkillAutocompleteChanged> for InputBar {}
 pub struct InputEdited;
 impl EventEmitter<InputEdited> for InputBar {}
+pub struct InputScopeChanged;
+impl EventEmitter<InputScopeChanged> for InputBar {}
 pub struct TogglePaneScopePicker;
 impl EventEmitter<TogglePaneScopePicker> for InputBar {}
 
@@ -630,7 +632,7 @@ impl InputBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.mode == InputMode::Agent || self.recent_commands.is_empty() {
+        if self.recent_commands.is_empty() {
             return false;
         }
 
@@ -713,6 +715,7 @@ impl InputBar {
     pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_mode(self.mode.next(), window, cx);
         self.clear_completion_ui();
+        cx.emit(InputScopeChanged);
         cx.emit(InputEdited);
         cx.notify();
     }
@@ -742,6 +745,7 @@ impl InputBar {
         self.selected_pane_ids.clear();
         self.last_single_target_id = Some(self.focused_pane_id);
         self.clear_completion_ui();
+        cx.emit(InputScopeChanged);
         cx.emit(InputEdited);
         cx.notify();
     }
@@ -753,6 +757,7 @@ impl InputBar {
             self.set_mode(InputMode::Shell, window, cx);
         }
         self.clear_completion_ui();
+        cx.emit(InputScopeChanged);
         cx.emit(InputEdited);
         cx.notify();
     }
@@ -786,6 +791,7 @@ impl InputBar {
             }
         }
         self.clear_completion_ui();
+        cx.emit(InputScopeChanged);
         cx.emit(InputEdited);
         cx.notify();
     }
@@ -1376,6 +1382,12 @@ impl Render for InputBar {
                             cx.stop_propagation();
                         }
                     }
+                    "up" => {
+                        if this.navigate_history(true, window, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
                     "down" if has_completions => {
                         this.skill_selection =
                             (this.skill_selection + 1).min(matches.len().saturating_sub(1));
@@ -1386,6 +1398,12 @@ impl Render for InputBar {
                     }
                     "down" if this.has_path_completion_candidates() => {
                         if this.navigate_path_completion(false, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    "down" => {
+                        if this.navigate_history(false, window, cx) {
                             window.prevent_default();
                             cx.stop_propagation();
                         }

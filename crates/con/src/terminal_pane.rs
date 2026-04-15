@@ -73,6 +73,7 @@ impl TerminalPane {
         font_size: f32,
         background_opacity: f32,
         background_blur: bool,
+        cursor_style: &str,
         background_image: Option<&str>,
         background_image_opacity: f32,
         background_image_position: Option<&str>,
@@ -88,6 +89,7 @@ impl TerminalPane {
                 font_size,
                 background_opacity,
                 background_blur,
+                cursor_style,
                 background_image,
                 background_image_opacity,
                 background_image_position,
@@ -120,11 +122,9 @@ impl TerminalPane {
         self.entity.update(cx, |view, _| view.shutdown_surface());
     }
 
-    pub fn set_focus_state(&self, focused: bool, cx: &App) {
-        if let Some(terminal) = self.entity.read(cx).terminal() {
-            terminal.set_focus(focused);
-            terminal.refresh();
-        }
+    pub fn set_focus_state(&self, focused: bool, cx: &mut App) {
+        self.entity
+            .update(cx, |view, _| view.set_surface_focus_state(focused));
     }
 
     pub fn refresh_surface(&self, cx: &App) {

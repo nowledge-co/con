@@ -58,6 +58,7 @@ pub struct GhosttyConfigPatch {
     pub background_opacity: Option<f32>,
     pub background_opacity_cells: Option<bool>,
     pub background_blur: Option<bool>,
+    pub cursor_style: Option<String>,
     pub background_image: Option<String>,
     pub background_image_opacity: Option<f32>,
     pub background_image_position: Option<String>,
@@ -84,6 +85,9 @@ impl GhosttyConfigPatch {
         }
         if let Some(background_blur) = patch.background_blur {
             self.background_blur = Some(background_blur);
+        }
+        if let Some(cursor_style) = &patch.cursor_style {
+            self.cursor_style = Some(cursor_style.clone());
         }
         if let Some(background_image) = &patch.background_image {
             self.background_image = Some(background_image.clone());
@@ -128,6 +132,11 @@ impl GhosttyConfigPatch {
         }
         if let Some(background_blur) = self.background_blur {
             s.push_str(&format!("background-blur = {}\n", background_blur));
+        }
+        if let Some(cursor_style) = &self.cursor_style {
+            s.push_str(&format!("cursor-style = {}\n", cursor_style));
+            s.push_str("cursor-color = cell-foreground\n");
+            s.push_str("cursor-text = cell-background\n");
         }
         if let Some(background_image) = &self.background_image {
             s.push_str(&format!("background-image = {:?}\n", background_image));
@@ -181,6 +190,7 @@ fn build_ghostty_config(patch: &GhosttyConfigPatch) -> Result<ffi::ghostty_confi
         || patch.font_size.is_some()
         || patch.background_opacity.is_some()
         || patch.background_blur.is_some()
+        || patch.cursor_style.is_some()
         || patch.background_image.is_some()
         || patch.background_image_opacity.is_some()
         || patch.background_image_position.is_some()
@@ -195,6 +205,15 @@ fn build_ghostty_config(patch: &GhosttyConfigPatch) -> Result<ffi::ghostty_confi
 
     unsafe { ffi::ghostty_config_finalize(config) };
     Ok(config)
+}
+
+fn normalize_cursor_style(style: &str) -> &'static str {
+    match style.trim().to_ascii_lowercase().as_str() {
+        "block" => "block",
+        "underline" => "underline",
+        "block_hollow" | "block-hollow" | "hollow" => "block_hollow",
+        _ => "bar",
+    }
 }
 
 // ── Per-surface state updated by action callbacks ───────────
@@ -318,6 +337,7 @@ impl GhosttyApp {
         font_size: Option<f32>,
         background_opacity: Option<f32>,
         background_blur: Option<bool>,
+        cursor_style: Option<&str>,
         background_image: Option<&str>,
         background_image_opacity: Option<f32>,
         background_image_position: Option<&str>,
@@ -333,6 +353,7 @@ impl GhosttyApp {
             background_opacity,
             background_opacity_cells: background_opacity.map(|opacity| opacity < 0.999),
             background_blur,
+            cursor_style: cursor_style.map(normalize_cursor_style).map(ToOwned::to_owned),
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity,
             background_image_position: background_image_position.map(ToOwned::to_owned),
@@ -388,6 +409,7 @@ impl GhosttyApp {
             background_opacity: None,
             background_opacity_cells: None,
             background_blur: None,
+            cursor_style: None,
             background_image: None,
             background_image_opacity: None,
             background_image_position: None,
@@ -403,6 +425,7 @@ impl GhosttyApp {
         font_size: f32,
         background_opacity: f32,
         background_blur: bool,
+        cursor_style: &str,
         background_image: Option<&str>,
         background_image_opacity: f32,
         background_image_position: Option<&str>,
@@ -416,6 +439,7 @@ impl GhosttyApp {
             background_opacity: Some(background_opacity),
             background_opacity_cells: Some(background_opacity < 0.999),
             background_blur: Some(background_blur),
+            cursor_style: Some(normalize_cursor_style(cursor_style).to_string()),
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity: background_image.map(|_| background_image_opacity),
             background_image_position: background_image_position.map(ToOwned::to_owned),
@@ -640,6 +664,7 @@ impl GhosttyTerminal {
         font_size: f32,
         background_opacity: f32,
         background_blur: bool,
+        cursor_style: &str,
         background_image: Option<&str>,
         background_image_opacity: f32,
         background_image_position: Option<&str>,
@@ -653,6 +678,7 @@ impl GhosttyTerminal {
             background_opacity: Some(background_opacity),
             background_opacity_cells: Some(background_opacity < 0.999),
             background_blur: Some(background_blur),
+            cursor_style: Some(normalize_cursor_style(cursor_style).to_string()),
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity: background_image.map(|_| background_image_opacity),
             background_image_position: background_image_position.map(ToOwned::to_owned),
@@ -682,6 +708,28 @@ impl GhosttyTerminal {
         }
         // If text contains NUL bytes, we silently drop it — this matches
         // terminal semantics where NUL in text input is meaningless.
+    }
+
+    pub fn ime_point(&self) -> ImePoint {
+        let mut x = 0.0;
+        let mut y = 0.0;
+        let mut width = 0.0;
+        let mut height = 0.0;
+        unsafe {
+            ffi::ghostty_surface_ime_point(
+                self.surface,
+                &mut x,
+                &mut y,
+                &mut width,
+                &mut height,
+            );
+        }
+        ImePoint {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Write raw bytes to the terminal via the key event path.
@@ -1042,6 +1090,14 @@ pub struct SurfaceSize {
     pub height_px: u32,
     pub cell_width_px: u32,
     pub cell_height_px: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ImePoint {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Debug, Clone, Copy)]

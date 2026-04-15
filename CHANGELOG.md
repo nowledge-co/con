@@ -203,6 +203,15 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Added standard macOS app-menu commands for Hide con, Hide Others, and Show All, including their native system shortcuts.
 - Reduced terminal flashing when hiding or showing the bottom input bar and agent panel by removing the full-terminal transition matte from those interactions.
 - Reduced tab transition flashing by removing the full-terminal matte from tab creation/switching and deferring closed-tab surface teardown until the replacement tab is visible.
+- Fixed Appearance slider layout so Terminal Glass and Window Chrome use the same fixed-width control lane.
+- Added a macOS 12 compatibility guard for terminal glass. On Monterey and older, Con now forces the embedded terminal to solid/no-blur to avoid transparent blank windows caused by old WindowServer + embedded Metal composition behavior.
+- Fixed bottom input history navigation across Smart, Shell, and Agent modes. Up/Down now recall submitted input directly, while completion popups still keep their own selection behavior.
+- Fixed terminal IME/cursor polish: printable keys now follow the terminal-safe IME path, IME candidate placement uses Ghostty's real cursor anchor, and Con's cursor style setting now applies to embedded Ghostty panes.
+- Fixed duplicate ASCII input from the terminal IME bridge and added a Cursor Style selector in Appearance settings.
+- Polished Appearance settings by moving Cursor Style into its own Cursor section instead of mixing terminal behavior with font sizing.
+- Restored terminal cursor blinking and tied Ghostty cursor focus visuals to Con's pane scope, including broadcast and custom multi-pane targets.
+- Fixed Chinese IME composition leaving pinyin/preedit text behind in terminal panes.
+- Fixed typing ASCII while a Chinese IME is in English mode by consuming terminal key events explicitly instead of dropping ASCII IME commits.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.
