@@ -559,6 +559,56 @@ impl SettingsPanel {
         ENDPOINT_CUSTOM_LABEL
     }
 
+    fn mapped_protocol_base_url(
+        source_provider: &ProviderKind,
+        target_provider: &ProviderKind,
+        source_base_url: Option<&str>,
+    ) -> Option<String> {
+        let source_label = Self::endpoint_label_for_base_url(source_provider, source_base_url);
+        if matches!(source_label, ENDPOINT_DEFAULT_LABEL | ENDPOINT_CUSTOM_LABEL) {
+            let target_presets = Self::provider_endpoint_presets(target_provider);
+            return (target_presets.len() == 1).then(|| target_presets[0].base_url.to_string());
+        }
+
+        if let Some(preset) = Self::provider_endpoint_presets(target_provider)
+            .iter()
+            .find(|preset| preset.label == source_label)
+        {
+            return Some(preset.base_url.to_string());
+        }
+
+        let target_presets = Self::provider_endpoint_presets(target_provider);
+        (target_presets.len() == 1).then(|| target_presets[0].base_url.to_string())
+    }
+
+    fn seed_protocol_variant_config(
+        source_provider: &ProviderKind,
+        target_provider: &ProviderKind,
+        source: &ProviderConfig,
+        target: &ProviderConfig,
+    ) -> ProviderConfig {
+        let mut seeded = target.clone();
+
+        if seeded.model.is_none() {
+            seeded.model = source.model.clone();
+        }
+        if seeded.api_key.is_none() {
+            seeded.api_key = source.api_key.clone();
+        }
+        if seeded.api_key_env.is_none() {
+            seeded.api_key_env = source.api_key_env.clone();
+        }
+        if seeded.max_tokens.is_none() {
+            seeded.max_tokens = source.max_tokens;
+        }
+        if seeded.base_url.as_deref().is_none_or(|value| value.trim().is_empty()) {
+            seeded.base_url =
+                Self::mapped_protocol_base_url(source_provider, target_provider, source.base_url.as_deref());
+        }
+
+        seeded
+    }
+
     fn make_endpoint_preset_select(
         provider: &ProviderKind,
         current_base_url: &Option<String>,
@@ -1717,6 +1767,13 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let source_provider = self.selected_provider.clone();
+        let source_config = self.read_provider_inputs(cx);
+        self.config
+            .agent
+            .providers
+            .set(&source_provider, source_config.clone());
+
         let Some(provider) =
             Self::protocol_toggled_provider(&self.selected_provider, use_anthropic)
         else {
@@ -1730,6 +1787,14 @@ impl SettingsPanel {
                 ProviderTransport::OpenAI
             }),
         );
+        let target_config = self.config.agent.providers.get_or_default(&provider);
+        let seeded_target = Self::seed_protocol_variant_config(
+            &source_provider,
+            &provider,
+            &source_config,
+            &target_config,
+        );
+        self.config.agent.providers.set(&provider, seeded_target);
         self.transition_provider(provider, window, cx);
     }
 
