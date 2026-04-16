@@ -33,7 +33,7 @@ gpui-component-macros = { git = "https://github.com/longbridge/gpui-component.gi
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component.git", branch = "main", package = "gpui-component-assets" }
 
 # AI Agent
-rig-core = { git = "https://github.com/wey-gu/rig.git", rev = "af46b1d4882148aacf2a3a55361837341d11c16a", default-features = false, features = ["rustls"] }
+rig-core = { git = "https://github.com/0xPlaygrounds/rig.git", rev = "6dc36d803adaf4f89de774577b9c4f7ac9057644", default-features = false, features = ["rustls"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
