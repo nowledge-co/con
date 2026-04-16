@@ -369,42 +369,43 @@ jobs:
           git clone "https://x-access-token:${GH_TOKEN}@github.com/nowledge-co/homebrew-tap.git" tap
           cd tap
 
-          cat > "Casks/${cask}.rb" <<RUBY
-cask "${cask}" do
-  version "${version}"
+          cat > "Casks/${cask}.rb" <<EOF
+          cask "${cask}" do
+            version "${version}"
 
-  on_arm do
-    sha256 "${arm64_sha}"
-    url "https://github.com/nowledge-co/con/releases/download/v#{version}/${dmg_prefix}-#{version}-macos-arm64.dmg"
-  end
+            on_arm do
+              sha256 "${arm64_sha}"
+              url "https://github.com/nowledge-co/con/releases/download/v#{version}/${dmg_prefix}-#{version}-macos-arm64.dmg"
+            end
 
-  on_intel do
-    sha256 "${x86_64_sha}"
-    url "https://github.com/nowledge-co/con/releases/download/v#{version}/${dmg_prefix}-#{version}-macos-x86_64.dmg"
-  end
+            on_intel do
+              sha256 "${x86_64_sha}"
+              url "https://github.com/nowledge-co/con/releases/download/v#{version}/${dmg_prefix}-#{version}-macos-x86_64.dmg"
+            end
 
-  name "${app_name}"
-  desc "GPU-accelerated terminal emulator with built-in AI agent"
-  homepage "https://github.com/nowledge-co/con"
+            name "${app_name}"
+            desc "GPU-accelerated terminal emulator with built-in AI agent"
+            homepage "https://github.com/nowledge-co/con"
 
-  livecheck do
-    url :url
-    strategy :github_latest
-    regex(/v?(\d+(?:\.\d+)*(?:-beta\.\d+)?)/i)
-  end
+            livecheck do
+              url :url
+              strategy :github_latest
+              regex(/v?(\d+(?:\.\d+)*(?:-beta\.\d+)?)/i)
+            end
 
-  auto_updates true
-  depends_on macos: ">= :catalina"
+            auto_updates true
+            depends_on macos: ">= :catalina"
 
-  app "${app_name}.app"
+            app "${app_name}.app"
 
-  zap trash: [
-    "~/.config/con",
-    "~/Library/Caches/co.nowledge.con${bundle_suffix}",
-    "~/Library/Preferences/co.nowledge.con${bundle_suffix}.plist",
-  ]
-end
-RUBY
+            zap trash: [
+              "~/.config/con",
+              "~/Library/Caches/co.nowledge.con${bundle_suffix}",
+              "~/Library/Preferences/co.nowledge.con${bundle_suffix}.plist",
+            ]
+          end
+          EOF
+          sed -i '' 's/^          //' "Casks/${cask}.rb"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
