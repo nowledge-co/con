@@ -761,7 +761,6 @@ fn render_table_cell(
     let content_cell = div()
         .flex_1()
         .min_w(column_min_width)
-        .min_w_0()
         .px(px(12.0))
         .py(px(if is_header { 8.0 } else { 8.5 }))
         .child(match align {
@@ -779,7 +778,6 @@ fn render_table_cell(
             .flex_shrink()
             .flex_basis(basis)
             .min_w(column_min_width)
-            .min_w_0()
             .bg(style.table_border)
             .child(div().w(px(1.0)).self_stretch())
             .child(content_cell)
@@ -790,7 +788,6 @@ fn render_table_cell(
             .flex_shrink()
             .flex_basis(basis)
             .min_w(column_min_width)
-            .min_w_0()
             .child(content_cell)
             .into_any_element()
     }

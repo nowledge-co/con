@@ -513,6 +513,11 @@ impl InputBar {
     }
 
     pub fn set_recent_commands(&mut self, commands: Vec<String>) {
+        let commands = commands
+            .into_iter()
+            .filter(|command| !command.contains('\n'))
+            .collect::<Vec<_>>();
+
         if self.recent_commands == commands {
             return;
         }

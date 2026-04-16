@@ -225,6 +225,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed the side agent-panel composer empty-state layout so the input keeps the same full-width shell even when no LLM provider is configured.
 - Fixed right-panel composer history navigation so multiline drafts keep normal Up/Down cursor movement, while single-line prompts still support submitted-history recall.
 - Improved markdown table rendering for complex prose tables in the agent panel by using a stable minimum table width with horizontal scrolling instead of collapsing all columns into a narrow wrapped stack.
+- Fixed bottom command-bar history so it only recalls single-line entries. Multiline agent prompts no longer get injected into the single-line command bar and crash GPUI on Up/Down recall.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.
