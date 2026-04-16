@@ -4096,6 +4096,7 @@ impl Render for AgentPanel {
             panel = panel.child(
                 div()
                     .flex_shrink_0()
+                    .w_full()
                     .pl(px(8.0))
                     .pr(px(9.0))
                     .py(px(8.0))
@@ -4140,6 +4141,8 @@ impl Render for AgentPanel {
                         div()
                             .flex()
                             .items_center()
+                            .w_full()
+                            .min_h(px(46.0))
                             .gap(px(8.0))
                             .pl(px(7.0))
                             .pr(px(8.0))
