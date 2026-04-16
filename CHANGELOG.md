@@ -223,6 +223,8 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Polished provider setup and pane scope controls for the beta. The provider list now shows provider icons with clear configured/unconfigured state, and the pane-scope picker uses matched frame geometry between the mode switcher and minimap.
 - Fixed command palette dismissal focus. Pressing Escape now returns focus to the active terminal so Cmd-Shift-P can reopen the palette immediately without clicking the terminal first.
 - Fixed the side agent-panel composer empty-state layout so the input keeps the same full-width shell even when no LLM provider is configured.
+- Fixed right-panel composer history navigation so Up/Down only switch submitted-history entries when the caret is already on the first or last line of a multiline draft.
+- Improved markdown table rendering for complex prose tables in the agent panel by using a stable minimum table width with horizontal scrolling instead of collapsing all columns into a narrow wrapped stack.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

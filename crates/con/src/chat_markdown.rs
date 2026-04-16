@@ -2,9 +2,9 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use gpui::{
-    AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, IntoElement,
-    ParentElement, SharedString, Styled, StyledText, TextStyle, TextRun, UnderlineStyle,
-    WhiteSpace, div, px, relative,
+    AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, InteractiveElement,
+    IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, StyledText,
+    TextStyle, TextRun, UnderlineStyle, WhiteSpace, div, px, relative,
 };
 use gpui_component::clipboard::Clipboard;
 use gpui_component::highlighter::SyntaxHighlighter;
@@ -639,7 +639,7 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
                     .into_any_element()
             }))
             .into_any_element(),
-        MarkdownBlock::Table { aligns, rows } => render_table_block(aligns, rows, style),
+        MarkdownBlock::Table { aligns, rows } => render_table_block(index, aligns, rows, style),
         MarkdownBlock::Rule => div()
             .w_full()
             .h(px(1.0))
@@ -654,6 +654,7 @@ fn ordered_list_marker_lane_width(max_marker: usize) -> gpui::Pixels {
 }
 
 fn render_table_block(
+    index: usize,
     aligns: &[MarkdownTableAlign],
     rows: &[Vec<Vec<MarkdownInline>>],
     style: &ChatMarkdownStyle<'_>,
@@ -664,10 +665,12 @@ fn render_table_block(
 
     let header = &rows[0];
     let column_count = header.len().max(1);
+    let table_min_width = px(column_count.max(2) as f32 * 180.0);
     let body_rows = rows.iter().skip(1).enumerate().map(|(row_idx, row)| {
         let row_content = div()
             .w_full()
             .flex()
+            .items_stretch()
             .bg(style.table_cell_background)
             .children(row.iter().enumerate().map(|(column_idx, cell)| {
                 render_table_cell(cell, column_idx, column_count, aligns, false, style)
@@ -687,28 +690,42 @@ fn render_table_block(
     });
 
     div()
+        .id(("chat-md-table-scroll", index))
         .w_full()
-        .overflow_hidden()
-        .rounded(px(10.0))
-        .bg(style.table_border)
-        .p(px(1.0))
+        .overflow_x_scroll()
         .child(
             div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .bg(style.table_cell_background)
+                .min_w(table_min_width)
+                .overflow_hidden()
+                .rounded(px(10.0))
+                .bg(style.table_border)
+                .p(px(1.0))
                 .child(
                     div()
                         .w_full()
                         .flex()
-                        .bg(style.table_header_background)
-                        .children(header.iter().enumerate().map(|(column_idx, cell)| {
-                            render_table_cell(cell, column_idx, column_count, aligns, true, style)
-                        })),
-                )
-                .child(div().h(px(1.0)).bg(style.table_border))
-                .children(body_rows),
+                        .flex_col()
+                        .bg(style.table_cell_background)
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_stretch()
+                                .bg(style.table_header_background)
+                                .children(header.iter().enumerate().map(|(column_idx, cell)| {
+                                    render_table_cell(
+                                        cell,
+                                        column_idx,
+                                        column_count,
+                                        aligns,
+                                        true,
+                                        style,
+                                    )
+                                })),
+                        )
+                        .child(div().h(px(1.0)).bg(style.table_border))
+                        .children(body_rows),
+                ),
         )
         .into_any_element()
 }
