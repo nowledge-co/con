@@ -222,6 +222,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Refined the Settings keycap typography and pane-scope picker, removed the misleading "local" pane label, and added configurable Control-Tab / Control-Shift-Tab tab cycling with Cmd-Shift-[ / ] fallbacks.
 - Polished provider setup and pane scope controls for the beta. The provider list now shows provider icons with clear configured/unconfigured state, and the pane-scope picker uses matched frame geometry between the mode switcher and minimap.
 - Fixed command palette dismissal focus. Pressing Escape now returns focus to the active terminal so Cmd-Shift-P can reopen the palette immediately without clicking the terminal first.
+- Fixed the side agent-panel composer empty-state layout so the input keeps the same full-width shell even when no LLM provider is configured.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

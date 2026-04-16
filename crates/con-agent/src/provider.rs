@@ -1,11 +1,12 @@
 use anyhow::Result;
 use crossbeam_channel::Sender;
 use futures::StreamExt;
+use http::{HeaderMap, HeaderValue};
 use rig::agent::{MultiTurnStreamItem, StreamingResult};
 use rig::client::CompletionClient;
 use rig::client::Nothing;
 use rig::providers::{
-    anthropic, chatgpt, cohere, deepseek, gemini, github_copilot, groq, minimax, mistral, moonshot,
+    anthropic, chatgpt, cohere, copilot, deepseek, gemini, groq, minimax, mistral, moonshot,
     ollama, openai, openrouter, perplexity, together, xai, zai,
 };
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
@@ -27,6 +28,9 @@ use crate::tools::{
     TmuxEnsureAgentTargetTool, TmuxEnsureShellTargetTool, TmuxFindTargetsTool, TmuxInspectTool,
     TmuxListTool, TmuxRunCommandTool, TmuxSendKeysTool, TmuxShellTurnTool, WaitForTool,
 };
+
+const KIMI_CODING_BASE_URL: &str = "https://api.kimi.com/coding/v1";
+const KIMI_CODING_USER_AGENT: &str = "KimiCLI/1.35.0";
 
 // ── Provider enum ───────────────────────────────────────────────────
 
@@ -302,6 +306,75 @@ mod tests {
     }
 
     #[test]
+    fn kimi_coding_url_detection_is_scoped_to_coding_endpoint() {
+        assert!(is_kimi_coding_base_url("https://api.kimi.com/coding/v1"));
+        assert!(is_kimi_coding_base_url("https://api.kimi.com/coding/v1/"));
+        assert!(!is_kimi_coding_base_url("https://api.moonshot.ai/v1"));
+        assert!(!is_kimi_coding_base_url(
+            "https://api.moonshot.ai/anthropic"
+        ));
+    }
+
+    #[test]
+    fn kimi_coding_headers_match_kimi_cli_api_key_path() {
+        let headers = kimi_coding_headers();
+
+        assert_eq!(
+            headers
+                .get(http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some(KIMI_CODING_USER_AGENT)
+        );
+        assert!(headers.get("X-Msh-Platform").is_none());
+    }
+
+    #[test]
+    fn moonshot_client_adds_kimi_headers_only_for_coding_endpoint() {
+        let mut coding_config = AgentConfig::default();
+        coding_config.providers.set(
+            &ProviderKind::Moonshot,
+            ProviderConfig {
+                api_key: Some("test-key".into()),
+                base_url: Some(KIMI_CODING_BASE_URL.into()),
+                ..Default::default()
+            },
+        );
+
+        let coding_client = AgentProvider::new(coding_config)
+            .build_moonshot_client()
+            .expect("moonshot coding client");
+
+        assert_eq!(
+            coding_client
+                .headers()
+                .get(http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some(KIMI_CODING_USER_AGENT)
+        );
+
+        let mut standard_config = AgentConfig::default();
+        standard_config.providers.set(
+            &ProviderKind::Moonshot,
+            ProviderConfig {
+                api_key: Some("test-key".into()),
+                base_url: Some("https://api.moonshot.ai/v1".into()),
+                ..Default::default()
+            },
+        );
+
+        let standard_client = AgentProvider::new(standard_config)
+            .build_moonshot_client()
+            .expect("moonshot standard client");
+
+        assert!(
+            standard_client
+                .headers()
+                .get(http::header::USER_AGENT)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn think_parser_extracts_inline_reasoning() {
         let mut parser = ThinkTagStreamParser::default();
         let out = parser.push("before<think>reasoning</think>after");
@@ -343,6 +416,21 @@ mod tests {
         assert_eq!(out.reasoning, "");
         assert_eq!(tail, ThinkParseOutput::default());
     }
+}
+
+fn is_kimi_coding_base_url(url: &str) -> bool {
+    url.trim_end_matches('/') == KIMI_CODING_BASE_URL
+}
+
+fn kimi_coding_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    // Kimi CLI sends this header for API-key based LLM calls. Its X-Msh device
+    // headers belong to the OAuth path, so Con does not fabricate them here.
+    headers.insert(
+        http::header::USER_AGENT,
+        HeaderValue::from_static(KIMI_CODING_USER_AGENT),
+    );
+    headers
 }
 
 impl ProviderKind {
@@ -450,7 +538,7 @@ where
         ProviderKind::GitHubCopilot => {
             let prompt_handler = prompt_handler.clone();
             let mut builder =
-                github_copilot::Client::builder()
+                copilot::Client::builder()
                     .oauth()
                     .on_device_code(move |prompt| {
                         prompt_handler(OAuthDevicePrompt {
@@ -1156,103 +1244,11 @@ impl AgentProvider {
             };
         }
 
-        macro_rules! stream_with_model {
-            ($model:expr) => {{
-                let root: std::path::PathBuf = workspace_root.clone();
-                let mut builder = rig::agent::AgentBuilder::new($model)
-                    .preamble(&system_prompt)
-                    .tool(TerminalExecTool::new(terminal_exec_tx.clone()))
-                    .tool(ShellExecTool)
-                    .tool(FileReadTool::new(root.clone()))
-                    .tool(FileWriteTool::new(root.clone()))
-                    .tool(EditFileTool::new(root.clone()))
-                    .tool(ListFilesTool::new(root.clone()))
-                    .tool(SearchTool::new(root))
-                    .tool(ListPanesTool::new(pane_tx.clone()))
-                    .tool(ListTabWorkspacesTool::new(pane_tx.clone()))
-                    .tool(TmuxInspectTool::new(pane_tx.clone()))
-                    .tool(TmuxListTool::new(pane_tx.clone()))
-                    .tool(TmuxCaptureTool::new(pane_tx.clone()))
-                    .tool(TmuxFindTargetsTool::new(pane_tx.clone()))
-                    .tool(ResolveWorkTargetTool::new(pane_tx.clone()))
-                    .tool(EnsureLocalCodingWorkspaceTool::new(pane_tx.clone()))
-                    .tool(AgentCliTurnTool::new(pane_tx.clone()))
-                    .tool(EnsureLocalAgentTargetTool::new(pane_tx.clone()))
-                    .tool(EnsureLocalShellTargetTool::new(pane_tx.clone()))
-                    .tool(EnsureRemoteShellTargetTool::new(pane_tx.clone()))
-                    .tool(EnsureRemoteTmuxShellTargetTool::new(
-                        pane_tx.clone(),
-                        terminal_exec_tx.clone(),
-                    ))
-                    .tool(EnsureRemoteTmuxWorkspaceTool::new(
-                        pane_tx.clone(),
-                        terminal_exec_tx.clone(),
-                    ))
-                    .tool(RemoteExecTool::new(
-                        pane_tx.clone(),
-                        terminal_exec_tx.clone(),
-                    ))
-                    .tool(TmuxEnsureShellTargetTool::new(pane_tx.clone()))
-                    .tool(TmuxShellTurnTool::new(pane_tx.clone()))
-                    .tool(TmuxSendKeysTool::new(pane_tx.clone()))
-                    .tool(TmuxRunCommandTool::new(pane_tx.clone()))
-                    .tool(TmuxEnsureAgentTargetTool::new(pane_tx.clone()))
-                    .tool(ProbeShellContextTool::new(pane_tx.clone()))
-                    .tool(ReadPaneTool::new(pane_tx.clone()))
-                    .tool(SendKeysTool::new(pane_tx.clone()))
-                    .tool(SearchPanesTool::new(pane_tx.clone()))
-                    .tool(CreatePaneTool::new(pane_tx.clone()))
-                    .tool(WaitForTool::new(pane_tx, cancelled.clone()))
-                    .tool(BatchExecTool::new(terminal_exec_tx))
-                    .default_max_turns(self.config.max_turns);
-
-                if let Some(max_tokens) = self.config.effective_max_tokens(kind) {
-                    builder = builder.max_tokens(max_tokens);
-                }
-                if let Some(temp) = self.config.temperature {
-                    builder = builder.temperature(temp);
-                }
-
-                let agent = builder.build();
-                match agent.tool_server_handle.get_tool_defs(None).await {
-                    Ok(defs) => {
-                        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-                        log::info!(
-                            "[agent] Registered {} tools for {:?}/{}: {:?}",
-                            defs.len(),
-                            kind,
-                            self.config.effective_model(kind),
-                            names,
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("[agent] Failed to query tool definitions: {}", e);
-                    }
-                }
-
-                let stream = agent
-                    .stream_prompt(&last_user_msg)
-                    .with_hook(hook)
-                    .with_history(chat_history)
-                    .await;
-
-                consume_stream(stream, &event_tx, &cancelled).await?
-            }};
-        }
-
         let response = match *kind {
             ProviderKind::Anthropic => stream_with!(self.build_anthropic_client()?),
             ProviderKind::OpenAI => stream_with!(self.build_openai_client()?),
             ProviderKind::ChatGPT => stream_with!(self.build_chatgpt_client()?),
-            ProviderKind::GitHubCopilot => {
-                let client = self.build_github_copilot_client()?;
-                let model = self.config.effective_model(kind);
-                if github_copilot::requires_responses_api(model) {
-                    stream_with_model!(client.responses_model(model))
-                } else {
-                    stream_with!(client)
-                }
-            }
+            ProviderKind::GitHubCopilot => stream_with!(self.build_github_copilot_client()?),
             ProviderKind::OpenAICompatible => {
                 stream_with!(self.build_openai_compatible_client()?)
             }
@@ -1351,8 +1347,8 @@ impl AgentProvider {
             .map_err(|e| anyhow::anyhow!("ChatGPT client error: {e}"))
     }
 
-    fn build_github_copilot_client(&self) -> Result<github_copilot::Client> {
-        let mut builder = github_copilot::Client::builder();
+    fn build_github_copilot_client(&self) -> Result<copilot::Client> {
+        let mut builder = copilot::Client::builder();
         if let Some(url) = self.config.effective_base_url(&ProviderKind::GitHubCopilot) {
             builder = builder.base_url(url);
         }
@@ -1399,6 +1395,9 @@ impl AgentProvider {
         let api_key = self.resolve_api_key(&ProviderKind::Moonshot)?;
         let mut builder = moonshot::Client::builder().api_key(&api_key);
         if let Some(url) = self.config.effective_base_url(&ProviderKind::Moonshot) {
+            if is_kimi_coding_base_url(url) {
+                builder = builder.http_headers(kimi_coding_headers());
+            }
             builder = builder.base_url(url);
         }
         builder

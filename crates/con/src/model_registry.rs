@@ -60,9 +60,13 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
         ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
             &["MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.5", "MiniMax-M2.7"]
         }
-        ProviderKind::Moonshot | ProviderKind::MoonshotAnthropic => {
-            &["kimi-k2.5", "kimi-k2", "moonshot-v1-128k"]
-        }
+        ProviderKind::Moonshot => &[
+            "kimi-for-coding",
+            "kimi-k2.5",
+            "kimi-k2",
+            "moonshot-v1-128k",
+        ],
+        ProviderKind::MoonshotAnthropic => &["kimi-k2.5", "kimi-k2", "moonshot-v1-128k"],
         ProviderKind::ZAI | ProviderKind::ZAIAnthropic => {
             &["glm-4.6", "glm-4.6-air", "glm-4.5", "glm-4.5v"]
         }
@@ -104,6 +108,21 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
     }
 }
 
+fn pinned_models(provider: &ProviderKind) -> &'static [&'static str] {
+    match provider {
+        ProviderKind::Moonshot => &["kimi-for-coding"],
+        _ => &[],
+    }
+}
+
+fn append_missing_models(models: &mut Vec<String>, extra: &[&str]) {
+    for model in extra {
+        if !models.iter().any(|existing| existing == model) {
+            models.push((*model).to_string());
+        }
+    }
+}
+
 /// Maps settings/runtime provider variants onto the canonical models.dev family.
 fn canonical_models_provider(provider: &ProviderKind) -> ProviderKind {
     match provider {
@@ -122,9 +141,10 @@ fn models_dev_id_to_providers(id: &str) -> &'static [ProviderKind] {
         "chatgpt" => &[ProviderKind::ChatGPT],
         "github-copilot" => &[ProviderKind::GitHubCopilot],
         "minimax" => &[ProviderKind::MiniMax, ProviderKind::MiniMaxAnthropic],
-        "moonshot" | "moonshotai" | "moonshotai-cn" | "kimi-for-coding" => {
+        "moonshot" | "moonshotai" | "moonshotai-cn" => {
             &[ProviderKind::Moonshot, ProviderKind::MoonshotAnthropic]
         }
+        "kimi-for-coding" => &[ProviderKind::Moonshot],
         "z-ai" | "zai" | "zai-coding-plan" => &[ProviderKind::ZAI, ProviderKind::ZAIAnthropic],
         "deepseek" => &[ProviderKind::DeepSeek],
         "groq" => &[ProviderKind::Groq],
@@ -189,15 +209,19 @@ impl ModelRegistry {
         if let Some(entry) = guard.as_ref() {
             if let Some(models) = entry.models.get(&canonical) {
                 if !models.is_empty() {
-                    return models.clone();
+                    let mut models = models.clone();
+                    append_missing_models(&mut models, pinned_models(provider));
+                    return models;
                 }
             }
         }
         // Fallback
-        fallback_models(provider)
+        let mut models: Vec<String> = fallback_models(provider)
             .iter()
             .map(|s| s.to_string())
-            .collect()
+            .collect();
+        append_missing_models(&mut models, pinned_models(provider));
+        models
     }
 
     /// Whether the cache is stale or empty and needs a refresh.
@@ -277,7 +301,7 @@ impl ModelRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_models_provider, models_dev_id_to_providers};
+    use super::*;
     use con_agent::ProviderKind;
 
     #[test]
@@ -312,11 +336,27 @@ mod tests {
         );
         assert_eq!(
             models_dev_id_to_providers("kimi-for-coding"),
-            &[ProviderKind::Moonshot, ProviderKind::MoonshotAnthropic]
+            &[ProviderKind::Moonshot]
         );
         assert_eq!(
             models_dev_id_to_providers("zai-coding-plan"),
             &[ProviderKind::ZAI, ProviderKind::ZAIAnthropic]
+        );
+    }
+
+    #[test]
+    fn pinned_models_are_merged_into_live_cache() {
+        let registry = ModelRegistry::new();
+        let mut models = HashMap::new();
+        models.insert(ProviderKind::Moonshot, vec!["kimi-k2.5".to_string()]);
+        *registry.inner.lock().unwrap() = Some(CacheEntry {
+            models,
+            fetched_at: Instant::now(),
+        });
+
+        assert_eq!(
+            registry.models_for(&ProviderKind::Moonshot),
+            vec!["kimi-k2.5".to_string(), "kimi-for-coding".to_string()]
         );
     }
 }
