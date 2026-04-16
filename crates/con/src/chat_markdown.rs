@@ -665,7 +665,10 @@ fn render_table_block(
 
     let header = &rows[0];
     let column_count = header.len().max(1);
-    let table_min_width = px(column_count.max(2) as f32 * 180.0);
+    let table_min_width = match column_count {
+        2 => px(520.0),
+        _ => px(column_count.max(2) as f32 * 180.0),
+    };
     let body_rows = rows.iter().skip(1).enumerate().map(|(row_idx, row)| {
         let row_content = div()
             .w_full()
@@ -753,10 +756,11 @@ fn render_table_cell(
         .unwrap_or(MarkdownTableAlign::Left);
 
     let content = render_inline_content(cell, &base_style, style);
+    let column_min_width = table_column_min_width(column_idx, column_count);
 
     let content_cell = div()
         .flex_1()
-        .min_w(px(68.0))
+        .min_w(column_min_width)
         .min_w_0()
         .px(px(12.0))
         .py(px(if is_header { 8.0 } else { 8.5 }))
@@ -766,7 +770,7 @@ fn render_table_cell(
             MarkdownTableAlign::Left | MarkdownTableAlign::None => div().w_full().child(content),
         });
 
-    let basis = relative(1.0 / column_count as f32);
+    let basis = table_column_basis(column_idx, column_count);
 
     if column_idx > 0 {
         div()
@@ -774,7 +778,7 @@ fn render_table_cell(
             .flex_grow()
             .flex_shrink()
             .flex_basis(basis)
-            .min_w(px(68.0))
+            .min_w(column_min_width)
             .min_w_0()
             .bg(style.table_border)
             .child(div().w(px(1.0)).self_stretch())
@@ -785,10 +789,26 @@ fn render_table_cell(
             .flex_grow()
             .flex_shrink()
             .flex_basis(basis)
-            .min_w(px(68.0))
+            .min_w(column_min_width)
             .min_w_0()
             .child(content_cell)
             .into_any_element()
+    }
+}
+
+fn table_column_basis(column_idx: usize, column_count: usize) -> gpui::DefiniteLength {
+    match (column_count, column_idx) {
+        (2, 0) => relative(0.34),
+        (2, 1) => relative(0.66),
+        _ => relative(1.0 / column_count as f32),
+    }
+}
+
+fn table_column_min_width(column_idx: usize, column_count: usize) -> gpui::Pixels {
+    match (column_count, column_idx) {
+        (2, 0) => px(180.0),
+        (2, 1) => px(320.0),
+        _ => px(120.0),
     }
 }
 

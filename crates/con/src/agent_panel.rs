@@ -1032,30 +1032,9 @@ impl AgentPanel {
     }
 
     fn inline_history_boundary(value: &str, cursor: u32, previous: bool) -> bool {
-        if !value.contains('\n') {
-            return true;
-        }
-
-        let cursor_chars = cursor as usize;
-        let mut line_index = 0usize;
-        let mut seen_chars = 0usize;
-
-        for ch in value.chars() {
-            if seen_chars >= cursor_chars {
-                break;
-            }
-            if ch == '\n' {
-                line_index += 1;
-            }
-            seen_chars += 1;
-        }
-
-        let last_line_index = value.lines().count().saturating_sub(1);
-        if previous {
-            line_index == 0
-        } else {
-            line_index >= last_line_index
-        }
+        let _ = cursor;
+        let _ = previous;
+        !value.contains('\n')
     }
 
     fn handle_inline_navigation_key(
@@ -4256,13 +4235,25 @@ mod tests {
     use super::AgentPanel;
 
     #[test]
-    fn multiline_history_boundary_only_triggers_on_first_or_last_line() {
+    fn multiline_drafts_disable_inline_history_navigation() {
         let text = "first line\nsecond line\nthird line";
 
-        assert!(AgentPanel::inline_history_boundary(text, 0, true));
-        assert!(AgentPanel::inline_history_boundary(text, 4, true));
+        assert!(!AgentPanel::inline_history_boundary(text, 0, true));
+        assert!(!AgentPanel::inline_history_boundary(text, 4, true));
         assert!(!AgentPanel::inline_history_boundary(text, 12, true));
         assert!(!AgentPanel::inline_history_boundary(text, 15, false));
+        assert!(!AgentPanel::inline_history_boundary(
+            text,
+            text.chars().count() as u32,
+            false,
+        ));
+    }
+
+    #[test]
+    fn single_line_drafts_keep_inline_history_navigation() {
+        let text = "single line";
+
+        assert!(AgentPanel::inline_history_boundary(text, 0, true));
         assert!(AgentPanel::inline_history_boundary(
             text,
             text.chars().count() as u32,
