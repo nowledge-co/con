@@ -164,6 +164,10 @@ const BACKGROUND_IMAGE_POSITIONS: &[&str] = &[
 const BACKGROUND_IMAGE_FITS: &[&str] = &["contain", "cover", "stretch", "none"];
 const ENDPOINT_DEFAULT_LABEL: &str = "Provider Default";
 const ENDPOINT_CUSTOM_LABEL: &str = "Custom";
+const KIMI_CODING_ENDPOINT: EndpointPreset = EndpointPreset {
+    label: "Kimi Coding",
+    base_url: "https://api.kimi.com/coding/v1",
+};
 
 #[derive(Clone, Copy)]
 struct EndpointPreset {
@@ -598,10 +602,7 @@ impl SettingsPanel {
                     label: "China",
                     base_url: "https://api.moonshot.cn/v1",
                 },
-                EndpointPreset {
-                    label: "Kimi Coding",
-                    base_url: "https://api.kimi.com/coding/v1",
-                },
+                KIMI_CODING_ENDPOINT,
             ],
             ProviderKind::MoonshotAnthropic => &[EndpointPreset {
                 label: "Global",
@@ -625,17 +626,54 @@ impl SettingsPanel {
         }
     }
 
+    fn extra_endpoint_presets(provider: &ProviderKind) -> &'static [EndpointPreset] {
+        match provider {
+            // Kimi Coding is OpenAI-compatible only. Show it while the Moonshot
+            // card is in Anthropic mode and switch back to OpenAI when selected.
+            ProviderKind::MoonshotAnthropic => &[KIMI_CODING_ENDPOINT],
+            _ => &[],
+        }
+    }
+
     fn endpoint_options(provider: &ProviderKind) -> Vec<String> {
         let presets = Self::provider_endpoint_presets(provider);
-        if presets.is_empty() {
+        let extra_presets = Self::extra_endpoint_presets(provider);
+        if presets.is_empty() && extra_presets.is_empty() {
             return vec![ENDPOINT_DEFAULT_LABEL.to_string()];
         }
 
-        let mut options = Vec::with_capacity(presets.len() + 2);
+        let mut options = Vec::with_capacity(presets.len() + extra_presets.len() + 2);
         options.push(ENDPOINT_DEFAULT_LABEL.to_string());
         options.extend(presets.iter().map(|preset| preset.label.to_string()));
+        for preset in extra_presets {
+            if !options.iter().any(|option| option == preset.label) {
+                options.push(preset.label.to_string());
+            }
+        }
         options.push(ENDPOINT_CUSTOM_LABEL.to_string());
         options
+    }
+
+    fn endpoint_preset_for_label(
+        provider: &ProviderKind,
+        label: &str,
+    ) -> Option<(ProviderKind, EndpointPreset)> {
+        if let Some(preset) = Self::provider_endpoint_presets(provider)
+            .iter()
+            .copied()
+            .find(|preset| preset.label == label)
+        {
+            return Some((provider.clone(), preset));
+        }
+
+        Self::extra_endpoint_presets(provider)
+            .iter()
+            .copied()
+            .find(|preset| preset.label == label)
+            .and_then(|preset| match provider {
+                ProviderKind::MoonshotAnthropic => Some((ProviderKind::Moonshot, preset)),
+                _ => None,
+            })
     }
 
     fn endpoint_label_for_base_url(
@@ -647,6 +685,11 @@ impl SettingsPanel {
         };
 
         for preset in Self::provider_endpoint_presets(provider) {
+            if preset.base_url == base_url {
+                return preset.label;
+            }
+        }
+        for preset in Self::extra_endpoint_presets(provider) {
             if preset.base_url == base_url {
                 return preset.label;
             }
@@ -734,11 +777,39 @@ impl SettingsPanel {
                     }
                     ENDPOINT_CUSTOM_LABEL => {}
                     _ => {
-                        if let Some(preset) =
-                            Self::provider_endpoint_presets(&this.selected_provider)
-                                .iter()
-                                .find(|preset| preset.label == value.as_str())
-                        {
+                        if let Some((target_provider, preset)) = Self::endpoint_preset_for_label(
+                            &this.selected_provider,
+                            value.as_str(),
+                        ) {
+                            if target_provider != this.selected_provider {
+                                let source_provider = this.selected_provider.clone();
+                                let source_config = this.read_provider_inputs(cx);
+                                this.config
+                                    .agent
+                                    .providers
+                                    .set(&source_provider, source_config.clone());
+
+                                let target_config =
+                                    this.config.agent.providers.get_or_default(&target_provider);
+                                let mut seeded_target = Self::seed_protocol_variant_config(
+                                    &source_provider,
+                                    &target_provider,
+                                    &source_config,
+                                    &target_config,
+                                );
+                                seeded_target.base_url = Some(preset.base_url.to_string());
+                                this.config
+                                    .agent
+                                    .providers
+                                    .set(&target_provider, seeded_target);
+                                this.config.agent.set_provider_transport(
+                                    &target_provider,
+                                    Some(ProviderTransport::OpenAI),
+                                );
+                                this.transition_provider(target_provider, window, cx);
+                                return;
+                            }
+
                             this.base_url_input.update(cx, |input, cx| {
                                 input.set_value(preset.base_url, window, cx);
                             });
@@ -869,7 +940,7 @@ impl SettingsPanel {
 
         let model_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
-            s.set_placeholder("Provider default", window, cx);
+            s.set_placeholder("Provider default or custom model ID", window, cx);
             s.set_value(&pc.model.clone().unwrap_or_default(), window, cx);
             s
         });
@@ -1439,7 +1510,16 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SelectState<SearchableVec<String>>> {
-        let models: Vec<String> = registry.models_for(provider);
+        let mut models: Vec<String> = registry.models_for(provider);
+        if let Some(model) = current_model
+            .as_ref()
+            .map(|model| model.trim())
+            .filter(|model| !model.is_empty())
+        {
+            if !models.iter().any(|item| item == model) {
+                models.insert(0, model.to_string());
+            }
+        }
         let selected_index = current_model
             .as_ref()
             .and_then(|m| models.iter().position(|item| item == m).map(IndexPath::new));
@@ -3311,13 +3391,18 @@ impl SettingsPanel {
                         ),
                 )
                 .child(if models.is_empty() {
-                    div().child(Input::new(&model_input))
+                    div().child(Input::new(&model_input).small())
                 } else {
-                    div().child(
-                        Select::new(&model_select)
-                            .placeholder("Select a model…")
-                            .small(),
-                    )
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .child(
+                            Select::new(&model_select)
+                                .placeholder("Select a known model…")
+                                .small(),
+                        )
+                        .child(Input::new(&model_input).small())
                 }),
         );
 

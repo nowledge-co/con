@@ -108,6 +108,21 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
     }
 }
 
+fn pinned_models(provider: &ProviderKind) -> &'static [&'static str] {
+    match provider {
+        ProviderKind::Moonshot => &["kimi-for-coding"],
+        _ => &[],
+    }
+}
+
+fn append_missing_models(models: &mut Vec<String>, extra: &[&str]) {
+    for model in extra {
+        if !models.iter().any(|existing| existing == model) {
+            models.push((*model).to_string());
+        }
+    }
+}
+
 /// Maps settings/runtime provider variants onto the canonical models.dev family.
 fn canonical_models_provider(provider: &ProviderKind) -> ProviderKind {
     match provider {
@@ -194,15 +209,19 @@ impl ModelRegistry {
         if let Some(entry) = guard.as_ref() {
             if let Some(models) = entry.models.get(&canonical) {
                 if !models.is_empty() {
-                    return models.clone();
+                    let mut models = models.clone();
+                    append_missing_models(&mut models, pinned_models(provider));
+                    return models;
                 }
             }
         }
         // Fallback
-        fallback_models(provider)
+        let mut models: Vec<String> = fallback_models(provider)
             .iter()
             .map(|s| s.to_string())
-            .collect()
+            .collect();
+        append_missing_models(&mut models, pinned_models(provider));
+        models
     }
 
     /// Whether the cache is stale or empty and needs a refresh.
@@ -282,7 +301,7 @@ impl ModelRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_models_provider, models_dev_id_to_providers};
+    use super::*;
     use con_agent::ProviderKind;
 
     #[test]
@@ -322,6 +341,22 @@ mod tests {
         assert_eq!(
             models_dev_id_to_providers("zai-coding-plan"),
             &[ProviderKind::ZAI, ProviderKind::ZAIAnthropic]
+        );
+    }
+
+    #[test]
+    fn pinned_models_are_merged_into_live_cache() {
+        let registry = ModelRegistry::new();
+        let mut models = HashMap::new();
+        models.insert(ProviderKind::Moonshot, vec!["kimi-k2.5".to_string()]);
+        *registry.inner.lock().unwrap() = Some(CacheEntry {
+            models,
+            fetched_at: Instant::now(),
+        });
+
+        assert_eq!(
+            registry.models_for(&ProviderKind::Moonshot),
+            vec!["kimi-k2.5".to_string(), "kimi-for-coding".to_string()]
         );
     }
 }
