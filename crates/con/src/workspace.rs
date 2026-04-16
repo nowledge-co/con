@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
-const AGENT_PANEL_MAX_WIDTH: f32 = 800.0;
+const TERMINAL_MIN_CONTENT_WIDTH: f32 = 360.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
@@ -41,6 +41,10 @@ fn chrome_tooltip(label: &str, stroke: Option<Keystroke>, window: &mut Window, c
         content
     })
     .build(window, cx)
+}
+
+fn max_agent_panel_width(window_width: f32) -> f32 {
+    (window_width - TERMINAL_MIN_CONTENT_WIDTH).max(AGENT_PANEL_MIN_WIDTH)
 }
 
 use crate::agent_panel::{
@@ -5754,7 +5758,10 @@ impl Render for ConWorkspace {
             .clamp(0.0, 1.0)
             .powf(0.92);
         let compact_titlebar_progress = 1.0 - tab_strip_progress;
-        let animated_panel_width = self.agent_panel_width * agent_panel_progress;
+        let effective_agent_panel_width = self
+            .agent_panel_width
+            .min(max_agent_panel_width(window.bounds().size.width.as_f32()));
+        let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -5813,11 +5820,11 @@ impl Render for ConWorkspace {
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
                                             this.release_active_terminal_mouse_selection(cx);
                                             this.agent_panel_drag = Some((
                                                 f32::from(event.position.x),
-                                                this.agent_panel_width,
+                                                effective_agent_panel_width,
                                             ));
                                         }),
                                     ),
@@ -6121,8 +6128,9 @@ impl Render for ConWorkspace {
                     // Agent panel resize drag
                     if let Some((start_x, start_width)) = this.agent_panel_drag {
                         let delta = start_x - f32::from(event.position.x);
+                        let max_width = max_agent_panel_width(win.bounds().size.width.as_f32());
                         let new_width = (start_width + delta)
-                            .clamp(AGENT_PANEL_MIN_WIDTH, AGENT_PANEL_MAX_WIDTH);
+                            .clamp(AGENT_PANEL_MIN_WIDTH, max_width);
                         if (this.agent_panel_width - new_width).abs() > 1.0 {
                             this.agent_panel_width = new_width;
                             if this.active_tab >= this.tabs.len() {
@@ -6163,12 +6171,14 @@ impl Render for ConWorkspace {
                     // (tab bar ~38px, input bar ~40px, agent panel if open)
                     let win_w = f32::from(win.bounds().size.width);
                     let win_h = f32::from(win.bounds().size.height);
+                    let effective_agent_panel_width =
+                        this.agent_panel_width.min(max_agent_panel_width(win_w));
                     let (current_pos, total_size) =
                         if let Some(dir) = pane_tree.dragging_direction() {
                             match dir {
                                 SplitDirection::Horizontal => {
                                     let panel_w = if this.agent_panel_open {
-                                        this.agent_panel_width + 7.0
+                                        effective_agent_panel_width + 7.0
                                     } else {
                                         0.0
                                     };
@@ -6693,9 +6703,12 @@ impl Render for ConWorkspace {
         if has_inline_skill_popup {
             let theme = cx.theme();
             let popup_bottom = self.agent_panel.read(cx).inline_skill_popup_offset(cx);
-            let panel_left = window.bounds().size.width.as_f32() - self.agent_panel_width;
+            let effective_agent_panel_width = self
+                .agent_panel_width
+                .min(max_agent_panel_width(window.bounds().size.width.as_f32()));
+            let panel_left = window.bounds().size.width.as_f32() - effective_agent_panel_width;
             let popup_left = px((panel_left + 8.0).max(24.0));
-            let popup_width = px((self.agent_panel_width - 24.0).clamp(180.0, 320.0));
+            let popup_width = px((effective_agent_panel_width - 24.0).clamp(180.0, 320.0));
             let skills = self
                 .agent_panel
                 .read(cx)

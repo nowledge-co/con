@@ -311,8 +311,12 @@ pub fn render_parsed_chat_markdown(
         .flex()
         .flex_col()
         .gap(style.block_gap)
-        .max_w(style.content_width)
-        .children(blocks.iter().enumerate().map(|(idx, block)| render_block(block, idx, &style)))
+        .children(
+            blocks
+                .iter()
+                .enumerate()
+                .map(|(idx, block)| render_block_with_width(block, idx, &style)),
+        )
         .into_any_element()
 }
 
@@ -648,6 +652,19 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
     }
 }
 
+fn render_block_with_width(
+    block: &MarkdownBlock,
+    index: usize,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let mut wrapper = div().w_full();
+    if !matches!(block, MarkdownBlock::CodeBlock { .. } | MarkdownBlock::Table { .. }) {
+        wrapper = wrapper.max_w(style.content_width);
+    }
+
+    wrapper.child(render_block(block, index, style)).into_any_element()
+}
+
 fn ordered_list_marker_lane_width(max_marker: usize) -> gpui::Pixels {
     let digits = max_marker.max(1).to_string().len() as f32;
     px(14.0 + digits * 8.0)
@@ -665,10 +682,7 @@ fn render_table_block(
 
     let header = &rows[0];
     let column_count = header.len().max(1);
-    let table_min_width = match column_count {
-        2 => px(520.0),
-        _ => px(column_count.max(2) as f32 * 180.0),
-    };
+    let table_min_width = table_min_width(column_count);
     let body_rows = rows.iter().skip(1).enumerate().map(|(row_idx, row)| {
         let row_content = div()
             .w_full()
@@ -731,6 +745,18 @@ fn render_table_block(
                 ),
         )
         .into_any_element()
+}
+
+fn table_min_width(column_count: usize) -> gpui::Pixels {
+    let safe_count = column_count.max(1);
+    let content_width = (0..safe_count)
+        .map(|column_idx| table_column_min_width(column_idx, safe_count))
+        .fold(px(0.0), |sum, width| sum + width);
+    let horizontal_padding = px(safe_count as f32 * 24.0);
+    let separators = px(safe_count.saturating_sub(1) as f32);
+    let outer_border = px(2.0);
+
+    content_width + horizontal_padding + separators + outer_border
 }
 
 fn render_table_cell(
