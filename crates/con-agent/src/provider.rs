@@ -6,7 +6,7 @@ use rig::agent::{MultiTurnStreamItem, StreamingResult};
 use rig::client::CompletionClient;
 use rig::client::Nothing;
 use rig::providers::{
-    anthropic, chatgpt, cohere, deepseek, gemini, github_copilot, groq, minimax, mistral, moonshot,
+    anthropic, chatgpt, cohere, copilot, deepseek, gemini, groq, minimax, mistral, moonshot,
     ollama, openai, openrouter, perplexity, together, xai, zai,
 };
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
@@ -538,7 +538,7 @@ where
         ProviderKind::GitHubCopilot => {
             let prompt_handler = prompt_handler.clone();
             let mut builder =
-                github_copilot::Client::builder()
+                copilot::Client::builder()
                     .oauth()
                     .on_device_code(move |prompt| {
                         prompt_handler(OAuthDevicePrompt {
@@ -1244,103 +1244,11 @@ impl AgentProvider {
             };
         }
 
-        macro_rules! stream_with_model {
-            ($model:expr) => {{
-                let root: std::path::PathBuf = workspace_root.clone();
-                let mut builder = rig::agent::AgentBuilder::new($model)
-                    .preamble(&system_prompt)
-                    .tool(TerminalExecTool::new(terminal_exec_tx.clone()))
-                    .tool(ShellExecTool)
-                    .tool(FileReadTool::new(root.clone()))
-                    .tool(FileWriteTool::new(root.clone()))
-                    .tool(EditFileTool::new(root.clone()))
-                    .tool(ListFilesTool::new(root.clone()))
-                    .tool(SearchTool::new(root))
-                    .tool(ListPanesTool::new(pane_tx.clone()))
-                    .tool(ListTabWorkspacesTool::new(pane_tx.clone()))
-                    .tool(TmuxInspectTool::new(pane_tx.clone()))
-                    .tool(TmuxListTool::new(pane_tx.clone()))
-                    .tool(TmuxCaptureTool::new(pane_tx.clone()))
-                    .tool(TmuxFindTargetsTool::new(pane_tx.clone()))
-                    .tool(ResolveWorkTargetTool::new(pane_tx.clone()))
-                    .tool(EnsureLocalCodingWorkspaceTool::new(pane_tx.clone()))
-                    .tool(AgentCliTurnTool::new(pane_tx.clone()))
-                    .tool(EnsureLocalAgentTargetTool::new(pane_tx.clone()))
-                    .tool(EnsureLocalShellTargetTool::new(pane_tx.clone()))
-                    .tool(EnsureRemoteShellTargetTool::new(pane_tx.clone()))
-                    .tool(EnsureRemoteTmuxShellTargetTool::new(
-                        pane_tx.clone(),
-                        terminal_exec_tx.clone(),
-                    ))
-                    .tool(EnsureRemoteTmuxWorkspaceTool::new(
-                        pane_tx.clone(),
-                        terminal_exec_tx.clone(),
-                    ))
-                    .tool(RemoteExecTool::new(
-                        pane_tx.clone(),
-                        terminal_exec_tx.clone(),
-                    ))
-                    .tool(TmuxEnsureShellTargetTool::new(pane_tx.clone()))
-                    .tool(TmuxShellTurnTool::new(pane_tx.clone()))
-                    .tool(TmuxSendKeysTool::new(pane_tx.clone()))
-                    .tool(TmuxRunCommandTool::new(pane_tx.clone()))
-                    .tool(TmuxEnsureAgentTargetTool::new(pane_tx.clone()))
-                    .tool(ProbeShellContextTool::new(pane_tx.clone()))
-                    .tool(ReadPaneTool::new(pane_tx.clone()))
-                    .tool(SendKeysTool::new(pane_tx.clone()))
-                    .tool(SearchPanesTool::new(pane_tx.clone()))
-                    .tool(CreatePaneTool::new(pane_tx.clone()))
-                    .tool(WaitForTool::new(pane_tx, cancelled.clone()))
-                    .tool(BatchExecTool::new(terminal_exec_tx))
-                    .default_max_turns(self.config.max_turns);
-
-                if let Some(max_tokens) = self.config.effective_max_tokens(kind) {
-                    builder = builder.max_tokens(max_tokens);
-                }
-                if let Some(temp) = self.config.temperature {
-                    builder = builder.temperature(temp);
-                }
-
-                let agent = builder.build();
-                match agent.tool_server_handle.get_tool_defs(None).await {
-                    Ok(defs) => {
-                        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-                        log::info!(
-                            "[agent] Registered {} tools for {:?}/{}: {:?}",
-                            defs.len(),
-                            kind,
-                            self.config.effective_model(kind),
-                            names,
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("[agent] Failed to query tool definitions: {}", e);
-                    }
-                }
-
-                let stream = agent
-                    .stream_prompt(&last_user_msg)
-                    .with_hook(hook)
-                    .with_history(chat_history)
-                    .await;
-
-                consume_stream(stream, &event_tx, &cancelled).await?
-            }};
-        }
-
         let response = match *kind {
             ProviderKind::Anthropic => stream_with!(self.build_anthropic_client()?),
             ProviderKind::OpenAI => stream_with!(self.build_openai_client()?),
             ProviderKind::ChatGPT => stream_with!(self.build_chatgpt_client()?),
-            ProviderKind::GitHubCopilot => {
-                let client = self.build_github_copilot_client()?;
-                let model = self.config.effective_model(kind);
-                if github_copilot::requires_responses_api(model) {
-                    stream_with_model!(client.responses_model(model))
-                } else {
-                    stream_with!(client)
-                }
-            }
+            ProviderKind::GitHubCopilot => stream_with!(self.build_github_copilot_client()?),
             ProviderKind::OpenAICompatible => {
                 stream_with!(self.build_openai_compatible_client()?)
             }
@@ -1439,8 +1347,8 @@ impl AgentProvider {
             .map_err(|e| anyhow::anyhow!("ChatGPT client error: {e}"))
     }
 
-    fn build_github_copilot_client(&self) -> Result<github_copilot::Client> {
-        let mut builder = github_copilot::Client::builder();
+    fn build_github_copilot_client(&self) -> Result<copilot::Client> {
+        let mut builder = copilot::Client::builder();
         if let Some(url) = self.config.effective_base_url(&ProviderKind::GitHubCopilot) {
             builder = builder.base_url(url);
         }
