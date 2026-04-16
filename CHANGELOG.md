@@ -32,6 +32,9 @@ con is still pre-release, so entries may group larger areas of work while the pr
 
 ### Improved
 
+**Interface**
+- The agent panel can now expand with the window instead of stopping at a fixed width ceiling, while still preserving a minimum terminal area. Wide markdown content such as tables and code blocks now uses the panel's full available width instead of being forced through the prose column.
+
 **Release and Packaging**
 - The macOS app bundle, updater, and release pipeline are now documented and exercised as real product surfaces. Local updater testing now runs from a bundled beta app instead of `cargo run`, and version metadata is visible in both Settings and the About window.
 - Workspace dependencies no longer rely on local `3pp/` checkouts at build time. GPUI, gpui-component, Rig, and Ghostty now resolve from upstream git sources or scripted fetches instead of local path dependencies.
@@ -223,6 +226,9 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Polished provider setup and pane scope controls for the beta. The provider list now shows provider icons with clear configured/unconfigured state, and the pane-scope picker uses matched frame geometry between the mode switcher and minimap.
 - Fixed command palette dismissal focus. Pressing Escape now returns focus to the active terminal so Cmd-Shift-P can reopen the palette immediately without clicking the terminal first.
 - Fixed the side agent-panel composer empty-state layout so the input keeps the same full-width shell even when no LLM provider is configured.
+- Fixed right-panel composer history navigation so multiline drafts keep normal Up/Down cursor movement, while single-line prompts still support submitted-history recall.
+- Improved markdown table rendering for complex prose tables in the agent panel by using a stable minimum table width with horizontal scrolling instead of collapsing all columns into a narrow wrapped stack.
+- Fixed bottom command-bar history so it only recalls single-line entries. Multiline agent prompts no longer get injected into the single-line command bar and crash GPUI on Up/Down recall.
 - Command palette (Cmd+Shift+P) with fuzzy search for every action
 - Session sidebar showing your open tabs
 - Four built-in terminal color themes — Flexoki Dark, Flexoki Light, Catppuccin Mocha, and Tokyo Night. Switch instantly from Settings, or set your default in config.toml.

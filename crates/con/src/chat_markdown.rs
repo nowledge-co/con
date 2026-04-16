@@ -2,9 +2,9 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use gpui::{
-    AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, IntoElement,
-    ParentElement, SharedString, Styled, StyledText, TextStyle, TextRun, UnderlineStyle,
-    WhiteSpace, div, px, relative,
+    AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, InteractiveElement,
+    IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, StyledText,
+    TextStyle, TextRun, UnderlineStyle, WhiteSpace, div, px, relative,
 };
 use gpui_component::clipboard::Clipboard;
 use gpui_component::highlighter::SyntaxHighlighter;
@@ -311,8 +311,12 @@ pub fn render_parsed_chat_markdown(
         .flex()
         .flex_col()
         .gap(style.block_gap)
-        .max_w(style.content_width)
-        .children(blocks.iter().enumerate().map(|(idx, block)| render_block(block, idx, &style)))
+        .children(
+            blocks
+                .iter()
+                .enumerate()
+                .map(|(idx, block)| render_block_with_width(block, idx, &style)),
+        )
         .into_any_element()
 }
 
@@ -639,7 +643,7 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
                     .into_any_element()
             }))
             .into_any_element(),
-        MarkdownBlock::Table { aligns, rows } => render_table_block(aligns, rows, style),
+        MarkdownBlock::Table { aligns, rows } => render_table_block(index, aligns, rows, style),
         MarkdownBlock::Rule => div()
             .w_full()
             .h(px(1.0))
@@ -648,12 +652,26 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
     }
 }
 
+fn render_block_with_width(
+    block: &MarkdownBlock,
+    index: usize,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let mut wrapper = div().w_full();
+    if !matches!(block, MarkdownBlock::CodeBlock { .. } | MarkdownBlock::Table { .. }) {
+        wrapper = wrapper.max_w(style.content_width);
+    }
+
+    wrapper.child(render_block(block, index, style)).into_any_element()
+}
+
 fn ordered_list_marker_lane_width(max_marker: usize) -> gpui::Pixels {
     let digits = max_marker.max(1).to_string().len() as f32;
     px(14.0 + digits * 8.0)
 }
 
 fn render_table_block(
+    index: usize,
     aligns: &[MarkdownTableAlign],
     rows: &[Vec<Vec<MarkdownInline>>],
     style: &ChatMarkdownStyle<'_>,
@@ -664,10 +682,12 @@ fn render_table_block(
 
     let header = &rows[0];
     let column_count = header.len().max(1);
+    let table_min_width = table_min_width(column_count);
     let body_rows = rows.iter().skip(1).enumerate().map(|(row_idx, row)| {
         let row_content = div()
             .w_full()
             .flex()
+            .items_stretch()
             .bg(style.table_cell_background)
             .children(row.iter().enumerate().map(|(column_idx, cell)| {
                 render_table_cell(cell, column_idx, column_count, aligns, false, style)
@@ -687,30 +707,56 @@ fn render_table_block(
     });
 
     div()
+        .id(("chat-md-table-scroll", index))
         .w_full()
-        .overflow_hidden()
-        .rounded(px(10.0))
-        .bg(style.table_border)
-        .p(px(1.0))
+        .overflow_x_scroll()
         .child(
             div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .bg(style.table_cell_background)
+                .min_w(table_min_width)
+                .overflow_hidden()
+                .rounded(px(10.0))
+                .bg(style.table_border)
+                .p(px(1.0))
                 .child(
                     div()
                         .w_full()
                         .flex()
-                        .bg(style.table_header_background)
-                        .children(header.iter().enumerate().map(|(column_idx, cell)| {
-                            render_table_cell(cell, column_idx, column_count, aligns, true, style)
-                        })),
-                )
-                .child(div().h(px(1.0)).bg(style.table_border))
-                .children(body_rows),
+                        .flex_col()
+                        .bg(style.table_cell_background)
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_stretch()
+                                .bg(style.table_header_background)
+                                .children(header.iter().enumerate().map(|(column_idx, cell)| {
+                                    render_table_cell(
+                                        cell,
+                                        column_idx,
+                                        column_count,
+                                        aligns,
+                                        true,
+                                        style,
+                                    )
+                                })),
+                        )
+                        .child(div().h(px(1.0)).bg(style.table_border))
+                        .children(body_rows),
+                ),
         )
         .into_any_element()
+}
+
+fn table_min_width(column_count: usize) -> gpui::Pixels {
+    let safe_count = column_count.max(1);
+    let content_width = (0..safe_count)
+        .map(|column_idx| table_column_min_width(column_idx, safe_count))
+        .fold(px(0.0), |sum, width| sum + width);
+    let horizontal_padding = px(safe_count as f32 * 24.0);
+    let separators = px(safe_count.saturating_sub(1) as f32);
+    let outer_border = px(2.0);
+
+    content_width + horizontal_padding + separators + outer_border
 }
 
 fn render_table_cell(
@@ -736,11 +782,11 @@ fn render_table_cell(
         .unwrap_or(MarkdownTableAlign::Left);
 
     let content = render_inline_content(cell, &base_style, style);
+    let column_min_width = table_column_min_width(column_idx, column_count);
 
     let content_cell = div()
         .flex_1()
-        .min_w(px(68.0))
-        .min_w_0()
+        .min_w(column_min_width)
         .px(px(12.0))
         .py(px(if is_header { 8.0 } else { 8.5 }))
         .child(match align {
@@ -749,7 +795,7 @@ fn render_table_cell(
             MarkdownTableAlign::Left | MarkdownTableAlign::None => div().w_full().child(content),
         });
 
-    let basis = relative(1.0 / column_count as f32);
+    let basis = table_column_basis(column_idx, column_count);
 
     if column_idx > 0 {
         div()
@@ -757,8 +803,7 @@ fn render_table_cell(
             .flex_grow()
             .flex_shrink()
             .flex_basis(basis)
-            .min_w(px(68.0))
-            .min_w_0()
+            .min_w(column_min_width)
             .bg(style.table_border)
             .child(div().w(px(1.0)).self_stretch())
             .child(content_cell)
@@ -768,10 +813,25 @@ fn render_table_cell(
             .flex_grow()
             .flex_shrink()
             .flex_basis(basis)
-            .min_w(px(68.0))
-            .min_w_0()
+            .min_w(column_min_width)
             .child(content_cell)
             .into_any_element()
+    }
+}
+
+fn table_column_basis(column_idx: usize, column_count: usize) -> gpui::DefiniteLength {
+    match (column_count, column_idx) {
+        (2, 0) => relative(0.34),
+        (2, 1) => relative(0.66),
+        _ => relative(1.0 / column_count as f32),
+    }
+}
+
+fn table_column_min_width(column_idx: usize, column_count: usize) -> gpui::Pixels {
+    match (column_count, column_idx) {
+        (2, 0) => px(180.0),
+        (2, 1) => px(320.0),
+        _ => px(120.0),
     }
 }
 

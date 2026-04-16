@@ -1022,6 +1022,21 @@ impl AgentPanel {
         })
     }
 
+    fn inline_history_boundary_reached(&self, previous: bool, cx: &App) -> bool {
+        let Some(ref input) = self.inline_input_state else {
+            return false;
+        };
+
+        let state = input.read(cx);
+        Self::inline_history_boundary(&state.value(), state.cursor() as u32, previous)
+    }
+
+    fn inline_history_boundary(value: &str, cursor: u32, previous: bool) -> bool {
+        let _ = cursor;
+        let _ = previous;
+        !value.contains('\n')
+    }
+
     fn handle_inline_navigation_key(
         &mut self,
         key: &str,
@@ -1043,8 +1058,12 @@ impl AgentPanel {
                 cx.notify();
                 true
             }
-            "up" => self.navigate_inline_history(true, window, cx),
-            "down" => self.navigate_inline_history(false, window, cx),
+            "up" if self.inline_history_boundary_reached(true, cx) => {
+                self.navigate_inline_history(true, window, cx)
+            }
+            "down" if self.inline_history_boundary_reached(false, cx) => {
+                self.navigate_inline_history(false, window, cx)
+            }
             _ => false,
         }
     }
@@ -4209,6 +4228,38 @@ fn humanize_model_name(model: &str) -> String {
     }
     // Fallback: show as-is but truncated
     truncate_str(model, 24)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentPanel;
+
+    #[test]
+    fn multiline_drafts_disable_inline_history_navigation() {
+        let text = "first line\nsecond line\nthird line";
+
+        assert!(!AgentPanel::inline_history_boundary(text, 0, true));
+        assert!(!AgentPanel::inline_history_boundary(text, 4, true));
+        assert!(!AgentPanel::inline_history_boundary(text, 12, true));
+        assert!(!AgentPanel::inline_history_boundary(text, 15, false));
+        assert!(!AgentPanel::inline_history_boundary(
+            text,
+            text.chars().count() as u32,
+            false,
+        ));
+    }
+
+    #[test]
+    fn single_line_drafts_keep_inline_history_navigation() {
+        let text = "single line";
+
+        assert!(AgentPanel::inline_history_boundary(text, 0, true));
+        assert!(AgentPanel::inline_history_boundary(
+            text,
+            text.chars().count() as u32,
+            false,
+        ));
+    }
 }
 
 /// Format a step/tool call duration.
