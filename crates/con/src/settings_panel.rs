@@ -598,6 +598,10 @@ impl SettingsPanel {
                     label: "China",
                     base_url: "https://api.moonshot.cn/v1",
                 },
+                EndpointPreset {
+                    label: "Kimi Coding",
+                    base_url: "https://api.kimi.com/coding/v1",
+                },
             ],
             ProviderKind::MoonshotAnthropic => &[EndpointPreset {
                 label: "Global",

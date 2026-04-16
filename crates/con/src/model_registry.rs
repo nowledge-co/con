@@ -60,9 +60,13 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
         ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
             &["MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.5", "MiniMax-M2.7"]
         }
-        ProviderKind::Moonshot | ProviderKind::MoonshotAnthropic => {
-            &["kimi-k2.5", "kimi-k2", "moonshot-v1-128k"]
-        }
+        ProviderKind::Moonshot => &[
+            "kimi-for-coding",
+            "kimi-k2.5",
+            "kimi-k2",
+            "moonshot-v1-128k",
+        ],
+        ProviderKind::MoonshotAnthropic => &["kimi-k2.5", "kimi-k2", "moonshot-v1-128k"],
         ProviderKind::ZAI | ProviderKind::ZAIAnthropic => {
             &["glm-4.6", "glm-4.6-air", "glm-4.5", "glm-4.5v"]
         }
@@ -122,9 +126,10 @@ fn models_dev_id_to_providers(id: &str) -> &'static [ProviderKind] {
         "chatgpt" => &[ProviderKind::ChatGPT],
         "github-copilot" => &[ProviderKind::GitHubCopilot],
         "minimax" => &[ProviderKind::MiniMax, ProviderKind::MiniMaxAnthropic],
-        "moonshot" | "moonshotai" | "moonshotai-cn" | "kimi-for-coding" => {
+        "moonshot" | "moonshotai" | "moonshotai-cn" => {
             &[ProviderKind::Moonshot, ProviderKind::MoonshotAnthropic]
         }
+        "kimi-for-coding" => &[ProviderKind::Moonshot],
         "z-ai" | "zai" | "zai-coding-plan" => &[ProviderKind::ZAI, ProviderKind::ZAIAnthropic],
         "deepseek" => &[ProviderKind::DeepSeek],
         "groq" => &[ProviderKind::Groq],
@@ -312,7 +317,7 @@ mod tests {
         );
         assert_eq!(
             models_dev_id_to_providers("kimi-for-coding"),
-            &[ProviderKind::Moonshot, ProviderKind::MoonshotAnthropic]
+            &[ProviderKind::Moonshot]
         );
         assert_eq!(
             models_dev_id_to_providers("zai-coding-plan"),
