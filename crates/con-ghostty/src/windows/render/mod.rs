@@ -49,7 +49,10 @@ use atlas::{CellMetrics, GlyphCache, GlyphKey};
 use pipeline::{instance_for_cell, Globals, Instance, Pipeline};
 
 const ATLAS_SIZE_PX: u32 = 2048;
-const INITIAL_INSTANCE_CAPACITY: u32 = 8 * 1024; // 200x40 panes
+/// Initial instance-buffer capacity. 16 384 covers a 200×80 grid
+/// without reallocation; panes larger than that grow via
+/// `Pipeline::ensure_instance_capacity` in the hot path.
+const INITIAL_INSTANCE_CAPACITY: u32 = 16 * 1024;
 
 /// Rendering config that tracks the user's font + theme choice. The
 /// backend-facade (`WindowsGhosttyApp::update_appearance`) writes this
@@ -82,7 +85,7 @@ pub struct Renderer {
     rtv: Option<ID3D11RenderTargetView>,
     _dwrite: IDWriteFactory,
 
-    pipeline: Pipeline,
+    pipeline: std::sync::Mutex<Pipeline>,
     atlas: Mutex<GlyphCache>,
 
     /// CPU-side reusable scratch for the per-frame instance buffer.
@@ -167,7 +170,7 @@ impl Renderer {
             swapchain,
             rtv,
             _dwrite: dwrite,
-            pipeline,
+            pipeline: std::sync::Mutex::new(pipeline),
             atlas: Mutex::new(atlas),
             instances: Mutex::new(Vec::with_capacity(INITIAL_INSTANCE_CAPACITY as usize)),
             last_generation: Mutex::new(0),
@@ -315,26 +318,33 @@ impl Renderer {
         drop(atlas); // release atlas lock before GPU upload
 
         // Grow instance buffer if the grid exceeded what we allocated.
-        // Pipeline is !Send... actually it's owned by &self here; we're
-        // on the render thread. Re-borrow mutably via the Mutex-less
-        // fields would require an interior mutable `pipeline`; skip for
-        // now — assume initial capacity covers typical grids. TODO(3b):
-        // wrap pipeline in a Mutex when we add dynamic grow.
-        if instances.len() > self.pipeline.instance_capacity as usize {
-            log::warn!(
-                "instance count {} exceeds capacity {}; truncating",
-                instances.len(),
-                self.pipeline.instance_capacity
+        let mut pipeline = self
+            .pipeline
+            .lock()
+            .expect("pipeline mutex poisoned");
+        let needed = instances.len() as u32;
+        if needed > pipeline.instance_capacity {
+            // Allocate with 50% headroom so we don't thrash on
+            // every-frame minor growth during resize.
+            let new_capacity = (needed + needed / 2).max(INITIAL_INSTANCE_CAPACITY);
+            log::debug!(
+                "growing instance buffer: {} -> {} (need {})",
+                pipeline.instance_capacity,
+                new_capacity,
+                needed
             );
-            instances.truncate(self.pipeline.instance_capacity as usize);
+            pipeline
+                .ensure_instance_capacity(&self.device, new_capacity)
+                .context("ensure_instance_capacity failed")?;
         }
 
-        self.pipeline
+        pipeline
             .upload_instances(&self.context, &instances)
             .context("upload_instances failed")?;
 
         // Globals.
         let metrics = self.metrics();
+        let atlas_size = self.atlas.lock().unwrap().atlas_size() as f32;
         let inv_viewport = [
             2.0 / self.width_px.max(1) as f32,
             -2.0 / self.height_px.max(1) as f32,
@@ -347,9 +357,9 @@ impl Renderer {
             ],
             grid_cols: snapshot.cols as u32,
             grid_rows: snapshot.rows as u32,
-            _pad: [0.0; 2],
+            inv_atlas_size: [1.0 / atlas_size, 1.0 / atlas_size],
         };
-        self.pipeline
+        pipeline
             .upload_globals(&self.context, &globals)
             .context("upload_globals failed")?;
 
@@ -359,9 +369,9 @@ impl Renderer {
 
         // Atlas SRV: re-lock to hand a reference to the pipeline.
         let atlas = self.atlas.lock().unwrap();
-        self.pipeline
-            .bind_and_draw(&self.context, atlas.atlas_srv(), instance_count);
+        pipeline.bind_and_draw(&self.context, atlas.atlas_srv(), instance_count);
         drop(atlas);
+        drop(pipeline);
 
         // SAFETY: swapchain owned; Present(1, 0) waits for vsync.
         unsafe { self.swapchain.Present(1, DXGI_PRESENT(0)) }

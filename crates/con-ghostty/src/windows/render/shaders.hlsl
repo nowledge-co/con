@@ -19,7 +19,10 @@ cbuffer Globals : register(b0) {
     // Grid dims — for cursor / debug overlays.
     uint   gridCols;
     uint   gridRows;
-    float2 _pad;
+    // Inverse of atlas texture dimensions (1/width, 1/height). Used
+    // to normalize the atlas UV (which we pass in pixel coords for
+    // simplicity) into the [0,1] range the D3D sampler expects.
+    float2 invAtlasSize;
 };
 
 // ── Per-instance inputs ────────────────────────────────────────────────
@@ -87,7 +90,9 @@ VSOut vs_main(uint vid : SV_VertexID, VSInstance inst) {
 
     float2 atlasTopLeft = float2(inst.atlasRect.xy);
     float2 atlasSize    = float2(inst.atlasRect.zw);
-    o.atlasUV = atlasTopLeft + atlasSize * float2(corner);
+    // Pixel coords for the glyph rect, then normalize by the atlas
+    // texture dims so the Sample() call gets UVs in [0,1].
+    o.atlasUV = (atlasTopLeft + atlasSize * float2(corner)) * invAtlasSize;
 
     o.fg    = unpackRGBA(inst.fg);
     o.bg    = unpackRGBA(inst.bg);
@@ -97,12 +102,10 @@ VSOut vs_main(uint vid : SV_VertexID, VSInstance inst) {
 
 // ── PS ─────────────────────────────────────────────────────────────────
 float4 ps_main(VSOut i) : SV_Target {
-    // Atlas UV is in pixels; our sampler uses normalized coordinates
-    // so the caller divides by atlas dims before sample. We accept UV
-    // in pixels and normalize here via the atlas size constant.
-    // (Moved to a cbuffer in pipeline.rs for simplicity; here we assume
-    //  UV is already normalized.)
-
+    // atlasUV arrives already normalized (VS divides pixel coords by
+    // invAtlasSize). Sample the grayscale coverage from the red channel —
+    // Direct2D's DrawText with GRAYSCALE antialias writes coverage into
+    // all RGB channels of the atlas; we pick R arbitrarily.
     float coverage = atlas.Sample(samp, i.atlasUV).r;
 
     // Inverse handling: swap fg/bg when attr bit 4 is set.

@@ -57,7 +57,9 @@ pub struct Globals {
     pub cell_size: [f32; 2],
     pub grid_cols: u32,
     pub grid_rows: u32,
-    pub _pad: [f32; 2],
+    /// (1/atlas_w, 1/atlas_h) — lets the VS normalize pixel-space
+    /// glyph UVs into the [0,1] range the sampler expects.
+    pub inv_atlas_size: [f32; 2],
 }
 
 pub struct Pipeline {
@@ -150,7 +152,6 @@ impl Pipeline {
     /// Grow the instance buffer to `new_capacity` cells when the grid
     /// expands past what we've allocated. Drops the old buffer; GPU
     /// drivers allocate from a renamed pool so this is cheap.
-    #[allow(dead_code)] // wired once the render loop grows grids dynamically.
     pub fn ensure_instance_capacity(
         &mut self,
         device: &ID3D11Device,
