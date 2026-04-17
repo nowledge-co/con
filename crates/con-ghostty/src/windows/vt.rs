@@ -550,11 +550,17 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
 fn read_cell(cells: GhosttyRowCells) -> Cell {
     let mut raw: u64 = 0;
     let mut _style: u64 = 0;
-    let mut bg: u32 = 0;
-    let mut fg: u32 = 0;
+    // BG_COLOR / FG_COLOR write a `GhosttyColorRgb` (3 bytes: R, G, B)
+    // to the out pointer — NOT a packed u32. Reading into a u32 was
+    // over-reading by one byte of stack garbage AND mis-interpreting
+    // the byte layout, which produced the blue/green stripe artifact
+    // (real R→our alpha, real G→our B, real B→our G) that the user
+    // saw on the pwsh prompt.
+    let mut bg = GhosttyColorRgb::default();
+    let mut fg = GhosttyColorRgb::default();
 
     // SAFETY: out params typed per upstream contract (RAW=u64,
-    // STYLE=opaque pointer-sized, BG/FG=u32 packed RGBA).
+    // STYLE=opaque pointer-sized, BG/FG=GhosttyColorRgb).
     unsafe {
         let _ = ghostty_render_state_row_cells_get(
             cells,
@@ -581,10 +587,16 @@ fn read_cell(cells: GhosttyRowCells) -> Cell {
     let codepoint = (raw & 0xFFFF_FFFF) as u32;
     let attrs = ((raw >> 56) & 0xFF) as u8;
 
+    // Pack RGB into the 0xRRGGBBAA u32 our HLSL `unpackRGBA` expects
+    // (high byte = R, low byte = A). A=0xFF (opaque).
+    let pack = |c: GhosttyColorRgb| -> u32 {
+        ((c.r as u32) << 24) | ((c.g as u32) << 16) | ((c.b as u32) << 8) | 0xFF
+    };
+
     Cell {
         codepoint,
-        fg,
-        bg,
+        fg: pack(fg),
+        bg: pack(bg),
         attrs,
         _pad: [0; 3],
     }
