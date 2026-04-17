@@ -33,10 +33,10 @@ use windows::Win32::System::Console::{
 };
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
     LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-    STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
+    STARTUPINFOEXW, STARTUPINFOW, TerminateProcess, UpdateProcThreadAttribute,
 };
 use windows::core::PWSTR;
 
@@ -143,24 +143,30 @@ impl ConPty {
             .collect();
         let mut process_info = PROCESS_INFORMATION::default();
 
-        // CREATE_NO_WINDOW: don't attach the child to the parent's
-        // console, and don't let it pop a new one. ConPTY still works —
-        // the pseudo-console is the child's stdio, independent of the
-        // OS-level console window. Without this flag, every pane spawns
-        // a visible cmd.exe / pwsh window alongside con-app.
-        let creation_flags =
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+        // Only two flags are safe with `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`:
+        // CREATE_NO_WINDOW, DETACHED_PROCESS, and CREATE_NEW_CONSOLE are
+        // all INCOMPATIBLE with ConPTY — they prevent the conhost.exe
+        // helper (which the pty attribute launches internally) from
+        // starting, so the child never writes anything to the pipe.
+        // Seen by the user: powershell spawned successfully but zero
+        // output bytes ever reached the reader thread. The visible
+        // console flash on startup is conhost briefly initializing;
+        // the hide-window story is a later polish item.
+        let creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
 
         // SAFETY: command_line_w is mutable + NUL-terminated;
         // `attribute_buffer` keeps the attribute list alive until after
-        // CreateProcessW returns.
+        // CreateProcessW returns. `bInheritHandles = true` is REQUIRED
+        // for ConPTY — the internal conhost helper inherits the pipe
+        // ends captured by CreatePseudoConsole. Passing `false` breaks
+        // output delivery the same way CREATE_NO_WINDOW does.
         let create_result = unsafe {
             CreateProcessW(
                 None,
                 Some(PWSTR(command_line_w.as_mut_ptr())),
                 None,
                 None,
-                false,
+                true,
                 creation_flags,
                 None,
                 None,
@@ -221,9 +227,22 @@ impl ConPty {
 
 impl Drop for ConPty {
     fn drop(&mut self) {
-        // PseudoConsole's Drop closes the PCON, which EOFs the output
-        // pipe. The reader thread exits and we join it so the FnMut
-        // closure isn't dropped on a live thread.
+        // `ClosePseudoConsole` (inside PseudoConsole::drop) blocks
+        // waiting for the child to drain stdout — a hung shell makes
+        // it wait forever. Force-kill the child first so the drain
+        // terminates cleanly, then the output thread sees EOF and
+        // joins.
+        //
+        // SAFETY: process handle is owned by us; TerminateProcess with
+        // exit code 0 is the Windows equivalent of SIGKILL. We don't
+        // care about the returned bool — even if the process already
+        // exited naturally, this is a no-op.
+        let process = self.process.as_handle();
+        if !process.is_invalid() {
+            unsafe {
+                let _ = TerminateProcess(process, 0);
+            }
+        }
         if let Some(handle) = self.output_thread.take() {
             let _ = handle.join();
         }
