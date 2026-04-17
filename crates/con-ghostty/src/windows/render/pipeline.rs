@@ -22,10 +22,11 @@ use windows::Win32::Graphics::Direct3D::Fxc::{
 use windows::Win32::Graphics::Direct3D::{ID3DBlob, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_INDEX_BUFFER, D3D11_BIND_VERTEX_BUFFER,
-    D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_INPUT_ELEMENT_DESC,
-    D3D11_INPUT_PER_INSTANCE_DATA, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_WRITE_DISCARD,
-    D3D11_SUBRESOURCE_DATA, D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE,
-    ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11InputLayout, ID3D11PixelShader,
+    D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_CULL_NONE, D3D11_FILL_SOLID,
+    D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_INSTANCE_DATA, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_MAP_WRITE_DISCARD, D3D11_RASTERIZER_DESC, D3D11_SUBRESOURCE_DATA,
+    D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE, ID3D11Buffer, ID3D11Device,
+    ID3D11DeviceContext, ID3D11InputLayout, ID3D11PixelShader, ID3D11RasterizerState,
     ID3D11SamplerState, ID3D11VertexShader,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -67,8 +68,13 @@ pub struct Pipeline {
     pub ps: ID3D11PixelShader,
     pub input_layout: ID3D11InputLayout,
     pub sampler: ID3D11SamplerState,
+    /// Explicit no-cull rasterizer — guarantees both triangles of
+    /// each cell-quad are rendered regardless of the winding we
+    /// happen to produce. Cheaper than reasoning about
+    /// `FrontCounterClockwise` vs. default cull semantics.
+    pub rasterizer: ID3D11RasterizerState,
 
-    /// 6 indices for a two-triangle quad (CCW), immutable.
+    /// 6 indices for a two-triangle quad, immutable.
     pub index_buffer: ID3D11Buffer,
     /// Per-frame instance data (dynamic, WRITE_DISCARD).
     pub instance_buffer: ID3D11Buffer,
@@ -123,6 +129,11 @@ impl Pipeline {
         // Sampler: point clamp — pixel-accurate atlas reads.
         let sampler = create_point_sampler(device)?;
 
+        // No-cull rasterizer: we compose each cell from two triangles
+        // and don't want to worry about which winding happens to face
+        // the camera in NDC after the Y-flip in our VS.
+        let rasterizer = create_no_cull_rasterizer(device)?;
+
         // Index buffer: 6 indices (two triangles, CCW).
         let indices: [u32; 6] = [0, 1, 2, 2, 1, 3];
         let index_buffer = create_immutable_buffer(
@@ -142,6 +153,7 @@ impl Pipeline {
             ps,
             input_layout,
             sampler,
+            rasterizer,
             index_buffer,
             instance_buffer,
             instance_capacity: initial_instance_capacity,
@@ -218,6 +230,7 @@ impl Pipeline {
         unsafe {
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             context.IASetInputLayout(&self.input_layout);
+            context.RSSetState(&self.rasterizer);
 
             let stride: u32 = std::mem::size_of::<Instance>() as u32;
             let offset: u32 = 0;
@@ -318,6 +331,26 @@ fn instance_elem(
         InputSlotClass: D3D11_INPUT_PER_INSTANCE_DATA,
         InstanceDataStepRate: 1,
     }
+}
+
+fn create_no_cull_rasterizer(device: &ID3D11Device) -> Result<ID3D11RasterizerState> {
+    let desc = D3D11_RASTERIZER_DESC {
+        FillMode: D3D11_FILL_SOLID,
+        CullMode: D3D11_CULL_NONE,
+        FrontCounterClockwise: false.into(),
+        DepthBias: 0,
+        DepthBiasClamp: 0.0,
+        SlopeScaledDepthBias: 0.0,
+        DepthClipEnable: true.into(),
+        ScissorEnable: false.into(),
+        MultisampleEnable: false.into(),
+        AntialiasedLineEnable: false.into(),
+    };
+    let mut out: Option<ID3D11RasterizerState> = None;
+    // SAFETY: desc is stack-local; single out param.
+    unsafe { device.CreateRasterizerState(&desc, Some(&mut out)) }
+        .context("CreateRasterizerState failed")?;
+    out.context("CreateRasterizerState produced no state")
 }
 
 fn create_point_sampler(device: &ID3D11Device) -> Result<ID3D11SamplerState> {

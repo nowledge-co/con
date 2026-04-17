@@ -71,16 +71,21 @@ SamplerState      samp  : register(s0);
 
 // ── VS ─────────────────────────────────────────────────────────────────
 VSOut vs_main(uint vid : SV_VertexID, VSInstance inst) {
-    // Corner: 00, 10, 01, 11 for a quad. Using TRIANGLELIST with a
-    // 6-index pattern (0,1,2, 2,1,3) the raw SV_VertexID maps as:
-    //   0->00, 1->10, 2->01, 3->01, 4->10, 5->11
-    // so we normalize by (vid % 4) masked.
-    uint corner_i = vid % 6;
-    const uint2 mapping[6] = {
-        uint2(0, 0), uint2(1, 0), uint2(0, 1),
-        uint2(0, 1), uint2(1, 0), uint2(1, 1),
+    // The index buffer is `[0, 1, 2, 2, 1, 3]` — two triangles making
+    // a quad. `SV_VertexID` is the VALUE from the index buffer (one of
+    // 0, 1, 2, 3 — never higher), not the position-in-strip. Four
+    // entries in the mapping, one per corner:
+    //   0 = top-left (0, 0)
+    //   1 = top-right (1, 0)
+    //   2 = bottom-left (0, 1)
+    //   3 = bottom-right (1, 1)
+    const uint2 mapping[4] = {
+        uint2(0, 0),
+        uint2(1, 0),
+        uint2(0, 1),
+        uint2(1, 1),
     };
-    uint2 corner = mapping[corner_i];
+    uint2 corner = mapping[vid % 4];
 
     float2 px = (float2(inst.cellPos) + float2(corner)) * cellSize;
 
