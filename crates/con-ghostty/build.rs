@@ -155,32 +155,45 @@ fn build_windows() {
 
     let ghostty_dir = resolve_ghostty_source();
 
-    // Upstream's libghostty-vt build-step name moved across revisions
-    // (`ghostty-vt-static` in recent main, older trees expose different
-    // names or haven't split out the vt library at all). Discover which
-    // steps this Ghostty pin offers and pick one.
-    //
-    // Override via `CON_GHOSTTY_VT_STEP` if autodetect picks wrong.
-    let step = pick_vt_step(&zig_bin, &ghostty_dir);
+    // Upstream Ghostty exposes libghostty-vt in two shapes depending on
+    // revision:
+    //   (a) Current main: option `-Demit-lib-vt=true` on the default
+    //       `install` step disables the xcframework / macOS-app / docs
+    //       and leaves libghostty-vt as the produced artifact.
+    //   (b) Older revisions: a named step like `ghostty-vt-static`.
+    // We probe `zig build -h` to pick the right invocation. Override
+    // the probe via `CON_GHOSTTY_VT_STEP` (step name) or
+    // `CON_GHOSTTY_VT_EMIT_OPTION=1` (force the option-based path).
+    let invocation = pick_vt_invocation(&zig_bin, &ghostty_dir);
 
     // `-Doptimize=ReleaseFast` for terminal-class throughput;
     // `-Dsimd=true` enables the SIMD UTF-8 paths.
-    let status = Command::new(&zig_bin)
-        .args(["build", &step, "-Doptimize=ReleaseFast", "-Dsimd=true"])
-        .current_dir(&ghostty_dir)
+    let mut cmd = Command::new(&zig_bin);
+    cmd.current_dir(&ghostty_dir);
+    cmd.arg("build");
+    for arg in &invocation {
+        cmd.arg(arg);
+    }
+    cmd.args(["-Doptimize=ReleaseFast", "-Dsimd=true"]);
+
+    let status = cmd
         .status()
         .expect("failed to run zig build for libghostty-vt");
 
     if !status.success() {
         panic!(
-            "zig build {step} failed; see output above.\n\
-             If this Ghostty revision doesn't expose a libghostty-vt\n\
-             build step, bump GHOSTTY_REV in crates/con-ghostty/build.rs\n\
-             or set CON_GHOSTTY_VT_STEP to the correct step name."
+            "zig build {:?} failed; see output above.\n\
+             If this Ghostty revision doesn't expose libghostty-vt,\n\
+             bump GHOSTTY_REV in crates/con-ghostty/build.rs or set\n\
+             CON_GHOSTTY_VT_STEP to the correct step name.",
+            invocation
         );
     }
 
-    let lib_name = if cfg!(target_env = "msvc") {
+    // `cfg!()` at build.rs compile time reflects the *host*, not the
+    // target. Use the runtime env the cargo build passes us.
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let lib_name = if target_env == "msvc" {
         "ghostty-vt.lib"
     } else {
         "libghostty-vt.a"
@@ -208,12 +221,17 @@ fn build_windows() {
     println!("cargo:include={}", include_dir.display());
 }
 
-/// Probe `zig build -h` and pick a libghostty-vt step name. Honors the
-/// `CON_GHOSTTY_VT_STEP` env var if set.
-fn pick_vt_step(zig_bin: &std::ffi::OsStr, ghostty_dir: &PathBuf) -> String {
+/// Probe `zig build -h` and pick how to invoke a libghostty-vt build.
+/// Returns a list of extra arguments to append after `zig build`.
+///
+/// Priority:
+///   1. `CON_GHOSTTY_VT_STEP` env var -> single named step.
+///   2. `-Demit-lib-vt=` option in help -> `["-Demit-lib-vt=true"]`.
+///   3. Named step matching one of the known candidates.
+fn pick_vt_invocation(zig_bin: &std::ffi::OsStr, ghostty_dir: &PathBuf) -> Vec<String> {
     if let Some(val) = env::var_os("CON_GHOSTTY_VT_STEP") {
         if let Some(s) = val.to_str() {
-            return s.to_string();
+            return vec![s.to_string()];
         }
     }
 
@@ -234,6 +252,14 @@ fn pick_vt_step(zig_bin: &std::ffi::OsStr, ghostty_dir: &PathBuf) -> String {
         }
     };
 
+    // Preferred: current Ghostty exposes `-Demit-lib-vt=[bool]` which
+    // configures the default `install` step to produce only
+    // libghostty-vt (disables xcframework / macOS-app / docs).
+    if help_text.contains("-Demit-lib-vt=") {
+        return vec!["-Demit-lib-vt=true".to_string()];
+    }
+
+    // Fallback: older revisions that split the lib behind a named step.
     const CANDIDATES: &[&str] = &[
         "ghostty-vt-static",
         "libghostty-vt-static",
@@ -242,26 +268,24 @@ fn pick_vt_step(zig_bin: &std::ffi::OsStr, ghostty_dir: &PathBuf) -> String {
         "ghostty-vt",
     ];
     for cand in CANDIDATES {
-        // Match on a word boundary so "ghostty-vt" doesn't incorrectly
-        // accept a "ghostty-vt-static" listing.
-        if help_text
-            .lines()
-            .any(|line| line.trim_start().starts_with(&format!("{cand} ")) ||
-                        line.trim_start() == *cand)
-        {
-            return cand.to_string();
+        if help_text.lines().any(|line| {
+            let t = line.trim_start();
+            t.starts_with(&format!("{cand} ")) || t == *cand
+        }) {
+            return vec![cand.to_string()];
         }
     }
 
     panic!(
         "\n========================================================\n\
-         con-ghostty: couldn't find a libghostty-vt build step in this\n\
-         Ghostty checkout. The pinned revision may predate the vt-\n\
-         library split (PR ghostty-org/ghostty#8840).\n\n\
+         con-ghostty: couldn't find a libghostty-vt build knob in this\n\
+         Ghostty checkout. The pinned revision may predate libghostty-vt\n\
+         entirely (PR ghostty-org/ghostty#8840), or the upstream build\n\
+         surface changed again.\n\n\
          `zig build -h` output:\n{help}\n\n\
-         To work around: bump GHOSTTY_REV in crates/con-ghostty/build.rs\n\
-         to a commit that ships `ghostty-vt-static`, or set\n\
-         CON_GHOSTTY_VT_STEP to the exact step name from the list above.\n\
+         To work around: bump GHOSTTY_REV in crates/con-ghostty/build.rs,\n\
+         or set CON_GHOSTTY_VT_STEP to an exact step name from the list\n\
+         above.\n\
          ========================================================\n",
         help = help_text,
     );
