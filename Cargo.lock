@@ -1165,6 +1165,7 @@ name = "con-ghostty"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cc",
  "core-foundation 0.10.0",
  "etagere",
  "log",

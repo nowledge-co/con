@@ -37,9 +37,31 @@ Prerequisites:
 - **Git for Windows**.
 - **Zig 0.13 or newer** on PATH (for `libghostty-vt`); download from
   <https://ziglang.org/download/>. If the `zig` executable isn't on
-  PATH, set `CON_ZIG_BIN` to its absolute path. To skip the
-  libghostty-vt build entirely (terminal backend will fail to link,
-  rest of the app still compiles): `$env:CON_SKIP_GHOSTTY_VT=1`.
+  PATH, set `CON_ZIG_BIN` to its absolute path.
+
+Build-time env vars for `con-ghostty`:
+
+| Var | Effect |
+|-----|--------|
+| `CON_ZIG_BIN` | Absolute path to the `zig` executable. |
+| `CON_GHOSTTY_SOURCE_DIR` | Reuse a local Ghostty checkout instead of fetching one into `OUT_DIR` (handy on Windows when `MAX_PATH` bites or Defender scans the `target` dir). |
+| `CON_GHOSTTY_VT_STEP` | Exact Zig build step/flag to pass for libghostty-vt. Autodetected; override only if the probe picks wrong. |
+| `CON_STUB_GHOSTTY_VT=1` | Compile `src/windows/ghostty_vt_stub.c` and link it instead of libghostty-vt. The resulting `con-app.exe` launches fully, the terminal pane creates the real WS_CHILD HWND and swapchain, ConPTY spawns the shell — but the terminal grid is empty because the VT parser is stubbed. Useful for iterating GPUI / HWND / renderer paths while a real libghostty-vt is broken. |
+| `CON_SKIP_GHOSTTY_VT=1` | Skip both. `cargo build` will fail at link. Only useful for `cargo check`. |
+
+Common Windows pitfalls when the Zig step fails mid-build with
+`FileNotFound` on a just-compiled `uucode_build_tables.exe`:
+
+1. **Windows Defender** is quarantining the newborn executable. Add an
+   exclusion for `C:\path\to\con` + `%USERPROFILE%\.zig-cache` +
+   `%LOCALAPPDATA%\zig`.
+2. **MAX_PATH** — the default 260-char limit trips on Zig's deep cache
+   layout. Enable long paths (`HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1`)
+   OR point `CON_GHOSTTY_SOURCE_DIR` at a short path like `C:\ghostty`.
+3. **Zig version mismatch** — our pinned Ghostty revision was built
+   against an older Zig; Zig 0.15+ may break upstream. Either install
+   the matching Zig, or bump `GHOSTTY_REV` in `build.rs` (requires
+   macOS re-validation of the full libghostty build).
 
 The binary ships as `con-app.exe`, not `con.exe`: `CON` is a reserved
 DOS device name and Windows refuses to create `con.exe` via most

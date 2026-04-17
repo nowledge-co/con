@@ -97,15 +97,36 @@ fn build_windows() {
     // but `src/windows/vt.rs` does — its FFI declarations resolve to
     // the symbols `libghostty-vt.a` exports.
 
+    if env::var_os("CON_STUB_GHOSTTY_VT").is_some() {
+        // Fallback path: compile the C stub in `src/windows/ghostty_vt_stub.c`
+        // and link it instead of libghostty-vt. The resulting binary
+        // launches fully — GPUI window, HWND host view, D3D11 swapchain,
+        // ConPTY spawn — but the terminal pane paints an empty grid
+        // because the stub returns no rows. Useful for iterating the
+        // non-VT parts of the backend while Zig / Ghostty build issues
+        // are resolved separately. See docs/impl/windows-port.md.
+        println!("cargo:warning=CON_STUB_GHOSTTY_VT set — linking stub C implementations \
+                  instead of libghostty-vt. Terminal output will be empty.");
+        cc::Build::new()
+            .file("src/windows/ghostty_vt_stub.c")
+            .compile("ghostty_vt_stub");
+        // The static lib name above means `-lghostty_vt_stub` is emitted
+        // by cc-rs; but our vt.rs binds to `ghostty_*` symbols that the
+        // stub provides, so the linker resolves them from ghostty_vt_stub.
+        // No extra cargo:rustc-link-lib needed — cc-rs handles it.
+        return;
+    }
+
     if env::var_os("CON_SKIP_GHOSTTY_VT").is_some() {
-        // Escape hatch: skip the upstream build entirely. The
-        // `src/windows/vt.rs` symbols become unresolved at link time;
-        // intended for IDE / `cargo check` flows where the compile-only
-        // pass doesn't link.
+        // Escape hatch: skip both upstream and stub. The vt.rs symbols
+        // become unresolved at link time; intended for `cargo check`
+        // flows that don't link, or when you plan to supply a static
+        // library via other means.
         println!(
             "cargo:warning=CON_SKIP_GHOSTTY_VT set — skipping libghostty-vt build. \
              A subsequent `cargo build` will fail to link unless a static \
-             library is provided manually."
+             library is provided manually. Consider CON_STUB_GHOSTTY_VT=1 \
+             if you want a linkable placeholder."
         );
         return;
     }
