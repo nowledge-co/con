@@ -66,6 +66,12 @@ impl HostView {
     /// rendering. `bounds` is the initial position+size in the parent's
     /// client coordinates.
     pub fn new(parent: HWND, bounds: RECT, config: RendererConfig) -> Result<Self> {
+        log::info!(
+            "HostView::new parent={:?} rect={}x{}",
+            parent.0,
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top
+        );
         ensure_window_class()?;
 
         let width = (bounds.right - bounds.left).max(1) as u32;
@@ -97,18 +103,27 @@ impl HostView {
         let mut renderer_config = config.clone();
         renderer_config.initial_width = width;
         renderer_config.initial_height = height;
+        log::info!("HostView: creating Renderer");
         let renderer = Renderer::new(hwnd, &renderer_config)?;
+        log::info!("HostView: Renderer created");
 
         let (cols, rows) = renderer.grid_for_dimensions(&renderer_config);
+        log::info!("HostView: grid {cols}x{rows}");
 
+        log::info!("HostView: creating VtScreen");
         let vt = Arc::new(VtScreen::new(cols, rows)?);
+        log::info!("HostView: VtScreen created");
+
         let vt_for_pty = vt.clone();
+        let shell = super::conpty::default_shell_command();
+        log::info!("HostView: spawning ConPTY shell={shell}");
         let conpty = ConPty::spawn(
-            &super::conpty::default_shell_command(),
+            &shell,
             PtySize { cols, rows },
             move |bytes| vt_for_pty.feed(bytes),
         )?;
         let conpty = Arc::new(conpty);
+        log::info!("HostView: ConPTY spawned");
 
         let state = Box::new(HostState {
             renderer: Mutex::new(renderer),

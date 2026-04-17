@@ -479,14 +479,100 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
     ]);
 }
 
+/// Install a panic hook that writes every panic (including from
+/// background threads) to both stderr and a log file in the platform
+/// temp dir. On Windows specifically, a GUI-launched exe has no
+/// console by default and the default panic output is lost — this
+/// guarantees we always have a record to read after a silent exit.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("<unnamed>");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".into());
+        let payload = payload_as_str(info.payload()).unwrap_or("<non-string payload>");
+
+        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let record = format!(
+            "[{timestamp}] PANIC on thread '{thread_name}' at {location}:\n  \
+             {payload}\n\nBacktrace:\n{backtrace}\n\n"
+        );
+
+        // Always try stderr first.
+        let _ = {
+            use std::io::Write;
+            let mut stderr = std::io::stderr().lock();
+            let _ = stderr.write_all(record.as_bytes());
+            stderr.flush()
+        };
+
+        // Then persist to a file — this is the one the user can actually
+        // read after the process exits.
+        let log_path = std::env::temp_dir().join("con-panic.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write;
+            let _ = f.write_all(record.as_bytes());
+            let _ = f.flush();
+            eprintln!("[panic log] {}", log_path.display());
+        }
+
+        // Chain to the previous hook so cargo / test harnesses still
+        // see what they expect.
+        previous(info);
+    }));
+}
+
+fn payload_as_str(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        Some(*s)
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        Some(s.as_str())
+    } else {
+        None
+    }
+}
+
 fn main() {
-    env_logger::init();
+    // Install a panic hook before anything else so every panic —
+    // including ones from background threads that would otherwise be
+    // invisible — gets written to both stderr and a dated log file.
+    // Critical on Windows where double-clicking the exe detaches
+    // stderr and a panic produces a silent exit.
+    install_panic_hook();
+
+    // Always capture backtraces unless the user already set a
+    // preference. `full` prints symbols + line numbers when debug info
+    // is present; harmless in release.
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        // SAFETY: single-threaded during startup, standard env-var set.
+        unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
+    }
+
+    // Default to `info` for our crates if the user didn't set RUST_LOG,
+    // so early-init traces are visible without an explicit opt-in.
+    let mut builder = env_logger::Builder::from_default_env();
+    if std::env::var_os("RUST_LOG").is_none() {
+        builder.filter_level(log::LevelFilter::Info);
+    }
+    builder.init();
+
+    log::info!("con starting (pid {})", std::process::id());
 
     let config = con_core::Config::load().unwrap_or_default();
+    log::info!("config loaded");
 
     let app = gpui_platform::application()
         .with_quit_mode(QuitMode::Explicit)
         .with_assets(assets::ConAssets);
+    log::info!("gpui application created");
     app.on_reopen(|cx| {
         let has_windows = cx
             .window_stack()

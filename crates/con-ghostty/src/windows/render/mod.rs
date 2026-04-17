@@ -98,7 +98,9 @@ unsafe impl Sync for Renderer {}
 
 impl Renderer {
     pub fn new(hwnd: HWND, config: &RendererConfig) -> Result<Self> {
+        log::info!("Renderer: creating D3D11 device");
         let (device, context) = create_device()?;
+        log::info!("Renderer: D3D11 device created");
         let dxgi_factory: IDXGIFactory6 =
             unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
                 .context("CreateDXGIFactory2 failed")?;
@@ -127,17 +129,22 @@ impl Renderer {
         };
 
         // SAFETY: hwnd owned by caller (host_view); device + desc valid.
+        log::info!("Renderer: creating swapchain");
         let swapchain: IDXGISwapChain1 = unsafe {
             dxgi_factory.CreateSwapChainForHwnd(&device, hwnd, &desc, None, None)
         }
         .context("CreateSwapChainForHwnd failed")?;
+        log::info!("Renderer: swapchain created");
 
         let rtv = Some(create_rtv(&device, &swapchain)?);
+        log::info!("Renderer: RTV created");
 
         let dwrite: IDWriteFactory =
             unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
                 .context("DWriteCreateFactory failed")?;
+        log::info!("Renderer: DWrite factory created");
 
+        log::info!("Renderer: creating GlyphCache (font={})", config.font_family);
         let atlas = GlyphCache::new(
             &device,
             &context,
@@ -147,9 +154,12 @@ impl Renderer {
             ATLAS_SIZE_PX,
         )
         .context("GlyphCache::new failed")?;
+        log::info!("Renderer: GlyphCache created");
 
+        log::info!("Renderer: creating D3D11 pipeline (HLSL compile)");
         let pipeline = Pipeline::new(&device, INITIAL_INSTANCE_CAPACITY)
             .context("Pipeline::new failed")?;
+        log::info!("Renderer: pipeline ready");
 
         Ok(Self {
             device,
