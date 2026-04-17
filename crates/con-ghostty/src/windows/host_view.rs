@@ -161,6 +161,28 @@ impl HostView {
         }
     }
 
+    /// Render one frame right now. Called from GPUI's paint pass so
+    /// the terminal surface doesn't rely on Windows-driven `WM_PAINT`
+    /// (which only fires when the window is invalidated — something
+    /// that doesn't happen for a child HWND whose class has no
+    /// auto-paint).
+    pub fn paint_frame(&self) {
+        // SAFETY: state_ptr is valid for the lifetime of the HWND (freed
+        // only in WM_DESTROY). We access it from the main thread just
+        // like the WM_PAINT handler does.
+        if self.state.is_null() {
+            return;
+        }
+        unsafe {
+            let state = &*self.state;
+            let snapshot = state.vt.snapshot();
+            let renderer = state.renderer.lock();
+            if let Err(err) = renderer.render(&snapshot, &state.config) {
+                log::warn!("renderer.render failed: {err:#}");
+            }
+        }
+    }
+
     /// Re-parent to a different GPUI HWND (rare; happens on tab move).
     pub fn set_parent(&self, new_parent: HWND) {
         // SAFETY: hwnd is valid; SetParent may fire WM_PARENTNOTIFY.

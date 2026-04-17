@@ -196,6 +196,19 @@ impl GhosttyView {
             }
         }
     }
+
+    /// Trigger one render pass now. GPUI's paint pipeline drives this
+    /// rather than waiting for Windows-side `WM_PAINT`, which never
+    /// fires on demand for a child HWND whose class has no auto-paint
+    /// behavior.
+    fn paint_host(&self) {
+        if let Some(terminal) = &self.terminal {
+            let inner = terminal.inner();
+            if let Some(host) = inner.lock().as_ref() {
+                host.paint_frame();
+            }
+        }
+    }
 }
 
 impl Focusable for GhosttyView {
@@ -233,6 +246,16 @@ impl Render for GhosttyView {
                         let bottom = ((f32::from(bounds.origin.y) + f32::from(bounds.size.height))
                             * scale) as i32;
 
+                        log::trace!(
+                            "pane bounds: logical ({:.1},{:.1}) {:.1}x{:.1} scale={} → physical ({},{})-({},{})",
+                            f32::from(bounds.origin.x),
+                            f32::from(bounds.origin.y),
+                            f32::from(bounds.size.width),
+                            f32::from(bounds.size.height),
+                            scale,
+                            left, top, right, bottom,
+                        );
+
                         let parent_hwnd = parent_hwnd_from_window(window);
 
                         if let Some(view) = entity.upgrade() {
@@ -241,6 +264,7 @@ impl Render for GhosttyView {
                                     view.ensure_host(parent, (left, top, right, bottom));
                                 }
                                 view.reposition_host((left, top, right, bottom));
+                                view.paint_host();
                             });
                         }
                     })
