@@ -123,14 +123,10 @@ GhosttyResult ghostty_render_state_row_cells_new(
 void ghostty_render_state_row_cells_free(GhosttyRowCells cells) { (void)cells; }
 int ghostty_render_state_row_cells_next(GhosttyRowCells cells) { (void)cells; return 0; }
 
-GhosttyResult ghostty_render_state_row_cells_get_multi(
-    GhosttyRowCells cells,
-    size_t count,
-    const int* keys,
-    const void** values,
-    size_t* out_written
+GhosttyResult ghostty_render_state_row_cells_get(
+    GhosttyRowCells cells, int key, void* out
 ) {
-    (void)cells; (void)count; (void)keys; (void)values;
-    if (out_written) { *out_written = 0; }
+    (void)cells; (void)key;
+    if (out) { *(uint8_t*)out = 0; }
     return 0;
 }

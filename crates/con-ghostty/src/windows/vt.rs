@@ -176,17 +176,15 @@ unsafe extern "C" {
     /// available; zero when the row is exhausted.
     pub fn ghostty_render_state_row_cells_next(cells: GhosttyRowCells) -> c_int;
 
-    /// Fetch `count` fields for the currently-selected cell in a single
-    /// call. `keys` points to an array of `GhosttyRenderStateRowCellsData`
-    /// values; `values` to an array of pointer-sized outputs (caller
-    /// aligns per-key). `out_written` receives the number of keys that
-    /// were successfully populated.
-    pub fn ghostty_render_state_row_cells_get_multi(
+    /// Fetch one field from the cell iterator's current position.
+    /// Older Ghostty revisions (our current pin, ~April 2026) ship this
+    /// single-key variant; the batched `row_cells_get_multi` is a newer
+    /// upstream addition. We call `_get` per key to stay compatible
+    /// with the pinned revision.
+    pub fn ghostty_render_state_row_cells_get(
         cells: GhosttyRowCells,
-        count: usize,
-        keys: *const GhosttyRenderStateRowCellsData,
-        values: *const *mut c_void,
-        out_written: *mut usize,
+        key: GhosttyRenderStateRowCellsData,
+        out: *mut c_void,
     ) -> GhosttyResult;
 }
 
@@ -442,37 +440,37 @@ impl VtScreen {
     }
 }
 
-/// Batch-read four fields from the cell iterator's current position in a
-/// single FFI call. Returns a fully-populated [`Cell`] for the renderer.
+/// Read four fields from the cell iterator's current position. Uses
+/// per-key `_get` calls to stay compatible with Ghostty revisions that
+/// predate the batched `_get_multi` helper.
 fn read_cell(cells: GhosttyRowCells) -> Cell {
     let mut raw: u64 = 0;
     let mut _style: usize = 0;
     let mut bg: u32 = 0;
     let mut fg: u32 = 0;
 
-    let keys = [
-        GhosttyRenderStateRowCellsData::Raw,
-        GhosttyRenderStateRowCellsData::Style,
-        GhosttyRenderStateRowCellsData::BgColor,
-        GhosttyRenderStateRowCellsData::FgColor,
-    ];
-    let values: [*mut c_void; 4] = [
-        &mut raw as *mut _ as *mut c_void,
-        &mut _style as *mut _ as *mut c_void,
-        &mut bg as *mut _ as *mut c_void,
-        &mut fg as *mut _ as *mut c_void,
-    ];
-    let mut written: usize = 0;
-
-    // SAFETY: keys + values live on stack for the call; alignment per
-    // the per-key contract in render.h.
+    // SAFETY: out pointers are correctly typed for each key per upstream
+    // `render.h`.
     unsafe {
-        let _ = ghostty_render_state_row_cells_get_multi(
+        let _ = ghostty_render_state_row_cells_get(
             cells,
-            keys.len(),
-            keys.as_ptr(),
-            values.as_ptr(),
-            &mut written,
+            GhosttyRenderStateRowCellsData::Raw,
+            &mut raw as *mut _ as *mut c_void,
+        );
+        let _ = ghostty_render_state_row_cells_get(
+            cells,
+            GhosttyRenderStateRowCellsData::Style,
+            &mut _style as *mut _ as *mut c_void,
+        );
+        let _ = ghostty_render_state_row_cells_get(
+            cells,
+            GhosttyRenderStateRowCellsData::BgColor,
+            &mut bg as *mut _ as *mut c_void,
+        );
+        let _ = ghostty_render_state_row_cells_get(
+            cells,
+            GhosttyRenderStateRowCellsData::FgColor,
+            &mut fg as *mut _ as *mut c_void,
         );
     }
 
