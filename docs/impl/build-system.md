@@ -20,7 +20,7 @@ cargo test --workspace
 ```toml
 [workspace]
 members = [
-    "crates/con",
+    "crates/con-app",
     "crates/con-core",
     "crates/con-terminal",
     "crates/con-ghostty",

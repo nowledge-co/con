@@ -75,7 +75,7 @@ For signed macOS release artifacts, use:
 
 ## Useful Paths
 
-- `crates/con/src` — app shell and GPUI surfaces
+- `crates/con-app/src` — app shell and GPUI surfaces (the crate directory is `con-app` because `con` is a reserved DOS device name on Windows; the Cargo package and binary are still named `con` on macOS, so `cargo run -p con` works as before — see `docs/impl/windows-port.md`)
 - `crates/con-core/src` — shared app logic
 - `crates/con-agent/src` — agent provider, hooks, tools, skills
 - `docs/design` — design handoff set

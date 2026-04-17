@@ -235,7 +235,7 @@ This is stable across releases and extensible to Linux when needed.
 
 Sparkle is loaded dynamically from `Contents/Frameworks/Sparkle.framework` at app launch.  If the framework is absent (e.g. `cargo run` dev builds), auto-update silently disables.
 
-The Rust FFI bridge (`crates/con/src/updater.rs`) uses `objc` crate to:
+The Rust FFI bridge (`crates/con-app/src/updater.rs`) uses `objc` crate to:
 
 1. Load `Sparkle.framework` from the app bundle
 2. Verify `SUFeedURL` is set in Info.plist

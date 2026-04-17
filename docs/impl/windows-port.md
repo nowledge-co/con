@@ -15,7 +15,7 @@ The macOS stack is fully native:
 
 ```
 GPUI window (upstream zed-industries/zed)
-  └── GhosttyView                          crates/con/src/ghostty_view.rs
+  └── GhosttyView                          crates/con-app/src/ghostty_view.rs
         ├── child NSView (host)            cocoa::base::id
         ├── GhosttyApp     (per window)    crates/con-ghostty
         └── GhosttyTerminal (per surface)  ghostty_surface_t
@@ -24,6 +24,13 @@ GPUI window (upstream zed-industries/zed)
               ├── Metal renderer           libghostty (IOSurface layer)
               └── action callbacks         libghostty
 ```
+
+The UI crate lives at `crates/con-app/` (not `crates/con/`) because `CON`
+is a reserved DOS device name on Windows — `git clone` and `git checkout`
+refuse to create any path component named `con`. The Cargo package name
+and the binary name are both still `con` on macOS; only the filesystem
+directory changed. See "Binary naming on Windows" below for how the
+future Windows build will produce a valid executable filename.
 
 `con-ghostty` is a thin Rust wrapper over libghostty's C embedding API.
 libghostty is built from a pinned Ghostty revision via `zig build` and
@@ -163,6 +170,56 @@ inside a GPUI window. Three sub-options:
 Recommendation: prototype option 2 first because it keeps the rendering
 contract entirely inside GPUI. If perf is unacceptable (likely fine for
 text), pursue option 1.
+
+### Binary naming on Windows
+
+`CON` is a reserved DOS device name on Windows. That reservation covers
+both filesystem paths (`git checkout` refuses to create `crates/con/`
+even read-only, which is why the UI crate now lives at
+`crates/con-app/`) and the produced executable — a `con.exe` file
+cannot be created by most file-creation APIs. The `CON` reservation
+applies regardless of extension.
+
+Today this is latent: the UI binary is macOS-only via a `compile_error!`
+in `crates/con-app/src/main.rs`, so no `con.exe` is ever produced. When
+the Windows backend actually builds, the binary needs a new name on
+Windows only — macOS and Linux should keep the plain `con` muscle
+memory. Cargo does not support per-target `[[bin]] name` in the
+manifest, so the two practical mechanisms are:
+
+1. **Feature-gated twin `[[bin]]` entries pointing at the same
+   `main.rs`** —
+
+   ```toml
+   [features]
+   default = ["bin-con"]
+   bin-con = []      # enabled on macOS/Linux via a .cargo/config.toml
+   bin-con-app = []  # enabled on Windows
+
+   [[bin]]
+   name = "con"
+   path = "src/main.rs"
+   required-features = ["bin-con"]
+
+   [[bin]]
+   name = "con-app"
+   path = "src/main.rs"
+   required-features = ["bin-con-app"]
+   ```
+
+   Combined with a `.cargo/config.toml` that sets the right feature
+   per `[target.cfg(...)]`, `cargo run -p con` works everywhere and
+   produces `con` on Unix / `con-app.exe` on Windows.
+2. **Rename the single `[[bin]]` to `con-app` and install a shell
+   wrapper named `con`** in the macOS cask / Homebrew formula so the
+   command-line experience is unchanged. Simpler manifest, more work
+   in the packaging scripts.
+
+We recommend mechanism 1 when Windows support lands. It keeps the
+binary-name behavior platform-local and doesn't require external
+installers to hide the difference. Until then, no change is needed —
+the `compile_error!` gate ensures the name only matters on macOS,
+where `con` is a valid filename.
 
 ### Hurdle 3 — Host-side Windows-isms
 

@@ -55,8 +55,40 @@ product. The macOS-specific calls (NSView creation, NSPasteboard, dock
 icon, NSBundle Info.plist reads, Sparkle, Carbon global hotkey) live
 behind `cfg(target_os = "macos")` gates already, but the `con` binary
 crate has a hard `compile_error!("con currently requires macOS …")` in
-`crates/con/src/main.rs:90` and the non-UI crates assume Unix sockets at
+the crate's `main.rs` and the non-UI crates assume Unix sockets at
 `/tmp/con.sock` with `chmod 0600`.
+
+## The reserved-name bite
+
+Shortly after the first prep push we tried to clone the repo on a
+Windows machine and hit:
+
+```
+git clone git@github.com:nowledge-co/con.git
+fatal: could not create work tree dir 'con': Invalid argument
+
+git clone git@github.com:nowledge-co/con.git con-terminal
+error: invalid path 'crates/con/Cargo.toml'
+fatal: unable to checkout working tree
+```
+
+`CON` (along with `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) is
+a DOS device name that Windows reserves globally across its Win32 file
+APIs, regardless of extension. Git on Windows refuses to create any
+path component called `con`, so the repository couldn't be checked out
+at all. The `cargo check --target x86_64-pc-windows-gnu` validation we
+ran from Linux didn't surface this because cross-compilation never
+creates a directory named `con` on the host filesystem — it only reads
+the paths inside the repo.
+
+Mitigation applied in the same PR series: renamed the UI crate
+directory from `crates/con/` to `crates/con-app/`. The Cargo package
+name stays `con` and the `[[bin]] name = "con"` stays `con`, so
+`cargo run -p con` and the produced `con` binary on macOS are
+unchanged. The binary name will need a per-target rename when the
+Windows backend actually builds (`con.exe` is also reserved); the
+mechanism is documented in `docs/impl/windows-port.md` under
+"Binary naming on Windows".
 
 ## Fix applied (this PR — Phase 0)
 
