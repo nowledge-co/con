@@ -306,6 +306,7 @@ where
         .name("conpty-output-reader".into())
         .spawn(move || {
             let mut buf = [0u8; 4096];
+            let mut total_bytes: u64 = 0;
             loop {
                 let mut bytes_read: u32 = 0;
                 let handle = read_handle.as_handle();
@@ -315,8 +316,16 @@ where
                     ReadFile(handle, Some(&mut buf), Some(&mut bytes_read), None)
                 };
                 if result.is_err() || bytes_read == 0 {
+                    log::info!(
+                        "conpty reader: EOF after {total_bytes} bytes, err={:?}",
+                        result.err()
+                    );
                     break; // EOF or error; child exited.
                 }
+                total_bytes += bytes_read as u64;
+                log::trace!(
+                    "conpty reader: +{bytes_read} bytes (total {total_bytes})"
+                );
                 on_output(&buf[..bytes_read as usize]);
             }
             // OwnedHandle::Drop closes the handle.
@@ -324,21 +333,28 @@ where
         .expect("conpty reader thread spawn failed")
 }
 
-/// Discover a sensible default shell:
-///   1. `$env:COMSPEC` if set.
-///   2. `pwsh.exe` (PowerShell 7+) if on PATH.
-///   3. `powershell.exe` (Windows PowerShell) if on PATH.
-///   4. `cmd.exe` (always present).
+/// Discover a sensible default shell. Matches Windows Terminal's
+/// default-profile selection:
+///   1. `pwsh.exe`   (PowerShell 7+) if on PATH.
+///   2. `powershell.exe` (Windows PowerShell) if on PATH.
+///   3. `$env:COMSPEC` if set (usually `cmd.exe`).
+///   4. `cmd.exe` (hardcoded last resort — always present).
+///
+/// Users who want to force a different shell can point us at it via
+/// `CON_SHELL` (future: a config-file field). We prefer pwsh over
+/// cmd because Windows Terminal does, and because pwsh is the modern
+/// default on Windows 11 / Server 2025.
 pub fn default_shell_command() -> String {
-    if let Ok(cmd) = std::env::var("COMSPEC") {
-        if !cmd.trim().is_empty() {
-            return cmd;
-        }
+    if let Some(cmd) = std::env::var("CON_SHELL").ok().filter(|s| !s.trim().is_empty()) {
+        return cmd;
     }
     for candidate in ["pwsh.exe", "powershell.exe"] {
         if path_lookup(candidate).is_some() {
             return candidate.to_string();
         }
+    }
+    if let Some(cmd) = std::env::var("COMSPEC").ok().filter(|s| !s.trim().is_empty()) {
+        return cmd;
     }
     "cmd.exe".to_string()
 }

@@ -498,6 +498,22 @@ impl VtScreen {
             );
         }
 
+        let non_empty = inner
+            .scratch
+            .iter()
+            .filter(|c| c.codepoint != 0 && c.codepoint != 0x20)
+            .count();
+        log::trace!(
+            "snapshot: gen={} dirty_rows={} non_empty_cells={}/{} cursor=({},{})vis={}",
+            inner.generation,
+            dirty_rows.len(),
+            non_empty,
+            inner.scratch.len(),
+            col_u16,
+            row_u16,
+            visible,
+        );
+
         ScreenSnapshot {
             cols,
             rows,
