@@ -1166,6 +1166,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
+ "etagere",
  "log",
  "objc",
  "parking_lot",

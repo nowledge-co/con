@@ -155,23 +155,29 @@ fn build_windows() {
 
     let ghostty_dir = resolve_ghostty_source();
 
-    // `ghostty-vt-static` is the upstream artifact name; it produces
-    // `libghostty-vt.a` (or `ghostty-vt.lib` on MSVC). `-Doptimize=ReleaseFast`
-    // gives us terminal-class throughput; `-Dsimd=true` enables the
-    // SIMD UTF-8 paths.
+    // Upstream's libghostty-vt build-step name moved across revisions
+    // (`ghostty-vt-static` in recent main, older trees expose different
+    // names or haven't split out the vt library at all). Discover which
+    // steps this Ghostty pin offers and pick one.
+    //
+    // Override via `CON_GHOSTTY_VT_STEP` if autodetect picks wrong.
+    let step = pick_vt_step(&zig_bin, &ghostty_dir);
+
+    // `-Doptimize=ReleaseFast` for terminal-class throughput;
+    // `-Dsimd=true` enables the SIMD UTF-8 paths.
     let status = Command::new(&zig_bin)
-        .args([
-            "build",
-            "ghostty-vt-static",
-            "-Doptimize=ReleaseFast",
-            "-Dsimd=true",
-        ])
+        .args(["build", &step, "-Doptimize=ReleaseFast", "-Dsimd=true"])
         .current_dir(&ghostty_dir)
         .status()
         .expect("failed to run zig build for libghostty-vt");
 
     if !status.success() {
-        panic!("zig build ghostty-vt-static failed; see output above");
+        panic!(
+            "zig build {step} failed; see output above.\n\
+             If this Ghostty revision doesn't expose a libghostty-vt\n\
+             build step, bump GHOSTTY_REV in crates/con-ghostty/build.rs\n\
+             or set CON_GHOSTTY_VT_STEP to the correct step name."
+        );
     }
 
     let lib_name = if cfg!(target_env = "msvc") {
@@ -200,6 +206,65 @@ fn build_windows() {
 
     let include_dir = ghostty_dir.join("include");
     println!("cargo:include={}", include_dir.display());
+}
+
+/// Probe `zig build -h` and pick a libghostty-vt step name. Honors the
+/// `CON_GHOSTTY_VT_STEP` env var if set.
+fn pick_vt_step(zig_bin: &std::ffi::OsStr, ghostty_dir: &PathBuf) -> String {
+    if let Some(val) = env::var_os("CON_GHOSTTY_VT_STEP") {
+        if let Some(s) = val.to_str() {
+            return s.to_string();
+        }
+    }
+
+    let output = Command::new(zig_bin)
+        .args(["build", "-h"])
+        .current_dir(ghostty_dir)
+        .output();
+
+    let help_text = match output {
+        Ok(out) => {
+            let mut text = String::new();
+            text.push_str(&String::from_utf8_lossy(&out.stdout));
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            text
+        }
+        Err(err) => {
+            panic!("failed to run `zig build -h` in Ghostty checkout: {err}");
+        }
+    };
+
+    const CANDIDATES: &[&str] = &[
+        "ghostty-vt-static",
+        "libghostty-vt-static",
+        "vt-static",
+        "libghostty-vt",
+        "ghostty-vt",
+    ];
+    for cand in CANDIDATES {
+        // Match on a word boundary so "ghostty-vt" doesn't incorrectly
+        // accept a "ghostty-vt-static" listing.
+        if help_text
+            .lines()
+            .any(|line| line.trim_start().starts_with(&format!("{cand} ")) ||
+                        line.trim_start() == *cand)
+        {
+            return cand.to_string();
+        }
+    }
+
+    panic!(
+        "\n========================================================\n\
+         con-ghostty: couldn't find a libghostty-vt build step in this\n\
+         Ghostty checkout. The pinned revision may predate the vt-\n\
+         library split (PR ghostty-org/ghostty#8840).\n\n\
+         `zig build -h` output:\n{help}\n\n\
+         To work around: bump GHOSTTY_REV in crates/con-ghostty/build.rs\n\
+         to a commit that ships `ghostty-vt-static`, or set\n\
+         CON_GHOSTTY_VT_STEP to the exact step name from the list above.\n\
+         ========================================================\n",
+        help = help_text,
+    );
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────

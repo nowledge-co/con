@@ -1,25 +1,26 @@
-//! `libghostty-vt` FFI bindings — the cross-platform VT parser carved
-//! out of Ghostty (PR ghostty-org/ghostty#8840 + follow-up commits).
+//! `libghostty-vt` FFI bindings + render-state snapshot.
 //!
-//! Upstream public surface lives at `include/ghostty/vt.h`
-//! (umbrella) plus per-module headers under `include/ghostty/vt/`.
-//! Symbol prefix is `ghostty_*`. The C API has hand-written headers
-//! (not bindgen-generated upstream) and follows a typed get/set pattern
-//! (`ghostty_terminal_get(term, KEY, &out)`) instead of one accessor
-//! per field. We mirror just the slice we need.
+//! Upstream public surface lives at `include/ghostty/vt.h` with module
+//! headers under `include/ghostty/vt/`. Symbol prefix: `ghostty_*`.
 //!
-//! Key API characteristics:
+//! There are two ways to read screen state:
 //!
-//! - The terminal is **not** thread-safe. We wrap it in a `Mutex` and
-//!   serialize all FFI calls through that.
-//! - `ghostty_terminal_vt_write` is non-reentrant — callbacks fired
-//!   during it must not call `vt_write` back on the same terminal.
-//! - Render state is a separate opaque `GhosttyRenderState` updated
-//!   from the terminal under the embedder's lock.
+//! - `ghostty_grid_ref_*` — ergonomic but **explicitly not for render
+//!   loops** per `include/ghostty/vt/grid_ref.h`. Used for selection
+//!   hit-testing and accessibility.
+//! - `ghostty_render_state_*` — designed for the hot path. Tracks per-row
+//!   DIRTY flags so we only read cells that changed, and exposes a
+//!   `row_cells_get_multi` that fetches several fields (raw codepoint,
+//!   style, fg, bg) in one call.
 //!
-//! libghostty-vt is built from the pinned Ghostty source by `build.rs`
-//! via `zig build` and statically linked. `GHOSTTY_STATIC` is defined
-//! at compile time so the `GHOSTTY_API` visibility macro is a no-op.
+//! We use the render-state path. The terminal is NOT thread-safe;
+//! internal mutexes serialize FFI calls, and the renderer reads a
+//! cloned snapshot so the parser lock is released between feeds and
+//! frames.
+//!
+//! libghostty-vt is built by `build.rs` via `zig build ghostty-vt-static`
+//! and linked statically. `GHOSTTY_STATIC` is defined so the upstream
+//! `GHOSTTY_API` visibility macro is a no-op.
 
 #![allow(non_camel_case_types, dead_code)]
 
@@ -28,36 +29,19 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-// ── Raw FFI ────────────────────────────────────────────────────────────
+// ── Opaque types ───────────────────────────────────────────────────────
 
-/// Opaque terminal handle (`GhosttyTerminal` in C — typedef'd to a
-/// `GhosttyTerminalImpl*`).
 pub type GhosttyTerminal = *mut c_void;
-
-/// Opaque render state (`GhosttyRenderState`).
 pub type GhosttyRenderState = *mut c_void;
-
-/// Opaque row iterator.
 pub type GhosttyRowIterator = *mut c_void;
-
-/// Opaque per-row cells iterator.
 pub type GhosttyRowCells = *mut c_void;
-
-/// `GhosttyResult` — 0 on success, non-zero error codes otherwise. We
-/// translate to `Result<(), c_int>` at the call site.
+pub type GhosttyAllocator = c_void;
 pub type GhosttyResult = c_int;
 
-/// Constructor options for a terminal.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct GhosttyTerminalOptions {
-    pub cols: u16,
-    pub rows: u16,
-    pub max_scrollback: usize,
-}
+// ── Enums (keys) ───────────────────────────────────────────────────────
 
-/// Typed-get keys (`GHOSTTY_TERMINAL_DATA_*`). We expose only the few
-/// we read from Rust; the upstream enum has dozens.
+/// `GHOSTTY_TERMINAL_DATA_*` — keys for `ghostty_terminal_get`. Only
+/// the subset we read here; upstream defines many more.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub enum GhosttyTerminalData {
@@ -68,13 +52,9 @@ pub enum GhosttyTerminalData {
     CursorVisible = 4,
     Title = 20,
     Pwd = 21,
-    // Upstream defines many more. Keep this list synced when adding a
-    // new accessor — the numeric values are stable per the upstream
-    // ABI introspection helper `ghostty_type_json()`.
 }
 
-/// Typed-set option keys (`GHOSTTY_TERMINAL_OPT_*`). Only the ones we
-/// register callbacks for.
+/// `GHOSTTY_TERMINAL_OPT_*` — keys for `ghostty_terminal_set`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub enum GhosttyTerminalOpt {
@@ -82,24 +62,66 @@ pub enum GhosttyTerminalOpt {
     WritePty = 1,
     Bell = 2,
     TitleChanged = 3,
-    // ...
 }
 
-/// `GhosttyAllocator` — NULL means "use the upstream default
-/// allocator". We always pass NULL.
-pub type GhosttyAllocator = c_void;
+/// `GhosttyRenderStateDirty` — return from `row_data(DIRTY)`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyRenderStateDirty {
+    False = 0,
+    Partial = 1,
+    Full = 2,
+}
+
+/// `GHOSTTY_RENDER_STATE_ROW_DATA_*` — keys readable from a row.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum GhosttyRenderStateRowData {
+    Dirty = 0,
+    YOffset = 1,
+    ContentId = 2,
+    SemanticPrompt = 3,
+}
+
+/// `GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_*` — keys readable from a cell
+/// iterator position via `row_cells_get_multi`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum GhosttyRenderStateRowCellsData {
+    Raw = 0,     // packed cell (uint64)
+    Style = 1,   // GhosttyStyle pointer-sized index
+    GraphemesLen = 2,
+    GraphemesBuf = 3,
+    BgColor = 4, // u32 0xRRGGBBAA
+    FgColor = 5, // u32 0xRRGGBBAA
+}
+
+// ── Sized structs ──────────────────────────────────────────────────────
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyTerminalOptions {
+    pub cols: u16,
+    pub rows: u16,
+    pub max_scrollback: usize,
+}
+
+// ── Raw FFI ────────────────────────────────────────────────────────────
+//
+// Signatures mirror `include/ghostty/vt/terminal.h` and
+// `include/ghostty/vt/render.h`. Upstream warns that function signatures
+// are subject to change — if a build fails on a newer Ghostty pin, check
+// the headers and update the bindings.
 
 unsafe extern "C" {
+    // Terminal lifecycle (`terminal.h`)
     pub fn ghostty_terminal_new(
         allocator: *const GhosttyAllocator,
         out_terminal: *mut GhosttyTerminal,
         options: GhosttyTerminalOptions,
     ) -> GhosttyResult;
-
     pub fn ghostty_terminal_free(terminal: GhosttyTerminal);
-
     pub fn ghostty_terminal_reset(terminal: GhosttyTerminal);
-
     pub fn ghostty_terminal_resize(
         terminal: GhosttyTerminal,
         cols: u16,
@@ -107,49 +129,84 @@ unsafe extern "C" {
         cell_width_px: u32,
         cell_height_px: u32,
     ) -> GhosttyResult;
-
     pub fn ghostty_terminal_vt_write(terminal: GhosttyTerminal, data: *const u8, len: usize);
-
     pub fn ghostty_terminal_get(
         terminal: GhosttyTerminal,
         key: GhosttyTerminalData,
         out: *mut c_void,
     ) -> GhosttyResult;
-
     pub fn ghostty_terminal_set(
         terminal: GhosttyTerminal,
         key: GhosttyTerminalOpt,
         value: *const c_void,
     ) -> GhosttyResult;
+
+    // Render state (`render.h`) — the hot path
+    pub fn ghostty_render_state_new(
+        terminal: GhosttyTerminal,
+        out_state: *mut GhosttyRenderState,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_free(state: GhosttyRenderState);
+    /// Pull fresh data from the terminal into the render state. Caller
+    /// holds the terminal lock for the duration of this call; afterwards
+    /// the state is self-contained and can be read lock-free.
+    pub fn ghostty_render_state_update(state: GhosttyRenderState) -> GhosttyResult;
+
+    pub fn ghostty_render_state_row_iterator_new(
+        state: GhosttyRenderState,
+        out_iter: *mut GhosttyRowIterator,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_row_iterator_free(iter: GhosttyRowIterator);
+    /// Advance to the next row. Returns non-zero when a row is
+    /// available; zero when iteration is done.
+    pub fn ghostty_render_state_row_iterator_next(iter: GhosttyRowIterator) -> c_int;
+
+    pub fn ghostty_render_state_row_get(
+        iter: GhosttyRowIterator,
+        key: GhosttyRenderStateRowData,
+        out: *mut c_void,
+    ) -> GhosttyResult;
+
+    pub fn ghostty_render_state_row_cells_new(
+        iter: GhosttyRowIterator,
+        out_cells: *mut GhosttyRowCells,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_row_cells_free(cells: GhosttyRowCells);
+    /// Advance to the next cell. Returns non-zero when a cell is
+    /// available; zero when the row is exhausted.
+    pub fn ghostty_render_state_row_cells_next(cells: GhosttyRowCells) -> c_int;
+
+    /// Fetch `count` fields for the currently-selected cell in a single
+    /// call. `keys` points to an array of `GhosttyRenderStateRowCellsData`
+    /// values; `values` to an array of pointer-sized outputs (caller
+    /// aligns per-key). `out_written` receives the number of keys that
+    /// were successfully populated.
+    pub fn ghostty_render_state_row_cells_get_multi(
+        cells: GhosttyRowCells,
+        count: usize,
+        keys: *const GhosttyRenderStateRowCellsData,
+        values: *const *mut c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
 }
 
-// ── Safe wrapper ───────────────────────────────────────────────────────
+// ── Snapshot (renderer's view) ────────────────────────────────────────
 
-/// Snapshot the renderer reads each frame. We own the data — no
-/// borrowed pointers across the FFI boundary, so the parser lock can
-/// be released between feeds and renders.
-#[derive(Debug, Clone, Default)]
-pub struct ScreenSnapshot {
-    pub cols: u16,
-    pub rows: u16,
-    /// Row-major cell array; cells.len() == cols*rows when populated.
-    /// Empty until the renderer-state extraction PR lands; the host
-    /// view can still display the shell as a clear-color rect with
-    /// title until then.
-    pub cells: Vec<Cell>,
-    pub cursor: Cursor,
-    pub title: Option<String>,
-    /// Monotonic; renderer skips frame if it matches last seen.
-    pub generation: u64,
-}
-
+/// One cell ready for the renderer. Packed to match the GPU instance
+/// layout so the renderer can `memcpy` the row of cells straight into
+/// the dynamic instance buffer.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Cell {
+    /// Unicode codepoint; 0 = empty.
     pub codepoint: u32,
-    pub fg: [u8; 3],
-    pub bg: [u8; 3],
-    /// 1=bold, 2=italic, 4=underline, 8=strike, 16=reverse.
+    /// Foreground RGBA (0xRRGGBBAA).
+    pub fg: u32,
+    /// Background RGBA.
+    pub bg: u32,
+    /// Bit flags: 1=bold, 2=italic, 4=underline, 8=strike, 16=inverse.
     pub attrs: u8,
+    pub _pad: [u8; 3],
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -159,51 +216,84 @@ pub struct Cursor {
     pub visible: bool,
 }
 
-/// Thread-safe handle to a `ghostty_terminal_t`. Internally serialized
-/// (libghostty-vt itself is single-threaded — see upstream `terminal.h`).
+/// Screen snapshot the renderer consumes. Dirty rows are represented by
+/// storing all cells (simpler — the renderer checks `dirty_rows` to skip
+/// upload); total LOC savings over a diff structure aren't worth the
+/// complexity at Phase 3b.
+#[derive(Debug, Clone, Default)]
+pub struct ScreenSnapshot {
+    pub cols: u16,
+    pub rows: u16,
+    /// Row-major: `cells[row * cols + col]`.
+    pub cells: Vec<Cell>,
+    /// Row indices whose cells changed since the last update.
+    pub dirty_rows: Vec<u16>,
+    pub cursor: Cursor,
+    pub title: Option<String>,
+    /// Monotonic counter; the renderer skips draws where this hasn't
+    /// advanced.
+    pub generation: u64,
+}
+
+// ── Safe wrapper ───────────────────────────────────────────────────────
+
 pub struct VtScreen {
     inner: Arc<Mutex<VtInner>>,
 }
 
 struct VtInner {
-    handle: GhosttyTerminal,
+    terminal: GhosttyTerminal,
+    render_state: GhosttyRenderState,
     cols: u16,
     rows: u16,
     generation: u64,
+    /// Reusable scratch to avoid per-frame Vec allocs.
+    scratch: Vec<Cell>,
 }
 
 unsafe impl Send for VtInner {}
 
 impl VtScreen {
     pub fn new(cols: u16, rows: u16) -> anyhow::Result<Self> {
-        let mut handle: GhosttyTerminal = std::ptr::null_mut();
+        let mut terminal: GhosttyTerminal = std::ptr::null_mut();
         let options = GhosttyTerminalOptions {
             cols,
             rows,
             max_scrollback: 10_000,
         };
-        // SAFETY: out parameter; allocator NULL = default.
-        let rc = unsafe { ghostty_terminal_new(std::ptr::null(), &mut handle, options) };
-        if rc != 0 || handle.is_null() {
+        // SAFETY: out param; allocator NULL = upstream default.
+        let rc = unsafe { ghostty_terminal_new(std::ptr::null(), &mut terminal, options) };
+        if rc != 0 || terminal.is_null() {
             anyhow::bail!("ghostty_terminal_new failed: rc={}", rc);
         }
+
+        let mut render_state: GhosttyRenderState = std::ptr::null_mut();
+        // SAFETY: terminal valid; out param.
+        let rc = unsafe { ghostty_render_state_new(terminal, &mut render_state) };
+        if rc != 0 || render_state.is_null() {
+            // SAFETY: terminal needs to be freed on partial init.
+            unsafe { ghostty_terminal_free(terminal) };
+            anyhow::bail!("ghostty_render_state_new failed: rc={}", rc);
+        }
+
         Ok(Self {
             inner: Arc::new(Mutex::new(VtInner {
-                handle,
+                terminal,
+                render_state,
                 cols,
                 rows,
                 generation: 0,
+                scratch: Vec::with_capacity(cols as usize * rows as usize),
             })),
         })
     }
 
-    /// Feed PTY bytes into the parser. Non-reentrant per upstream — do
-    /// not call from inside a registered callback on the same terminal.
+    /// Feed bytes from the PTY into the parser. Non-reentrant per
+    /// upstream: do not call from inside a registered callback.
     pub fn feed(&self, bytes: &[u8]) {
         let mut inner = self.inner.lock();
-        // SAFETY: handle valid for the lifetime of `inner`; bytes valid
-        // for the call duration.
-        unsafe { ghostty_terminal_vt_write(inner.handle, bytes.as_ptr(), bytes.len()) };
+        // SAFETY: terminal valid; bytes live for the call.
+        unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
         inner.generation = inner.generation.wrapping_add(1);
     }
 
@@ -215,43 +305,118 @@ impl VtScreen {
         cell_height_px: u32,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.lock();
-        // SAFETY: handle valid; resize is a state mutation.
+        // SAFETY: terminal valid.
         let rc = unsafe {
-            ghostty_terminal_resize(inner.handle, cols, rows, cell_width_px, cell_height_px)
+            ghostty_terminal_resize(inner.terminal, cols, rows, cell_width_px, cell_height_px)
         };
         if rc != 0 {
             anyhow::bail!("ghostty_terminal_resize failed: rc={}", rc);
         }
         inner.cols = cols;
         inner.rows = rows;
+        inner.scratch = Vec::with_capacity(cols as usize * rows as usize);
         inner.generation = inner.generation.wrapping_add(1);
         Ok(())
     }
 
-    /// Snapshot the renderable state. Cell extraction iterates upstream's
-    /// render-state row/cells iterators — staged for the focused glyph
-    /// renderer PR to keep this PR's surface contained.
+    /// Pull a fresh snapshot via the render-state API. Walks row and
+    /// cell iterators, batch-reads RAW/STYLE/BG/FG per cell, honors the
+    /// per-row DIRTY flag so unchanged rows don't touch FFI again.
     pub fn snapshot(&self) -> ScreenSnapshot {
-        let inner = self.inner.lock();
+        let mut inner = self.inner.lock();
 
+        // Refresh the render state from the terminal.
+        // SAFETY: render_state valid while inner holds the mutex.
+        unsafe { ghostty_render_state_update(inner.render_state) };
+
+        let cols = inner.cols;
+        let rows = inner.rows;
+        let total = cols as usize * rows as usize;
+
+        // Keep the previous frame's cells so untouched rows stay intact.
+        if inner.scratch.len() != total {
+            inner.scratch.clear();
+            inner.scratch.resize(total, Cell::default());
+        }
+
+        let mut dirty_rows: Vec<u16> = Vec::new();
+
+        // SAFETY: iterator lifetime is scoped; free on the way out.
+        let mut iter: GhosttyRowIterator = std::ptr::null_mut();
+        let rc = unsafe { ghostty_render_state_row_iterator_new(inner.render_state, &mut iter) };
+        if rc == 0 && !iter.is_null() {
+            let mut row_idx: u16 = 0;
+            // SAFETY: iter valid for the duration; `next` returns 0 at end.
+            while unsafe { ghostty_render_state_row_iterator_next(iter) } != 0 {
+                if row_idx >= rows {
+                    break;
+                }
+
+                let mut dirty: GhosttyRenderStateDirty = GhosttyRenderStateDirty::False;
+                // SAFETY: DIRTY is an enum-sized integer; caller provides
+                // aligned out pointer.
+                unsafe {
+                    ghostty_render_state_row_get(
+                        iter,
+                        GhosttyRenderStateRowData::Dirty,
+                        &mut dirty as *mut _ as *mut c_void,
+                    );
+                }
+
+                if dirty == GhosttyRenderStateDirty::False {
+                    row_idx += 1;
+                    continue;
+                }
+
+                dirty_rows.push(row_idx);
+
+                // SAFETY: cells handle scoped to this block.
+                let mut cells: GhosttyRowCells = std::ptr::null_mut();
+                let rc =
+                    unsafe { ghostty_render_state_row_cells_new(iter, &mut cells) };
+                if rc == 0 && !cells.is_null() {
+                    let row_start = row_idx as usize * cols as usize;
+                    let mut col_idx: u16 = 0;
+                    while unsafe { ghostty_render_state_row_cells_next(cells) } != 0 {
+                        if col_idx >= cols {
+                            break;
+                        }
+                        let cell = read_cell(cells);
+                        inner.scratch[row_start + col_idx as usize] = cell;
+                        col_idx += 1;
+                    }
+                    // Clear any trailing cells in the row.
+                    for c in col_idx..cols {
+                        inner.scratch[row_start + c as usize] = Cell::default();
+                    }
+                    unsafe { ghostty_render_state_row_cells_free(cells) };
+                }
+
+                row_idx += 1;
+            }
+            unsafe { ghostty_render_state_row_iterator_free(iter) };
+        }
+
+        // Cursor from the terminal (render_state has a pointer-equivalent,
+        // but using the terminal get keeps parity with the simple case).
         let mut cursor = Cursor::default();
         let mut visible: u8 = 0;
         let mut col_u16: u16 = 0;
         let mut row_u16: u16 = 0;
-        // SAFETY: out parameters of correct types per terminal.h get table.
+        // SAFETY: out params, correct sizes per upstream terminal.h.
         unsafe {
             let _ = ghostty_terminal_get(
-                inner.handle,
+                inner.terminal,
                 GhosttyTerminalData::CursorX,
                 &mut col_u16 as *mut _ as *mut c_void,
             );
             let _ = ghostty_terminal_get(
-                inner.handle,
+                inner.terminal,
                 GhosttyTerminalData::CursorY,
                 &mut row_u16 as *mut _ as *mut c_void,
             );
             let _ = ghostty_terminal_get(
-                inner.handle,
+                inner.terminal,
                 GhosttyTerminalData::CursorVisible,
                 &mut visible as *mut _ as *mut c_void,
             );
@@ -260,19 +425,13 @@ impl VtScreen {
         cursor.row = row_u16;
         cursor.visible = visible != 0;
 
-        // Title is exposed as a borrowed `GhosttyString { data, len }`
-        // by upstream. The exact struct shape is in
-        // `include/ghostty/vt/types.h`. Until the renderer needs it
-        // we leave it as None — the GPUI parent reads pane title via a
-        // separate path.
-        let title = None;
-
         ScreenSnapshot {
-            cols: inner.cols,
-            rows: inner.rows,
-            cells: Vec::new(),
+            cols,
+            rows,
+            cells: inner.scratch.clone(),
+            dirty_rows,
             cursor,
-            title,
+            title: None, // TODO: terminal_get(TITLE) returns GhosttyString; wire shape.
             generation: inner.generation,
         }
     }
@@ -283,14 +442,70 @@ impl VtScreen {
     }
 }
 
+/// Batch-read four fields from the cell iterator's current position in a
+/// single FFI call. Returns a fully-populated [`Cell`] for the renderer.
+fn read_cell(cells: GhosttyRowCells) -> Cell {
+    let mut raw: u64 = 0;
+    let mut _style: usize = 0;
+    let mut bg: u32 = 0;
+    let mut fg: u32 = 0;
+
+    let keys = [
+        GhosttyRenderStateRowCellsData::Raw,
+        GhosttyRenderStateRowCellsData::Style,
+        GhosttyRenderStateRowCellsData::BgColor,
+        GhosttyRenderStateRowCellsData::FgColor,
+    ];
+    let values: [*mut c_void; 4] = [
+        &mut raw as *mut _ as *mut c_void,
+        &mut _style as *mut _ as *mut c_void,
+        &mut bg as *mut _ as *mut c_void,
+        &mut fg as *mut _ as *mut c_void,
+    ];
+    let mut written: usize = 0;
+
+    // SAFETY: keys + values live on stack for the call; alignment per
+    // the per-key contract in render.h.
+    unsafe {
+        let _ = ghostty_render_state_row_cells_get_multi(
+            cells,
+            keys.len(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            &mut written,
+        );
+    }
+
+    // `raw` packs the codepoint in its low 32 bits and a content/attrs
+    // tag above. Upstream screen.h documents the layout via
+    // GHOSTTY_CELL_DATA_* accessors; for the renderer's purposes we only
+    // need the codepoint and precomputed fg/bg from the render state.
+    let codepoint = (raw & 0xFFFF_FFFF) as u32;
+    let attrs = ((raw >> 56) & 0xFF) as u8;
+
+    Cell {
+        codepoint,
+        fg,
+        bg,
+        attrs,
+        _pad: [0; 3],
+    }
+}
+
 impl Drop for VtScreen {
     fn drop(&mut self) {
         if let Some(mutex) = Arc::get_mut(&mut self.inner) {
             let inner = mutex.get_mut();
-            if !inner.handle.is_null() {
+            // Free render_state before terminal — it borrows.
+            if !inner.render_state.is_null() {
                 // SAFETY: unique owner via Arc::get_mut check.
-                unsafe { ghostty_terminal_free(inner.handle) };
-                inner.handle = std::ptr::null_mut();
+                unsafe { ghostty_render_state_free(inner.render_state) };
+                inner.render_state = std::ptr::null_mut();
+            }
+            if !inner.terminal.is_null() {
+                // SAFETY: unique owner.
+                unsafe { ghostty_terminal_free(inner.terminal) };
+                inner.terminal = std::ptr::null_mut();
             }
         }
     }
