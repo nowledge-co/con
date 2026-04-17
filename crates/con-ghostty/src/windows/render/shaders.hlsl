@@ -29,8 +29,10 @@ cbuffer Globals : register(b0) {
 struct VSInstance {
     // (col, row) of this cell in the grid.
     uint2  cellPos       : CELLPOS;
-    // (x, y, w, h) of this cell's glyph in atlas pixels.
-    uint4  atlasRect     : ATLAS;
+    // (x, y) of this cell's glyph in atlas pixels.
+    uint2  atlasPos      : ATLAS_POS;
+    // (w, h) of this cell's glyph in atlas pixels.
+    uint2  atlasSize     : ATLAS_SIZE;
     // Foreground RGBA8 (srgb).
     uint   fg            : FGCOLOR;
     // Background RGBA8.
@@ -93,11 +95,11 @@ VSOut vs_main(uint vid : SV_VertexID, VSInstance inst) {
     o.pos = float4(px * invViewport + float2(-1.0,  1.0), 0.0, 1.0);
     // NDC y is up; our logical y is down. invViewport.y is negative to flip.
 
-    float2 atlasTopLeft = float2(inst.atlasRect.xy);
-    float2 atlasSize    = float2(inst.atlasRect.zw);
+    float2 atlasTopLeft = float2(inst.atlasPos);
+    float2 atlasPixels  = float2(inst.atlasSize);
     // Pixel coords for the glyph rect, then normalize by the atlas
     // texture dims so the Sample() call gets UVs in [0,1].
-    o.atlasUV = (atlasTopLeft + atlasSize * float2(corner)) * invAtlasSize;
+    o.atlasUV = (atlasTopLeft + atlasPixels * float2(corner)) * invAtlasSize;
 
     o.fg    = unpackRGBA(inst.fg);
     o.bg    = unpackRGBA(inst.bg);

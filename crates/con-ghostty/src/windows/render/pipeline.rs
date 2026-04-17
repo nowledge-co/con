@@ -38,13 +38,21 @@ use super::atlas::GlyphRect;
 const HLSL_SOURCE: &str = include_str!("shaders.hlsl");
 
 /// Per-cell instance pushed to the GPU. Exactly matches the HLSL
-/// `VSInstance` layout (20 bytes). Keep in sync with
+/// `VSInstance` layout (36 bytes). Keep in sync with
 /// [`shaders.hlsl`].
+///
+/// `atlas_rect` is split into `atlas_pos` + `atlas_size` (two
+/// `R32G32_UINT` slots) rather than a single `R32G32B32A32_UINT`
+/// — the latter at offset 8 (non-16-aligned) has been observed to
+/// produce partial / zeroed reads on some AMD Radeon drivers.
+/// Two 8-byte slots at 8-byte-aligned offsets sidestep the issue
+/// entirely and cost nothing at runtime.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Instance {
     pub cell_pos: [u32; 2],       // CELLPOS
-    pub atlas_rect: [u32; 4],     // ATLAS (x, y, w, h in atlas pixels)
+    pub atlas_pos: [u32; 2],      // ATLAS_POS (x, y)
+    pub atlas_size: [u32; 2],     // ATLAS_SIZE (w, h)
     pub fg: u32,                  // FGCOLOR
     pub bg: u32,                  // BGCOLOR
     pub attrs: u32,               // ATTRS
@@ -105,14 +113,16 @@ impl Pipeline {
 
         // Matches the `VSInstance` struct in shaders.hlsl. All per-instance.
         let cellpos = CString::new("CELLPOS").unwrap();
-        let atlas = CString::new("ATLAS").unwrap();
+        let atlas_pos = CString::new("ATLAS_POS").unwrap();
+        let atlas_size = CString::new("ATLAS_SIZE").unwrap();
         let fg = CString::new("FGCOLOR").unwrap();
         let bg = CString::new("BGCOLOR").unwrap();
         let attrs = CString::new("ATTRS").unwrap();
 
         let layout = [
             instance_elem(&cellpos, 0, DXGI_FORMAT_R32G32_UINT, 0),
-            instance_elem(&atlas, 0, DXGI_FORMAT_R32G32B32A32_UINT, 8),
+            instance_elem(&atlas_pos, 0, DXGI_FORMAT_R32G32_UINT, 8),
+            instance_elem(&atlas_size, 0, DXGI_FORMAT_R32G32_UINT, 16),
             instance_elem(&fg, 0, DXGI_FORMAT_R32_UINT, 24),
             instance_elem(&bg, 0, DXGI_FORMAT_R32_UINT, 28),
             instance_elem(&attrs, 0, DXGI_FORMAT_R32_UINT, 32),
@@ -450,7 +460,8 @@ pub fn instance_for_cell(
 ) -> Instance {
     Instance {
         cell_pos: [col as u32, row as u32],
-        atlas_rect: [glyph.x as u32, glyph.y as u32, glyph.w as u32, glyph.h as u32],
+        atlas_pos: [glyph.x as u32, glyph.y as u32],
+        atlas_size: [glyph.w as u32, glyph.h as u32],
         fg,
         bg,
         attrs: attrs as u32,

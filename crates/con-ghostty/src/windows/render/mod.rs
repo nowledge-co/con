@@ -270,6 +270,7 @@ impl Renderer {
         let mut instances = self.instances.lock().unwrap();
         instances.clear();
         instances.reserve(snapshot.cells.len());
+        let mut logged_non_empty: u32 = 0;
 
         for (i, cell) in snapshot.cells.iter().enumerate() {
             let col = (i % snapshot.cols as usize) as u16;
@@ -280,7 +281,8 @@ impl Renderer {
                 // glyph rect (sampler returns zero coverage → all bg).
                 instances.push(Instance {
                     cell_pos: [col as u32, row as u32],
-                    atlas_rect: [0, 0, 0, 0],
+                    atlas_pos: [0, 0],
+                    atlas_size: [0, 0],
                     fg: cell.fg,
                     bg: cell.bg,
                     attrs: cell.attrs as u32,
@@ -297,7 +299,8 @@ impl Renderer {
                 // Atlas exhausted — emit a bg quad; TODO(3b+): resize atlas.
                 instances.push(Instance {
                     cell_pos: [col as u32, row as u32],
-                    atlas_rect: [0, 0, 0, 0],
+                    atlas_pos: [0, 0],
+                    atlas_size: [0, 0],
                     fg: cell.fg,
                     bg: cell.bg,
                     attrs: cell.attrs as u32,
@@ -305,14 +308,18 @@ impl Renderer {
                 continue;
             };
 
-            instances.push(instance_for_cell(
-                col,
-                row,
-                glyph,
-                cell.fg,
-                cell.bg,
-                cell.attrs,
-            ));
+            let inst = instance_for_cell(col, row, glyph, cell.fg, cell.bg, cell.attrs);
+            if logged_non_empty < 6 {
+                log::trace!(
+                    "instance[{i}]: cell_pos=({},{}) atlas_pos=({},{}) atlas_size=({},{}) fg={:#010x} bg={:#010x} codepoint=U+{:04X}",
+                    inst.cell_pos[0], inst.cell_pos[1],
+                    inst.atlas_pos[0], inst.atlas_pos[1],
+                    inst.atlas_size[0], inst.atlas_size[1],
+                    inst.fg, inst.bg, cell.codepoint,
+                );
+                logged_non_empty += 1;
+            }
+            instances.push(inst);
         }
 
         drop(atlas); // release atlas lock before GPU upload
