@@ -274,17 +274,30 @@ impl VtScreen {
         }
 
         let mut render_state: GhosttyRenderState = std::ptr::null_mut();
-        log::info!("VtScreen::new: calling ghostty_render_state_new");
-        // SAFETY: terminal valid; out param.
-        let rc = unsafe { ghostty_render_state_new(terminal, &mut render_state) };
-        log::info!(
-            "VtScreen::new: ghostty_render_state_new returned rc={rc}, state={:?}",
-            render_state
-        );
-        if rc != 0 || render_state.is_null() {
-            // SAFETY: terminal needs to be freed on partial init.
-            unsafe { ghostty_terminal_free(terminal) };
-            anyhow::bail!("ghostty_render_state_new failed: rc={}", rc);
+        let enable_render_state = std::env::var("CON_GHOSTTY_VT_RENDER_STATE")
+            .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        if enable_render_state {
+            log::info!("VtScreen::new: calling ghostty_render_state_new");
+            // SAFETY: terminal valid; out param.
+            let rc = unsafe { ghostty_render_state_new(terminal, &mut render_state) };
+            log::info!(
+                "VtScreen::new: ghostty_render_state_new returned rc={rc}, state={:?}",
+                render_state
+            );
+            if rc != 0 || render_state.is_null() {
+                // SAFETY: terminal needs to be freed on partial init.
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_render_state_new failed: rc={}", rc);
+            }
+        } else {
+            log::warn!(
+                "VtScreen::new: skipping render_state (CON_GHOSTTY_VT_RENDER_STATE unset). \
+                 Terminal output will parse but cells won't render. \
+                 The pinned Ghostty revision's render_state API crashes \
+                 (access violation inside ghostty_render_state_new); \
+                 bump GHOSTTY_REV once it's stable."
+            );
         }
 
         Ok(Self {
@@ -336,12 +349,30 @@ impl VtScreen {
     pub fn snapshot(&self) -> ScreenSnapshot {
         let mut inner = self.inner.lock();
 
+        let cols = inner.cols;
+        let rows = inner.rows;
+
+        // If the render_state API is disabled (see VtScreen::new), we
+        // can't read cells back. Return a trivial snapshot so the
+        // renderer still clears to the background color and presents —
+        // ConPTY + terminal_vt_write still run; output simply isn't
+        // visualized until render_state is enabled upstream.
+        if inner.render_state.is_null() {
+            return ScreenSnapshot {
+                cols,
+                rows,
+                cells: Vec::new(),
+                dirty_rows: Vec::new(),
+                cursor: Cursor::default(),
+                title: None,
+                generation: inner.generation,
+            };
+        }
+
         // Refresh the render state from the terminal.
         // SAFETY: render_state valid while inner holds the mutex.
         unsafe { ghostty_render_state_update(inner.render_state) };
 
-        let cols = inner.cols;
-        let rows = inner.rows;
         let total = cols as usize * rows as usize;
 
         // Keep the previous frame's cells so untouched rows stay intact.
