@@ -7,7 +7,18 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// Pinned Ghostty revision. Bump together when updating either the
 /// macOS full-libghostty build or the Windows libghostty-vt build —
 /// both consume the same source tree to keep VT semantics in sync.
-const GHOSTTY_REV: &str = "e740f6fc117971da9df9fc957a706e6d96554aa5";
+///
+/// 2026-04-17 bump: from `e740f6fc1...` to `ca7516bea6...`. The older
+/// pin predated libghostty-vt's render-state implementation on
+/// Windows — `ghostty_render_state_new` was exported as a symbol but
+/// dereferenced a null internal function pointer at runtime. The new
+/// pin is tip-of-main on 2026-04-17; see the postmortem in
+/// docs/impl/windows-port.md.
+///
+/// If a bump breaks the macOS libghostty build (different zig flags
+/// needed), revert by re-pinning to `e740f6fc117971da9df9fc957a706e6d96554aa5`
+/// — that's known-good on macOS.
+const GHOSTTY_REV: &str = "ca7516bea60190ee2e9a4f9182b61d318d107c6e";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 
 fn main() {

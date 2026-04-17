@@ -48,6 +48,7 @@ Build-time env vars for `con-ghostty`:
 | `CON_GHOSTTY_VT_STEP` | Exact Zig build step/flag to pass for libghostty-vt. Autodetected; override only if the probe picks wrong. |
 | `CON_GHOSTTY_VT_SIMD=1` | Opt in to Ghostty's SIMD UTF-8 paths (`-Dsimd=true`). Default off on Windows because the resulting `ghostty-vt-static.lib` references `simdutf` C++ symbols that Zig doesn't bundle into the archive. Flip this once simdutf link-resolution is sorted (see TODO in `build.rs`). |
 | `CON_STUB_GHOSTTY_VT=1` | Compile `src/windows/ghostty_vt_stub.c` and link it instead of libghostty-vt. The resulting `con-app.exe` launches fully, the terminal pane creates the real WS_CHILD HWND and swapchain, ConPTY spawns the shell — but the terminal grid is empty because the VT parser is stubbed. Useful for iterating GPUI / HWND / renderer paths while a real libghostty-vt is broken. |
+| `CON_GHOSTTY_VT_RENDER_STATE=0` | Skip `ghostty_render_state_new` at startup. Default on (render state is how we read cells back for display). The escape hatch exists because older Ghostty revisions have a broken render-state implementation on Windows; the `GHOSTTY_REV` pin as of 2026-04-17 tip-of-main works, but if you pull a regression from upstream you can ship a runnable app with `=0` while the fix is in flight. |
 | `CON_SKIP_GHOSTTY_VT=1` | Skip both. `cargo build` will fail at link. Only useful for `cargo check`. |
 
 Common Windows pitfalls when the Zig step fails mid-build with

@@ -274,9 +274,15 @@ impl VtScreen {
         }
 
         let mut render_state: GhosttyRenderState = std::ptr::null_mut();
+        // The older Ghostty pin (pre-2026-04-17) exported
+        // `ghostty_render_state_new` as a symbol but its body derefed
+        // a null function pointer on Windows. We've bumped past that;
+        // default on. Escape hatch left in for regressions while the
+        // upstream API stabilizes.
         let enable_render_state = std::env::var("CON_GHOSTTY_VT_RENDER_STATE")
-            .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false);
+            .map(|s| matches!(s.as_str(), "0" | "false" | "no" | "off"))
+            .map(|disabled| !disabled)
+            .unwrap_or(true);
         if enable_render_state {
             log::info!("VtScreen::new: calling ghostty_render_state_new");
             // SAFETY: terminal valid; out param.
@@ -292,11 +298,9 @@ impl VtScreen {
             }
         } else {
             log::warn!(
-                "VtScreen::new: skipping render_state (CON_GHOSTTY_VT_RENDER_STATE unset). \
-                 Terminal output will parse but cells won't render. \
-                 The pinned Ghostty revision's render_state API crashes \
-                 (access violation inside ghostty_render_state_new); \
-                 bump GHOSTTY_REV once it's stable."
+                "VtScreen::new: render_state disabled via \
+                 CON_GHOSTTY_VT_RENDER_STATE=0 — terminal output will \
+                 parse but cells won't render."
             );
         }
 
