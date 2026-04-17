@@ -291,14 +291,26 @@ fn build_startup_info(hpcon: HPCON) -> Result<(STARTUPINFOEXW, Vec<u8>)> {
             .context("InitializeProcThreadAttributeList failed")?;
     }
 
-    // SAFETY: passing the HPCON value as the attribute. The lifetime of
-    // the HPCON exceeds CreateProcessW (caller holds `pcon` until after).
+    // SAFETY: for PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE the kernel
+    // stores `lpValue` directly as the pseudo-console handle — NOT a
+    // pointer to a value to copy. Match the canonical Microsoft
+    // sample (github.com/microsoft/terminal ConPTY sample): pass the
+    // HPCON (which is itself a pointer/void*) as lpValue.
+    //
+    // The previous `&hpcon` form had two bugs: (1) it pointed at a
+    // local in `build_startup_info` that died when the function
+    // returned, leaving a dangling stack pointer in the attribute
+    // list for CreateProcessW to dereference; (2) even on a
+    // longer-lived HPCON, this attribute expects the handle as
+    // lpValue, not a pointer to it. Result seen by the user:
+    // powershell spawned without PTY binding, opened its own console
+    // window, wrote nothing to our pipe.
     unsafe {
         UpdateProcThreadAttribute(
             attribute_list,
             0,
             PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
-            Some(&hpcon as *const HPCON as *const _),
+            Some(hpcon.0 as *const _),
             size_of::<HPCON>(),
             None,
             None,
