@@ -1104,6 +1104,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "uuid",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -1168,6 +1169,8 @@ dependencies = [
  "log",
  "objc",
  "parking_lot",
+ "raw-window-handle",
+ "windows 0.61.3",
 ]
 
 [[package]]

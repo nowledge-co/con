@@ -9,14 +9,22 @@ mod command_palette;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
 
-// The terminal-view module is selected per platform. macOS embeds a
-// libghostty-backed NSView; non-macOS uses a placeholder view until the
-// libghostty-vt + ConPTY (Windows) / forkpty (Linux) backend lands. The
-// public type names are identical so downstream modules compile on both
-// paths without per-callsite cfg. See `docs/impl/windows-port.md`.
+// The terminal-view module is selected per platform:
+//   macOS   -> ghostty_view.rs (libghostty + child NSView)
+//   Windows -> windows_view.rs (libghostty-vt + ConPTY + D3D11 child HWND)
+//   Linux / other -> stub_view.rs (placeholder until Linux backend lands)
+//
+// All three expose the same public type names (`GhosttyView`,
+// `GhosttyTitleChanged`, `GhosttyProcessExited`, `GhosttyFocusChanged`,
+// `GhosttySplitRequested`, `init`) so downstream modules
+// (`terminal_pane`, `workspace`) compile on every target without
+// per-callsite cfg gates. See `docs/impl/windows-port.md`.
 #[cfg(target_os = "macos")]
 mod ghostty_view;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+#[path = "windows_view.rs"]
+mod ghostty_view;
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 #[path = "stub_view.rs"]
 mod ghostty_view;
 

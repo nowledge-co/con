@@ -289,12 +289,44 @@ phase keeps the macOS build green.
 | 0 | prep | Cfg-gates, transport abstraction, docs, cleaner non-macOS error message | macOS unchanged; non-UI crates compile on Windows | ✅ landed |
 | 1 | Windows + Linux CI smoke test | `.github/workflows/ci-portable.yml` runs `cargo check` + `cargo test` for the portable crates and the UI binary on `windows-latest` and `ubuntu-latest` | CI green on both targets | ✅ landed |
 | 2 | Stub terminal backend | `con-ghostty` exposes stub types on non-macOS; `stub_view.rs` is a GPUI placeholder view selected via `#[path]`; the `compile_error!` is gone | **`cargo build -p con` works on Windows and Linux** — terminal pane paints a "backend under construction" card; agent panel, settings, command palette, control socket all functional | ✅ landed |
-| 3 | Windows terminal backend | `libghostty-vt` Rust FFI + ConPTY wrapper + GPUI-painted grid renderer. Replaces the stub view on Windows. Decide on DirectWrite-via-`font-kit` vs. GPUI's own text shaping | Smoke-test terminal works on Windows | — |
-| 4 | Hardening | Multi-pane, splits, IME, focus, resize, copy/paste, drag/drop | Beta-quality | — |
-| 5 | Distribution | MSI installer, code signing, auto-update | Release-ready | — |
+| 3a | Windows backend scaffold | `con-ghostty/src/windows/` modules: ConPTY wrapper, libghostty-vt FFI, D3D11 + DirectWrite renderer skeleton (clear-to-color), WS_CHILD HWND host with WM_SIZE/WM_DPICHANGED/WM_CHAR/WM_KEYDOWN/WM_PAINT plumbing, `WindowsGhosttyApp`/`WindowsGhosttyTerminal` facade. `con-app/src/windows_view.rs` instantiates a `HostView` lazily once GPUI's parent HWND is available. `build.rs` builds `libghostty-vt` via `zig build ghostty-vt-static` on Windows host targets. | **`cargo build -p con` on Windows produces a `con.exe` that launches; terminal pane creates a real WS_CHILD HWND, spawns a real ConPTY shell, drives libghostty-vt — but the renderer only clears to a color** until 3b lands. Compiles clean on Linux + Windows cross-target. | ✅ landed |
+| 3b | Glyph atlas + grid render | DirectWrite glyph rasterization into a D3D11 texture atlas, vertex/index buffers for the cell grid, HLSL vertex+pixel shaders, one draw call per frame instancing. Replaces `Renderer::render`'s clear-only path. | Visible terminal text on Windows. | — |
+| 3c | Input + selection | VK_* → xterm escape sequence translation in `host_view::WM_KEYDOWN`; mouse selection / scroll forwarding; clipboard via OSC 52 + Win32 clipboard. | Real terminal interactivity. | — |
+| 3d | (Parallel, upstream) | `WindowsWindow::attach_external_swap_chain_handle(bounds, HANDLE)` PR to `zed-industries/zed`. ~50 LOC. When merged, swap our backend from `CreateSwapChainForHwnd(WS_CHILD HWND)` to `CreateSwapChainForCompositionSurfaceHandle` so DWM composites our visual cleanly with GPUI's. Zero user-visible change except popup Z-order becomes pixel-perfect. | (No con change required pre-merge.) | — |
+| 4 | Hardening | Multi-pane, splits, IME, focus, resize, copy/paste, drag/drop, OSC 133 shell integration, ligatures | Beta-quality | — |
+| 5 | Distribution | MSI installer, code signing, auto-update (WiX or `cargo dist`), `con-app.exe` rename via feature-gated twin `[[bin]]` | Release-ready | — |
 
-Phases 0-2 are **complete**. Phase 3 is the bulk of the remaining
-engineering work.
+Phases 0-3a are **complete**. Phases 3b-3c are the real-glyphs work
+(non-trivial GPU programming) and need iteration on actual Windows
+hardware. Phase 3d is independent upstream work.
+
+### What you can do *today* on Windows after Phase 3a
+
+```powershell
+git clone https://github.com/nowledge-co/con.git
+cd con
+cargo build -p con --release
+target\release\con.exe
+```
+
+The window comes up with the full chrome. Click the terminal pane —
+GPUI hands us its parent HWND, we create a `WS_CHILD` HWND in the pane
+rect, spawn a `pwsh.exe`/`cmd.exe` ConPTY child, pipe its output bytes
+into libghostty-vt. The terminal area paints a solid clear color (the
+glyph renderer is staged for 3b). Typing into the terminal pane
+forwards to the shell via `WM_CHAR`. Resize works. Window close kills
+the shell.
+
+Caveats:
+- You must have **Zig 0.13+** on `PATH` (one-time install from
+  <https://ziglang.org/download/>) for `cargo build` to compile
+  `libghostty-vt`. `cargo check` works without Zig (compile-only, no
+  link); set `CON_SKIP_GHOSTTY_VT=1` to skip the build entirely.
+- The shell is `$env:COMSPEC` if set, else `pwsh.exe`/`powershell.exe`
+  if on PATH, else `cmd.exe`. User-overridable via config (Phase 4).
+- Cell grid sizing uses a stub 8×16 px until DirectWrite font metrics
+  are wired (3b). Windows users will see the wrong column/row count
+  reported to the shell until then.
 
 ## Open questions
 

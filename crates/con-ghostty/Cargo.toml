@@ -15,3 +15,27 @@ parking_lot.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 objc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Win32 API surface for the Windows terminal backend (Phase 3).
+# See docs/impl/windows-port.md for the staged plan.
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",          # ConPTY: CreatePseudoConsole etc.
+    "Win32_System_Threading",         # CreateProcessW, STARTUPINFOEXW, WaitForSingleObject
+    "Win32_System_Pipes",             # CreatePipe (anonymous pipes for ConPTY I/O)
+    "Win32_System_IO",                # OVERLAPPED, shared I/O types
+    "Win32_Storage_FileSystem",       # ReadFile, WriteFile
+    "Win32_Security",                 # SECURITY_ATTRIBUTES
+    "Win32_Graphics_Direct3D",        # D3D_FEATURE_LEVEL, D3D_DRIVER_TYPE
+    "Win32_Graphics_Direct3D11",      # ID3D11Device, swapchain, RTV, shaders, buffers
+    "Win32_Graphics_Dxgi",            # IDXGIFactory6, IDXGISwapChain1, CreateSwapChainForComposition
+    "Win32_Graphics_Dxgi_Common",     # DXGI_FORMAT, DXGI_SAMPLE_DESC
+    "Win32_Graphics_DirectComposition", # IDCompositionDevice/Target/Visual
+    "Win32_Graphics_DirectWrite",     # IDWriteFactory, glyph rasterization
+    "Win32_Graphics_Gdi",             # RECT/POINT/HDC plumbing
+    "Win32_UI_WindowsAndMessaging",   # CreateWindowExW, RegisterClassExW, WM_* messages
+    "Win32_UI_HiDpi",                 # GetDpiForWindow, per-monitor DPI awareness
+    "Win32_UI_Input_KeyboardAndMouse", # virtual-key codes for WM_KEYDOWN/WM_CHAR
+] }
+raw-window-handle = "0.6"
