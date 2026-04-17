@@ -22,8 +22,17 @@ const GHOSTTY_REV: &str = "ca7516bea60190ee2e9a4f9182b61d318d107c6e";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 
 fn main() {
+    // Rerun the build script when any of our own env vars flip — cargo
+    // otherwise caches the last build.rs output across env changes, so
+    // toggling CON_STUB_GHOSTTY_VT off wouldn't re-build libghostty-vt
+    // until something unrelated invalidated the cache.
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed={GHOSTTY_ENV}");
+    println!("cargo:rerun-if-env-changed=CON_STUB_GHOSTTY_VT");
+    println!("cargo:rerun-if-env-changed=CON_SKIP_GHOSTTY_VT");
+    println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_SIMD");
+    println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_STEP");
+    println!("cargo:rerun-if-env-changed=CON_ZIG_BIN");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 

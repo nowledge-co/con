@@ -33,7 +33,7 @@ use windows::Win32::System::Console::{
 };
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
     LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
     STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
@@ -143,7 +143,13 @@ impl ConPty {
             .collect();
         let mut process_info = PROCESS_INFORMATION::default();
 
-        let creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+        // CREATE_NO_WINDOW: don't attach the child to the parent's
+        // console, and don't let it pop a new one. ConPTY still works —
+        // the pseudo-console is the child's stdio, independent of the
+        // OS-level console window. Without this flag, every pane spawns
+        // a visible cmd.exe / pwsh window alongside con-app.
+        let creation_flags =
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
 
         // SAFETY: command_line_w is mutable + NUL-terminated;
         // `attribute_buffer` keeps the attribute list alive until after

@@ -280,6 +280,14 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let renderer = state.renderer.lock();
                 let _ = renderer.render(&snapshot, &state.config);
             }
+            // Mark the client area validated — without this, the OS
+            // considers the HWND perpetually dirty and keeps calling
+            // WM_PAINT in a tight loop (and can refuse to composite
+            // the backbuffer until the dirty region is cleared).
+            // SAFETY: hwnd is valid for the duration of the message.
+            unsafe {
+                let _ = windows::Win32::Graphics::Gdi::ValidateRect(Some(hwnd), None);
+            }
             LRESULT(0)
         }
         WM_SIZE => {
