@@ -8,7 +8,23 @@ const GHOSTTY_REV: &str = "e740f6fc117971da9df9fc957a706e6d96554aa5";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed={GHOSTTY_ENV}");
+
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    // libghostty's full embedded C API is macOS-only upstream (April 2026).
+    // See docs/impl/windows-port.md for the Windows/Linux porting plan.
+    // On non-macOS targets we still expose the crate (so the workspace
+    // resolves and `cargo check` passes) but do not invoke `zig build`
+    // and do not emit any link instructions.
+    if target_os != "macos" {
+        println!(
+            "cargo:warning=con-ghostty: skipping libghostty build on target_os={target_os} \
+             (macOS-only — see docs/impl/windows-port.md)"
+        );
+        return;
+    }
 
     let ghostty_dir = resolve_ghostty_source();
 
@@ -38,25 +54,22 @@ fn main() {
     );
     println!("cargo:rustc-link-lib=static=ghostty-fat");
 
-    // macOS frameworks required by libghostty
-    if cfg!(target_os = "macos") {
-        for framework in &[
-            "AppKit",
-            "Metal",
-            "CoreGraphics",
-            "CoreText",
-            "CoreVideo",
-            "CoreFoundation",
-            "Foundation",
-            "IOSurface",
-            "QuartzCore",
-            "Carbon",
-        ] {
-            println!("cargo:rustc-link-lib=framework={}", framework);
-        }
-        // C++ runtime (ghostty uses some C++ deps like simdutf)
-        println!("cargo:rustc-link-lib=c++");
+    for framework in &[
+        "AppKit",
+        "Metal",
+        "CoreGraphics",
+        "CoreText",
+        "CoreVideo",
+        "CoreFoundation",
+        "Foundation",
+        "IOSurface",
+        "QuartzCore",
+        "Carbon",
+    ] {
+        println!("cargo:rustc-link-lib=framework={}", framework);
     }
+    // C++ runtime (ghostty uses some C++ deps like simdutf)
+    println!("cargo:rustc-link-lib=c++");
 
     // If the caller provided a local Ghostty checkout, track its source changes.
     if env::var_os(GHOSTTY_ENV).is_some() {

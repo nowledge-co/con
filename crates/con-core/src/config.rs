@@ -288,7 +288,7 @@ impl Config {
     pub fn config_path() -> PathBuf {
         dirs::config_dir()
             .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .unwrap_or_else(std::env::temp_dir)
             .join("con")
             .join("config.toml")
     }

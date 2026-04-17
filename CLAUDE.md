@@ -4,14 +4,17 @@
 
 con is an open-source, macOS-native, GPU-accelerated terminal emulator with a built-in AI agent harness. Built in Rust.
 
+A Windows port is in preparation — the non-UI crates already build on `x86_64-pc-windows-*` targets. The staged plan lives in
+`docs/impl/windows-port.md` and the first preparation PR is summarized in `postmortem/2026-04-16-prepare-windows-port.md`.
+
 ## Stack
 
-- **UI**: GPUI-CE v0.3.3 (community edition of Zed's framework, Apache 2.0)
-- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView
-- **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API (surface lifecycle, action callbacks, clipboard, key/mouse input)
+- **UI**: upstream Zed GPUI (git dependency on `zed-industries/zed`, Apache 2.0). Windows backend is D3D11/DirectComposition; HWND child-embedding is the known gap for the Windows port.
+- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. macOS-only today; see `docs/impl/windows-port.md` for the Windows strategy (likely `libghostty-vt` + ConPTY + custom renderer).
+- **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API (surface lifecycle, action callbacks, clipboard, key/mouse input). Cfg-gated to macOS; on other targets the crate compiles to an empty shell so the workspace resolves.
 - **Terminal support crate**: con-terminal — theme and palette helpers only
 - **AI agent**: Rig v0.34.0 (from crates.io, 13 providers, Tool trait)
-- **Socket API**: Unix domain sockets + newline-delimited JSON-RPC, served by the app and consumed first by `con-cli`
+- **Socket API**: JSON-RPC 2.0 with a platform-specific transport — Unix domain sockets on Unix, Windows Named Pipes (`\\.\pipe\con`) on Windows. Served by the app and consumed first by `con-cli`.
 
 ## Repository Layout
 
@@ -46,14 +49,17 @@ The `3pp/` directory contains third-party source checkouts for **read-only refer
 ## Build
 
 ```bash
-# Prerequisites: rust (stable, edition 2024), cmake
-cargo build            # debug
-cargo build --release  # release
-cargo run -p con       # run the terminal
+# Prerequisites: rust (stable, edition 2024), cmake, zig (for libghostty on macOS)
+cargo build            # debug (macOS)
+cargo build --release  # release (macOS)
+cargo run -p con       # run the terminal (macOS)
 cargo test --workspace # test
 
 # GPUI needs runtime_shaders feature (already set)
-# con currently ships the embedded Ghostty runtime on macOS
+# The `con` UI binary is currently macOS-only — a compile_error fires on
+# other targets. Check the portable crates on Linux or Windows with:
+cargo check -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+# (con-ghostty intentionally compiles to an empty shell on non-macOS.)
 ```
 
 ## Control Plane

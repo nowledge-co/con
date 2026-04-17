@@ -87,8 +87,23 @@ fn set_dock_icon() {
 #[cfg(not(target_os = "macos"))]
 fn set_dock_icon() {}
 
+// The `con` binary is currently macOS-only because the GhosttyView terminal
+// pane embeds a child NSView and talks to libghostty's macOS-only embedded C
+// API. The non-UI crates (`con-core`, `con-cli`, `con-agent`,
+// `con-terminal`) are already cross-platform; the Windows port is staged in
+// `docs/impl/windows-port.md` and tracked in
+// `postmortem/2026-04-16-prepare-windows-port.md`. Keep this gate as a
+// `compile_error!` (not a runtime check) so a Windows or Linux build fails
+// loudly at the point where the terminal backend has to be selected,
+// rather than silently producing a binary with no way to open a pane.
 #[cfg(not(target_os = "macos"))]
-compile_error!("con currently requires macOS and the embedded Ghostty backend.");
+compile_error!(
+    "the `con` UI binary is currently macOS-only — see \
+     docs/impl/windows-port.md for the Windows/Linux porting plan and \
+     status. The supporting crates (con-core, con-cli, con-agent, \
+     con-terminal) build cross-platform and can be developed against on \
+     this target."
+);
 
 fn default_window_options(cx: &mut App) -> WindowOptions {
     WindowOptions {

@@ -301,7 +301,7 @@ impl Conversation {
         }
         dirs::data_dir()
             .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .unwrap_or_else(std::env::temp_dir)
             .join("con")
             .join("conversations")
     }

@@ -1,5 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -457,8 +456,74 @@ fn shell_quote(word: String) -> String {
     format!("'{}'", word.replace('\'', "'\"'\"'"))
 }
 
+/// A bidirectional, blocking byte stream connected to the con control
+/// endpoint. Backed by a Unix domain socket on Unix and by a Named Pipe
+/// (opened as a `File`) on Windows.
+enum ControlStream {
+    #[cfg(unix)]
+    Unix(std::os::unix::net::UnixStream),
+    #[cfg(windows)]
+    Pipe(std::fs::File),
+}
+
+impl Read for ControlStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            #[cfg(unix)]
+            ControlStream::Unix(stream) => stream.read(buf),
+            #[cfg(windows)]
+            ControlStream::Pipe(file) => file.read(buf),
+        }
+    }
+}
+
+impl Write for ControlStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            #[cfg(unix)]
+            ControlStream::Unix(stream) => stream.write(buf),
+            #[cfg(windows)]
+            ControlStream::Pipe(file) => file.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            #[cfg(unix)]
+            ControlStream::Unix(stream) => stream.flush(),
+            #[cfg(windows)]
+            ControlStream::Pipe(file) => file.flush(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn connect_control_endpoint(path: &Path) -> std::io::Result<ControlStream> {
+    std::os::unix::net::UnixStream::connect(path).map(ControlStream::Unix)
+}
+
+#[cfg(windows)]
+fn connect_control_endpoint(path: &Path) -> std::io::Result<ControlStream> {
+    // On Windows, a Named Pipe is opened via `CreateFileW` with the same
+    // path that the server passed to `CreateNamedPipeW`. `OpenOptions`
+    // wraps both, and the resulting `File` supports duplex I/O.
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map(ControlStream::Pipe)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn connect_control_endpoint(_path: &Path) -> std::io::Result<ControlStream> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "con-cli is not supported on this target — see docs/impl/windows-port.md",
+    ))
+}
+
 fn send_command(socket_path: &Path, command: ControlCommand) -> Result<Value> {
-    let mut stream = UnixStream::connect(socket_path).with_context(|| {
+    let mut stream = connect_control_endpoint(socket_path).with_context(|| {
         format!(
             "failed to connect to con at {}. Launch con first or pass --socket/CON_SOCKET_PATH.",
             socket_path.display()

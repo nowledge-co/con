@@ -500,7 +500,7 @@ pub fn oauth_token_dir(kind: &ProviderKind) -> Option<PathBuf> {
     Some(
         dirs::config_dir()
             .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .unwrap_or_else(std::env::temp_dir)
             .join("con")
             .join("auth")
             .join(provider_dir),
@@ -1216,14 +1216,15 @@ impl AgentProvider {
 
         // Each provider dispatches to its native Rig client — exhaustive match
         // prevents silent misrouting.
-        // Derive workspace root from terminal context cwd, falling back to $HOME or /tmp
+        // Derive workspace root from terminal context cwd, falling back to
+        // $HOME, then to the platform's temp dir.
         let workspace_root = context
             .cwd
             .as_ref()
             .map(std::path::PathBuf::from)
             .filter(|p| p.is_dir())
             .or_else(|| dirs::home_dir())
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+            .unwrap_or_else(std::env::temp_dir);
 
         macro_rules! stream_with {
             ($client:expr) => {
