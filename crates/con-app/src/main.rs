@@ -540,6 +540,84 @@ fn payload_as_str(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
     }
 }
 
+/// Install a Win32 vectored exception handler. Catches C-level faults
+/// (EXCEPTION_ACCESS_VIOLATION, EXCEPTION_STACK_OVERFLOW, illegal
+/// instruction, etc.) that bypass Rust's panic machinery — common when
+/// an FFI library (libghostty-vt, a GPU driver) crashes inside its
+/// own code. We log the exception code + address and the last breadcrumb
+/// visible in stderr, then let the exception propagate so the process
+/// still terminates.
+///
+/// Vectored handlers run *before* structured exception handling (SEH),
+/// so ours fires even if the FFI library has its own `__try`/`__except`.
+#[cfg(target_os = "windows")]
+fn install_seh_filter() {
+    use windows::Win32::System::Diagnostics::Debug::{
+        AddVectoredExceptionHandler, EXCEPTION_POINTERS,
+    };
+
+    extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
+        // SAFETY: `info` is provided by the OS during an exception
+        // dispatch; it points at a valid EXCEPTION_POINTERS structure.
+        // We only read a few scalar fields and write to stderr /
+        // a file; no heap allocation is done from this handler.
+        let (code, address) = unsafe {
+            if info.is_null() {
+                (0u32, std::ptr::null_mut())
+            } else {
+                let er = (*info).ExceptionRecord;
+                if er.is_null() {
+                    (0, std::ptr::null_mut())
+                } else {
+                    ((*er).ExceptionCode.0 as u32, (*er).ExceptionAddress)
+                }
+            }
+        };
+
+        // Only log "interesting" exceptions — many Windows internals
+        // throw soft exceptions (DLL not found probes, debugger
+        // breaks) that we shouldn't report. The ones below are the
+        // real crashes.
+        let interesting = matches!(
+            code,
+            0xC0000005  // ACCESS_VIOLATION
+            | 0xC00000FD  // STACK_OVERFLOW
+            | 0xC000001D  // ILLEGAL_INSTRUCTION
+            | 0xC0000094  // INT_DIVIDE_BY_ZERO
+            | 0xC0000096  // PRIV_INSTRUCTION
+            | 0xC000013A  // CONTROL_C_EXIT
+        );
+
+        if interesting {
+            let record = format!(
+                "[SEH] Exception {:#x} at {:p} — likely C/FFI crash. \
+                 The most recent log line above is the last thing that \
+                 ran before the fault.\n",
+                code, address
+            );
+            use std::io::Write;
+            let _ = std::io::stderr().lock().write_all(record.as_bytes());
+            let log_path = std::env::temp_dir().join("con-panic.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+            {
+                let _ = f.write_all(record.as_bytes());
+            }
+        }
+
+        // EXCEPTION_CONTINUE_SEARCH = 0: let normal SEH unwinding run.
+        0
+    }
+
+    // SAFETY: registering a handler is always safe; the handler fn is
+    // `extern "system"` with the correct signature.
+    unsafe {
+        let _ = AddVectoredExceptionHandler(1, Some(handler));
+    }
+}
+
 fn main() {
     // Install a panic hook before anything else so every panic —
     // including ones from background threads that would otherwise be
@@ -547,6 +625,12 @@ fn main() {
     // Critical on Windows where double-clicking the exe detaches
     // stderr and a panic produces a silent exit.
     install_panic_hook();
+
+    // Catch C-level access violations / stack overflows / etc. from
+    // FFI libraries (libghostty-vt, GPU driver shims) that bypass
+    // Rust's panic infrastructure entirely.
+    #[cfg(target_os = "windows")]
+    install_seh_filter();
 
     // Always capture backtraces unless the user already set a
     // preference. `full` prints symbols + line numbers when debug info

@@ -259,15 +259,28 @@ impl VtScreen {
             rows,
             max_scrollback: 10_000,
         };
+        log::info!(
+            "VtScreen::new: calling ghostty_terminal_new(cols={cols}, rows={rows}, scrollback={})",
+            options.max_scrollback
+        );
         // SAFETY: out param; allocator NULL = upstream default.
         let rc = unsafe { ghostty_terminal_new(std::ptr::null(), &mut terminal, options) };
+        log::info!(
+            "VtScreen::new: ghostty_terminal_new returned rc={rc}, terminal={:?}",
+            terminal
+        );
         if rc != 0 || terminal.is_null() {
             anyhow::bail!("ghostty_terminal_new failed: rc={}", rc);
         }
 
         let mut render_state: GhosttyRenderState = std::ptr::null_mut();
+        log::info!("VtScreen::new: calling ghostty_render_state_new");
         // SAFETY: terminal valid; out param.
         let rc = unsafe { ghostty_render_state_new(terminal, &mut render_state) };
+        log::info!(
+            "VtScreen::new: ghostty_render_state_new returned rc={rc}, state={:?}",
+            render_state
+        );
         if rc != 0 || render_state.is_null() {
             // SAFETY: terminal needs to be freed on partial init.
             unsafe { ghostty_terminal_free(terminal) };
