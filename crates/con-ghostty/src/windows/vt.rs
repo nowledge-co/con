@@ -117,6 +117,31 @@ pub enum GhosttyRenderStateRowCellsData {
     FgColor = 6,
 }
 
+/// `GHOSTTY_CELL_DATA_*` keys for `ghostty_cell_get`. Integer values
+/// per `include/ghostty/vt/screen.h` at the pinned revision — the RAW
+/// we get from row_cells is an **opaque `GhosttyCell` u64 handle**, not
+/// a packed codepoint. Reading the codepoint requires this accessor.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum GhosttyCellData {
+    Invalid = 0,
+    Codepoint = 1,
+    ContentTag = 2,
+    Wide = 3,
+    HasText = 4,
+    HasStyling = 5,
+    StyleId = 6,
+    HasHyperlink = 7,
+    Protected = 8,
+    SemanticContent = 9,
+    ColorPalette = 10,
+    ColorRgb = 11,
+}
+
+/// Opaque cell snapshot returned by `row_cells_get(RAW, ...)`.
+/// `typedef uint64_t GhosttyCell;` upstream.
+pub type GhosttyCell = u64;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GhosttyTerminalOptions {
@@ -197,6 +222,14 @@ unsafe extern "C" {
     pub fn ghostty_render_state_row_cells_get(
         cells: GhosttyRowCells,
         key: GhosttyRenderStateRowCellsData,
+        out: *mut c_void,
+    ) -> GhosttyResult;
+
+    // Cell accessor (`screen.h`). Decodes fields out of the opaque
+    // `GhosttyCell` u64 we get from row_cells RAW.
+    pub fn ghostty_cell_get(
+        cell: GhosttyCell,
+        key: GhosttyCellData,
         out: *mut c_void,
     ) -> GhosttyResult;
 }
@@ -548,18 +581,18 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
 }
 
 fn read_cell(cells: GhosttyRowCells) -> Cell {
-    let mut raw: u64 = 0;
+    // RAW here is an **opaque `GhosttyCell` u64 snapshot**, not a packed
+    // codepoint. Decode fields via `ghostty_cell_get(cell, KEY, &out)`
+    // per `screen.h`. Previous code bitshifted RAW directly and produced
+    // nonsense codepoints (U+015C etc. for the "PowerShell" banner).
+    let mut raw: GhosttyCell = 0;
     let mut _style: u64 = 0;
     // BG_COLOR / FG_COLOR write a `GhosttyColorRgb` (3 bytes: R, G, B)
-    // to the out pointer — NOT a packed u32. Reading into a u32 was
-    // over-reading by one byte of stack garbage AND mis-interpreting
-    // the byte layout, which produced the blue/green stripe artifact
-    // (real R→our alpha, real G→our B, real B→our G) that the user
-    // saw on the pwsh prompt.
+    // to the out pointer — NOT a packed u32.
     let mut bg = GhosttyColorRgb::default();
     let mut fg = GhosttyColorRgb::default();
 
-    // SAFETY: out params typed per upstream contract (RAW=u64,
+    // SAFETY: out params typed per upstream contract (RAW=GhosttyCell u64,
     // STYLE=opaque pointer-sized, BG/FG=GhosttyColorRgb).
     unsafe {
         let _ = ghostty_render_state_row_cells_get(
@@ -584,8 +617,25 @@ fn read_cell(cells: GhosttyRowCells) -> Cell {
         );
     }
 
-    let codepoint = (raw & 0xFFFF_FFFF) as u32;
-    let attrs = ((raw >> 56) & 0xFF) as u8;
+    // Gate codepoint decode on HAS_TEXT — blank cells carry a bogus
+    // grapheme-tag codepoint we'd otherwise rasterize.
+    let mut has_text: bool = false;
+    let mut codepoint: u32 = 0;
+    // SAFETY: `has_text` is a C `_Bool` (1 byte); `codepoint` is uint32.
+    unsafe {
+        let _ = ghostty_cell_get(
+            raw,
+            GhosttyCellData::HasText,
+            &mut has_text as *mut _ as *mut c_void,
+        );
+        if has_text {
+            let _ = ghostty_cell_get(
+                raw,
+                GhosttyCellData::Codepoint,
+                &mut codepoint as *mut _ as *mut c_void,
+            );
+        }
+    }
 
     // Pack RGB into the 0xRRGGBBAA u32 our HLSL `unpackRGBA` expects
     // (high byte = R, low byte = A). A=0xFF (opaque).
@@ -597,7 +647,9 @@ fn read_cell(cells: GhosttyRowCells) -> Cell {
         codepoint,
         fg: pack(fg),
         bg: pack(bg),
-        attrs,
+        // attrs decode lives in STYLE_ID → ghostty_style_get; not wired
+        // yet (bold/italic/underline come next). Leave 0 for now.
+        attrs: 0,
         _pad: [0; 3],
     }
 }
