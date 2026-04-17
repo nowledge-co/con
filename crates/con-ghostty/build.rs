@@ -187,15 +187,35 @@ fn build_windows() {
     // `CON_GHOSTTY_VT_EMIT_OPTION=1` (force the option-based path).
     let invocation = pick_vt_invocation(&zig_bin, &ghostty_dir);
 
-    // `-Doptimize=ReleaseFast` for terminal-class throughput;
-    // `-Dsimd=true` enables the SIMD UTF-8 paths.
+    // `-Doptimize=ReleaseFast` for terminal-class throughput.
+    //
+    // `-Dsimd`: Ghostty vendors `simdutf` (a C++ SIMD UTF-8 library)
+    // when SIMD is on. Zig's `-Demit-lib-vt=true` produces
+    // `ghostty-vt-static.lib` that *references* simdutf symbols but
+    // doesn't bundle the simdutf C++ objects into the archive — link
+    // fails with unresolved `simdutf::convert_utf8_to_utf32` etc.
+    // Default off on Windows so the static lib is self-contained; the
+    // user can flip via `CON_GHOSTTY_VT_SIMD=1` once we figure out how
+    // to link simdutf separately (it's produced somewhere in zig-cache
+    // but surfacing it cleanly across revisions is its own project).
+    // macOS/Linux: the full libghostty build bundles everything, so
+    // `-Dsimd=true` is safe and default there.
+    let simd_on = env::var("CON_GHOSTTY_VT_SIMD")
+        .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    let simd_flag = if simd_on {
+        "-Dsimd=true"
+    } else {
+        "-Dsimd=false"
+    };
+
     let mut cmd = Command::new(&zig_bin);
     cmd.current_dir(&ghostty_dir);
     cmd.arg("build");
     for arg in &invocation {
         cmd.arg(arg);
     }
-    cmd.args(["-Doptimize=ReleaseFast", "-Dsimd=true"]);
+    cmd.args(["-Doptimize=ReleaseFast", simd_flag]);
 
     let status = cmd
         .status()
