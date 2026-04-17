@@ -45,6 +45,12 @@ pub struct GhosttyView {
     initial_cwd: Option<String>,
     initial_font_size: f32,
     initialized: bool,
+    /// Set true after a HostView::new failure to suppress retry on
+    /// every layout pass — the same DXGI / D3D errors fire ~60×/s
+    /// otherwise. The user has to explicitly recreate the pane to
+    /// clear this; richer recovery (delayed retry, rebuild on resize)
+    /// can come later.
+    init_failed: bool,
 }
 
 pub fn init(_cx: &mut App) {
@@ -73,6 +79,7 @@ impl GhosttyView {
             initial_cwd: cwd,
             initial_font_size: font_size,
             initialized: false,
+            init_failed: false,
         }
     }
 
@@ -142,7 +149,7 @@ impl GhosttyView {
     fn ensure_host(&mut self, parent_hwnd: isize, rect_px: (i32, i32, i32, i32)) {
         use windows::Win32::Foundation::{HWND, RECT};
 
-        if self.initialized {
+        if self.initialized || self.init_failed {
             return;
         }
 
@@ -166,6 +173,9 @@ impl GhosttyView {
             }
             Err(err) => {
                 log::error!("HostView::new failed: {:#}", err);
+                // Latch so we don't re-attempt on every layout. Trade-
+                // off: the user has to recreate the pane to retry.
+                self.init_failed = true;
             }
         }
     }

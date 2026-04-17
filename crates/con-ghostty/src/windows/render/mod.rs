@@ -36,7 +36,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_STRETCH,
@@ -116,7 +116,13 @@ impl Renderer {
             BufferCount: 2,
             Scaling: DXGI_SCALING_STRETCH,
             SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-            AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+            // CreateSwapChainForHwnd rejects PREMULTIPLIED with
+            // DXGI_ERROR_INVALID_CALL (0x887A0001). PREMULTIPLIED is
+            // only valid with CreateSwapChainForComposition (DComp).
+            // IGNORE is fine for an opaque WS_CHILD rect — the
+            // terminal pane doesn't need per-pixel alpha against the
+            // GPUI compositor; the HWND already clips the region.
+            AlphaMode: DXGI_ALPHA_MODE_IGNORE,
             Flags: 0,
         };
 
