@@ -211,20 +211,53 @@ fn build_windows() {
         );
     }
 
+    // Zig produces both a shared library (`ghostty-vt.dll` +
+    // `ghostty-vt.lib` import-stub on MSVC) and a static archive
+    // (`ghostty-vt-static.lib`). We want the static archive — linking
+    // the import stub would leave `con-app.exe` dependent on
+    // `ghostty-vt.dll` at runtime, which we don't ship.
+    //
     // `cfg!()` at build.rs compile time reflects the *host*, not the
     // target. Use the runtime env the cargo build passes us.
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    let lib_name = if target_env == "msvc" {
-        "ghostty-vt.lib"
-    } else {
-        "libghostty-vt.a"
+    let (static_lib_name, static_link_name, fallback_lib_name, fallback_link_name) =
+        if target_env == "msvc" {
+            (
+                "ghostty-vt-static.lib",
+                "ghostty-vt-static",
+                "ghostty-vt.lib",
+                "ghostty-vt",
+            )
+        } else {
+            (
+                "libghostty-vt-static.a",
+                "ghostty-vt-static",
+                "libghostty-vt.a",
+                "ghostty-vt",
+            )
+        };
+
+    // Prefer static; fall back to the import-lib variant with a loud
+    // warning so the user notices the runtime DLL dependency.
+    let (lib_path, link_name) = match try_find_lib(&ghostty_dir, static_lib_name) {
+        Some(p) => (p, static_link_name),
+        None => {
+            println!(
+                "cargo:warning=libghostty-vt-static not found; linking shared `{fallback_lib_name}` \
+                 instead. The resulting executable will depend on ghostty-vt.dll at runtime — \
+                 ship it alongside the .exe or bump the Ghostty pin to a revision that emits \
+                 the static archive."
+            );
+            let path = find_lib(&ghostty_dir, fallback_lib_name);
+            (path, fallback_link_name)
+        }
     };
-    let lib_path = find_lib(&ghostty_dir, lib_name);
+
     println!(
         "cargo:rustc-link-search=native={}",
         lib_path.parent().unwrap().display()
     );
-    println!("cargo:rustc-link-lib=static=ghostty-vt");
+    println!("cargo:rustc-link-lib=static={link_name}");
 
     // libghostty-vt has zero Win32 dependencies of its own (only libc).
     // The MSVC default runtime + the windows-rs crate's transitive
@@ -349,6 +382,38 @@ fn resolve_ghostty_source() -> PathBuf {
     );
 
     vendor_root
+}
+
+fn try_find_lib(ghostty_dir: &PathBuf, lib_name: &str) -> Option<PathBuf> {
+    let zig_cache = ghostty_dir.join(".zig-cache");
+    if zig_cache.exists() {
+        if let Ok(output) = Command::new("find")
+            .args([zig_cache.to_str().unwrap(), "-name", lib_name, "-type", "f"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut candidates: Vec<PathBuf> = stdout
+                .lines()
+                .map(PathBuf::from)
+                .filter(|p| p.exists())
+                .collect();
+            candidates.sort_by(|a, b| {
+                let a_time = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+                let b_time = std::fs::metadata(b).and_then(|m| m.modified()).ok();
+                b_time.cmp(&a_time)
+            });
+            if let Some(path) = candidates.first() {
+                return Some(path.clone());
+            }
+        }
+    }
+    for relative in ["zig-out/lib", "zig-out\\lib", "macos/build/Debug"] {
+        let candidate = ghostty_dir.join(relative).join(lib_name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn find_lib(ghostty_dir: &PathBuf, lib_name: &str) -> PathBuf {

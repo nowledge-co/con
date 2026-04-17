@@ -24,7 +24,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_INDEX_BUFFER, D3D11_BIND_VERTEX_BUFFER,
     D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_INPUT_ELEMENT_DESC,
     D3D11_INPUT_PER_INSTANCE_DATA, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_WRITE_DISCARD,
-    D3D11_SUBRESOURCE_DATA, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE,
+    D3D11_SUBRESOURCE_DATA, D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE,
     ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11InputLayout, ID3D11PixelShader,
     ID3D11SamplerState, ID3D11VertexShader,
 };
@@ -150,6 +150,7 @@ impl Pipeline {
     /// Grow the instance buffer to `new_capacity` cells when the grid
     /// expands past what we've allocated. Drops the old buffer; GPU
     /// drivers allocate from a renamed pool so this is cheap.
+    #[allow(dead_code)] // wired once the render loop grows grids dynamically.
     pub fn ensure_instance_capacity(
         &mut self,
         device: &ID3D11Device,

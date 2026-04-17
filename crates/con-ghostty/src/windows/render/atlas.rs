@@ -14,8 +14,8 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_BRUSH_PROPERTIES, D2D1_DRAW_TEXT_OPTIONS_NONE,
-    D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1CreateFactory, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Factory,
     ID2D1RenderTarget, ID2D1SolidColorBrush,
@@ -35,6 +35,7 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // offset_x/offset_y are wired in Phase 3b-2 (glyph bearing).
 pub struct GlyphRect {
     pub x: u16,
     pub y: u16,
@@ -219,6 +220,7 @@ impl GlyphCache {
     pub fn atlas_srv(&self) -> &ID3D11ShaderResourceView {
         &self.atlas_srv
     }
+    #[allow(dead_code)] // used once atlas-grow lands.
     pub fn atlas_size(&self) -> u32 {
         self.atlas_size
     }

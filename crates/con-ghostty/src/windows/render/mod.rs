@@ -44,7 +44,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory6, IDXGISwapChain1,
 };
 
-use super::vt::{Cell, ScreenSnapshot};
+use super::vt::ScreenSnapshot;
 use atlas::{CellMetrics, GlyphCache, GlyphKey};
 use pipeline::{instance_for_cell, Globals, Instance, Pipeline};
 
@@ -80,7 +80,7 @@ pub struct Renderer {
     context: ID3D11DeviceContext,
     swapchain: IDXGISwapChain1,
     rtv: Option<ID3D11RenderTargetView>,
-    dwrite: IDWriteFactory,
+    _dwrite: IDWriteFactory,
 
     pipeline: Pipeline,
     atlas: Mutex<GlyphCache>,
@@ -150,7 +150,7 @@ impl Renderer {
             context,
             swapchain,
             rtv,
-            dwrite,
+            _dwrite: dwrite,
             pipeline,
             atlas: Mutex::new(atlas),
             instances: Mutex::new(Vec::with_capacity(INITIAL_INSTANCE_CAPACITY as usize)),
