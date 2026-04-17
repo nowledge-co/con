@@ -26,17 +26,32 @@ On Windows (from a Developer Command Prompt for VS 2022):
 rustup default stable
 git clone https://github.com/nowledge-co/con.git
 cd con
-cargo build -p con --release          # → target\release\con.exe
-cargo test  -p con-core -p con-cli -p con-agent -p con-terminal
+cargo wbuild -p con --release          # → target\release\con-app.exe
+cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal
 ```
 
-Prerequisites: Rust (stable, edition 2024), Visual Studio Build Tools
-2022 with "Desktop development with C++" (for `link.exe` + Windows
-SDK), Git for Windows. No Zig, no MSYS2, no mingw needed when using
-the MSVC toolchain.
+Prerequisites:
+- **Rust** (stable, edition 2024).
+- **Visual Studio Build Tools 2022** with "Desktop development with
+  C++" (for `link.exe` + Windows SDK).
+- **Git for Windows**.
+- **Zig 0.13 or newer** on PATH (for `libghostty-vt`); download from
+  <https://ziglang.org/download/>. If the `zig` executable isn't on
+  PATH, set `CON_ZIG_BIN` to its absolute path. To skip the
+  libghostty-vt build entirely (terminal backend will fail to link,
+  rest of the app still compiles): `$env:CON_SKIP_GHOSTTY_VT=1`.
 
-The produced `con.exe` launches into the full UI. The terminal pane
-is a placeholder until Phase 3 lands.
+The binary ships as `con-app.exe`, not `con.exe`: `CON` is a reserved
+DOS device name and Windows refuses to create `con.exe` via most
+Win32 file APIs. The package name is still `con` (so `cargo run -p
+con` is unambiguous), and the `wbuild` / `wrun` / `wtest` / `wcheck`
+aliases in `.cargo/config.toml` wrap the `--no-default-features
+--features con/bin-con-app` incantation that selects the renamed bin.
+macOS and Linux keep the plain `con` binary unchanged.
+
+The produced `con-app.exe` launches into the full UI. The terminal
+pane shows a solid clear color until Phase 3b lands (real glyph
+rendering).
 
 ## What works today (macOS)
 

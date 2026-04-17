@@ -110,15 +110,47 @@ fn build_windows() {
         return;
     }
 
-    if Command::new("zig").arg("version").output().is_err() {
-        // Without zig we can't build libghostty-vt; emit a warning so
-        // `cargo check` still succeeds (no link step) but `cargo build`
-        // fails loudly with a link error pointing the user at this hint.
-        println!(
-            "cargo:warning=`zig` not found on PATH. Install Zig 0.13+ to build libghostty-vt; \
-             see https://ziglang.org/download/ . `cargo check` will still pass."
-        );
-        return;
+    // Detect Zig. Surface the actual error (not-found, permission-denied,
+    // etc.) and the PATH we searched so the user can diagnose — previous
+    // silent warnings led to confusing link-time failures.
+    let zig_bin =
+        env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
+    let zig_probe = Command::new(&zig_bin).arg("version").output();
+    match zig_probe {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            println!("cargo:warning=using zig {} (from `{}`)", version, zig_bin.to_string_lossy());
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            panic!(
+                "\n\n========================================================\n\
+                 con-ghostty: `{bin} version` exited with status {status}.\n\
+                 stderr:\n{stderr}\n\
+                 ========================================================\n",
+                bin = zig_bin.to_string_lossy(),
+                status = output.status,
+                stderr = stderr,
+            );
+        }
+        Err(err) => {
+            let path = env::var("PATH").unwrap_or_default();
+            panic!(
+                "\n\n========================================================\n\
+                 con-ghostty: could not spawn `{bin} version`: {err}\n\n\
+                 Zig 0.13+ is required to build libghostty-vt on Windows.\n\
+                 Install it from https://ziglang.org/download/ and ensure\n\
+                 the `zig` executable is on PATH, or set CON_ZIG_BIN to\n\
+                 the absolute path of the zig executable.\n\n\
+                 Current PATH: {path}\n\n\
+                 To skip this step entirely (the terminal backend will\n\
+                 fail to link), set CON_SKIP_GHOSTTY_VT=1.\n\
+                 ========================================================\n",
+                bin = zig_bin.to_string_lossy(),
+                err = err,
+                path = path,
+            );
+        }
     }
 
     let ghostty_dir = resolve_ghostty_source();
@@ -127,7 +159,7 @@ fn build_windows() {
     // `libghostty-vt.a` (or `ghostty-vt.lib` on MSVC). `-Doptimize=ReleaseFast`
     // gives us terminal-class throughput; `-Dsimd=true` enables the
     // SIMD UTF-8 paths.
-    let status = Command::new("zig")
+    let status = Command::new(&zig_bin)
         .args([
             "build",
             "ghostty-vt-static",

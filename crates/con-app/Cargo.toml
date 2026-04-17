@@ -4,9 +4,30 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+# Two binaries pointing at the same `main.rs`, gated by mutually-exclusive
+# features. `CON` is a reserved DOS device name on Windows so `con.exe` is
+# rejected by the Win32 file APIs; on that target we ship `con-app.exe`
+# instead. macOS / Linux keep the plain `con` binary so existing scripts
+# and the `.app` bundle structure are unchanged.
+#
+# Default feature set targets macOS / Linux. Windows users must build with
+# `--no-default-features --features bin-con-app`; the workspace
+# `.cargo/config.toml` exposes a `cargo wbuild` / `cargo wrun` alias for
+# this so the day-to-day command stays short.
 [[bin]]
 name = "con"
 path = "src/main.rs"
+required-features = ["bin-con"]
+
+[[bin]]
+name = "con-app"
+path = "src/main.rs"
+required-features = ["bin-con-app"]
+
+[features]
+default = ["bin-con"]
+bin-con = []
+bin-con-app = []
 
 [dependencies]
 con-core.workspace = true

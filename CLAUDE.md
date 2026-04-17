@@ -65,13 +65,20 @@ See `docs/impl/windows-port.md` for the porting plan and the path to
 a working terminal on Windows.
 
 ```bash
-# Windows (from a Developer Command Prompt for VS 2022):
-cargo build -p con --release           # produces target\release\con.exe
-cargo test -p con-core -p con-cli -p con-agent -p con-terminal
+# Windows (from a Developer Command Prompt for VS 2022; needs Zig 0.13+ on PATH
+# for libghostty-vt; the binary ships as `con-app.exe` because `CON` is a
+# reserved DOS device name):
+cargo wbuild -p con --release          # produces target\release\con-app.exe
+cargo wrun   -p con
+cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal
 
 # Linux (needs the GPUI linux runtime deps — see .github/workflows/ci-portable.yml):
 cargo build -p con --release
 ```
+
+The `w*` aliases (declared in `.cargo/config.toml`) wrap the
+`--no-default-features --features con/bin-con-app` incantation the
+Windows-named binary requires.
 
 ## Control Plane
 
