@@ -12,6 +12,7 @@ path = "src/main.rs"
 con-core.workspace = true
 con-terminal.workspace = true
 con-agent.workspace = true
+con-ghostty.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-languages"] }
@@ -37,7 +38,6 @@ markdown = { version = "1.0.0", features = ["serde"] }
 ropey.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-con-ghostty.workspace = true
 cocoa = "=0.26.0"
 objc = "0.2"
 raw-window-handle = "0.6"

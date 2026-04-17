@@ -9,6 +9,35 @@ This is a planning document, not an implementation log. The corresponding
 postmortem (`postmortem/2026-04-16-prepare-windows-port.md`) records the
 decisions made when this plan was first written.
 
+## Building today
+
+As of Phase 2 the workspace builds on Windows, Linux, and macOS. What
+you get per platform:
+
+| Target | UI binary | Terminal pane | Control socket | Agent / settings / CLI |
+|:-------|:---------:|:-------------:|:--------------:|:----------------------:|
+| macOS  | ✅ real   | ✅ libghostty + Metal | `/tmp/con.sock` | ✅ |
+| Windows | ✅ builds | Placeholder card | `\\.\pipe\con` | ✅ |
+| Linux  | ✅ builds | Placeholder card | `/tmp/con.sock` | ✅ |
+
+On Windows (from a Developer Command Prompt for VS 2022):
+
+```powershell
+rustup default stable
+git clone https://github.com/nowledge-co/con.git
+cd con
+cargo build -p con --release          # → target\release\con.exe
+cargo test  -p con-core -p con-cli -p con-agent -p con-terminal
+```
+
+Prerequisites: Rust (stable, edition 2024), Visual Studio Build Tools
+2022 with "Desktop development with C++" (for `link.exe` + Windows
+SDK), Git for Windows. No Zig, no MSYS2, no mingw needed when using
+the MSVC toolchain.
+
+The produced `con.exe` launches into the full UI. The terminal pane
+is a placeholder until Phase 3 lands.
+
 ## What works today (macOS)
 
 The macOS stack is fully native:
@@ -257,15 +286,15 @@ phase keeps the macOS build green.
 
 | Phase | Scope | What changes | Build state |
 |------:|-------|--------------|-------------|
-| 0 | **This PR**: prep | Cfg-gates, transport abstraction, docs, cleaner non-macOS error message | macOS unchanged; non-UI crates compile on Windows |
-| 1 | Windows non-UI smoke test | CI matrix entry that runs `cargo check -p con-core -p con-agent -p con-cli -p con-terminal` for `x86_64-pc-windows-msvc` | non-UI crates green on Windows |
-| 2 | Terminal backend skeleton | New `con-terminal-backend` trait crate; macOS impl wraps current `GhosttyView`; Windows impl is a stub returning "backend not yet implemented" | Windows compiles `con` binary, runtime panics if user opens a pane |
-| 3 | Windows backend prototype | Option 1A: libghostty-vt + ConPTY + GPUI-painted grid | Smoke-test terminal works on Windows |
-| 4 | Hardening | Multi-pane, splits, IME, focus, resize, copy/paste, drag/drop | Beta-quality |
-| 5 | Distribution | MSI installer, code signing, auto-update | Release-ready |
+| 0 | prep | Cfg-gates, transport abstraction, docs, cleaner non-macOS error message | macOS unchanged; non-UI crates compile on Windows | ✅ landed |
+| 1 | Windows + Linux CI smoke test | `.github/workflows/ci-portable.yml` runs `cargo check` + `cargo test` for the portable crates and the UI binary on `windows-latest` and `ubuntu-latest` | CI green on both targets | ✅ landed |
+| 2 | Stub terminal backend | `con-ghostty` exposes stub types on non-macOS; `stub_view.rs` is a GPUI placeholder view selected via `#[path]`; the `compile_error!` is gone | **`cargo build -p con` works on Windows and Linux** — terminal pane paints a "backend under construction" card; agent panel, settings, command palette, control socket all functional | ✅ landed |
+| 3 | Windows terminal backend | `libghostty-vt` Rust FFI + ConPTY wrapper + GPUI-painted grid renderer. Replaces the stub view on Windows. Decide on DirectWrite-via-`font-kit` vs. GPUI's own text shaping | Smoke-test terminal works on Windows | — |
+| 4 | Hardening | Multi-pane, splits, IME, focus, resize, copy/paste, drag/drop | Beta-quality | — |
+| 5 | Distribution | MSI installer, code signing, auto-update | Release-ready | — |
 
-Phases 1-2 are mechanical and can begin once Phase 0 (this PR) lands.
-Phases 3-5 are the bulk of the engineering work.
+Phases 0-2 are **complete**. Phase 3 is the bulk of the remaining
+engineering work.
 
 ## Open questions
 

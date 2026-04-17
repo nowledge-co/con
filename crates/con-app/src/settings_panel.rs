@@ -2044,23 +2044,23 @@ impl SettingsPanel {
 
         // Build the Updates card (only shown for channels that poll)
         let channel = con_core::release_channel::current();
+        // `show_updates` drives the Sparkle auto-update card, which is
+        // macOS-only; on other targets the whole block is cfg-ed out.
+        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
         let show_updates = channel.polls_for_updates();
 
+        // The `mut` is only needed on macOS (the updates card re-binds
+        // `container`); on other targets the update block is cfg-ed out.
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut container = section_content(
             "General",
             "Terminal defaults and shared app behavior.",
             theme,
         );
 
+        #[cfg(target_os = "macos")]
         if show_updates {
-            let updater_status = {
-                #[cfg(target_os = "macos")]
-                { crate::updater::status() }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    unreachable!("updates card is only rendered on macOS")
-                }
-            };
+            let updater_status = crate::updater::status();
 
             container = container.child(
                 div()

@@ -54,12 +54,23 @@ cargo build            # debug (macOS)
 cargo build --release  # release (macOS)
 cargo run -p con       # run the terminal (macOS)
 cargo test --workspace # test
+```
 
-# GPUI needs runtime_shaders feature (already set)
-# The `con` UI binary is currently macOS-only — a compile_error fires on
-# other targets. Check the portable crates on Linux or Windows with:
-cargo check -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
-# (con-ghostty intentionally compiles to an empty shell on non-macOS.)
+The `con` UI binary builds on macOS, Linux, and Windows. On non-macOS
+targets the terminal pane uses a placeholder view ("backend under
+construction") until the Windows/Linux backend lands — the rest of the
+app (agent panel, settings, command palette, control socket at
+`\\.\pipe\con` on Windows / `/tmp/con.sock` on Unix) is fully wired.
+See `docs/impl/windows-port.md` for the porting plan and the path to
+a working terminal on Windows.
+
+```bash
+# Windows (from a Developer Command Prompt for VS 2022):
+cargo build -p con --release           # produces target\release\con.exe
+cargo test -p con-core -p con-cli -p con-agent -p con-terminal
+
+# Linux (needs the GPUI linux runtime deps — see .github/workflows/ci-portable.yml):
+cargo build -p con --release
 ```
 
 ## Control Plane

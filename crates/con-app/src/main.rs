@@ -8,8 +8,18 @@ mod chat_markdown;
 mod command_palette;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
+
+// The terminal-view module is selected per platform. macOS embeds a
+// libghostty-backed NSView; non-macOS uses a placeholder view until the
+// libghostty-vt + ConPTY (Windows) / forkpty (Linux) backend lands. The
+// public type names are identical so downstream modules compile on both
+// paths without per-callsite cfg. See `docs/impl/windows-port.md`.
 #[cfg(target_os = "macos")]
 mod ghostty_view;
+#[cfg(not(target_os = "macos"))]
+#[path = "stub_view.rs"]
+mod ghostty_view;
+
 mod input_bar;
 mod keycaps;
 mod model_registry;
@@ -26,10 +36,9 @@ mod workspace;
 use con_core::config::KeybindingConfig;
 use con_core::session::{GlobalHistoryState, Session};
 use gpui::*;
-use gpui_component::{
-    ActiveTheme,
-    link::Link,
-};
+use gpui_component::ActiveTheme;
+#[cfg(target_os = "macos")]
+use gpui_component::link::Link;
 use workspace::ConWorkspace;
 
 actions!(
@@ -87,23 +96,11 @@ fn set_dock_icon() {
 #[cfg(not(target_os = "macos"))]
 fn set_dock_icon() {}
 
-// The `con` binary is currently macOS-only because the GhosttyView terminal
-// pane embeds a child NSView and talks to libghostty's macOS-only embedded C
-// API. The non-UI crates (`con-core`, `con-cli`, `con-agent`,
-// `con-terminal`) are already cross-platform; the Windows port is staged in
-// `docs/impl/windows-port.md` and tracked in
-// `postmortem/2026-04-16-prepare-windows-port.md`. Keep this gate as a
-// `compile_error!` (not a runtime check) so a Windows or Linux build fails
-// loudly at the point where the terminal backend has to be selected,
-// rather than silently producing a binary with no way to open a pane.
-#[cfg(not(target_os = "macos"))]
-compile_error!(
-    "the `con` UI binary is currently macOS-only — see \
-     docs/impl/windows-port.md for the Windows/Linux porting plan and \
-     status. The supporting crates (con-core, con-cli, con-agent, \
-     con-terminal) build cross-platform and can be developed against on \
-     this target."
-);
+// On non-macOS targets, the terminal backend is a placeholder (see
+// `stub_view.rs`). The binary builds and runs — agent panel, settings,
+// command palette, the control socket — but the terminal surface paints a
+// "backend under construction" card until the libghostty-vt + ConPTY /
+// forkpty implementation lands. See `docs/impl/windows-port.md`.
 
 fn default_window_options(cx: &mut App) -> WindowOptions {
     WindowOptions {
@@ -239,6 +236,7 @@ fn bundle_info_value(key: &'static [u8]) -> Option<String> {
     }
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn app_display_version() -> String {
     #[cfg(target_os = "macos")]
     let version = bundle_info_value(b"CFBundleShortVersionString\0")
@@ -249,6 +247,7 @@ pub(crate) fn app_display_version() -> String {
     version
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn app_build_number() -> String {
     #[cfg(target_os = "macos")]
     let build =
@@ -259,6 +258,11 @@ pub(crate) fn app_build_number() -> String {
     build
 }
 
+// About-panel helpers and window: only wired in to the menu on macOS
+// (Sparkle lives in the same menu, and the Cocoa "About con" gesture
+// hits this path). The functions stay platform-neutral so they're
+// trivially reusable when a cross-platform About window lands.
+#[cfg(target_os = "macos")]
 fn about_panel_name() -> String {
     #[cfg(target_os = "macos")]
     {
@@ -272,6 +276,7 @@ fn about_panel_name() -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn about_panel_version_detail() -> String {
     let version = app_display_version();
     let build = app_build_number();
@@ -287,12 +292,14 @@ fn about_panel_version_detail() -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
 struct AboutView {
     app_name: String,
     version: String,
     version_detail: String,
 }
 
+#[cfg(target_os = "macos")]
 impl Render for AboutView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
@@ -382,6 +389,7 @@ impl Render for AboutView {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn show_about_window(cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(432.0), px(388.0)), cx)),
@@ -507,7 +515,8 @@ fn main() {
         );
 
         // Register ghostty terminal key bindings (Tab interception, etc.)
-        #[cfg(target_os = "macos")]
+        // The stub impl is a no-op but we call it unconditionally so the
+        // code path is shape-identical across platforms.
         ghostty_view::init(cx);
 
         // Register global keybindings from user config
