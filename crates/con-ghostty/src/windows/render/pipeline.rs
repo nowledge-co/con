@@ -261,6 +261,12 @@ impl Pipeline {
             context.PSSetShader(&self.ps, None);
 
             context.VSSetConstantBuffers(0, Some(&[Some(self.globals_buffer.clone())]));
+            // Also bind Globals to the PS — ps_main reads `cellSize` to
+            // size the underline / strikethrough band. Without this,
+            // the PS's b0 is uninitialized (cellSize.y == 0), so
+            // `pxUV = 1.0 / max(0, 1) = 1.0` and the band check matches
+            // every pixel → whole cell fills with fg for under/strike.
+            context.PSSetConstantBuffers(0, Some(&[Some(self.globals_buffer.clone())]));
             context.PSSetShaderResources(0, Some(&[Some(atlas_srv.clone())]));
             context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
 
