@@ -200,7 +200,18 @@ impl HostView {
     pub fn write_input(&self, text: &str) {
         // SAFETY: state is valid until WM_DESTROY.
         let state = unsafe { &*self.state };
-        let _ = state.conpty.write(text.as_bytes());
+        // ConPTY simulates a keyboard: Enter on Windows keyboards
+        // produces CR (\r), not LF (\n). The app-level input paths (e.g.
+        // the command input bar in workspace.rs) append \n per Unix
+        // convention; translate here so pwsh / cmd actually execute the
+        // line. Without this, pwsh echoes the command but never runs it
+        // because its line editor is still waiting for CR.
+        let bytes: std::borrow::Cow<[u8]> = if text.as_bytes().contains(&b'\n') {
+            std::borrow::Cow::Owned(text.replace('\n', "\r").into_bytes())
+        } else {
+            std::borrow::Cow::Borrowed(text.as_bytes())
+        };
+        let _ = state.conpty.write(&bytes);
     }
 }
 

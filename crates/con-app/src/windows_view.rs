@@ -209,6 +209,86 @@ impl GhosttyView {
             }
         }
     }
+
+    /// Translate a GPUI `KeyDownEvent` into bytes and forward to the
+    /// ConPTY via `terminal.send_text`. Returns `true` if the key was
+    /// handled (so GPUI can stop propagation).
+    ///
+    /// GPUI owns keyboard focus on Windows — our `WS_CHILD` HWND never
+    /// receives `WM_CHAR` because it isn't in the focus chain. So we
+    /// translate at this layer into the byte sequences a terminal
+    /// emulator expects. Mapping matches Windows Terminal / Ghostty:
+    ///   - printable → key_char bytes
+    ///   - Enter → `\r` (ConPTY's line-editor expects CR)
+    ///   - Backspace → `\x7f` (DEL — the xterm / VT220 convention modern shells want)
+    ///   - Tab → `\t`
+    ///   - Esc → `\x1b`
+    ///   - Arrows / Home / End / Page / Delete → xterm CSI sequences
+    ///   - Ctrl-<letter> → control character (Ctrl-C → 0x03, etc.)
+    fn handle_key_down(&self, event: &KeyDownEvent) -> bool {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return false;
+        };
+        let keystroke = &event.keystroke;
+
+        // Named keys first. Arrow / nav sequences are the "application
+        // cursor keys off" variants (ESC [ letter) — most modern shells
+        // don't enable DECCKM so this is the safe default.
+        let named: Option<&str> = match keystroke.key.as_str() {
+            "enter" | "return" => Some("\r"),
+            "backspace" => Some("\x7f"),
+            "tab" => Some("\t"),
+            "escape" => Some("\x1b"),
+            "up" => Some("\x1b[A"),
+            "down" => Some("\x1b[B"),
+            "right" => Some("\x1b[C"),
+            "left" => Some("\x1b[D"),
+            "home" => Some("\x1b[H"),
+            "end" => Some("\x1b[F"),
+            "pageup" => Some("\x1b[5~"),
+            "pagedown" => Some("\x1b[6~"),
+            "delete" => Some("\x1b[3~"),
+            _ => None,
+        };
+        if let Some(s) = named {
+            terminal.send_text(s);
+            return true;
+        }
+
+        // Ctrl + ascii letter → control char (Ctrl-C = 0x03 etc.)
+        if keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && keystroke.key.len() == 1
+        {
+            if let Some(ch) = keystroke.key.chars().next() {
+                if ch.is_ascii_alphabetic() {
+                    let code = ch.to_ascii_uppercase() as u8 - b'@';
+                    let byte = [code];
+                    if let Ok(s) = std::str::from_utf8(&byte) {
+                        terminal.send_text(s);
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Plain printable: GPUI fills `key_char` with the rendered
+        // character (respects shift / layout). Falls back to `key` for
+        // single-char key names when `key_char` is absent.
+        if let Some(ch) = keystroke.key_char.as_deref() {
+            if !ch.is_empty() {
+                terminal.send_text(ch);
+                return true;
+            }
+        }
+        if keystroke.key.len() == 1 {
+            terminal.send_text(&keystroke.key);
+            return true;
+        }
+
+        false
+    }
 }
 
 impl Focusable for GhosttyView {
@@ -228,6 +308,16 @@ impl Render for GhosttyView {
         // HWND's coordinate space.
         div()
             .size_full()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
+                if this.handle_key_down(event) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
+            }))
             // Transparent so the HWND swapchain (sibling-composed by DWM)
             // shows through wherever this element paints.
             .bg(theme.background.opacity(0.0))
