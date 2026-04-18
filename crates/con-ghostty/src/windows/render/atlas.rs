@@ -29,7 +29,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
-    IDWriteFactory, IDWriteTextFormat,
+    DWRITE_TEXT_METRICS, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -346,16 +346,49 @@ fn make_text_format(
 }
 
 fn measure_cell(
-    _dwrite: &IDWriteFactory,
-    _format: &IDWriteTextFormat,
+    dwrite: &IDWriteFactory,
+    format: &IDWriteTextFormat,
     font_size_px: f32,
 ) -> Result<CellMetrics> {
-    // TODO(phase-3b+): read the real advance width from `IDWriteFontFace`:
-    // GetMetrics() + GetDesignGlyphMetrics() for 'M' / '0'. For monospace
-    // every glyph has the same advance, so one measure suffices.
-    let cell_width_px = (font_size_px * 0.6).ceil() as u32;
-    let cell_height_px = (font_size_px * 1.2).ceil() as u32;
-    let baseline_px = (font_size_px * 1.0).ceil() as u32;
+    // Measure a single 'M' via IDWriteTextLayout. For a monospace font
+    // every glyph has the same advance, so one glyph is representative.
+    // TextMetrics.width returns the exact advance (in DIPs at the
+    // format's font size) and .height returns the full line height
+    // (ascent + descent + lineGap) — both in the same DIP space we pass
+    // to D2D, so no unit conversion is needed.
+    //
+    // The previous `fs * 0.6` heuristic undercounted the advance on
+    // Consolas / Cascadia / Ioskeley, leaving every cell ~1px narrow and
+    // manifesting as visible kerning gaps ("W ndows", "M trosoft") in
+    // the pwsh banner.
+    let text: Vec<u16> = "M".encode_utf16().collect();
+    // SAFETY: text outlives the layout; format is owned by caller.
+    let layout = unsafe {
+        dwrite.CreateTextLayout(&text, format, 4096.0, 4096.0)
+    }
+    .context("IDWriteFactory::CreateTextLayout failed")?;
+
+    let mut tm = DWRITE_TEXT_METRICS::default();
+    // SAFETY: out param sized per windows-rs binding.
+    unsafe { layout.GetMetrics(&mut tm) }
+        .context("IDWriteTextLayout::GetMetrics failed")?;
+
+    let cell_width_px = tm.width.ceil().max(1.0) as u32;
+    let cell_height_px = tm.height.ceil().max(1.0) as u32;
+    // Baseline isn't exposed on DWRITE_TEXT_METRICS; use a conservative
+    // ascent estimate. Not currently consumed by the pipeline, but we
+    // return something sensible so future callers don't get 0.
+    let baseline_px = (font_size_px * 0.8).ceil() as u32;
+
+    log::info!(
+        "measure_cell: font_size_px={} -> cell {}x{} (DWRITE width={} height={})",
+        font_size_px,
+        cell_width_px,
+        cell_height_px,
+        tm.width,
+        tm.height,
+    );
+
     Ok(CellMetrics {
         cell_width_px,
         cell_height_px,
