@@ -52,6 +52,10 @@ struct VSVertex {
 struct VSOut {
     float4 pos           : SV_Position;
     float2 atlasUV       : TEXCOORD0;
+    // Cell-local UV, (0,0)=top-left .. (1,1)=bottom-right. Used by the
+    // PS to draw underline / strikethrough bands without needing to
+    // know the viewport.
+    float2 cellUV        : TEXCOORD1;
     nointerpolation float4 fg : FGCOLOR;
     nointerpolation float4 bg : BGCOLOR;
     nointerpolation uint   attrs : ATTRS;
@@ -100,6 +104,7 @@ VSOut vs_main(uint vid : SV_VertexID, VSInstance inst) {
     // Pixel coords for the glyph rect, then normalize by the atlas
     // texture dims so the Sample() call gets UVs in [0,1].
     o.atlasUV = (atlasTopLeft + atlasPixels * float2(corner)) * invAtlasSize;
+    o.cellUV  = float2(corner);
 
     o.fg    = unpackRGBA(inst.fg);
     o.bg    = unpackRGBA(inst.bg);
@@ -124,8 +129,33 @@ float4 ps_main(VSOut i) : SV_Target {
         bg = tmp;
     }
 
+    // Underline / strikethrough: draw a 1-pixel-tall fg band inside
+    // the cell. Bands are in cell-local UV space:
+    //   underline: bottom ~10% of the cell (UV.y in [0.90, 0.97])
+    //   strike:    vertical middle (UV.y in [0.48, 0.55])
+    // The cellSize in px tells us how wide a pixel is in UV, which
+    // lets us build a crisp 1-px band without AA fringing.
+    float pxUV = 1.0 / max(cellSize.y, 1.0);
+    float band_coverage = 0.0;
+    if (i.attrs & 4u) {
+        // Underline.
+        float center = 0.92;
+        if (abs(i.cellUV.y - center) < pxUV) {
+            band_coverage = 1.0;
+        }
+    }
+    if (i.attrs & 8u) {
+        // Strikethrough.
+        float center = 0.52;
+        if (abs(i.cellUV.y - center) < pxUV) {
+            band_coverage = 1.0;
+        }
+    }
+
+    float comp = max(coverage, band_coverage);
+
     // Grayscale compositing: opaque background with fg painted on top
     // by coverage. One draw call, no separate bg pass.
-    float3 rgb = lerp(bg.rgb, fg.rgb, coverage);
+    float3 rgb = lerp(bg.rgb, fg.rgb, comp);
     return float4(rgb, 1.0);
 }

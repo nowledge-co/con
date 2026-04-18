@@ -301,8 +301,23 @@ impl GlyphCache {
         self.text_format_bold_italic =
             make_text_format(&self.dwrite, &self.font_family, font_size_px, true, true)?;
         self.metrics = measure_cell(&self.dwrite, &self.text_format_regular, font_size_px)?;
-        // TODO(phase-3b+): clear the atlas texture via a render-target
-        // Clear, or we'll see stale pixels from the previous size.
+        // Clear the atlas texture so fresh rasterization doesn't blend
+        // with stale pixels from the previous size. BeginDraw/Clear/End
+        // is a single D2D op — the DXGI-backed RT aliases the same
+        // texture the D3D11 pixel shader samples, so the clear is
+        // visible to the next frame.
+        // SAFETY: d2d_rt is owned by self and targets the atlas texture.
+        unsafe {
+            self.d2d_rt.BeginDraw();
+            let transparent = D2D1_COLOR_F {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            };
+            self.d2d_rt.Clear(Some(&transparent));
+            let _ = self.d2d_rt.EndDraw(None, None);
+        }
         let _ = &self.device; // placeholder use so `device` field isn't dead
         Ok(())
     }

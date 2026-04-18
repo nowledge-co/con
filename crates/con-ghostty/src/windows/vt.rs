@@ -159,6 +159,76 @@ pub struct GhosttyColorRgb {
     pub b: u8,
 }
 
+// ── Style (`style.h`) ──────────────────────────────────────────────────
+//
+// `row_cells_get(STYLE, out)` writes a `GhosttyStyle` by value. Caller
+// sets `.size = sizeof(GhosttyStyle)` first so the library knows how
+// many bytes it may write (versioned-struct forward-compat pattern).
+
+/// `GhosttyStyleColor` — tagged color (None | Palette | Rgb). The
+/// union is laid out as `u64` here because we only care about the tag
+/// for now; per-cell fg/bg also come in via the cheaper FG_COLOR /
+/// BG_COLOR accessor on row_cells, so we don't need to decode the
+/// union value at read-cell time.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GhosttyStyleColor {
+    pub tag: u32,
+    pub _pad: u32,
+    pub value: u64,
+}
+
+/// `GhosttyStyle` — SGR-derived attributes for the current cell.
+/// Layout matches `include/ghostty/vt/style.h` at GHOSTTY_REV; the
+/// `size` prefix lets upstream add trailing fields without breaking
+/// older callers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyStyle {
+    pub size: usize,
+    pub fg_color: GhosttyStyleColor,
+    pub bg_color: GhosttyStyleColor,
+    pub underline_color: GhosttyStyleColor,
+    pub bold: bool,
+    pub italic: bool,
+    pub faint: bool,
+    pub blink: bool,
+    pub inverse: bool,
+    pub invisible: bool,
+    pub strikethrough: bool,
+    pub overline: bool,
+    pub underline: c_int,
+}
+
+impl GhosttyStyle {
+    fn new() -> Self {
+        Self {
+            size: std::mem::size_of::<GhosttyStyle>(),
+            fg_color: GhosttyStyleColor::default(),
+            bg_color: GhosttyStyleColor::default(),
+            underline_color: GhosttyStyleColor::default(),
+            bold: false,
+            italic: false,
+            faint: false,
+            blink: false,
+            inverse: false,
+            invisible: false,
+            strikethrough: false,
+            overline: false,
+            underline: 0,
+        }
+    }
+}
+
+// Attr bits packed into `Cell.attrs`. Kept in sync with the HLSL
+// pixel shader's interpretation (bit 0 = bold, 1 = italic, 2 =
+// underline, 3 = strike, 4 = inverse).
+pub const ATTR_BOLD: u8 = 1 << 0;
+pub const ATTR_ITALIC: u8 = 1 << 1;
+pub const ATTR_UNDERLINE: u8 = 1 << 2;
+pub const ATTR_STRIKE: u8 = 1 << 3;
+pub const ATTR_INVERSE: u8 = 1 << 4;
+
 // ── Raw FFI ────────────────────────────────────────────────────────────
 
 unsafe extern "C" {
@@ -612,14 +682,14 @@ fn read_cell(
     // per `screen.h`. Previous code bitshifted RAW directly and produced
     // nonsense codepoints (U+015C etc. for the "PowerShell" banner).
     let mut raw: GhosttyCell = 0;
-    let mut _style: u64 = 0;
+    let mut style = GhosttyStyle::new();
     // BG_COLOR / FG_COLOR write a `GhosttyColorRgb` (3 bytes: R, G, B)
     // to the out pointer — NOT a packed u32.
     let mut bg = GhosttyColorRgb::default();
     let mut fg = GhosttyColorRgb::default();
 
     // SAFETY: out params typed per upstream contract (RAW=GhosttyCell u64,
-    // STYLE=opaque pointer-sized, BG/FG=GhosttyColorRgb).
+    // STYLE=GhosttyStyle by value with `size` set to sizeof, BG/FG=GhosttyColorRgb).
     unsafe {
         let _ = ghostty_render_state_row_cells_get(
             cells,
@@ -629,7 +699,7 @@ fn read_cell(
         let _ = ghostty_render_state_row_cells_get(
             cells,
             GhosttyRenderStateRowCellsData::Style,
-            &mut _style as *mut _ as *mut c_void,
+            &mut style as *mut _ as *mut c_void,
         );
         let _ = ghostty_render_state_row_cells_get(
             cells,
@@ -678,13 +748,32 @@ fn read_cell(
         ((c.r as u32) << 24) | ((c.g as u32) << 16) | ((c.b as u32) << 8) | 0xFF
     };
 
+    // Pack style flags into the attrs byte the renderer (and HLSL
+    // pixel shader) interpret. Underline is an `int` upstream
+    // (0 = none, 1 = single, 2 = double, 3 = curly, ...); any non-zero
+    // value enables our single underline rendering for now.
+    let mut attrs: u8 = 0;
+    if style.bold {
+        attrs |= ATTR_BOLD;
+    }
+    if style.italic {
+        attrs |= ATTR_ITALIC;
+    }
+    if style.underline != 0 {
+        attrs |= ATTR_UNDERLINE;
+    }
+    if style.strikethrough {
+        attrs |= ATTR_STRIKE;
+    }
+    if style.inverse {
+        attrs |= ATTR_INVERSE;
+    }
+
     Cell {
         codepoint,
         fg: pack(fg),
         bg: pack(bg),
-        // attrs decode lives in STYLE_ID → ghostty_style_get; not wired
-        // yet (bold/italic/underline come next). Leave 0 for now.
-        attrs: 0,
+        attrs,
         _pad: [0; 3],
     }
 }

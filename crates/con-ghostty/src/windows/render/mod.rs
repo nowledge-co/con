@@ -342,13 +342,18 @@ impl Renderer {
             if col < cols_u && row < rows_u {
                 let idx = row * cols_u + col;
                 if let Some(src) = instances.get(idx).copied() {
+                    // Strip the inverse attr bit (0x10) on the cursor
+                    // re-emit: we've already swapped fg/bg here, and
+                    // leaving the bit set would trigger the PS's own
+                    // inverse swap — double-inverting a cell that
+                    // started with `inverse` would cancel the cursor.
                     instances.push(Instance {
                         cell_pos: src.cell_pos,
                         atlas_pos: src.atlas_pos,
                         atlas_size: src.atlas_size,
                         fg: src.bg,
                         bg: src.fg,
-                        attrs: src.attrs,
+                        attrs: src.attrs & !0x10,
                     });
                 }
             }
