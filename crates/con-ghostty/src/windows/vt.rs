@@ -429,6 +429,27 @@ impl VtScreen {
             log::warn!("ghostty_render_state_update rc={rc}");
         }
 
+        // Palette defaults. Cells with no explicit SGR color report
+        // FG_COLOR / BG_COLOR as (0,0,0) — the renderer is expected to
+        // substitute the terminal's default foreground/background from
+        // the render state. Without this, the pwsh banner (and any
+        // unstyled text) renders black-on-black.
+        let mut default_fg = GhosttyColorRgb { r: 0xCC, g: 0xCC, b: 0xCC };
+        let mut default_bg = GhosttyColorRgb::default();
+        // SAFETY: out params typed as GhosttyColorRgb per render.h.
+        unsafe {
+            let _ = ghostty_render_state_get(
+                inner.render_state,
+                GhosttyRenderStateData::ColorForeground,
+                &mut default_fg as *mut _ as *mut c_void,
+            );
+            let _ = ghostty_render_state_get(
+                inner.render_state,
+                GhosttyRenderStateData::ColorBackground,
+                &mut default_bg as *mut _ as *mut c_void,
+            );
+        }
+
         let total = cols as usize * rows as usize;
         if inner.scratch.len() != total {
             inner.scratch.clear();
@@ -496,7 +517,8 @@ impl VtScreen {
                 if col_idx >= cols {
                     break;
                 }
-                inner.scratch[row_start + col_idx as usize] = read_cell(inner.row_cells);
+                inner.scratch[row_start + col_idx as usize] =
+                    read_cell(inner.row_cells, default_fg, default_bg);
                 col_idx += 1;
             }
             // Clear trailing cells in the row.
@@ -580,7 +602,11 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
     }
 }
 
-fn read_cell(cells: GhosttyRowCells) -> Cell {
+fn read_cell(
+    cells: GhosttyRowCells,
+    default_fg: GhosttyColorRgb,
+    default_bg: GhosttyColorRgb,
+) -> Cell {
     // RAW here is an **opaque `GhosttyCell` u64 snapshot**, not a packed
     // codepoint. Decode fields via `ghostty_cell_get(cell, KEY, &out)`
     // per `screen.h`. Previous code bitshifted RAW directly and produced
@@ -636,6 +662,15 @@ fn read_cell(cells: GhosttyRowCells) -> Cell {
             );
         }
     }
+
+    // Substitute the palette's default fg/bg when the cell reports
+    // (0,0,0) — ghostty's convention for "unstyled, use default". A
+    // proper fix reads STYLE_ID and inspects the color mode, but this
+    // heuristic is good enough for first-pass rendering (we lose
+    // explicit-black on a non-black bg, which is rare).
+    let is_default = |c: GhosttyColorRgb| c.r == 0 && c.g == 0 && c.b == 0;
+    let fg = if is_default(fg) { default_fg } else { fg };
+    let bg = if is_default(bg) { default_bg } else { bg };
 
     // Pack RGB into the 0xRRGGBBAA u32 our HLSL `unpackRGBA` expects
     // (high byte = R, low byte = A). A=0xFF (opaque).
