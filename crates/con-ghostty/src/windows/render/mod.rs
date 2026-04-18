@@ -324,6 +324,36 @@ impl Renderer {
 
         drop(atlas); // release atlas lock before GPU upload
 
+        // Cursor overlay: inverse-video block cursor. Re-emit the
+        // cell-at-cursor with fg/bg swapped so the underlying glyph
+        // stays legible inside the cursor block.
+        //
+        // Drawn AFTER the main glyph pass (we push to the end of
+        // `instances`), so in the single DrawIndexedInstanced call this
+        // instance writes last and visually overlays the cell beneath.
+        // The pixel shader already lerps bg→fg by coverage, so swapping
+        // gives us the classic "glyph in bg color on fg-color block"
+        // look without any shader changes.
+        if snapshot.cursor.visible {
+            let col = snapshot.cursor.col as usize;
+            let row = snapshot.cursor.row as usize;
+            let cols_u = snapshot.cols as usize;
+            let rows_u = snapshot.rows as usize;
+            if col < cols_u && row < rows_u {
+                let idx = row * cols_u + col;
+                if let Some(src) = instances.get(idx).copied() {
+                    instances.push(Instance {
+                        cell_pos: src.cell_pos,
+                        atlas_pos: src.atlas_pos,
+                        atlas_size: src.atlas_size,
+                        fg: src.bg,
+                        bg: src.fg,
+                        attrs: src.attrs,
+                    });
+                }
+            }
+        }
+
         // Grow instance buffer if the grid exceeded what we allocated.
         let mut pipeline = self
             .pipeline
