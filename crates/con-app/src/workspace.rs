@@ -775,13 +775,26 @@ impl ConWorkspace {
             // pane-exit path.
             #[cfg(target_os = "windows")]
             {
-                let _ = workspace_handle.update(cx, |_workspace, cx| {
-                    cx.defer_in(window, |workspace, window, cx| {
+                // `cx.defer_in` delays by a single event-loop tick, which
+                // isn't enough: GPUI's `handle_activate_msg` spawns an
+                // async task on the same executor when WM_ACTIVATE fires
+                // during close, and those tasks outlive one tick — they
+                // then run `window.update()` on a freshly-destroyed HWND
+                // and log `window not found` with a backtrace. Spawn a
+                // small timer instead so every in-flight window task
+                // has time to drain before we tear the HWND down.
+                let handle = workspace_handle.clone();
+                cx.spawn_in(window, async move |_, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(120))
+                        .await;
+                    let _ = handle.update_in(cx, |workspace, window, cx| {
                         workspace.prepare_window_close(cx);
                         window.remove_window();
                         cx.quit();
                     });
-                });
+                })
+                .detach();
                 return false;
             }
             #[cfg(not(target_os = "windows"))]
