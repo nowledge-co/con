@@ -1,3 +1,4 @@
+use con_agent::ProviderKind;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -47,6 +48,29 @@ pub struct TabState {
     /// Per-tab conversation ID (persisted across restarts)
     #[serde(default)]
     pub conversation_id: Option<String>,
+    /// Per-tab agent routing overrides. Global settings still provide credentials
+    /// and shared behavior; tabs only persist the selected provider and model choices.
+    #[serde(default)]
+    pub agent_routing: AgentRoutingState,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentRoutingState {
+    pub provider: Option<ProviderKind>,
+    pub model_overrides: Vec<AgentModelOverrideState>,
+}
+
+impl AgentRoutingState {
+    pub fn is_empty(&self) -> bool {
+        self.provider.is_none() && self.model_overrides.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentModelOverrideState {
+    pub provider: ProviderKind,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +126,7 @@ impl Default for Session {
                 panes: vec![PaneState { cwd: None }],
                 shell_history: Vec::new(),
                 conversation_id: None,
+                agent_routing: AgentRoutingState::default(),
             }],
             active_tab: 0,
             agent_panel_open: false,

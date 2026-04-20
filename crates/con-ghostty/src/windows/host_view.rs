@@ -80,6 +80,10 @@ struct HostState {
 pub struct HostView {
     hwnd: HWND,
     state: *mut HostState, // Boxed; freed in WM_DESTROY.
+    /// Last visibility we asked Windows for. Checked by `reposition` /
+    /// `paint_frame` so we skip MoveWindow + D3D Present while a modal
+    /// is up — belt-and-braces on top of `ShowWindow(SW_HIDE)`.
+    visible: AtomicBool,
 }
 
 unsafe impl Send for HostView {}
@@ -189,11 +193,20 @@ impl HostView {
         Ok(Self {
             hwnd,
             state: state_ptr,
+            visible: AtomicBool::new(true),
         })
     }
 
-    /// Move + resize within the parent. Called from GPUI layout.
+    /// Move + resize within the parent. Called from GPUI layout. Skipped
+    /// while the pane is hidden behind a modal — `MoveWindow` itself
+    /// doesn't flip WS_VISIBLE, but it does re-invalidate the window,
+    /// and some DWM / compositing paths have been observed waking the
+    /// HWND up enough to catch mouse messages again. Safer to simply
+    /// stop talking to it until the modal closes.
     pub fn reposition(&self, bounds: RECT) {
+        if !self.visible.load(Ordering::Acquire) {
+            return;
+        }
         // SAFETY: hwnd is valid until Drop.
         unsafe {
             let _ = MoveWindow(
@@ -219,6 +232,13 @@ impl HostView {
         if self.state.is_null() {
             return;
         }
+        // Skip painting while the pane is behind a modal — Present on a
+        // hidden HWND is wasted work, and the DXGI / DirectComposition
+        // plumbing has been observed re-raising child HWNDs after a
+        // Present cycle on some driver combinations.
+        if !self.visible.load(Ordering::Acquire) {
+            return;
+        }
         unsafe {
             let state = &*self.state;
             let snapshot = state.vt.snapshot();
@@ -239,6 +259,16 @@ impl HostView {
     /// the modal's D3D-drawn elements become both visible and
     /// clickable.
     pub fn set_visible(&self, visible: bool) {
+        let prev = self.visible.swap(visible, Ordering::AcqRel);
+        if prev == visible {
+            return;
+        }
+        log::info!(
+            "HostView::set_visible hwnd={:?} {} -> {}",
+            self.hwnd.0,
+            prev,
+            visible
+        );
         // SAFETY: hwnd is valid for the lifetime of HostView (until Drop).
         unsafe {
             let _ = ShowWindow(

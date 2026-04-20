@@ -1892,9 +1892,6 @@ impl SettingsPanel {
     pub fn agent_config(&self) -> &AgentConfig {
         &self.config.agent
     }
-    pub fn agent_config_mut(&mut self) -> &mut AgentConfig {
-        &mut self.config.agent
-    }
     pub fn terminal_config(&self) -> &con_core::config::TerminalConfig {
         &self.config.terminal
     }

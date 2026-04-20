@@ -19,9 +19,9 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_OPTIONS,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
+    D2D1CreateFactory, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_CLIP,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE,
     D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Factory, ID2D1RenderTarget,
     ID2D1SolidColorBrush,
@@ -58,6 +58,17 @@ pub struct GlyphKey {
     pub codepoint: u32,
     pub bold: bool,
     pub italic: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GlyphMetricsPx {
+    /// Natural ink-box width (advance − |lsb| − |rsb| in design units
+    /// → pixels). Used to decide whether to widen the atlas slot.
+    ink_px: f32,
+    /// Left-side bearing in physical pixels. Negative values mean the
+    /// ink box extends leftward past the advance origin — we shift the
+    /// draw rect right by `-lsb_px` so that overhang fits in the slot.
+    lsb_px: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -414,16 +425,89 @@ impl GlyphCache {
         // ~1px-wider slot, and the 1-cell-wide instance of the next
         // cell would partially overdraw the ClearType edge coverage —
         // visible as "disconnected" spacing between letters.
-        let is_wide_candidate = matches!(key.codepoint, 0xE000..=0xF8FF);
-        let glyph_w = if is_wide_candidate {
-            let ink_px = self.primary_ink_px(key.codepoint).unwrap_or(cell_w as f32);
-            if ink_px > cell_w as f32 {
-                (cell_w * 2).min(ink_px.ceil() as i32)
-            } else {
-                cell_w
+        //
+        // Even within PUA the sidebearings vary. Powerline separators
+        // (U+E0A0..U+E0D4) and most arrows land at a 1-cell advance
+        // with near-zero sidebearings — they must render flush with the
+        // cell edge. Widening them by even 1 pixel produces a visible
+        // "edge" artifact where the sprite overlaps the next cell's
+        // background, so we explicitly exclude the entire Powerline /
+        // extra-symbols block from the wide path.
+        //
+        // Icon-style PUA glyphs (U+F07B folder, U+F09B github, ...)
+        // carry *negative* sidebearings so their ink box balloons past
+        // the advance on both sides. With LEADING alignment the pen
+        // origin sits at `draw_rect.left` and ink extends
+        // `lsb..advance-rsb` around it — for negative lsb the ink
+        // starts `|lsb|` pixels left of the draw rect.
+        //
+        // Strategy: allocate a wider slot sized to the natural ink
+        // width, then PushAxisAlignedClip to the slot bounds (so ink
+        // can't leak into neighbour atlas cells) and offset the
+        // layoutRect right by `|lsb|` so the pen origin lands `|lsb|`
+        // inside the slot. DirectWrite's ink then spans pen+lsb..pen+adv-rsb
+        // = slot.left..slot.left+ink_width — flush with the slot's
+        // left edge, and the whole ink box stays within the clip rect.
+        // The shader uses `atlasSize.x` as the quad width, so the
+        // glyph draws across two grid cells on screen.
+        //
+        // Threshold: require ≥1.5 px of natural overhang before
+        // widening. Monospace fonts often carry sub-pixel negative
+        // sidebearings on normal letters too; without the guard those
+        // glyphs would each allocate a +1px slot and the 1-cell-wide
+        // instance of the next cell would partially overdraw the
+        // ClearType edge coverage — visible as "disconnected" spacing
+        // between letters.
+        let codepoint = key.codepoint;
+        let is_wide_candidate = matches!(codepoint, 0xE000..=0xF8FF)
+            && !matches!(codepoint, 0xE0A0..=0xE0D4);
+        let (glyph_w, lsb_shift_px) = if is_wide_candidate {
+            match self.primary_glyph_metrics_px(codepoint) {
+                Some(m) => {
+                    // Nerd-Font icon glyphs (folder U+F07B, github U+F09B,
+                    // ...) frequently carry a *negative* leftSideBearing:
+                    // ink starts `|lsb|` pixels LEFT of the pen origin.
+                    // With LEADING alignment DirectWrite places the pen at
+                    // `draw_rect.left` and D2D1_DRAW_TEXT_OPTIONS_CLIP
+                    // then chops anything outside the layout rect — so
+                    // the leftmost `|lsb|` pixels of the glyph are lost
+                    // (the "half folder icon" symptom). Shift the pen
+                    // right by `|lsb|` so the ink box lands flush with
+                    // the slot's left edge.
+                    let lsb_shift = (-m.lsb_px).max(0.0);
+                    let natural = (m.ink_px + lsb_shift).ceil() as i32;
+                    // Widen to two cells only when the glyph's ink genuinely
+                    // overflows a single cell. Powerline / arrow glyphs
+                    // that already fit keep their 1-cell slot (widening
+                    // them would overlap the next column on screen).
+                    let glyph_w = if natural > cell_w + 1 {
+                        (cell_w * 2).min(natural)
+                    } else {
+                        cell_w
+                    };
+                    log::info!(
+                        "atlas: PUA U+{:04X} ink={:.1}px lsb={:.1}px \
+                         slot={}px shift={:.1}px (cell={})",
+                        codepoint,
+                        m.ink_px,
+                        m.lsb_px,
+                        glyph_w,
+                        lsb_shift,
+                        cell_w,
+                    );
+                    (glyph_w, lsb_shift)
+                }
+                None => {
+                    log::info!(
+                        "atlas: PUA U+{:04X} not in primary face; \
+                         using DirectWrite fallback",
+                        codepoint,
+                    );
+                    (cell_w, 0.0)
+                }
             }
         } else {
-            cell_w
+            (cell_w, 0.0)
         };
 
         let alloc = self.allocator.allocate(size2(glyph_w, cell_h))?;
@@ -440,7 +524,7 @@ impl GlyphCache {
             (false, false) => &self.text_format_regular,
         };
 
-        let draw_rect = D2D_RECT_F {
+        let slot_rect = D2D_RECT_F {
             left: rect.min.x as f32,
             top: rect.min.y as f32,
             right: rect.max.x as f32,
@@ -452,14 +536,46 @@ impl GlyphCache {
         // DXGI-backed RT.
         unsafe {
             self.d2d_rt.BeginDraw();
-            self.d2d_rt.DrawText(
-                utf16_slice,
-                format,
-                &draw_rect,
-                &self.white_brush,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                DWRITE_MEASURING_MODE_NATURAL,
-            );
+            if lsb_shift_px > 0.0 {
+                // PushAxisAlignedClip pins ink to the allocated slot so
+                // overflow can't bleed into neighbour atlas cells.
+                // Then we pass DrawText a layoutRect whose LEFT is
+                // shifted right by `|lsb|` — with LEADING alignment
+                // that puts the pen origin at `slot.left + |lsb|`,
+                // making the glyph's negative-lsb ink land exactly at
+                // `slot.left`. We skip D2D1_DRAW_TEXT_OPTIONS_CLIP
+                // here because the layoutRect and the clip region are
+                // intentionally different: CLIP would re-clip to the
+                // shifted layoutRect and chop off the `|lsb|` pixels
+                // we just translated into the slot.
+                let _ = self
+                    .d2d_rt
+                    .PushAxisAlignedClip(&slot_rect, D2D1_ANTIALIAS_MODE_ALIASED);
+                let shifted = D2D_RECT_F {
+                    left: slot_rect.left + lsb_shift_px,
+                    top: slot_rect.top,
+                    right: slot_rect.right + lsb_shift_px,
+                    bottom: slot_rect.bottom,
+                };
+                self.d2d_rt.DrawText(
+                    utf16_slice,
+                    format,
+                    &shifted,
+                    &self.white_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+                self.d2d_rt.PopAxisAlignedClip();
+            } else {
+                self.d2d_rt.DrawText(
+                    utf16_slice,
+                    format,
+                    &slot_rect,
+                    &self.white_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+            }
             let _ = self.d2d_rt.EndDraw(None, None);
         }
 
@@ -475,12 +591,13 @@ impl GlyphCache {
         Some(glyph_rect)
     }
 
-    /// Natural ink-box width in physical pixels for `codepoint` in the
-    /// primary face, or `None` when we can't measure (face absent, glyph
-    /// not in the primary face so DWrite fallback will handle it, or
-    /// metrics call failed). Used at rasterize time to widen the atlas
-    /// slot for overflow glyphs like Nerd-Font PUA icons.
-    fn primary_ink_px(&self, codepoint: u32) -> Option<f32> {
+    /// Glyph metrics in physical pixels for `codepoint` in the primary
+    /// face, or `None` when we can't measure (face absent, glyph not in
+    /// the primary face so DWrite fallback will handle it, or metrics
+    /// call failed). Used at rasterize time to widen the atlas slot and
+    /// offset the draw origin for overflow glyphs like Nerd-Font PUA
+    /// icons whose ink boxes extend past the advance.
+    fn primary_glyph_metrics_px(&self, codepoint: u32) -> Option<GlyphMetricsPx> {
         let face = self.primary_face.as_ref()?;
         let mut indices = [0u16; 1];
         let cps = [codepoint];
@@ -500,11 +617,18 @@ impl GlyphCache {
             return None;
         }
         let m = gm[0];
-        let ink_du = (m.advanceWidth as i32 - m.leftSideBearing - m.rightSideBearing) as f32;
-        if ink_du <= 0.0 || self.primary_upm <= 0.0 {
+        if self.primary_upm <= 0.0 {
             return None;
         }
-        Some(ink_du * self.font_size_px / self.primary_upm)
+        let du_to_px = self.font_size_px / self.primary_upm;
+        let ink_du = (m.advanceWidth as i32 - m.leftSideBearing - m.rightSideBearing) as f32;
+        if ink_du <= 0.0 {
+            return None;
+        }
+        Some(GlyphMetricsPx {
+            ink_px: ink_du * du_to_px,
+            lsb_px: (m.leftSideBearing as f32) * du_to_px,
+        })
     }
 
     /// Evict every cached glyph and reset the skyline allocator without

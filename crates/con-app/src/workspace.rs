@@ -174,14 +174,17 @@ use crate::{
     CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit, SplitDown,
     SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
 };
-use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
+use con_agent::{AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
 };
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
-use con_core::session::{GlobalHistoryState, PaneLayoutState, PaneSplitDirection, Session};
+use con_core::session::{
+    AgentModelOverrideState, AgentRoutingState, GlobalHistoryState, PaneLayoutState,
+    PaneSplitDirection, Session,
+};
 use con_core::{SuggestionContext, SuggestionEngine};
 
 struct Tab {
@@ -189,6 +192,7 @@ struct Tab {
     title: String,
     needs_attention: bool,
     session: AgentSession,
+    agent_routing: AgentRoutingState,
     panel_state: PanelState,
     runtime_trackers: RefCell<HashMap<usize, con_agent::context::PaneRuntimeTracker>>,
     runtime_cache: RefCell<HashMap<usize, con_agent::context::PaneRuntimeState>>,
@@ -483,6 +487,9 @@ impl ConWorkspace {
     }
 
     fn effective_ui_opacity(value: f32) -> f32 {
+        if !Self::supports_terminal_glass() {
+            return 1.0;
+        }
         let clamped = Self::clamp_ui_opacity(value);
         Self::remap_opacity(clamped, 0.35, 0.84, 1.9)
     }
@@ -621,6 +628,11 @@ impl ConWorkspace {
                     },
                     needs_attention: false,
                     session: agent_session,
+                    agent_routing: if tab_state.agent_routing.is_empty() {
+                        Self::default_agent_routing(&config.agent)
+                    } else {
+                        tab_state.agent_routing.clone()
+                    },
                     panel_state,
                     runtime_trackers: RefCell::new(HashMap::new()),
                     runtime_cache: RefCell::new(HashMap::new()),
@@ -635,6 +647,7 @@ impl ConWorkspace {
                 title: "Terminal".to_string(),
                 needs_attention: false,
                 session: AgentSession::new(),
+                agent_routing: Self::default_agent_routing(&config.agent),
                 panel_state: PanelState::new(),
                 runtime_trackers: RefCell::new(HashMap::new()),
                 runtime_cache: RefCell::new(HashMap::new()),
@@ -741,24 +754,44 @@ impl ConWorkspace {
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
             .detach();
         let workspace_handle = cx.weak_entity();
-        window.on_window_should_close(cx, move |_window, cx| {
-            let _ = workspace_handle.update(cx, |workspace, cx| {
-                workspace.prepare_window_close(cx);
-            });
-            // On Windows, closing the last window does NOT automatically
-            // exit the app — gpui_windows' event loop keeps running with
-            // no visible windows, which manifests as a "hang" (the user
-            // has to Ctrl+C the launching terminal to kill the process).
-            // macOS / NSApplication has its own convention (apps keep
-            // running without windows), so leave that platform alone.
-            // Con today is a single-window app; the first
-            // should_close that returns `true` is always the last
-            // window, so quitting here is correct.
+        window.on_window_should_close(cx, move |window, cx| {
+            // Two shutdown paths, two behaviours:
+            //
+            // macOS — run prepare + return true so NSApp destroys the
+            // window. Background tasks riding the main runloop finish
+            // naturally; NSApp keeps the process alive without windows
+            // per platform convention, so no explicit quit is needed.
+            //
+            // Windows — returning true tears the HWND down inside the
+            // same WM_CLOSE iteration that fired this callback. That
+            // races with pending async window tasks (e.g.
+            // `handle_activate_msg::async_block$0`) which then run on
+            // a dead HWND and log "Invalid window handle" / "window
+            // not found". Defer the cleanup so in-flight tasks drain
+            // first, then remove the window and quit (closing the
+            // last window does NOT auto-terminate the process on
+            // Windows). This mirrors `close_window_from_last_tab`,
+            // which the user confirmed shuts down cleanly from the
+            // pane-exit path.
             #[cfg(target_os = "windows")]
             {
-                cx.quit();
+                let _ = workspace_handle.update(cx, |_workspace, cx| {
+                    cx.defer_in(window, |workspace, window, cx| {
+                        workspace.prepare_window_close(cx);
+                        window.remove_window();
+                        cx.quit();
+                    });
+                });
+                return false;
             }
-            true
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = window;
+                let _ = workspace_handle.update(cx, |workspace, cx| {
+                    workspace.prepare_window_close(cx);
+                });
+                true
+            }
         });
 
         // Poll all tabs' agent sessions.
@@ -2207,6 +2240,7 @@ impl ConWorkspace {
 
                     let context = self.build_agent_context_for_tab(tab_idx, cx);
                     let session = &self.tabs[tab_idx].session;
+                    let agent_config = self.tab_agent_config(tab_idx);
                     let request_id = self.next_control_agent_request_id;
                     self.next_control_agent_request_id =
                         self.next_control_agent_request_id.wrapping_add(1);
@@ -2227,7 +2261,8 @@ impl ConWorkspace {
                             cx,
                         );
                     }
-                    self.harness.send_message(session, prompt, context);
+                    self.harness
+                        .send_message(session, agent_config, prompt, context);
                 }
                 Err(err) => Self::send_control_result(response_tx, Err(err)),
             },
@@ -2337,6 +2372,7 @@ impl ConWorkspace {
                     panes: pane_states,
                     shell_history,
                     conversation_id: Some(tab.session.conversation_id()),
+                    agent_routing: tab.agent_routing.clone(),
                 }
             })
             .collect();
@@ -2490,6 +2526,88 @@ impl ConWorkspace {
             }
         }
         aggregated
+    }
+
+    fn default_agent_routing(config: &AgentConfig) -> AgentRoutingState {
+        let mut model_overrides = Vec::new();
+        for provider in [
+            ProviderKind::Anthropic,
+            ProviderKind::OpenAI,
+            ProviderKind::ChatGPT,
+            ProviderKind::GitHubCopilot,
+            ProviderKind::OpenAICompatible,
+            ProviderKind::MiniMax,
+            ProviderKind::MiniMaxAnthropic,
+            ProviderKind::Moonshot,
+            ProviderKind::MoonshotAnthropic,
+            ProviderKind::ZAI,
+            ProviderKind::ZAIAnthropic,
+            ProviderKind::DeepSeek,
+            ProviderKind::Groq,
+            ProviderKind::Cohere,
+            ProviderKind::Gemini,
+            ProviderKind::Ollama,
+            ProviderKind::OpenRouter,
+            ProviderKind::Perplexity,
+            ProviderKind::Mistral,
+            ProviderKind::Together,
+            ProviderKind::XAI,
+        ] {
+            if let Some(model) = config.providers.get(&provider).and_then(|entry| entry.model.clone()) {
+                model_overrides.push(AgentModelOverrideState { provider, model });
+            }
+        }
+
+        AgentRoutingState {
+            provider: Some(config.provider.clone()),
+            model_overrides,
+        }
+    }
+
+    fn apply_agent_routing(base: &AgentConfig, routing: &AgentRoutingState) -> AgentConfig {
+        let mut config = base.clone();
+        if let Some(provider) = routing.provider.as_ref() {
+            config.provider = provider.clone();
+        }
+
+        for override_state in &routing.model_overrides {
+            if override_state.model.trim().is_empty() {
+                continue;
+            }
+            let mut provider_config = config.providers.get_or_default(&override_state.provider);
+            provider_config.model = Some(override_state.model.clone());
+            config.providers.set(&override_state.provider, provider_config);
+        }
+
+        config
+    }
+
+    fn tab_agent_config(&self, tab_idx: usize) -> AgentConfig {
+        Self::apply_agent_routing(self.harness.config(), &self.tabs[tab_idx].agent_routing)
+    }
+
+    fn active_tab_agent_config(&self) -> AgentConfig {
+        self.tab_agent_config(self.active_tab)
+    }
+
+    fn set_tab_provider_override(&mut self, tab_idx: usize, provider: ProviderKind) {
+        self.tabs[tab_idx].agent_routing.provider = Some(provider);
+    }
+
+    fn set_tab_model_override(&mut self, tab_idx: usize, provider: ProviderKind, model: String) {
+        let routing = &mut self.tabs[tab_idx].agent_routing;
+        if let Some(existing) = routing
+            .model_overrides
+            .iter_mut()
+            .find(|entry| entry.provider == provider)
+        {
+            existing.model = model;
+            return;
+        }
+
+        routing
+            .model_overrides
+            .push(AgentModelOverrideState { provider, model });
     }
 
     fn merge_shell_histories(
@@ -2660,12 +2778,9 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut config = self.harness.config().clone();
-        let provider = config.provider.clone();
-        let mut provider_config = config.providers.get_or_default(&provider);
-        provider_config.model = Some(event.model.clone());
-        config.providers.set(&provider, provider_config);
-        self.harness.update_config(config.clone());
+        let provider = self.tab_agent_config(self.active_tab).provider.clone();
+        self.set_tab_model_override(self.active_tab, provider.clone(), event.model.clone());
+        let config = self.tab_agent_config(self.active_tab);
 
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_session_provider_options(
@@ -2677,12 +2792,7 @@ impl ConWorkspace {
             panel.set_session_model_options(self.model_registry.models_for(&provider), window, cx);
         });
 
-        self.settings_panel.update(cx, |settings, _cx| {
-            let agent = settings.agent_config_mut();
-            agent.provider = config.provider.clone();
-            agent.providers = config.providers.clone();
-        });
-
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -2693,12 +2803,11 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut config = self.harness.config().clone();
-        config.provider = event.provider.clone();
-        self.harness.update_config(config.clone());
+        self.set_tab_provider_override(self.active_tab, event.provider.clone());
+        let config = self.tab_agent_config(self.active_tab);
 
         let provider = config.provider.clone();
-        let model_name = self.harness.active_model_name();
+        let model_name = AgentHarness::active_model_name_for(&config);
         let available_models = self.model_registry.models_for(&provider);
 
         self.agent_panel.update(cx, |panel, cx| {
@@ -2712,12 +2821,7 @@ impl ConWorkspace {
             panel.set_session_model_options(available_models, window, cx);
         });
 
-        self.settings_panel.update(cx, |settings, _cx| {
-            let agent = settings.agent_config_mut();
-            agent.provider = config.provider.clone();
-            agent.providers = config.providers.clone();
-        });
-
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -2737,6 +2841,7 @@ impl ConWorkspace {
 
         let context = self.build_agent_context(cx);
         let session = &self.tabs[self.active_tab].session;
+        let agent_config = self.active_tab_agent_config();
         if event.content.trim().starts_with('/') {
             match self.harness.classify_input(
                 &event.content,
@@ -2746,7 +2851,7 @@ impl ConWorkspace {
                 InputKind::SkillInvoke(name, args) => {
                     if let Some(desc) =
                         self.harness
-                            .invoke_skill(session, &name, args.as_deref(), context)
+                            .invoke_skill(session, agent_config.clone(), &name, args.as_deref(), context)
                     {
                         self.agent_panel.update(cx, |panel, cx| {
                             panel.add_step(&desc, cx);
@@ -2755,11 +2860,11 @@ impl ConWorkspace {
                 }
                 _ => self
                     .harness
-                    .send_message(session, event.content.clone(), context),
+                    .send_message(session, agent_config.clone(), event.content.clone(), context),
             }
         } else {
             self.harness
-                .send_message(session, event.content.clone(), context);
+                .send_message(session, agent_config, event.content.clone(), context);
         }
     }
 
@@ -2818,9 +2923,13 @@ impl ConWorkspace {
                 self.toggle_agent_panel(&ToggleAgentPanel, window, cx);
             }
             "settings" => {
-                self.settings_panel.update(cx, |panel, cx| {
-                    panel.toggle(window, cx);
-                });
+                // Route through the full toggle_settings action so
+                // `sync_pane_visibility_for_modals` fires. Opening the
+                // panel directly (via settings_panel.update.toggle)
+                // leaves pane WS_CHILD HWNDs visible on Windows, and
+                // they sit above the GPUI-drawn modal and swallow its
+                // clicks.
+                self.toggle_settings(&settings_panel::ToggleSettings, window, cx);
             }
             "new-tab" => {
                 self.new_tab(&NewTab, window, cx);
@@ -2895,12 +3004,20 @@ impl ConWorkspace {
         self.harness.update_config(new_config);
         self.shell_suggestion_engine = self.harness.suggestion_engine(180);
         self.shell_suggestion_engine.clear_cache();
+        let active_agent_config = self.active_tab_agent_config();
 
         // Sync auto-approve to agent panel UI
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_auto_approve(auto_approve);
             panel.set_session_provider_options(
-                AgentPanel::configured_session_providers(self.harness.config()),
+                AgentPanel::configured_session_providers(&active_agent_config),
+                window,
+                cx,
+            );
+            panel.set_provider_name(active_agent_config.provider.clone(), window, cx);
+            panel.set_model_name(AgentHarness::active_model_name_for(&active_agent_config));
+            panel.set_session_model_options(
+                self.model_registry.models_for(&active_agent_config.provider),
                 window,
                 cx,
             );
@@ -3133,9 +3250,10 @@ impl ConWorkspace {
                     InputKind::SkillInvoke(name, args) => {
                         let context = self.build_agent_context(cx);
                         let session = &self.tabs[self.active_tab].session;
+                        let agent_config = self.active_tab_agent_config();
                         if let Some(desc) =
                             self.harness
-                                .invoke_skill(session, &name, args.as_deref(), context)
+                                .invoke_skill(session, agent_config, &name, args.as_deref(), context)
                         {
                             if !self.agent_panel_open {
                                 self.agent_panel_open = true;
@@ -4701,12 +4819,32 @@ impl ConWorkspace {
     /// modal can see them. On macOS `set_visible` on NSView is
     /// cheap / idempotent, so this is a no-op in practice.
     fn sync_pane_visibility_for_modals(&self, cx: &App) {
-        let modal_open = self.is_modal_open(cx);
-        let want_visible = !modal_open;
-        for tab in &self.tabs {
-            for t in tab.pane_tree.all_terminals() {
-                t.set_native_view_visible(want_visible, cx);
+        // Windows-only workaround: a WS_CHILD HWND with WS_VISIBLE always
+        // paints over the parent D3D swapchain and also eats every mouse
+        // click that lands on its rect, so a GPUI-rendered modal
+        // (settings, command palette) has to explicitly hide the pane
+        // HWND to receive input. macOS NSView overlays honour Z-order
+        // natively — if we run this path on macOS the ghostty NSView
+        // becomes hidden and, because the main window is transparent on
+        // macOS 13+, the user sees the desktop through the settings
+        // modal's dim overlay instead of the terminal behind it.
+        #[cfg(target_os = "windows")]
+        {
+            let modal_open = self.is_modal_open(cx);
+            let want_visible = !modal_open;
+            log::info!(
+                "sync_pane_visibility_for_modals: modal_open={modal_open} \
+                 → panes want_visible={want_visible}"
+            );
+            for tab in &self.tabs {
+                for t in tab.pane_tree.all_terminals() {
+                    t.set_native_view_visible(want_visible, cx);
+                }
             }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = cx;
         }
     }
 
@@ -4720,6 +4858,7 @@ impl ConWorkspace {
             title: format!("Terminal {}", tab_number),
             needs_attention: false,
             session: AgentSession::new(),
+            agent_routing: Self::default_agent_routing(self.harness.config()),
             panel_state: PanelState::new(),
             runtime_trackers: RefCell::new(HashMap::new()),
             runtime_cache: RefCell::new(HashMap::new()),
@@ -5498,8 +5637,9 @@ impl ConWorkspace {
         });
         let context = self.build_agent_context(cx);
         let session = &self.tabs[self.active_tab].session;
+        let agent_config = self.active_tab_agent_config();
         self.harness
-            .send_message(session, content.to_string(), context);
+            .send_message(session, agent_config, content.to_string(), context);
         self.save_session(cx);
     }
 
@@ -5913,7 +6053,7 @@ impl Render for ConWorkspace {
         }
         self.modal_was_open = is_modal_open;
 
-        if !needs_ghostty_hidden {
+        if !needs_ghostty_hidden && !is_modal_open {
             for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
                 terminal.set_native_view_visible(true, cx);
             }
@@ -5988,8 +6128,9 @@ impl Render for ConWorkspace {
             .update(cx, |bar, _cx| bar.set_recent_commands(recent_commands));
 
         // Sync model name, inline input, and skills to agent panel
-        let model_name = self.harness.active_model_name();
-        let provider = self.harness.config().provider.clone();
+        let active_agent_config = self.active_tab_agent_config();
+        let model_name = AgentHarness::active_model_name_for(&active_agent_config);
+        let provider = active_agent_config.provider.clone();
         let available_models = self.model_registry.models_for(&provider);
         let show_inline = !self.input_bar_visible && self.agent_panel_open;
         let panel_skills: Vec<crate::input_bar::SkillEntry> = self
@@ -6003,7 +6144,7 @@ impl Render for ConWorkspace {
             .collect();
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_session_provider_options(
-                AgentPanel::configured_session_providers(self.harness.config()),
+                AgentPanel::configured_session_providers(&active_agent_config),
                 window,
                 cx,
             );
@@ -6173,6 +6314,10 @@ impl Render for ConWorkspace {
                     .flex_shrink_0()
                     .rounded(px(4.0))
                     .cursor_pointer()
+                    // Windows: without `.occlude()` the parent top_bar's
+                    // `WindowControlArea::Drag` hit-test swallows the
+                    // click (returns HTCAPTION → window drag starts).
+                    .occlude()
                     .hover(|s| s.bg(theme.muted.opacity(0.15)));
                 if !is_active {
                     close_el = close_el.invisible().group_hover("tab", |s| s.visible());
@@ -6203,6 +6348,13 @@ impl Render for ConWorkspace {
                     .h(px(30.0))
                     .text_size(px(11.5))
                     .cursor_pointer()
+                    // Windows: without `.occlude()` the parent top_bar's
+                    // `WindowControlArea::Drag` hit-test routes the click
+                    // to the OS (HTCAPTION) and starts a window drag
+                    // before GPUI fires `on_click` — so the tab never
+                    // activates. Same treatment as the `+`, caption
+                    // buttons, and tab-close controls in this file.
+                    .occlude()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_tab(index, window, cx);
                     }))
@@ -6222,7 +6374,6 @@ impl Render for ConWorkspace {
                 } else {
                     tab_el = tab_el
                         .rounded_t(px(6.0))
-                        .mb(px(1.0))
                         .bg(theme.background.opacity(0.14))
                         .text_color(theme.muted_foreground.opacity(0.72))
                         .hover(|s| {

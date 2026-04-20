@@ -33,6 +33,13 @@ pub enum AgentStatus {
     Responding,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FollowOutputState {
+    Auto,
+    Detached,
+    PendingJump,
+}
+
 struct ToolCallEntry {
     call_id: String,
     tool_name: String,
@@ -422,6 +429,7 @@ pub struct AgentPanel {
     recent_inputs: Vec<String>,
     inline_history_nav_index: Option<usize>,
     inline_history_nav_draft: Option<String>,
+    follow_output: FollowOutputState,
     /// Currently highlighted skill in inline autocomplete
     inline_skill_selection: usize,
     /// Tracks whether shift was held on the last enter keystroke (for inline input)
@@ -686,8 +694,8 @@ impl AgentPanel {
     }
 
     #[allow(dead_code)]
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
-        Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut panel = Self {
             state: PanelState::new(),
             scroll_handle: ScrollHandle::new(),
             history_scroll_handle: ScrollHandle::new(),
@@ -707,10 +715,13 @@ impl AgentPanel {
             recent_inputs: Vec::new(),
             inline_history_nav_index: None,
             inline_history_nav_draft: None,
+            follow_output: FollowOutputState::Auto,
             inline_skill_selection: 0,
             inline_shift_enter: false,
             ui_opacity: 0.90,
-        }
+        };
+        panel.ensure_inline_input_state(window, cx);
+        panel
     }
 
     pub fn state(&self) -> &PanelState {
@@ -760,8 +771,8 @@ impl AgentPanel {
     }
 
     /// Create with a pre-populated panel state (e.g. restored from session).
-    pub fn with_state(state: PanelState, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
-        Self {
+    pub fn with_state(state: PanelState, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut panel = Self {
             state,
             scroll_handle: ScrollHandle::new(),
             history_scroll_handle: ScrollHandle::new(),
@@ -781,16 +792,20 @@ impl AgentPanel {
             recent_inputs: Vec::new(),
             inline_history_nav_index: None,
             inline_history_nav_draft: None,
+            follow_output: FollowOutputState::Auto,
             inline_skill_selection: 0,
             inline_shift_enter: false,
             ui_opacity: 0.90,
-        }
+        };
+        panel.ensure_inline_input_state(window, cx);
+        panel
     }
 
     /// Swap the displayed panel state. Returns the old state (to stash back in the tab).
     pub fn swap_state(&mut self, new_state: PanelState, cx: &mut Context<Self>) -> PanelState {
         let old = std::mem::replace(&mut self.state, new_state);
         self.scroll_handle = ScrollHandle::new();
+        self.follow_output = FollowOutputState::Auto;
         self.showing_history = false;
         cx.notify();
         old
@@ -882,6 +897,108 @@ impl AgentPanel {
 
     pub fn set_show_inline_input(&mut self, show: bool) {
         self.show_inline_input = show;
+    }
+
+    fn ensure_inline_input_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.inline_input_state.is_some() {
+            return;
+        }
+
+        let state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Ask anything…")
+                .auto_grow(1, 4)
+        });
+        cx.observe_keystrokes(|this, event, _window, _cx| {
+            if event.keystroke.key == "enter" {
+                this.inline_shift_enter = event.keystroke.modifiers.shift;
+            }
+        })
+        .detach();
+        cx.observe_keystrokes(|this, event, window, cx| {
+            if !Self::should_fallback_handle_inline_history_key(event)
+                || !this.show_inline_input
+                || !this.is_inline_input_focused(window, cx)
+            {
+                return;
+            }
+
+            let key = event.keystroke.key.clone();
+            let _ = this.handle_inline_navigation_key(key.as_str(), window, cx);
+        })
+        .detach();
+        cx.subscribe_in(
+            &state,
+            window,
+            |this: &mut Self, _, ev: &InputEvent, window, cx| match ev {
+                InputEvent::Change => {
+                    if let Some(history_ix) = this.inline_history_nav_index {
+                        let current_value = this
+                            .inline_input_state
+                            .as_ref()
+                            .map(|input| input.read(cx).value().to_string())
+                            .unwrap_or_default();
+                        let matches_current = this
+                            .recent_inputs
+                            .get(history_ix)
+                            .is_some_and(|entry| entry == &current_value);
+                        if !matches_current {
+                            this.inline_history_nav_index = None;
+                            this.inline_history_nav_draft = None;
+                        }
+                    }
+                    let skills = this.filtered_inline_skills(cx);
+                    if skills.is_empty() {
+                        this.inline_skill_selection = 0;
+                    } else {
+                        this.inline_skill_selection = this
+                            .inline_skill_selection
+                            .min(skills.len().saturating_sub(1));
+                    }
+                    cx.emit(InlineSkillAutocompleteChanged);
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    if this.inline_shift_enter {
+                        this.inline_shift_enter = false;
+                        return;
+                    }
+
+                    if let Some(ref input) = this.inline_input_state {
+                        input.update(cx, |s, cx| {
+                            let cursor = s.cursor();
+                            let val = s.value().to_string();
+                            if cursor > 0 && val.as_bytes().get(cursor - 1) == Some(&b'\n') {
+                                let mut cleaned = val[..cursor - 1].to_string();
+                                cleaned.push_str(&val[cursor..]);
+                                s.set_value(&cleaned, window, cx);
+                            }
+                        });
+                    }
+
+                    let has_completions = !this.filtered_inline_skills(cx).is_empty();
+                    if has_completions {
+                        let skills = this.filtered_inline_skills(cx);
+                        let sel = this
+                            .inline_skill_selection
+                            .min(skills.len().saturating_sub(1));
+                        if let Some(skill) = skills.get(sel) {
+                            let name = skill.name.clone();
+                            this.complete_inline_skill(&name, window, cx);
+                        }
+                    } else if let Some(ref input) = this.inline_input_state {
+                        let text = input.read(cx).value().to_string();
+                        if !text.trim().is_empty() {
+                            input.update(cx, |s, cx| s.set_value("", window, cx));
+                            cx.emit(InlineInputSubmit { text });
+                        }
+                    }
+                }
+                _ => {}
+            },
+        )
+        .detach();
+        self.inline_input_state = Some(state);
     }
 
     pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
@@ -1072,9 +1189,45 @@ impl AgentPanel {
         self.scroll_handle.scroll_to_bottom();
     }
 
+    fn is_scrolled_near_bottom(&self) -> bool {
+        let distance_from_bottom = self.scroll_handle.max_offset().y + self.scroll_handle.offset().y;
+        distance_from_bottom <= px(24.0)
+    }
+
+    fn should_follow_output_after_change(&self) -> bool {
+        self.follow_output != FollowOutputState::Detached || self.is_scrolled_near_bottom()
+    }
+
+    fn follow_output_after_change(&mut self) {
+        if self.should_follow_output_after_change() {
+            self.follow_output = FollowOutputState::PendingJump;
+            self.scroll_to_bottom();
+        } else {
+            self.follow_output = FollowOutputState::Detached;
+        }
+    }
+
+    fn sync_follow_output_state(&mut self, cx: &mut Context<Self>) {
+        let near_bottom = self.is_scrolled_near_bottom();
+        let next = match (self.follow_output, near_bottom) {
+            (FollowOutputState::PendingJump, true) => FollowOutputState::Auto,
+            (FollowOutputState::PendingJump, false) => FollowOutputState::PendingJump,
+            (_, true) => FollowOutputState::Auto,
+            (FollowOutputState::Auto, false) => FollowOutputState::Detached,
+            (FollowOutputState::Detached, false) => FollowOutputState::Detached,
+        };
+        if self.follow_output != next {
+            self.follow_output = next;
+            cx.notify();
+        }
+    }
+
     pub fn add_message(&mut self, role: &str, content: &str, cx: &mut Context<Self>) {
         self.state.add_message(role, content);
-        self.scroll_to_bottom();
+        if role == "user" {
+            self.follow_output = FollowOutputState::PendingJump;
+        }
+        self.follow_output_after_change();
         cx.notify();
     }
 
@@ -1091,7 +1244,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         self.state.add_tool_call(call_id, tool_name, args);
-        self.scroll_to_bottom();
+        self.follow_output_after_change();
         cx.notify();
     }
 
@@ -1103,7 +1256,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         self.state.complete_tool_call(call_id, result);
-        self.scroll_to_bottom();
+        self.follow_output_after_change();
         cx.notify();
     }
 
@@ -1117,7 +1270,7 @@ impl AgentPanel {
     ) {
         self.state
             .add_pending_approval(call_id, tool_name, args, approval_tx);
-        self.scroll_to_bottom();
+        self.follow_output_after_change();
         cx.notify();
     }
 
@@ -1167,20 +1320,20 @@ impl AgentPanel {
 
     pub fn update_thinking(&mut self, text: &str, cx: &mut Context<Self>) {
         self.state.update_thinking(text);
-        self.scroll_to_bottom();
+        self.follow_output_after_change();
         cx.notify();
     }
 
     pub fn update_streaming(&mut self, token: &str, cx: &mut Context<Self>) {
         self.state.update_streaming(token);
-        self.scroll_to_bottom();
+        self.follow_output_after_change();
         cx.notify();
     }
 
     pub fn complete_response(&mut self, msg: &con_agent::Message, cx: &mut Context<Self>) {
         self.state
             .complete_response(&msg.content, msg.model.as_deref(), msg.duration_ms);
-        self.scroll_to_bottom();
+        self.follow_output_after_change();
         cx.notify();
     }
 
@@ -2366,111 +2519,8 @@ fn render_user_message_text(
 
 impl Render for AgentPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Pre-create inline input state before borrowing theme (needs &mut cx)
-        if self.show_inline_input && self.inline_input_state.is_none() {
-            let state = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Ask anything…")
-                    .auto_grow(1, 4)
-            });
-            // Track shift state — fires BEFORE PressEnter
-            cx.observe_keystrokes(|this, event, _window, _cx| {
-                if event.keystroke.key == "enter" {
-                    this.inline_shift_enter = event.keystroke.modifiers.shift;
-                }
-            })
-            .detach();
-            cx.observe_keystrokes(|this, event, window, cx| {
-                if !Self::should_fallback_handle_inline_history_key(event)
-                    || !this.show_inline_input
-                    || !this.is_inline_input_focused(window, cx)
-                {
-                    return;
-                }
-
-                let key = event.keystroke.key.clone();
-                let _ = this.handle_inline_navigation_key(key.as_str(), window, cx);
-            })
-            .detach();
-            cx.subscribe_in(
-                &state,
-                window,
-                |this: &mut Self, _, ev: &InputEvent, window, cx| {
-                    match ev {
-                        InputEvent::Change => {
-                            if let Some(history_ix) = this.inline_history_nav_index {
-                                let current_value = this
-                                    .inline_input_state
-                                    .as_ref()
-                                    .map(|input| input.read(cx).value().to_string())
-                                    .unwrap_or_default();
-                                let matches_current = this
-                                    .recent_inputs
-                                    .get(history_ix)
-                                    .is_some_and(|entry| entry == &current_value);
-                                if !matches_current {
-                                    this.inline_history_nav_index = None;
-                                    this.inline_history_nav_draft = None;
-                                }
-                            }
-                            let skills = this.filtered_inline_skills(cx);
-                            if skills.is_empty() {
-                                this.inline_skill_selection = 0;
-                            } else {
-                                this.inline_skill_selection = this
-                                    .inline_skill_selection
-                                    .min(skills.len().saturating_sub(1));
-                            }
-                            cx.emit(InlineSkillAutocompleteChanged);
-                            cx.notify();
-                        }
-                        InputEvent::PressEnter { .. } => {
-                            if this.inline_shift_enter {
-                                // Shift+Enter: newline already inserted by auto_grow
-                                this.inline_shift_enter = false;
-                                return;
-                            }
-
-                            // Regular Enter: undo the newline auto_grow inserted, then submit
-                            if let Some(ref input) = this.inline_input_state {
-                                input.update(cx, |s, cx| {
-                                    let cursor = s.cursor();
-                                    let val = s.value().to_string();
-                                    if cursor > 0 && val.as_bytes().get(cursor - 1) == Some(&b'\n')
-                                    {
-                                        let mut cleaned = val[..cursor - 1].to_string();
-                                        cleaned.push_str(&val[cursor..]);
-                                        s.set_value(&cleaned, window, cx);
-                                    }
-                                });
-                            }
-
-                            let has_completions = !this.filtered_inline_skills(cx).is_empty();
-                            if has_completions {
-                                // Enter completes the selected skill
-                                let skills = this.filtered_inline_skills(cx);
-                                let sel = this
-                                    .inline_skill_selection
-                                    .min(skills.len().saturating_sub(1));
-                                if let Some(skill) = skills.get(sel) {
-                                    let name = skill.name.clone();
-                                    this.complete_inline_skill(&name, window, cx);
-                                }
-                            } else if let Some(ref input) = this.inline_input_state {
-                                let text = input.read(cx).value().to_string();
-                                if !text.trim().is_empty() {
-                                    input.update(cx, |s, cx| s.set_value("", window, cx));
-                                    cx.emit(InlineInputSubmit { text });
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                },
-            )
-            .detach();
-            self.inline_input_state = Some(state);
-        }
+        self.ensure_inline_input_state(window, cx);
+        self.sync_follow_output_state(cx);
 
         let theme = cx.theme();
         let content_reveal = self.content_reveal.value(window);
@@ -3915,10 +3965,12 @@ impl Render for AgentPanel {
         // Use system proportional font for readable prose — the workspace root
         // sets Ioskeley Mono which would cascade here without this override.
         let mut panel = div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
             .min_h_0()
+            .items_stretch()
             .bg(theme.title_bar.opacity(self.ui_opacity))
             .font_family(theme.font_family.clone())
             .child(header)
@@ -4044,19 +4096,51 @@ impl Render for AgentPanel {
                     .vertical_scrollbar(&self.history_scroll_handle),
             );
         } else {
+            let show_jump_to_latest =
+                self.follow_output == FollowOutputState::Detached && !self.is_scrolled_near_bottom();
             // Container: relative + scrollbar on container, content scrolls inside
-            panel = panel.child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        messages_content
-                            .opacity(content_reveal)
-                            .pt(vertical_reveal_offset(content_reveal, 10.0)),
-                    )
-                    .vertical_scrollbar(&self.scroll_handle),
-            );
+            let mut messages_container = div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .on_scroll_wheel(cx.listener(|_this, _event: &ScrollWheelEvent, window, cx| {
+                    cx.on_next_frame(window, |this, _window, cx| {
+                        this.sync_follow_output_state(cx);
+                    });
+                }))
+                .child(
+                    messages_content
+                        .opacity(content_reveal)
+                        .pt(vertical_reveal_offset(content_reveal, 10.0)),
+                )
+                .vertical_scrollbar(&self.scroll_handle);
+
+            if show_jump_to_latest {
+                messages_container = messages_container.child(
+                    div()
+                        .absolute()
+                        .right(px(14.0))
+                        .bottom(if self.show_inline_input {
+                            px(66.0)
+                        } else {
+                            px(14.0)
+                        })
+                        .child(
+                            Button::new("agent-jump-latest")
+                                .ghost()
+                                .xsmall()
+                                .icon(Icon::default().path("phosphor/arrow-line-down.svg"))
+                                .label("Latest")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.follow_output = FollowOutputState::PendingJump;
+                                    this.scroll_to_bottom();
+                                    cx.notify();
+                                })),
+                        ),
+                );
+            }
+
+            panel = panel.child(messages_container);
         }
 
         // Inline input — shown when main input bar is hidden
@@ -4114,11 +4198,10 @@ impl Render for AgentPanel {
 
             panel = panel.child(
                 div()
-                    .flex_shrink_0()
-                    .w_full()
-                    .pl(px(8.0))
-                    .pr(px(9.0))
-                    .py(px(8.0))
+                    .absolute()
+                    .left(px(8.0))
+                    .right(px(9.0))
+                    .bottom(px(8.0))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                         let key = event.keystroke.key.as_str();
                         let has_completions = !this.filtered_inline_skills(cx).is_empty();
@@ -4183,14 +4266,15 @@ impl Render for AgentPanel {
                             .child(
                                 div()
                                     .flex_1()
-                                    .min_w_0()
+                                    .w_full()
+                                    .min_w(px(120.0))
                                     .font_family(theme.font_family.clone())
                                     .text_size(px(13.0))
-                                    .child(
+                                    .child(div().w_full().child(
                                         Input::new(&inline_input)
                                             .appearance(false)
                                             .cleanable(false),
-                                    ),
+                                    )),
                             )
                             .child(send_button),
                     ),

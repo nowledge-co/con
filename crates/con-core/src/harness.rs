@@ -312,7 +312,13 @@ impl AgentHarness {
     ///
     /// The session provides the conversation and channels;
     /// the harness provides runtime and config.
-    pub fn send_message(&self, session: &AgentSession, content: String, context: TerminalContext) {
+    pub fn send_message(
+        &self,
+        session: &AgentSession,
+        agent_config: con_agent::AgentConfig,
+        content: String,
+        context: TerminalContext,
+    ) {
         let user_msg = Message::user(&content);
         session.conversation.lock().add_message(user_msg);
 
@@ -320,7 +326,6 @@ impl AgentHarness {
         session.cancel_flag.store(false, Ordering::Relaxed);
 
         let harness_tx = session.event_tx.clone();
-        let agent_config = self.config.clone();
         let conversation = session.conversation.clone();
         let terminal_exec_tx = session.terminal_exec_tx.clone();
         let pane_tx = session.pane_tx.clone();
@@ -502,6 +507,7 @@ impl AgentHarness {
     pub fn invoke_skill(
         &self,
         session: &AgentSession,
+        agent_config: con_agent::AgentConfig,
         skill_name: &str,
         args: Option<&str>,
         context: TerminalContext,
@@ -512,7 +518,7 @@ impl AgentHarness {
         } else {
             skill.prompt_template.clone()
         };
-        self.send_message(session, prompt, context);
+        self.send_message(session, agent_config, prompt, context);
         Some(skill.description.clone())
     }
 
@@ -575,9 +581,11 @@ impl AgentHarness {
 
     /// Display name for the active model (e.g. "claude-sonnet-4-6").
     pub fn active_model_name(&self) -> String {
-        self.config
-            .effective_model(&self.config.provider)
-            .to_string()
+        Self::active_model_name_for(&self.config)
+    }
+
+    pub fn active_model_name_for(config: &con_agent::AgentConfig) -> String {
+        config.effective_model(&config.provider).to_string()
     }
 
     pub fn skill_names(&self) -> Vec<String> {
