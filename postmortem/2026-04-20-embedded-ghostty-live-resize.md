@@ -1,51 +1,55 @@
 ## What happened
 
-Resizing a Con window that contained a heavy TUI such as Claude Code still felt dramatically slower than native Ghostty, even after earlier fixes removed obvious workspace-level stalls.
+Resizing a Con window that contained a heavy TUI such as Claude Code, or even a simple `tmux` session, felt dramatically slower than native Ghostty.
+
+The visual symptom was consistent:
+
+- one pane
+- resize or heavy reflow would appear to repaint from upper rows down to the bottom
+- standalone Ghostty stayed effectively instant
 
 The lag reproduced in the simplest case:
 
 - one pane
 - one active terminal surface
 - no split management involved
-
-That ruled out pane-count scaling as the primary cause.
+- no Claude-specific behavior required
 
 ## Root cause
 
-Three integration mistakes were left in the embedded Ghostty path:
+The final root cause was more basic than the earlier host-integration theories:
 
-1. Con was still driving `ghostty_app_tick()` from its own workspace timer instead of honoring Ghostty's embedded runtime wakeup model.
-2. The embedded host `NSView` stack did not use the same live-resize-friendly AppKit policies that GPUI applies to its own native view host:
-   - autoresizing masks for width and height
-   - `NSViewLayerContentsRedrawDuringViewResize`
-3. Con hosted each Ghostty surface in a bare `NSView` and ignored `GHOSTTY_ACTION_SCROLLBAR`. Standalone Ghostty does not do that on macOS; it wraps the surface in a native scroll container and keeps the visible viewport synchronized with Ghostty's scrollbar state.
+Con's macOS Rust app was being built in release mode, but the embedded Ghostty runtime was not explicitly being built as a release-class Zig library. `crates/con-ghostty/build.rs` invoked:
 
-That third mistake was the one that matched the user-visible symptom most closely: during heavy TUI resize, Con could briefly show older Y-axis scrollback content and only later settle back to the bottom, while standalone Ghostty stayed bottom-anchored throughout the drag.
+```text
+zig build -Dapp-runtime=none -Dxcframework-target=native -Demit-macos-app=false
+```
+
+without `-Doptimize=ReleaseFast`.
+
+That left Con embedding a debug-grade or non-release-grade Ghostty runtime while standalone Ghostty.app was running an optimized one. In traces, the hot path was dominated by Ghostty's own terminal-core work:
+
+- `terminal.page.Page.verifyIntegrity`
+- `terminal.formatter.PageFormatter.*`
+- `terminal.render.RenderState.update`
+- `renderer.generic.Renderer(renderer.Metal).rebuildRow`
+- `renderer.generic.Renderer(renderer.Metal).addGlyph`
+
+That is why Con looked existentially slower while standalone Ghostty did not: the embedded runtime itself was being built in the wrong mode.
 
 ## Fix applied
 
-- `con-ghostty` now stores a small wake handle in app userdata and uses Ghostty's `wakeup_cb` to dispatch `ghostty_app_tick()` onto the macOS main queue, with atomic deduping so repeated wakeups coalesce cleanly.
-- Con's old workspace-level 8ms Ghostty tick loop was removed.
-- `GhosttyView` now gives the embedded host and child surface views native width/height autoresizing masks and `NSViewLayerContentsRedrawDuringViewResize`.
-- The remaining per-surface 16ms GPUI polling loops were removed. Surface event draining and init-retry housekeeping now run from one workspace-level Ghostty wake pump instead of N independent pane loops.
-- Con now also mirrors Ghostty's macOS cell-step window resize behavior by setting `contentResizeIncrements` from the active terminal surface's cell size. That reduces the number of meaningless sub-cell resize states the host and renderer ever see.
-- The workspace render path stopped performing fresh terminal observations for pane-metadata UI. It now reuses cached runtime state so normal UI renders do not pull terminal text while a heavy TUI is active.
-- `con-ghostty` now exposes Ghostty scrollbar actions through `TerminalState`, and `GhosttyView` hosts the embedded surface inside a native scroll container with a document view sized from Ghostty's scrollbar model. Con now keeps the viewport position synchronized with Ghostty during resize instead of treating the surface as a plain fixed-origin child view.
-- Con's embedded scroll host no longer fabricates a fallback `offset = 0` scrollbar model when Ghostty has not emitted real viewport state yet. The native scroll container now stays inert until Ghostty provides real scrollbar data, matching Ghostty's own macOS host behavior and avoiding forced top-of-history paints during startup and reflow.
-- Con's embedded macOS host no longer defers Ghostty surface size commits behind a custom coalescing policy. It now updates the core surface immediately on layout using AppKit backing-size conversion, which matches Ghostty's own macOS size propagation more closely.
+- `crates/con-ghostty/build.rs` now passes Zig `-Doptimize=ReleaseFast` by default for the macOS Ghostty build.
+- The optimize mode is also overridable with `CON_GHOSTTY_OPTIMIZE` for controlled experiments.
+- The profiling helper was corrected to trace the built `con` binary instead of accidentally profiling `cargo`.
+- Documentation was updated so performance investigations first confirm two invariants:
+  1. the trace targets `con`, not Cargo
+  2. the embedded Ghostty runtime is built as a release-class library
 
 ## What we learned
 
-- Embedded Ghostty should be integrated on Ghostty's own terms. Polling it from the host app is not equivalent to honoring its wakeup contract.
-- Live resize performance on macOS is as much an AppKit view-hosting problem as a renderer problem.
-- "Feels slower than Ghostty" is often an integration smell, not a sign that Ghostty itself is slow.
-- Even after the core renderer is wakeup-driven, duplicated host-side observer loops can still make the product feel slow. The render path and the host-side bookkeeping path both have to be reduced to one coherent ownership boundary.
-- Matching Ghostty also means matching its resize semantics, not just its tick semantics. If Con allows far more intermediate window states than Ghostty does, it can still feel slower even when the renderer itself is healthy.
-- Performance regressions also hide in “small” UI metadata paths. If the render path reads terminal text for sidebar/input-bar decoration, a dense TUI can make the whole app feel heavier even when the terminal surface itself is correct.
-- On macOS, Ghostty's scrollbar updates are not just UI chrome for a visible scrollbar. They are part of the viewport-hosting contract. Ignoring them leaves the embedder with the wrong mental model of what the surface view represents.
-- The host must also avoid guessing viewport state before Ghostty publishes it. A "helpful" fallback scrollbar model can be worse than no model at all because it actively drives the embed into the wrong part of scrollback.
-- The first hard profiling pass ruled out the easy blame targets. In Con's bad resize case:
-  - `ghostty_surface_set_size(...)` calls were effectively free
-  - Ghostty wakeup queue delay was near-zero
-  - `ghostty_app_tick(...)` time was near-zero
-  That points away from "Ghostty isn't using GPU" or "Rust resize logic is too slow" and toward the host/composition path around the embedded terminal view.
+- Before diagnosing architecture, validate the build mode. A release Rust binary can still embed a slow native dependency if that dependency's own build system defaults to a non-release profile.
+- Trace correctness matters as much as trace content. Profiling `cargo run -p con` under `xctrace` produced believable but irrelevant results because it sampled Cargo and rustup startup code instead of the app under test.
+- The first lightweight logs were still useful. They ruled out Rust-side resize calls, Ghostty wake queue delay, and `ghostty_app_tick()` as the primary bottleneck.
+- The decisive trace was the first valid `xctrace` capture of the actual `con` binary. Once that trace showed Ghostty terminal-core symbols dominating the hot path, the problem became a build/runtime issue rather than a host-view issue.
+- Earlier host-path fixes were not necessarily wasted, but they were not the main reason Con felt dramatically slower than Ghostty. The embedded runtime build mode was.

@@ -14,11 +14,13 @@ At that point, guessing is lower value than measuring.
 - Con **does** use GPU rendering on macOS.
 - The terminal runtime is embedded Ghostty.
 - Ghostty renders into a native `NSView` with its Metal renderer.
-- The remaining gap is therefore most likely in Con's host path:
-  - AppKit view embedding
-  - GPUI window composition
-  - main-thread scheduling around Ghostty wakeups
-  - native resize/composition behavior
+
+Before drawing architectural conclusions, verify two invariants first:
+
+1. the trace must target the real `con` process, not `cargo`
+2. the embedded Ghostty runtime must be built as a release-class Zig library
+
+Without those checks, performance comparisons against standalone Ghostty are not trustworthy.
 
 ## Lightweight app logs
 
@@ -79,6 +81,8 @@ Interpretation:
   - likely AppKit / Core Animation / compositing around the embedded terminal view
 - high `update_frame` elapsed time
   - the embedding host path itself is expensive before Ghostty work begins
+- low Rust-side timings, but `xctrace` shows Ghostty formatter / reflow / render-state symbols dominating
+  - first verify the embedded Ghostty build mode before blaming GPUI or AppKit
 
 ## Instruments pass
 
@@ -112,9 +116,14 @@ Look for:
 - time spent in `ghostty_surface_set_size`
 - whether Metal work itself is slow, or whether Con is late getting frames onto screen
 
+Also inspect the target process and hot symbols before deeper interpretation:
+
+- if the trace target is `cargo`, the trace is invalid for app-performance diagnosis
+- if the hottest symbols are Ghostty terminal-core functions such as `PageFormatter`, `RenderState.update`, or `verifyIntegrity`, validate that the embedded Ghostty runtime was built with `-Doptimize=ReleaseFast`
+
 ## Current thesis
 
-If Con remains much slower than Ghostty even when:
+After validating the target process and Ghostty build mode, if Con still remains much slower than Ghostty even when:
 
 - Ghostty wake tick delay is low
 - Ghostty tick time is low
