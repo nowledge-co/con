@@ -130,6 +130,8 @@ Another important macOS alignment point is window step-resize. Standalone Ghostt
 
 One more host-side rule matters for TUI performance: normal UI renders must not force fresh terminal observations. Con previously used runtime observation in the workspace render path just to derive pane labels and remote-host hints for the input bar. That path could pull visible/recent terminal text while a dense TUI was active. The UI now reads only cached runtime state during render; explicit terminal observation stays on agent/control paths where that cost is intentional.
 
+One more embedded-macOS detail turned out to matter: standalone Ghostty does not host the surface in a bare `NSView`. It wraps the surface in a scroll container and consumes `GHOSTTY_ACTION_SCROLLBAR` updates so the visible viewport stays synchronized with Ghostty's scrollback model during reflow and resize. Con now mirrors that contract by caching Ghostty scrollbar actions in `con-ghostty` and positioning the embedded surface inside a native scroll container. Without that, heavy TUIs could briefly render from upper scrollback during resize and only later settle back to the bottom.
+
 ## Agent execution
 
 The `terminal_exec` tool writes the command into the visible Ghostty pane.

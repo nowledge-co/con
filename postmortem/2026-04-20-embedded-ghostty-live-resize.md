@@ -12,14 +12,15 @@ That ruled out pane-count scaling as the primary cause.
 
 ## Root cause
 
-Two integration mistakes were left in the embedded Ghostty path:
+Three integration mistakes were left in the embedded Ghostty path:
 
 1. Con was still driving `ghostty_app_tick()` from its own workspace timer instead of honoring Ghostty's embedded runtime wakeup model.
 2. The embedded host `NSView` stack did not use the same live-resize-friendly AppKit policies that GPUI applies to its own native view host:
    - autoresizing masks for width and height
    - `NSViewLayerContentsRedrawDuringViewResize`
+3. Con hosted each Ghostty surface in a bare `NSView` and ignored `GHOSTTY_ACTION_SCROLLBAR`. Standalone Ghostty does not do that on macOS; it wraps the surface in a native scroll container and keeps the visible viewport synchronized with Ghostty's scrollbar state.
 
-In practice this meant Con was doing extra scheduling work while AppKit was also resizing a child Metal-backed view without the native redraw hints Ghostty/GPUI expect.
+That third mistake was the one that matched the user-visible symptom most closely: during heavy TUI resize, Con could briefly show older Y-axis scrollback content and only later settle back to the bottom, while standalone Ghostty stayed bottom-anchored throughout the drag.
 
 ## Fix applied
 
@@ -29,6 +30,7 @@ In practice this meant Con was doing extra scheduling work while AppKit was also
 - The remaining per-surface 16ms GPUI polling loops were removed. Surface event draining and deferred resize/retry housekeeping now run from one workspace-level Ghostty wake pump instead of N independent pane loops.
 - Con now also mirrors Ghostty's macOS cell-step window resize behavior by setting `contentResizeIncrements` from the active terminal surface's cell size. That reduces the number of meaningless sub-cell resize states the host and renderer ever see.
 - The workspace render path stopped performing fresh terminal observations for pane-metadata UI. It now reuses cached runtime state so normal UI renders do not pull terminal text while a heavy TUI is active.
+- `con-ghostty` now exposes Ghostty scrollbar actions through `TerminalState`, and `GhosttyView` hosts the embedded surface inside a native scroll container with a document view sized from Ghostty's scrollbar model. Con now keeps the viewport position synchronized with Ghostty during resize instead of treating the surface as a plain fixed-origin child view.
 
 ## What we learned
 
@@ -38,3 +40,4 @@ In practice this meant Con was doing extra scheduling work while AppKit was also
 - Even after the core renderer is wakeup-driven, duplicated host-side observer loops can still make the product feel slow. The render path and the host-side bookkeeping path both have to be reduced to one coherent ownership boundary.
 - Matching Ghostty also means matching its resize semantics, not just its tick semantics. If Con allows far more intermediate window states than Ghostty does, it can still feel slower even when the renderer itself is healthy.
 - Performance regressions also hide in “small” UI metadata paths. If the render path reads terminal text for sidebar/input-bar decoration, a dense TUI can make the whole app feel heavier even when the terminal surface itself is correct.
+- On macOS, Ghostty's scrollbar updates are not just UI chrome for a visible scrollbar. They are part of the viewport-hosting contract. Ignoring them leaves the embedder with the wrong mental model of what the surface view represents.

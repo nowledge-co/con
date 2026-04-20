@@ -357,12 +357,22 @@ pub struct ghostty_action_command_finished_s {
     pub duration: u64,
 }
 
+/// Action payload for SCROLLBAR.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_scrollbar_s {
+    pub total: u64,
+    pub offset: u64,
+    pub len: u64,
+}
+
 /// Action union — only relevant fields are accessed based on tag.
 #[repr(C)]
 pub union ghostty_action_u {
     pub new_split: ghostty_action_split_direction_e,
     pub goto_split: ghostty_action_goto_split_e,
     pub resize_split: ghostty_action_resize_split_s,
+    pub scrollbar: ghostty_action_scrollbar_s,
     pub set_title: ghostty_action_set_title_s,
     pub pwd: ghostty_action_pwd_s,
     pub command_finished: ghostty_action_command_finished_s,

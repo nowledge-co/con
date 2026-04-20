@@ -74,6 +74,8 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     host_view: Option<id>,
     #[cfg(target_os = "macos")]
+    document_view: Option<id>,
+    #[cfg(target_os = "macos")]
     nsview: Option<id>,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
@@ -126,6 +128,8 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             host_view: None,
             #[cfg(target_os = "macos")]
+            document_view: None,
+            #[cfg(target_os = "macos")]
             nsview: None,
             initialized: false,
             last_bounds: None,
@@ -173,6 +177,9 @@ impl GhosttyView {
             changed = true;
             cx.emit(GhosttyTitleChanged(title));
         }
+
+        #[cfg(target_os = "macos")]
+        self.sync_native_scroll_view();
 
         changed
     }
@@ -249,6 +256,7 @@ impl GhosttyView {
                 }
             }
         }
+        self.document_view = None;
         self.nsview = None;
     }
 
@@ -330,7 +338,7 @@ impl GhosttyView {
 
         // Create with a zero-origin frame — update_frame() will set the
         // correct flipped position immediately after initialization.
-        let (host_view, nsview): (id, id) = unsafe {
+        let (host_view, document_view, nsview): (id, id, id) = unsafe {
             let frame = NSRect::new(
                 cocoa::foundation::NSPoint::new(0.0, 0.0),
                 cocoa::foundation::NSSize::new(
@@ -338,9 +346,12 @@ impl GhosttyView {
                     f64::from(bounds.size.height),
                 ),
             );
-            let host: id = msg_send![class!(NSView), alloc];
+            let host: id = msg_send![class!(NSScrollView), alloc];
             let host: id = msg_send![host, initWithFrame:frame];
-            let _: () = msg_send![host, setWantsLayer:YES];
+            let _: () = msg_send![host, setDrawsBackground:NO];
+            let _: () = msg_send![host, setHasVerticalScroller:NO];
+            let _: () = msg_send![host, setHasHorizontalScroller:NO];
+            let _: () = msg_send![host, setAutohidesScrollers:YES];
             let _: () = msg_send![host, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
             let _: () = msg_send![host, setAutoresizesSubviews:YES];
             let _: () = msg_send![
@@ -354,6 +365,10 @@ impl GhosttyView {
                 relativeTo: gpui_nsview
             ];
 
+            let document: id = msg_send![class!(NSView), alloc];
+            let document: id = msg_send![document, initWithFrame:frame];
+            let _: () = msg_send![host, setDocumentView:document];
+
             let surface: id = msg_send![class!(NSView), alloc];
             let surface: id = msg_send![surface, initWithFrame:frame];
             let _: () = msg_send![surface, setWantsLayer:YES];
@@ -365,8 +380,8 @@ impl GhosttyView {
                 surface,
                 setLayerContentsRedrawPolicy:NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE
             ];
-            let _: () = msg_send![host, addSubview:surface];
-            (host, surface)
+            let _: () = msg_send![document, addSubview:surface];
+            (host, document, surface)
         };
 
         let scale = self.scale_factor as f64;
@@ -384,6 +399,7 @@ impl GhosttyView {
                 terminal.set_focus(self.surface_focused.get());
                 self.terminal = Some(Arc::new(terminal));
                 self.host_view = Some(host_view);
+                self.document_view = Some(document_view);
                 self.nsview = Some(nsview);
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
@@ -402,6 +418,7 @@ impl GhosttyView {
                     height_px,
                     scale
                 );
+                self.sync_native_scroll_view();
 
                 // Flush any data queued before the surface existed.
                 if let Some(data) = self.pending_write.take() {
@@ -415,6 +432,7 @@ impl GhosttyView {
                 self.initialized = false;
                 self.next_surface_init_retry_at = Some(Instant::now() + Duration::from_millis(250));
                 self.host_view = Some(host_view);
+                self.document_view = Some(document_view);
                 self.nsview = Some(nsview);
                 self.detach_host_view();
             }
@@ -463,24 +481,85 @@ impl GhosttyView {
                     ),
                 );
                 let _: () = msg_send![host_view, setFrame:frame];
-                if let Some(nsview) = self.nsview {
-                    let surface_frame = NSRect::new(
-                        cocoa::foundation::NSPoint::new(0.0, 0.0),
-                        cocoa::foundation::NSSize::new(
-                            f64::from(bounds.size.width),
-                            f64::from(bounds.size.height),
-                        ),
-                    );
-                    let _: () = msg_send![nsview, setFrame:surface_frame];
-                }
             }
         }
 
+        self.sync_native_scroll_view();
         self.request_surface_resize(bounds);
 
         if self.awaiting_first_layout_visibility {
             self.awaiting_first_layout_visibility = false;
             self.set_visible(self.native_view_visible.get());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_native_scroll_view(&mut self) {
+        let (Some(scroll_view), Some(document_view), Some(nsview), Some(bounds), Some(terminal)) = (
+            self.host_view,
+            self.document_view,
+            self.nsview,
+            self.last_bounds,
+            self.terminal.as_ref(),
+        ) else {
+            return;
+        };
+
+        let visible_width = f64::from(bounds.size.width.as_f32().max(1.0));
+        let visible_height = f64::from(bounds.size.height.as_f32().max(1.0));
+        let size = terminal.size();
+        let cell_height = if size.cell_height_px > 0 && self.scale_factor > 0.0 {
+            f64::from(size.cell_height_px) / f64::from(self.scale_factor)
+        } else {
+            0.0
+        };
+        let scrollbar = terminal.scrollbar().unwrap_or(con_ghostty::GhosttyScrollbar {
+            total: u64::from(size.rows.max(1)),
+            offset: 0,
+            len: u64::from(size.rows.max(1)),
+        });
+        let total_rows = scrollbar.total.max(scrollbar.len).max(1);
+        let visible_rows = scrollbar.len.max(1).min(total_rows);
+        let padding = if cell_height > 0.0 {
+            (visible_height - (visible_rows as f64 * cell_height)).max(0.0)
+        } else {
+            0.0
+        };
+        let document_height = if cell_height > 0.0 {
+            (total_rows as f64 * cell_height + padding).max(visible_height)
+        } else {
+            visible_height
+        };
+        let offset_from_bottom = if cell_height > 0.0 {
+            (total_rows
+                .saturating_sub(scrollbar.offset.min(total_rows))
+                .saturating_sub(visible_rows)) as f64
+                * cell_height
+        } else {
+            0.0
+        };
+        let scroll_y = offset_from_bottom.clamp(0.0, (document_height - visible_height).max(0.0));
+
+        unsafe {
+            let document_frame = NSRect::new(
+                cocoa::foundation::NSPoint::new(0.0, 0.0),
+                cocoa::foundation::NSSize::new(visible_width, document_height),
+            );
+            let _: () = msg_send![document_view, setFrame:document_frame];
+
+            let content_view: id = msg_send![scroll_view, contentView];
+            let _: () = msg_send![
+                content_view,
+                scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
+            ];
+            let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
+
+            let visible_rect: NSRect = msg_send![content_view, documentVisibleRect];
+            let surface_frame = NSRect::new(
+                visible_rect.origin,
+                cocoa::foundation::NSSize::new(visible_width, visible_height),
+            );
+            let _: () = msg_send![nsview, setFrame:surface_frame];
         }
     }
 
@@ -968,6 +1047,7 @@ impl Drop for GhosttyView {
         self.host_view = None;
         #[cfg(target_os = "macos")]
         {
+            self.document_view = None;
             self.nsview = None;
         }
     }

@@ -35,7 +35,8 @@ pub mod windows;
 #[cfg(target_os = "macos")]
 pub use terminal::{
     CommandFinishedSignal, CommandRecord, GhosttyApp, GhosttyConfigPatch, GhosttySplitDirection,
-    GhosttySurfaceEvent, GhosttyTerminal, MouseButton, SurfaceSize, TerminalColors, TerminalState,
+    GhosttyScrollbar, GhosttySurfaceEvent, GhosttyTerminal, MouseButton, SurfaceSize,
+    TerminalColors, TerminalState,
 };
 
 #[cfg(target_os = "windows")]

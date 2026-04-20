@@ -235,6 +235,13 @@ pub struct CommandRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GhosttyScrollbar {
+    pub total: u64,
+    pub offset: u64,
+    pub len: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GhosttySplitDirection {
     Right,
     Down,
@@ -274,6 +281,8 @@ pub struct TerminalState {
     pub surface: ffi::ghostty_surface_t,
     /// Pending host-side events emitted by Ghostty actions for this surface.
     pub pending_events: VecDeque<GhosttySurfaceEvent>,
+    /// Latest viewport scrollbar state emitted by Ghostty.
+    pub scrollbar: Option<GhosttyScrollbar>,
 }
 
 const MAX_COMMAND_HISTORY: usize = 20;
@@ -294,6 +303,7 @@ impl Default for TerminalState {
             last_command_finished_input_generation: 0,
             surface: std::ptr::null_mut(),
             pending_events: VecDeque::new(),
+            scrollbar: None,
         }
     }
 }
@@ -618,6 +628,10 @@ impl GhosttyTerminal {
             cell_width_px: s.cell_width_px,
             cell_height_px: s.cell_height_px,
         }
+    }
+
+    pub fn scrollbar(&self) -> Option<GhosttyScrollbar> {
+        self.state.lock().scrollbar
     }
 
     /// Set content scale (e.g., 2.0 for Retina).
@@ -1244,6 +1258,15 @@ unsafe extern "C" fn action_callback(
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_RENDER => {
                 state.lock().needs_render = true;
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SCROLLBAR => {
+                let scrollbar = action.action.scrollbar;
+                state.lock().scrollbar = Some(GhosttyScrollbar {
+                    total: scrollbar.total,
+                    offset: scrollbar.offset,
+                    len: scrollbar.len,
+                });
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_NEW_SPLIT => {
