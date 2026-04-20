@@ -41,6 +41,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The agent panel can now expand with the window instead of stopping at a fixed width ceiling, while still preserving a minimum terminal area. Wide markdown content such as tables and code blocks now uses the panel's full available width instead of being forced through the prose column.
 - macOS terminal profiling now has a dedicated runbook and opt-in host-path logs, making it easier to distinguish Ghostty core time from Con's embedding/composition cost when diagnosing heavy TUI resize issues.
 - The macOS `xctrace` profiling helper now builds and launches the real `con` binary instead of profiling the `cargo` wrapper process, so resize traces reflect the app under test.
+- The macOS Ghostty runtime is now built with Zig `-Doptimize=ReleaseFast` by default. Embedded debug-grade Ghostty builds made dense TUI startup and resize behavior much slower than standalone Ghostty and invalidated performance comparisons.
 
 **Release and Packaging**
 - The macOS app bundle, updater, and release pipeline are now documented and exercised as real product surfaces. Local updater testing now runs from a bundled beta app instead of `cargo run`, and version metadata is visible in both Settings and the About window.

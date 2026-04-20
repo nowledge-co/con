@@ -33,6 +33,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_SIMD");
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_STEP");
     println!("cargo:rerun-if-env-changed=CON_ZIG_BIN");
+    println!("cargo:rerun-if-env-changed=CON_GHOSTTY_OPTIMIZE");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
@@ -55,6 +56,7 @@ fn main() {
 
 fn build_macos() {
     let ghostty_dir = resolve_ghostty_source();
+    let optimize = ghostty_optimize();
 
     let status = Command::new("zig")
         .args([
@@ -62,6 +64,7 @@ fn build_macos() {
             "-Dapp-runtime=none",
             "-Dxcframework-target=native",
             "-Demit-macos-app=false",
+            &format!("-Doptimize={optimize}"),
         ])
         .current_dir(&ghostty_dir)
         .status()
@@ -108,6 +111,10 @@ fn build_macos() {
         "cargo:rustc-env=CON_GHOSTTY_RESOURCES_DIR={}",
         ghostty_dir.join("zig-out/share/ghostty").display()
     );
+}
+
+fn ghostty_optimize() -> String {
+    env::var("CON_GHOSTTY_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".to_string())
 }
 
 // ── Windows ───────────────────────────────────────────────────────────
