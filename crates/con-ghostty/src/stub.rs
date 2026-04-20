@@ -117,6 +117,12 @@ impl GhosttyApp {
 
     pub fn tick(&self) {}
 
+    /// Cross-platform parity with the macOS and Windows backends.
+    /// The stub backend never receives native wakeups, so it remains at 0.
+    pub fn wake_generation(&self) -> u64 {
+        0
+    }
+
     pub fn update_colors(&self, _colors: &TerminalColors) -> Result<(), String> {
         Ok(())
     }
@@ -270,4 +276,3 @@ impl GhosttyTerminal {
 // SAFETY: no interior state — trivially thread-safe.
 unsafe impl Send for GhosttyTerminal {}
 unsafe impl Sync for GhosttyTerminal {}
-

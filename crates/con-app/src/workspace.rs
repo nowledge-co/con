@@ -82,7 +82,7 @@ fn caption_buttons(
     theme: &gpui_component::theme::ThemeColor,
     height: f32,
 ) -> impl IntoElement {
-    use gpui::{div, px, svg, Hsla, IntoElement, ParentElement, Rgba, Styled, WindowControlArea};
+    use gpui::{div, px, svg, Hsla, ParentElement, Rgba, Styled, WindowControlArea};
 
     let close_red: Hsla = Rgba {
         r: 232.0 / 255.0,
