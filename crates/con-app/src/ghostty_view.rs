@@ -38,6 +38,8 @@ use objc::{class, msg_send, sel, sel_impl};
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
 
+const LIVE_RESIZE_COMMIT_INTERVAL: Duration = Duration::from_millis(16);
+
 /// Emitted when the terminal title changes.
 #[allow(dead_code)]
 pub struct GhosttyTitleChanged(pub Option<String>);
@@ -85,6 +87,9 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     /// Retry surface creation after transient libghostty initialization failures.
     next_surface_init_retry_at: Option<Instant>,
+    pending_resize_bounds: Option<Bounds<Pixels>>,
+    next_resize_commit_at: Option<Instant>,
+    last_resize_commit_at: Option<Instant>,
     ime_marked_text: Option<String>,
 }
 
@@ -143,6 +148,11 @@ impl GhosttyView {
                         {
                             view.next_surface_init_retry_at = None;
                             cx.notify();
+                        } else if view
+                            .next_resize_commit_at
+                            .is_some_and(|deadline| Instant::now() >= deadline)
+                        {
+                            view.commit_pending_resize();
                         }
                     })
                     .is_err()
@@ -173,6 +183,9 @@ impl GhosttyView {
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
             next_surface_init_retry_at: None,
+            pending_resize_bounds: None,
+            next_resize_commit_at: None,
+            last_resize_commit_at: None,
             ime_marked_text: None,
         }
     }
@@ -246,6 +259,9 @@ impl GhosttyView {
         self.last_title = None;
         self.pending_write = None;
         self.next_surface_init_retry_at = None;
+        self.pending_resize_bounds = None;
+        self.next_resize_commit_at = None;
+        self.last_resize_commit_at = None;
         self.ime_marked_text = None;
     }
 
@@ -342,6 +358,9 @@ impl GhosttyView {
                 self.nsview = Some(nsview);
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
+                self.pending_resize_bounds = None;
+                self.next_resize_commit_at = None;
+                self.last_resize_commit_at = Some(Instant::now());
                 self.set_visible(
                     self.native_view_visible.get() && !self.awaiting_first_layout_visibility,
                 );
@@ -428,11 +447,7 @@ impl GhosttyView {
             }
         }
 
-        if let Some(ref terminal) = self.terminal {
-            let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
-            let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
-            terminal.set_size(width_px, height_px);
-        }
+        self.request_surface_resize(bounds);
 
         if self.awaiting_first_layout_visibility {
             self.awaiting_first_layout_visibility = false;
@@ -445,6 +460,71 @@ impl GhosttyView {
         {
             self.ensure_initialized(bounds, window);
             self.update_frame(bounds);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn request_surface_resize(&mut self, bounds: Bounds<Pixels>) {
+        let Some(ref terminal) = self.terminal else {
+            return;
+        };
+
+        let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
+        let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
+        let size = terminal.size();
+        if size.width_px == width_px && size.height_px == height_px {
+            self.pending_resize_bounds = None;
+            self.next_resize_commit_at = None;
+            return;
+        }
+
+        let now = Instant::now();
+        let due = self
+            .last_resize_commit_at
+            .is_none_or(|last| now.duration_since(last) >= LIVE_RESIZE_COMMIT_INTERVAL);
+
+        if due {
+            self.commit_surface_resize(bounds);
+        } else {
+            self.pending_resize_bounds = Some(bounds);
+            self.next_resize_commit_at = self
+                .last_resize_commit_at
+                .map(|last| last + LIVE_RESIZE_COMMIT_INTERVAL)
+                .or(Some(now + LIVE_RESIZE_COMMIT_INTERVAL));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn commit_pending_resize(&mut self) {
+        let Some(bounds) = self.pending_resize_bounds.take() else {
+            self.next_resize_commit_at = None;
+            return;
+        };
+        self.commit_surface_resize(bounds);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn commit_surface_resize(&mut self, bounds: Bounds<Pixels>) {
+        let Some(ref terminal) = self.terminal else {
+            self.pending_resize_bounds = None;
+            self.next_resize_commit_at = None;
+            return;
+        };
+
+        let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
+        let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
+        terminal.set_size(width_px, height_px);
+        self.last_resize_commit_at = Some(Instant::now());
+        self.next_resize_commit_at = None;
+
+        let current_bounds = self.last_bounds.as_ref();
+        if current_bounds != Some(&bounds) {
+            self.pending_resize_bounds = Some(bounds);
+            self.next_resize_commit_at = self
+                .last_resize_commit_at
+                .map(|last| last + LIVE_RESIZE_COMMIT_INTERVAL);
+        } else {
+            self.pending_resize_bounds = None;
         }
     }
 
