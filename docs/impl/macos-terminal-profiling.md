@@ -29,6 +29,12 @@ Fast path:
 ./scripts/macos/profile-terminal-resize.sh
 ```
 
+Time Profiler capture:
+
+```bash
+./scripts/macos/profile-terminal-resize-xctrace.sh
+```
+
 Equivalent manual form:
 
 ```bash
@@ -79,6 +85,12 @@ Suggested workflow:
 2. Start a heavy TUI, for example `claude --resume`.
 3. Record while resizing the window for 3-5 seconds.
 4. Repeat the same capture with Ghostty.
+
+The helper script above automates the `Time Profiler` launch for Con by wrapping:
+
+```bash
+xcrun xctrace record --template 'Time Profiler' --launch -- cargo run -p con
+```
 
 Look for:
 
