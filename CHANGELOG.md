@@ -167,6 +167,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed a second visible-panel performance regression where fenced code blocks rebuilt syntax-highlight runs on every render.
 - Aligned embedded Ghostty viewport hosting with standalone Ghostty on macOS by consuming Ghostty scrollbar actions and wrapping each surface in a native scroll container. This keeps bottom anchoring stable during heavy TUI resize instead of briefly jumping into upper scrollback.
 - Removed Con-specific live-resize coalescing from the embedded Ghostty surface path on macOS. Surface resizes now follow Ghostty's own immediate backing-size update model instead of deferring commits behind host-side heuristics.
+- Fixed Ghostty resource packaging and dev-run bootstrap on macOS. Con now embeds Ghostty's `Resources/ghostty` payload into app bundles and points debug runs at the built Ghostty resources so child processes get `xterm-ghostty`, `TERMINFO`, and Ghostty shell integration instead of silently falling back to `xterm-256color`.
 
 **Terminal**
 - Full terminal emulation with 256-color and truecolor support

@@ -104,6 +104,10 @@ fn build_macos() {
 
     let include_dir = ghostty_dir.join("include");
     println!("cargo:include={}", include_dir.display());
+    println!(
+        "cargo:rustc-env=CON_GHOSTTY_RESOURCES_DIR={}",
+        ghostty_dir.join("zig-out/share/ghostty").display()
+    );
 }
 
 // ── Windows ───────────────────────────────────────────────────────────

@@ -72,4 +72,19 @@ That is enforced in the binary crate with a compile-time error on non-macOS targ
 - surface/app lifecycle lives in `terminal.rs`
 - product logic stays out of the wrapper
 
+## Ghostty resources
+
+Ghostty's runtime is not just the static library. The child shell environment also depends on the bundled Ghostty resources payload, especially:
+
+- `terminfo/xterm-ghostty`
+- shell integration scripts
+- supporting share files under `Resources/ghostty`
+
+Con now handles this in two places:
+
+- `cargo run -p con` debug runs: `con-ghostty` seeds `GHOSTTY_RESOURCES_DIR` from the built Ghostty `zig-out/share/ghostty` directory when that directory exists locally.
+- macOS app bundles: `scripts/macos/build-app.sh` copies Ghostty's built `share/ghostty` tree into `Contents/Resources/ghostty`.
+
+Without that payload, Ghostty falls back to `TERM=xterm-256color` and disables parts of shell integration. That changes the behavior child processes see and can invalidate product comparisons against standalone Ghostty.
+
 If we need stronger pane observability in the future, the preferred path is to upstream or expose new libghostty C API surface area instead of growing another terminal runtime in this repo.

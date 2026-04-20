@@ -14,6 +14,7 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::os::raw::c_void;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Once};
 
@@ -316,6 +317,8 @@ static GHOSTTY_INIT: Once = Once::new();
 static mut GHOSTTY_INIT_RESULT: i32 = -1;
 
 fn ensure_ghostty_init() -> Result<(), String> {
+    ensure_resources_dir_env();
+
     GHOSTTY_INIT.call_once(|| {
         let ret = unsafe { ffi::ghostty_init(0, std::ptr::null_mut()) };
         unsafe { GHOSTTY_INIT_RESULT = ret };
@@ -325,6 +328,25 @@ fn ensure_ghostty_init() -> Result<(), String> {
         Err(format!("ghostty_init failed with code {}", ret))
     } else {
         Ok(())
+    }
+}
+
+fn ensure_resources_dir_env() {
+    if std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some() {
+        return;
+    }
+
+    let Some(resources_dir) = option_env!("CON_GHOSTTY_RESOURCES_DIR") else {
+        return;
+    };
+    if !Path::new(resources_dir).exists() {
+        return;
+    }
+
+    // SAFETY: this runs during Ghostty initialization before the app spins up
+    // worker threads, so mutating process env here is acceptable.
+    unsafe {
+        std::env::set_var("GHOSTTY_RESOURCES_DIR", resources_dir);
     }
 }
 
