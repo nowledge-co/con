@@ -65,10 +65,14 @@ At the app level, con already does that. The remaining migration work is about r
 
 1. User input enters GPUI.
 2. `GhosttyView` forwards keyboard and mouse events into `ghostty_surface_*`.
-3. Ghostty writes input to the pane PTY, parses output, updates screen state, and renders into its Metal-backed view.
-4. Ghostty emits action callbacks such as title updates, PWD changes, and command-finished events.
-5. `con-ghostty` stores those facts in `TerminalState`.
-6. con reads `TerminalState` and visible text to build pane metadata for the agent, sidebar, and tab UI.
+3. Ghostty uses its embedded runtime wakeup callback to schedule `ghostty_app_tick()` on the macOS main queue. Con does not drive the core renderer from a fixed workspace polling loop anymore.
+4. Ghostty writes input to the pane PTY, parses output, updates screen state, and renders into its Metal-backed view.
+5. The host `NSView` and child surface `NSView` both use native autoresizing plus `NSViewLayerContentsRedrawDuringViewResize` so AppKit keeps the embedded layer responsive during live window resize.
+6. Ghostty emits action callbacks such as title updates, PWD changes, and command-finished events.
+7. `con-ghostty` stores those facts in `TerminalState`.
+8. con reads `TerminalState` and visible text to build pane metadata for the agent, sidebar, and tab UI.
+
+This distinction matters. Ghostty's embedded API is designed around wakeup-driven ticking, not "tick it every N milliseconds and hope that is close enough."
 
 ## What con reads from Ghostty
 

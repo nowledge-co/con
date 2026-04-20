@@ -1167,6 +1167,7 @@ dependencies = [
  "anyhow",
  "cc",
  "core-foundation 0.10.0",
+ "dispatch",
  "etagere",
  "log",
  "objc",

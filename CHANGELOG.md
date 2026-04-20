@@ -22,6 +22,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Instant command completion tracking — when a command finishes, con knows the exit code and exactly how long it took. The agent uses this to respond immediately instead of waiting on a timeout.
 - Clipboard integration — copy and paste work natively between the terminal and the system clipboard, including programmatic clipboard access via OSC 52.
 - Ghostty is now the only terminal runtime in con. The old in-app VTE/PTTY fallback path has been removed, so every pane uses the same terminal engine and the same behavior.
+- Embedded Ghostty ticking on macOS now follows Ghostty's wakeup-driven runtime model instead of a host-side polling loop, and the hosted NSView stack now uses native live-resize redraw policies for smoother terminal window resizing.
 
 **AI Agent**
 - Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.

@@ -41,6 +41,12 @@ use raw_window_handle::HasWindowHandle;
 const GHOSTTY_VIEW_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const LIVE_RESIZE_COMMIT_INTERVAL: Duration = Duration::from_millis(16);
 const LIVE_RESIZE_SETTLE_INTERVAL: Duration = Duration::from_millis(120);
+#[cfg(target_os = "macos")]
+const NS_VIEW_WIDTH_SIZABLE: usize = 1 << 1;
+#[cfg(target_os = "macos")]
+const NS_VIEW_HEIGHT_SIZABLE: usize = 1 << 4;
+#[cfg(target_os = "macos")]
+const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
 
 /// Emitted when the terminal title changes.
 #[allow(dead_code)]
@@ -323,7 +329,12 @@ impl GhosttyView {
             let host: id = msg_send![class!(NSView), alloc];
             let host: id = msg_send![host, initWithFrame:frame];
             let _: () = msg_send![host, setWantsLayer:YES];
-            let _: () = msg_send![host, setAutoresizesSubviews:NO];
+            let _: () = msg_send![host, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
+            let _: () = msg_send![host, setAutoresizesSubviews:YES];
+            let _: () = msg_send![
+                host,
+                setLayerContentsRedrawPolicy:NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE
+            ];
             let _: () = msg_send![
                 parent_nsview,
                 addSubview: host
@@ -334,7 +345,14 @@ impl GhosttyView {
             let surface: id = msg_send![class!(NSView), alloc];
             let surface: id = msg_send![surface, initWithFrame:frame];
             let _: () = msg_send![surface, setWantsLayer:YES];
-            let _: () = msg_send![surface, setAutoresizesSubviews:NO];
+            let _: () = msg_send![
+                surface,
+                setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE
+            ];
+            let _: () = msg_send![
+                surface,
+                setLayerContentsRedrawPolicy:NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE
+            ];
             let _: () = msg_send![host, addSubview:surface];
             (host, surface)
         };

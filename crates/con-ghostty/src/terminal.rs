@@ -14,8 +14,10 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Arc, Once};
 
+use dispatch::Queue;
 use parking_lot::Mutex;
 
 use crate::ffi;
@@ -327,6 +329,21 @@ pub struct GhosttyApp {
     // Box prevents the runtime_config from being moved while ghostty holds a pointer.
     _runtime_config: Box<ffi::ghostty_runtime_config_s>,
     appearance: Mutex<GhosttyConfigPatch>,
+    wake_handle: Arc<GhosttyWakeHandle>,
+}
+
+struct GhosttyWakeHandle {
+    app: AtomicPtr<c_void>,
+    tick_scheduled: AtomicBool,
+}
+
+impl Default for GhosttyWakeHandle {
+    fn default() -> Self {
+        Self {
+            app: AtomicPtr::new(std::ptr::null_mut()),
+            tick_scheduled: AtomicBool::new(false),
+        }
+    }
 }
 
 impl GhosttyApp {
@@ -362,10 +379,9 @@ impl GhosttyApp {
         };
         let config = build_ghostty_config(&appearance)?;
 
-        // App-level userdata is not used for per-surface state.
-        // We keep it null — per-surface state is on surface userdata.
+        let wake_handle = Arc::new(GhosttyWakeHandle::default());
         let runtime_config = Box::new(ffi::ghostty_runtime_config_s {
-            userdata: std::ptr::null_mut(),
+            userdata: Arc::as_ptr(&wake_handle) as *mut c_void,
             supports_selection_clipboard: false,
             wakeup_cb: Some(wakeup_callback),
             action_cb: Some(action_callback),
@@ -384,11 +400,15 @@ impl GhosttyApp {
         if app.is_null() {
             return Err("ghostty_app_new returned null".into());
         }
+        wake_handle
+            .app
+            .store(app.cast::<c_void>(), Ordering::Release);
 
         Ok(Self {
             app,
             _runtime_config: runtime_config,
             appearance: Mutex::new(appearance),
+            wake_handle,
         })
     }
 
@@ -530,6 +550,9 @@ impl GhosttyApp {
 
 impl Drop for GhosttyApp {
     fn drop(&mut self) {
+        self.wake_handle
+            .app
+            .store(std::ptr::null_mut(), Ordering::Release);
         // Free the app first — this allows ghostty to run any final cleanup
         // and fire callbacks while userdata is still valid.
         unsafe { ffi::ghostty_app_free(self.app) }
@@ -1155,14 +1178,32 @@ unsafe fn resolve_surface_state(target: &ffi::ghostty_target_s) -> Option<StateR
     }
 }
 
-unsafe extern "C" fn wakeup_callback(_userdata: *mut c_void) {
-    // The wakeup callback signals that ghostty has work to do.
-    // The GPUI integration layer (ghostty_view.rs) uses on_next_frame
-    // to call tick() on the main thread. This callback is a signal
-    // that we should schedule that tick sooner rather than later.
-    //
-    // TODO: integrate with GPUI's event loop for lower-latency wakeup.
-    // For now, the 8ms timer in ghostty_view.rs provides adequate refresh.
+unsafe extern "C" fn wakeup_callback(userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+
+    let wake_ptr = userdata.cast::<GhosttyWakeHandle>();
+    unsafe {
+        Arc::increment_strong_count(wake_ptr);
+    }
+    let wake_handle = unsafe { Arc::from_raw(wake_ptr) };
+    if wake_handle.app.load(Ordering::Acquire).is_null() {
+        return;
+    }
+
+    if wake_handle.tick_scheduled.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    Queue::main().exec_async(move || {
+        wake_handle.tick_scheduled.store(false, Ordering::Release);
+        let app = wake_handle.app.load(Ordering::Acquire) as ffi::ghostty_app_t;
+        if app.is_null() {
+            return;
+        }
+        unsafe { ffi::ghostty_app_tick(app) };
+    });
 }
 
 unsafe extern "C" fn action_callback(

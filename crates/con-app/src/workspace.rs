@@ -549,26 +549,6 @@ impl ConWorkspace {
             });
         }
 
-        {
-            let ghostty_app = ghostty_app.clone();
-            cx.spawn(async move |this, cx| {
-                loop {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(8))
-                        .await;
-                    if this
-                        .update(cx, |_workspace, _cx| {
-                            ghostty_app.tick();
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
-            .detach();
-        }
-
         let make_terminal =
             |cwd: Option<&str>, window: &mut Window, cx: &mut Context<Self>| -> TerminalPane {
                 make_ghostty_terminal(&ghostty_app, cwd, font_size, window, cx)
