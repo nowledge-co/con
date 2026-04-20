@@ -58,6 +58,19 @@ impl WindowsGhosttyApp {
         // (cursor blink, OSC 8 hyperlink invalidation, etc.).
     }
 
+    /// Stub for parity with the macOS `GhosttyApp::wake_generation`. On
+    /// macOS the counter gates `drain_surface_state` inside
+    /// `workspace::pump_ghostty_views` — it's bumped by Ghostty's
+    /// wake-up callback after every app tick so we only drain when
+    /// something changed. The Windows backend drives rendering through
+    /// `HostView`'s own WM_PAINT loop and has no Ghostty app object,
+    /// so a constant `0` means the drain branch is permanently
+    /// skipped. The Windows-specific refresh work already happens in
+    /// `pump_surface_deferred_work`, which is called unconditionally.
+    pub fn wake_generation(&self) -> u64 {
+        0
+    }
+
     pub fn update_colors(&self, _colors: &TerminalColors) -> Result<(), String> {
         Ok(())
     }
