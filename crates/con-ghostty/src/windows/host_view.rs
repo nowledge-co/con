@@ -30,16 +30,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{HBRUSH, ScreenToClient};
+use windows::Win32::Graphics::Gdi::{HBRUSH, InvalidateRect, ScreenToClient};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT,
     VK_RIGHT, VK_SHIFT, VK_UP, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
-    HCURSOR, HICON, MA_NOACTIVATE, MoveWindow, RegisterClassExW, SW_SHOW, SetParent,
-    SetWindowLongPtrW, ShowWindow, WINDOW_EX_STYLE, WM_CHAR, WM_DESTROY, WM_DPICHANGED,
+    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetParent,
+    GetWindowLongPtrW, HCURSOR, HICON, MA_NOACTIVATE, MoveWindow, RegisterClassExW, SW_SHOW,
+    SetParent, SetWindowLongPtrW, ShowWindow, WINDOW_EX_STYLE, WM_CHAR, WM_DESTROY, WM_DPICHANGED,
     WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_PAINT, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
 };
@@ -734,6 +734,26 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 // GPUI's parent HWND; we still need GPUI's *logical*
                 // focus to move to the clicked pane.
                 state.click_pending.store(true, Ordering::Release);
+                // MA_NOACTIVATE means this click never bubbles up to
+                // GPUI's parent HWND, so GPUI has no reason to start a
+                // new paint frame. Without a paint, our
+                // `on_children_prepainted` callback never fires and the
+                // flag we just set sits untouched. Invalidating the
+                // parent's client area queues a WM_PAINT on GPUI, which
+                // runs the element tree -> every pane's prepainted
+                // callback drains its own click_pending -> the clicked
+                // pane takes focus. Without this, pane->pane focus
+                // switches only worked if the user happened to click
+                // anything else first (which already triggers a paint).
+                // SAFETY: GetParent / InvalidateRect are safe on any
+                // HWND we own; the parent is GPUI's main window.
+                unsafe {
+                    if let Ok(parent) = GetParent(hwnd)
+                        && !parent.is_invalid()
+                    {
+                        let _ = InvalidateRect(Some(parent), None, false);
+                    }
+                }
                 if let Some(cell) = client_cell(state, lparam) {
                     *state.drag_anchor.lock() = Some(cell);
                     // Starting a new drag clears any prior selection;
