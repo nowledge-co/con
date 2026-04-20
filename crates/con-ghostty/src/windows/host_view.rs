@@ -25,6 +25,7 @@
 use std::cell::RefCell;
 use std::ptr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
@@ -37,10 +38,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
-    HCURSOR, HICON, MoveWindow, RegisterClassExW, SW_SHOW, SetParent, SetWindowLongPtrW,
-    ShowWindow, WINDOW_EX_STYLE, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WNDCLASSEXW, WS_CHILD,
-    WS_CLIPSIBLINGS, WS_VISIBLE,
+    HCURSOR, HICON, MA_NOACTIVATE, MoveWindow, RegisterClassExW, SW_SHOW, SetParent,
+    SetWindowLongPtrW, ShowWindow, WINDOW_EX_STYLE, WM_CHAR, WM_DESTROY, WM_DPICHANGED,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_PAINT, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
 };
 
 use super::clipboard;
@@ -66,6 +67,13 @@ struct HostState {
     /// Cell under the cursor when LMB went down. `Some` only while
     /// the button is held. Cleared on WM_LBUTTONUP / focus loss.
     drag_anchor: Mutex<Option<(u16, u16)>>,
+    /// Set by the WM_LBUTTONDOWN handler; drained by the GPUI side
+    /// (`WindowsGhosttyTerminal::take_click_pending`) on each paint so
+    /// it can move GPUI's focus to this pane when the user clicks
+    /// inside the child HWND. Without this, focus stays wherever it
+    /// was before (typically the input bar) and the terminal never
+    /// becomes the "active" pane from the workspace's perspective.
+    click_pending: AtomicBool,
 }
 
 /// A live terminal pane: child HWND + renderer + PTY + parser.
@@ -167,6 +175,7 @@ impl HostView {
             base_font_size_px,
             current_dpi,
             drag_anchor: Mutex::new(None),
+            click_pending: AtomicBool::new(false),
         });
         let state_ptr = Box::into_raw(state);
 
@@ -242,6 +251,18 @@ impl HostView {
         // SAFETY: state is valid until WM_DESTROY.
         let state = unsafe { &*self.state };
         state.conpty.is_alive()
+    }
+
+    /// Drain the "user clicked inside my HWND since last poll" flag.
+    /// GPUI-side code calls this each frame and, when it returns `true`,
+    /// moves GPUI's keyboard focus to this pane's `FocusHandle`. Needed
+    /// because WM_LBUTTONDOWN is delivered directly to the child HWND —
+    /// GPUI's parent HWND never sees the click and can't update focus
+    /// on its own.
+    pub fn take_click_pending(&self) -> bool {
+        // SAFETY: state is valid until WM_DESTROY.
+        let state = unsafe { &*self.state };
+        state.click_pending.swap(false, Ordering::AcqRel)
     }
 
     /// Send a UTF-8 string to the child shell.
@@ -689,10 +710,30 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             // (VK_F1..F24, VK_PRIOR, VK_NEXT) to xterm escape sequences.
             LRESULT(0)
         }
+        WM_MOUSEACTIVATE => {
+            // Default behavior for WM_MOUSEACTIVATE on a child HWND is
+            // MA_ACTIVATE, which has Windows SetFocus() the child —
+            // stealing keyboard focus from GPUI's parent HWND. Once
+            // focus is on the child, WM_KEYDOWN / WM_CHAR go here
+            // instead of to GPUI, so GPUI-level action bindings
+            // (Ctrl+L / Toggle Agent Panel, Ctrl+T / New Tab, etc.)
+            // silently stop firing. Returning MA_NOACTIVATE tells
+            // Windows to process the click *without* moving focus, so
+            // GPUI stays in the focus chain and keeps dispatching keys.
+            // We still get WM_LBUTTONDOWN for selection / click-to-
+            // focus tracking.
+            LRESULT(MA_NOACTIVATE as isize)
+        }
         WM_LBUTTONDOWN => {
             if !state_ptr.is_null() {
                 // SAFETY: state_ptr valid.
                 let state = unsafe { &*state_ptr };
+                // Signal the GPUI-side view that this pane was clicked
+                // so it can move focus to this pane's FocusHandle on
+                // the next paint. MA_NOACTIVATE kept Windows focus on
+                // GPUI's parent HWND; we still need GPUI's *logical*
+                // focus to move to the clicked pane.
+                state.click_pending.store(true, Ordering::Release);
                 if let Some(cell) = client_cell(state, lparam) {
                     *state.drag_anchor.lock() = Some(cell);
                     // Starting a new drag clears any prior selection;

@@ -383,12 +383,31 @@ impl Render for GhosttyView {
                         let parent_hwnd = parent_hwnd_from_window(window);
 
                         if let Some(view) = entity.upgrade() {
-                            view.update(cx, |view, _cx| {
+                            view.update(cx, |view, cx| {
                                 if let Some(parent) = parent_hwnd {
                                     view.ensure_host(parent, (left, top, right, bottom));
                                 }
                                 view.reposition_host((left, top, right, bottom));
                                 view.paint_host();
+                                // Click-to-focus: WM_MOUSEACTIVATE in
+                                // host_view returns MA_NOACTIVATE so
+                                // Windows keeps focus on GPUI's parent
+                                // HWND when the user clicks inside the
+                                // terminal — that keeps Ctrl+L /
+                                // Ctrl+T / etc. reaching GPUI. But
+                                // GPUI's *logical* focus still needs
+                                // to move to the clicked pane, which
+                                // the WM_LBUTTONDOWN handler signals
+                                // via `take_click_pending`. Poll +
+                                // focus here on the next paint.
+                                if view
+                                    .terminal
+                                    .as_ref()
+                                    .is_some_and(|t| t.take_click_pending())
+                                {
+                                    view.focus_handle.focus(window, cx);
+                                    cx.emit(GhosttyFocusChanged);
+                                }
                             });
                         }
                     })

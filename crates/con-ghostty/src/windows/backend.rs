@@ -139,6 +139,17 @@ impl WindowsGhosttyTerminal {
         self.inner.lock().is_some()
     }
 
+    /// Drain the "user clicked inside my child HWND since last poll"
+    /// flag set by WM_LBUTTONDOWN in `host_view`. The GPUI-side view
+    /// calls this each layout pass and focuses this pane's
+    /// `FocusHandle` when it returns `true`.
+    pub fn take_click_pending(&self) -> bool {
+        match self.inner.lock().as_ref() {
+            Some(host) => host.take_click_pending(),
+            None => false,
+        }
+    }
+
     pub fn draw(&self) {}
     pub fn refresh(&self) {}
     pub fn set_size(&self, _w: u32, _h: u32) {}
