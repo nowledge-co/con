@@ -1,8 +1,143 @@
 # Windows Port — Session Handover (2026-04-18)
 
 Multi-session context for continuing the Windows port of con. Paste the
-"Kickoff prompt" below into a fresh Claude session and it has everything
-it needs.
+"Kickoff prompt" at the bottom into a fresh Claude session and it has
+everything it needs.
+
+This doc is intentionally long — it captures not just *what* was done
+but *why*, so the next session can make consistent judgment calls
+without re-deriving the strategy.
+
+---
+
+## Project context
+
+`con` is an open-source, macOS-native, GPU-accelerated terminal
+emulator with a built-in AI agent harness. Rust workspace. Stack:
+
+- **UI**: upstream Zed GPUI (git dependency, Apache 2.0). D3D11 +
+  DirectComposition on Windows.
+- **Terminal runtime** (macOS): full libghostty via C API, Metal GPU
+  rendering, embedded as a native `NSView`.
+- **Agent**: Rig v0.34 (13 providers, Tool trait).
+- **Control plane**: JSON-RPC 2.0 over Unix domain socket on
+  macOS/Linux, Windows Named Pipe (`\\.\pipe\con`) on Windows.
+
+The goal of this work stream is to bring the Windows build to
+production quality. The non-UI crates (agent, cli, core, terminal)
+already compile for `x86_64-pc-windows-*`; the new engineering is in
+the terminal pane backend, HWND embedding, and the Windows-specific
+host plumbing.
+
+---
+
+## The three hurdles (strategic view)
+
+The Windows port has three independent hurdles. Progress on each is
+tracked in the phase table below.
+
+### 1. Terminal backend — DONE strategy, in-progress implementation
+
+libghostty's full C API is macOS-only (hard dep on Metal + CoreText).
+We evaluated three options and chose **Option A**:
+
+- **Option A (chosen)**: libghostty-vt + ConPTY + custom renderer.
+  `libghostty-vt` (upstream PR #8840) exports only the parser + screen
+  state machine, cross-platform. We own PTY + key encoding + rendering.
+- Option B: port full libghostty to Windows. Too much surface area
+  (Metal → D3D11, CoreText → DirectWrite, NSView → HWND, macOS-only
+  IPC). Months of work upstream.
+- Option C: shell out to conhost / Windows Terminal widget. Loses our
+  GPU pipeline and hard to embed in GPUI.
+
+### 2. GPUI HWND embedding — PARTIAL
+
+GPUI's Windows backend is D3D11 + DirectComposition. It doesn't
+natively support embedding a child HWND into the window tree. Two
+embedding strategies:
+
+- **WS_CHILD now (what ships today)**: create our D3D11 HWND as a
+  child of GPUI's main HWND. Works, but has z-order + DPI + input
+  quirks (focus never reaches the child; we route keys through GPUI's
+  focus chain instead).
+- **DComp sibling visual (Phase 3d)**: contribute an "external
+  swapchain" API upstream to GPUI so our D3D11 swapchain becomes a
+  DirectComposition sibling visual inside GPUI's DComp tree. See
+  `docs/study/gpui-external-swapchain-upstream-pr.md`.
+
+### 3. Host-side Windows-isms — PARTIAL
+
+Things that aren't the terminal or the compositor but still need
+Windows-specific code:
+
+- DPI (per-monitor v2, `WM_DPICHANGED`)
+- ClearType vs grayscale AA
+- ConPTY (`CreatePseudoConsole`, thread-per-pipe, CR vs LF)
+- Clipboard (`OpenClipboard` / `CF_UNICODETEXT`)
+- Reserved DOS device name `CON` → binary renamed to `con-app.exe`
+- Defender / long-path exclusions for the build tree (documented in
+  `docs/impl/windows-port.md`)
+
+---
+
+## Phase table
+
+| Phase | Name | Status | Key commits |
+|---|---|---|---|
+| 0 | Workspace prep (rename con→con-app, twin `[[bin]]`, cargo aliases) | ✅ | `b9d0499`, `0e36d44` |
+| 1 | CI portable (Linux + Windows cross-check) | ✅ | wired in `.github/workflows/ci-portable.yml` |
+| 2 | Stub terminal backend (UI binary builds and runs on Windows) | ✅ | `01f63b7` |
+| 3a | Real Windows terminal scaffold (ConPTY + HWND + VT wiring) | ✅ | `5fb0f0e`, `4fd9a17` |
+| 3b | Glyph renderer (DWrite atlas + D3D11 grid + attrs) | ✅ | `2c29fd9` → `769b6ee` (26 commits) |
+| 3c | Input, mouse, selection, clipboard, DPI, ClearType | ⏳ in progress — **this session** | planned: Milestones A.5 + B + C |
+| 3d | GPUI external-swapchain upstream (DComp sibling embed) | — queued | see study doc |
+| 4 | Hardening (panic-free resize, atlas overflow, mode queries) | — queued | part of Milestone C |
+| 5 | Distribution (MSIX / installer / code signing) | — queued | `docs/impl/windows-port.md` |
+
+---
+
+## Decision log
+
+Captures the key decisions so the next session doesn't re-litigate
+them.
+
+1. **libghostty-vt over full libghostty** (Option A). Cross-platform
+   parser beats porting a macOS-only renderer. We pay for it by owning
+   the renderer and key encoder.
+2. **Pinned rev `ca7516bea60190ee2e9a4f9182b61d318d107c6e`** on
+   ghostty main. Bumped once (`c4a9bde`) to pick up lib-vt emit
+   changes; don't bump casually — cell/style ABI is still evolving
+   upstream.
+3. **`crates/con-app/` + twin `[[bin]]`** (`bin-con` default on Unix,
+   `bin-con-app` on Windows). Driven by `CON` being a reserved DOS
+   device name. `wbuild` / `wrun` / `wtest` / `wcheck` aliases in
+   `.cargo/config.toml` hide the feature-flag incantation.
+4. **`-Dsimd=false` when building libghostty-vt**. simdutf C++ objects
+   aren't bundled into zig's static archive; leaving SIMD on yields
+   `unresolved external` at link time.
+5. **WS_CHILD today, DComp sibling later**. WS_CHILD unblocks
+   end-to-end smoke testing immediately; the external-swapchain
+   upstream work is a separate Phase 3d track.
+6. **Render driven by GPUI paint, not WM_PAINT** (`f59a902`). GPUI's
+   compositor frame is the source of truth. WM_PAINT on the child
+   HWND is untrustworthy (z-order + DComp interactions).
+7. **Keyboard routed through GPUI focus chain**, not `WM_KEYDOWN` on
+   the child HWND (`9478c78`). The child never gets focus because
+   GPUI owns it.
+8. **`DXGI_ALPHA_MODE_IGNORE`** on the swapchain (`8974bd0`).
+   `CreateSwapChainForHwnd` rejects `PREMULTIPLIED`.
+9. **`\n → \r` translation before ConPTY write** (`9478c78`). ConPTY
+   expects carriage return to submit a line, not newline.
+10. **Globals cbuffer must be bound to BOTH VS and PS** (`769b6ee`).
+    D3D11 binds per stage; PS reads `cellSize` for underline band
+    sizing.
+11. **`GhosttyCell` is opaque `uint64_t`** (`484e82d`). Never cast.
+    Always read via `ghostty_cell_get(cell, KEY, &out)`. Cell BG/FG
+    is `GhosttyColorRgb` (3 bytes), packed into RGBA for the shader.
+12. **Escape hatches**: `CON_STUB_GHOSTTY_VT=1` (link-time no-op
+    stub) and `CON_GHOSTTY_VT_RENDER_STATE=0` (skip render-state
+    creation — we crashed at one pin and needed a survival mode while
+    we diagnosed it; see `c5524eb`).
 
 ---
 
@@ -13,6 +148,7 @@ it needs.
 Most recent commits:
 
 ```
+d3ff1bd docs: windows-port session handover (2026-04-18)
 769b6ee fix(windows): bind Globals cbuffer to the pixel shader
 b7ae5ca feat(windows): render bold/italic/underline/strikethrough + clear atlas on rebuild
 9478c78 feat(windows): keyboard input; translate \n→\r for ConPTY
@@ -21,6 +157,103 @@ a350e23 feat(windows): render inverse-video block cursor
 805c947 fix(windows): fall back to palette default fg/bg on unstyled cells
 484e82d fix(windows): decode codepoint via ghostty_cell_get (RAW is opaque)
 ```
+
+---
+
+## Windows commit timeline (grouped by phase)
+
+All on `claude/prepare-windows-support-f7drP`, 33 commits `b9d0499` →
+`d3ff1bd`.
+
+### Phase 0 — workspace prep
+
+- `b9d0499` chore: prepare workspace for Windows port
+- `0e36d44` chore: rename crates/con to crates/con-app for Windows cloneability
+
+### Phase 2 — stub backend
+
+- `01f63b7` feat(windows): buildable UI binary with stub terminal backend
+
+### Phase 3a — real scaffold
+
+- `5fb0f0e` feat(windows): Phase 3a — real Windows terminal backend scaffold
+- `4fd9a17` fix(windows): rename bin to con-app on Windows; diagnose Zig failures
+
+### Phase 3b — glyph renderer + stability (26 commits)
+
+Renderer bring-up, ConPTY, ghostty-vt FFI:
+
+- `2c29fd9` Phase 3b — real glyph renderer (DWrite atlas + D3D11 grid)
+- `1648dd7` use -Demit-lib-vt=true for libghostty-vt on current Ghostty
+- `a73aee1` CON_STUB_GHOSTTY_VT stub backend + Defender/long-path docs
+- `7b8ad61` use per-key `_get` instead of `_get_multi` in vt FFI
+- `c507f9f` link ghostty-vt-static.lib instead of DLL import lib
+- `df020f5` default Ghostty SIMD off so static lib is self-contained
+- `8974bd0` swapchain AlphaMode IGNORE for HWND; latch init failures
+- `aa1d5bb` add RENDER_TARGET bind flag to glyph atlas texture
+- `f5e4656` panic hook to %TEMP%\con-panic.log + init breadcrumbs
+- `9986405` SEH handler + ghostty_terminal_new breadcrumbs
+- `c5524eb` skip ghostty_render_state_new by default — crashes at pin
+- `c4a9bde` bump GHOSTTY_REV to 2026-04-17 tip-of-main
+- `ffb9066` rewrite vt.rs FFI to match real upstream libghostty-vt API
+- `f59a902` drive render from GPUI paint + log pane bounds
+- `c9c059d` grow instance buffer + normalize atlas UV in shader
+- `167d62f` rerun build.rs on env change; hide cmd.exe; validate WM_PAINT
+- `35393f3` pwsh-first shell default; conpty + snapshot tracing
+- `36f8d5b` ConPTY needs bInheritHandles=true, no CREATE_NO_WINDOW
+- `85644ba` pass HPCON value (not &hpcon) to UpdateProcThreadAttribute
+- `2f37e2a` read cell BG/FG as GhosttyColorRgb (3 bytes), pack to RGBA
+- `5fd5769` VS quad-corner mapping off-by-one; add no-cull rasterizer
+- `140cbbf` split atlas_rect into atlas_pos + atlas_size (2x R32G32)
+
+Milestone A — rendering polish (this session):
+
+- `484e82d` decode codepoint via ghostty_cell_get (RAW is opaque)
+- `805c947` fall back to palette default fg/bg on unstyled cells
+- `4eeffe5` use DirectWrite metrics for cell width/height
+- `a350e23` render inverse-video block cursor
+- `9478c78` keyboard input; translate \n→\r for ConPTY
+- `b7ae5ca` render bold/italic/underline/strikethrough + clear atlas on rebuild
+- `769b6ee` bind Globals cbuffer to the pixel shader
+
+Handover:
+
+- `d3ff1bd` docs: windows-port session handover (2026-04-18)
+
+---
+
+## Current session achievements (Milestone A)
+
+Starting state: glyphs rendered but with packed-u32 codepoint decode
+bugs, missing palette fallback, wrong cell metrics, no cursor, no
+keyboard, no attrs.
+
+Delivered this session (7 commits `484e82d` → `769b6ee`):
+
+1. **Correct codepoint decode** via `ghostty_cell_get(CELL_CODEPOINT,
+   &out)` — previously cast the opaque u64 cell to u32, which is
+   meaningless.
+2. **Palette fallback** — unstyled cells report `(0,0,0)` for fg/bg;
+   substitute from render-state default palette.
+3. **DirectWrite cell metrics** — cell width/height from
+   `GetDesignGlyphMetrics` scaled by em size, not a made-up constant.
+4. **Inverse-video block cursor** — snapshot the cursor pos, flip
+   `ATTR_INVERSE` on that cell.
+5. **Keyboard input end-to-end** — `handle_key_down` in
+   `windows_view.rs` translates GPUI key events to bytes; `\n → \r`
+   so ConPTY submits Enter correctly.
+6. **Bold / italic / underline / strikethrough** — attrs bit layout
+   threaded through `vt.rs` → `render/mod.rs` → `shaders.hlsl`.
+   Atlas is cleared on rebuild so cached glyphs don't leak across
+   font/weight changes.
+7. **Globals cbuffer PS fix** — was only bound to VS; PS read stale
+   `cellSize`, making underline/strike bands land in the wrong place.
+
+Verified on a real Windows machine by the user (screenshot on
+2026-04-18). Side-by-side vs Windows Terminal shown under "State:
+visible gaps".
+
+---
 
 ## State: what works on Windows today
 
@@ -39,7 +272,6 @@ End-to-end smoke tested on a real Windows machine:
 - Rendering: correct codepoint decode, palette default fg/bg fallback,
   real DirectWrite cell metrics, inverse-video block cursor, bold /
   italic / underline / strikethrough / inverse all working.
-- Milestone A (rendering polish) pushed and verified by screenshot.
 
 ## State: visible gaps (user-reported)
 
@@ -61,6 +293,8 @@ Side-by-side vs Windows Terminal on same machine (user's screenshot on
 User is away for the day and asked for autonomous implementation of as
 much as possible toward "Windows production-ready". See "Plan of
 attack" below for the detailed cut list.
+
+---
 
 ## Technical context you need
 
@@ -158,6 +392,8 @@ links to a no-op stub instead of libghostty-vt.
    Palette default fg/bg is read from render state and substituted when
    the cell reports (0,0,0).
 
+---
+
 ## Plan of attack (the day)
 
 Approx 4 hours of focused work. Commit per milestone. Push each.
@@ -199,6 +435,9 @@ Approx 4 hours of focused work. Commit per milestone. Push each.
 - Full scrollback navigation — libghostty-vt has no viewport API; would
   need either upstream contribution or a secondary scrollback buffer.
 - OSC 52 clipboard (remote copy) — needs OSC parser wiring.
+- DComp sibling embedding (Phase 3d) — upstream GPUI work, separate track.
+
+---
 
 ## Gotchas from this series of sessions
 
@@ -221,6 +460,11 @@ Approx 4 hours of focused work. Commit per milestone. Push each.
   Y-flip.
 - **HLSL `if (uint_val)` auto-converts to bool**. `if (attrs & 4u)`
   works.
+- **`CON_GHOSTTY_VT_RENDER_STATE=0`** is an escape hatch — if
+  `ghostty_render_state_new` starts crashing after a ghostty rev bump,
+  set this and file a reproducer before bisecting.
+
+---
 
 ## Verification after each milestone
 
@@ -242,6 +486,47 @@ Manual tests per milestone:
   under rapid resize.
 - **C.hardening**: no panics under stress — run a big `Get-ChildItem
   -Recurse` on a deep tree.
+
+---
+
+## Study docs index
+
+Background reading in `docs/study/` — each is the research that
+informed a decision above:
+
+- `ghostty-vt.md` — libghostty-vt ABI deep dive, cell/style layout,
+  render-state iterator. Anchor for Option A.
+- `gpui-external-swapchain-upstream-pr.md` — proposed GPUI API to
+  accept an external D3D11 swapchain as a DComp sibling visual. Phase
+  3d plan.
+- `gpui.md` — GPUI internals relevant to the Windows backend
+  (DirectComposition tree, input routing, focus chain).
+- `pr-12167-windows-apprt-reference.md` — upstream ghostty PR with
+  Windows app-runtime reference code consulted for HWND + DComp
+  patterns.
+- `terminal-control-plane.md` — JSON-RPC 2.0 over socket/pipe,
+  relevant to Windows named-pipe transport.
+- `socket-control-patterns.md` — patterns for the `con-cli` client,
+  cross-platform transport.
+- `markdown-renderer-architecture.md`, `rig.md` — unrelated to Windows
+  port but referenced from the agent panel.
+
+And the implementation plan:
+
+- `docs/impl/windows-port.md` — staged plan; keep this updated as
+  phases land.
+
+---
+
+## Related postmortems
+
+- `postmortem/2026-04-16-prepare-windows-port.md` — the first
+  preparation PR (workspace rename, twin bin, cargo aliases, CI).
+  Context for Phase 0.
+- `postmortem/2026-04-18-windows-port-session-handover.md` — this
+  doc.
+
+---
 
 ## Kickoff prompt for next session
 
