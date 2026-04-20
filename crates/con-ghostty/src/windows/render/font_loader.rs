@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use windows::core::Interface;
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteFontFile,
-    IDWriteFontSet, IDWriteFontSetBuilder, IDWriteInMemoryFontFileLoader,
+    IDWriteFontSet, IDWriteFontSetBuilder1, IDWriteInMemoryFontFileLoader,
 };
 
 /// Family name the bundled TTFs advertise (must match the `name` table's
@@ -66,8 +66,11 @@ pub fn build_bundled_collection(
     unsafe { factory5.RegisterFontFileLoader(&loader) }
         .context("RegisterFontFileLoader failed")?;
 
-    // SAFETY: factory5 owns the font-set builder.
-    let builder: IDWriteFontSetBuilder = unsafe { factory5.CreateFontSetBuilder() }
+    // SAFETY: factory5 owns the font-set builder. `CreateFontSetBuilder`
+    // on `IDWriteFactory5` returns the `...1` flavour in the Win10+ SDK
+    // we pin; it inherits from `IDWriteFontSetBuilder`, but windows-rs
+    // binds the concrete type so we accept it here.
+    let builder: IDWriteFontSetBuilder1 = unsafe { factory5.CreateFontSetBuilder() }
         .context("CreateFontSetBuilder failed")?;
 
     for (label, bytes) in [

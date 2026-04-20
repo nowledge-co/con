@@ -142,6 +142,27 @@ pub enum GhosttyCellData {
 /// `typedef uint64_t GhosttyCell;` upstream.
 pub type GhosttyCell = u64;
 
+/// Packed 16-bit terminal mode — see `include/ghostty/vt/modes.h`.
+/// Bits 0–14 hold the numeric mode value; bit 15 is the ANSI flag
+/// (1 = ANSI, 0 = DEC private). Constructed via [`ghostty_mode`].
+pub type GhosttyMode = u16;
+
+/// Pack a mode value + ANSI flag into a [`GhosttyMode`]. Mirrors the
+/// inline `ghostty_mode_new` helper the C header ships.
+#[inline]
+pub const fn ghostty_mode(value: u16, ansi: bool) -> GhosttyMode {
+    (value & 0x7FFF) | ((ansi as u16) << 15)
+}
+
+// Pre-packed DEC private modes we care about on Windows. Keep the
+// numeric values synced with `modes.h`.
+pub const MODE_NORMAL_MOUSE: GhosttyMode = ghostty_mode(1000, false);
+pub const MODE_BUTTON_MOUSE: GhosttyMode = ghostty_mode(1002, false);
+pub const MODE_ANY_MOUSE: GhosttyMode = ghostty_mode(1003, false);
+pub const MODE_X10_MOUSE: GhosttyMode = ghostty_mode(9, false);
+pub const MODE_SGR_MOUSE: GhosttyMode = ghostty_mode(1006, false);
+pub const MODE_ALT_SCROLL: GhosttyMode = ghostty_mode(1007, false);
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GhosttyTerminalOptions {
@@ -251,6 +272,14 @@ unsafe extern "C" {
         terminal: GhosttyTerminal,
         key: GhosttyTerminalData,
         out: *mut c_void,
+    ) -> GhosttyResult;
+
+    /// Query whether a terminal mode is currently set. `out_value` is a
+    /// `bool` (1 byte). Returns `GHOSTTY_SUCCESS` on success.
+    pub fn ghostty_terminal_mode_get(
+        terminal: GhosttyTerminal,
+        mode: GhosttyMode,
+        out_value: *mut bool,
     ) -> GhosttyResult;
 
     // Render state (`render.h`)
@@ -657,6 +686,44 @@ impl VtScreen {
     pub fn size(&self) -> (u16, u16) {
         let inner = self.inner.lock();
         (inner.cols, inner.rows)
+    }
+
+    /// Returns `true` when at least one mouse-tracking mode is set
+    /// (X10 / normal / button / any). Host-view mouse handlers gate
+    /// mouse reporting on this so wheel / click / move don't leak
+    /// escape sequences into shells that didn't ask for them.
+    pub fn mouse_tracking_active(&self) -> bool {
+        self.mode_active(MODE_NORMAL_MOUSE)
+            || self.mode_active(MODE_BUTTON_MOUSE)
+            || self.mode_active(MODE_ANY_MOUSE)
+            || self.mode_active(MODE_X10_MOUSE)
+    }
+
+    /// SGR (1006) mouse format is the extended coord encoding.
+    /// Callers use it to choose the report syntax; the default
+    /// xterm legacy mouse report uses a different byte layout.
+    pub fn is_sgr_mouse(&self) -> bool {
+        self.mode_active(MODE_SGR_MOUSE)
+    }
+
+    /// Alt-screen scroll (1007): when set, mouse wheel in alt-screen
+    /// apps is translated to arrow keys (up/down) rather than SGR
+    /// reports. Apps like less / vim opt in.
+    pub fn is_alt_scroll(&self) -> bool {
+        self.mode_active(MODE_ALT_SCROLL)
+    }
+
+    /// Generic mode query — returns `false` when the FFI call fails
+    /// or the mode isn't set. Never panics.
+    pub fn mode_active(&self, mode: GhosttyMode) -> bool {
+        let inner = self.inner.lock();
+        if inner.terminal.is_null() {
+            return false;
+        }
+        let mut on: bool = false;
+        // SAFETY: terminal valid; `on` is a 1-byte C `_Bool`.
+        let rc = unsafe { ghostty_terminal_mode_get(inner.terminal, mode, &mut on) };
+        rc == 0 && on
     }
 }
 

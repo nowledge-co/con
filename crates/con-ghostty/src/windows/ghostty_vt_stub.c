@@ -64,6 +64,22 @@ GhosttyResult ghostty_terminal_get(
     return 0;
 }
 
+GhosttyResult ghostty_terminal_mode_get(
+    GhosttyTerminal terminal, uint16_t mode, bool* out_value
+) {
+    (void)terminal; (void)mode;
+    if (out_value) { *out_value = false; }
+    return 0;
+}
+
+/* ── Cell accessor ──────────────────────────────────────────────── */
+
+GhosttyResult ghostty_cell_get(uint64_t cell, int key, void* out) {
+    (void)cell; (void)key;
+    if (out) { *(uint8_t*)out = 0; }
+    return 0;
+}
+
 /* ── Render state ───────────────────────────────────────────────── */
 
 GhosttyResult ghostty_render_state_new(

@@ -97,9 +97,48 @@ pub struct Renderer {
     /// CPU-side reusable scratch for the per-frame instance buffer.
     instances: Mutex<Vec<Instance>>,
     last_generation: Mutex<u64>,
+    /// Current selection, if any. The host-view sets this during drag
+    /// and the per-cell loop XORs `ATTR_INVERSE` on cells inside the
+    /// range so the composite shader flips fg↔bg without a second pass.
+    selection: Mutex<Option<Selection>>,
 
     width_px: u32,
     height_px: u32,
+}
+
+/// Rectangular-linear selection range: a pair of `(col, row)` endpoints
+/// interpreted as positions on the flattened `row * cols + col` axis so
+/// multi-line selections wrap at row boundaries the way xterm / Windows
+/// Terminal expose them (drag from A to B selects every cell visited
+/// when scanning left-to-right, top-to-bottom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Selection {
+    pub anchor: (u16, u16),
+    pub extent: (u16, u16),
+}
+
+impl Selection {
+    /// Returns `true` when `(col, row)` falls inside the selection on
+    /// the linear order. Uses the grid's `cols` to project to a flat
+    /// index — the caller passes whichever `cols` matches the snapshot
+    /// we're painting so resize-during-drag doesn't glitch the flip.
+    pub fn contains(&self, col: u16, row: u16, cols: u16) -> bool {
+        let to_lin = |p: (u16, u16)| (p.1 as u32) * (cols as u32) + (p.0 as u32);
+        let a = to_lin(self.anchor);
+        let b = to_lin(self.extent);
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        let here = to_lin((col, row));
+        here >= lo && here <= hi
+    }
+
+    /// Stable hash for gating render (combining selection with the
+    /// snapshot's generation). Not cryptographic — just distinguishes
+    /// "selection changed" from "same selection".
+    pub fn hash_u64(&self) -> u64 {
+        let a = ((self.anchor.0 as u64) << 16) | (self.anchor.1 as u64);
+        let b = ((self.extent.0 as u64) << 16) | (self.extent.1 as u64);
+        (a << 32) | b
+    }
 }
 
 unsafe impl Send for Renderer {}
@@ -191,6 +230,7 @@ impl Renderer {
             atlas: Mutex::new(atlas),
             instances: Mutex::new(Vec::with_capacity(INITIAL_INSTANCE_CAPACITY as usize)),
             last_generation: Mutex::new(0),
+            selection: Mutex::new(None),
             width_px: config.initial_width,
             height_px: config.initial_height,
         })
@@ -226,6 +266,17 @@ impl Renderer {
         self.atlas.lock().unwrap().metrics()
     }
 
+    /// Install / clear the current selection. The render-gate combines
+    /// `snapshot.generation` with the selection fingerprint, so setting
+    /// a new selection naturally invalidates the last frame.
+    pub fn set_selection(&self, selection: Option<Selection>) {
+        *self.selection.lock().unwrap() = selection;
+    }
+
+    pub fn selection(&self) -> Option<Selection> {
+        *self.selection.lock().unwrap()
+    }
+
     pub fn grid_for_dimensions(&self, _config: &RendererConfig) -> (u16, u16) {
         let m = self.metrics();
         let cols = (self.width_px / m.cell_width_px.max(1)).max(1) as u16;
@@ -245,12 +296,22 @@ impl Renderer {
     /// 5. Bind + `DrawIndexedInstanced(6, cell_count)`.
     /// 6. `Present(1, 0)`.
     pub fn render(&self, snapshot: &ScreenSnapshot, config: &RendererConfig) -> Result<()> {
+        // Combine the snapshot generation with the selection fingerprint
+        // so selection-only changes (drag motion when cell contents are
+        // stable) force a repaint. `wrapping_mul` keeps the math
+        // non-wrapping-panic under debug overflow checks.
+        let selection = *self.selection.lock().unwrap();
+        let sel_hash = selection.map(|s| s.hash_u64()).unwrap_or(0);
+        let combined = snapshot
+            .generation
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(sel_hash);
         {
             let mut last = self.last_generation.lock().unwrap();
-            if *last == snapshot.generation {
+            if *last == combined {
                 return Ok(());
             }
-            *last = snapshot.generation;
+            *last = combined;
         }
 
         let Some(rtv) = self.rtv.as_ref() else {
@@ -293,6 +354,21 @@ impl Renderer {
             let col = (i % snapshot.cols as usize) as u16;
             let row = (i / snapshot.cols as usize) as u16;
 
+            // XOR-toggle ATTR_INVERSE (bit 4 / 0x10) on cells that fall
+            // inside the current selection. The pixel shader already
+            // handles inverse; doing the flip on the attr byte means
+            // selection highlight composes correctly with fg/bg attrs
+            // the VT already set (e.g. selecting an already-inverse cell
+            // turns it back to normal, matching Windows Terminal).
+            let in_sel = selection
+                .map(|s| s.contains(col, row, snapshot.cols))
+                .unwrap_or(false);
+            let effective_attrs = if in_sel {
+                cell.attrs ^ 0x10
+            } else {
+                cell.attrs
+            };
+
             if cell.codepoint == 0 || cell.codepoint == 0x20 {
                 // Empty / space: emit a bg-only quad by using a 0x0
                 // glyph rect (sampler returns zero coverage → all bg).
@@ -302,7 +378,7 @@ impl Renderer {
                     atlas_size: [0, 0],
                     fg: cell.fg,
                     bg: cell.bg,
-                    attrs: cell.attrs as u32,
+                    attrs: effective_attrs as u32,
                 });
                 continue;
             }
@@ -320,12 +396,12 @@ impl Renderer {
                     atlas_size: [0, 0],
                     fg: cell.fg,
                     bg: cell.bg,
-                    attrs: cell.attrs as u32,
+                    attrs: effective_attrs as u32,
                 });
                 continue;
             };
 
-            let inst = instance_for_cell(col, row, glyph, cell.fg, cell.bg, cell.attrs);
+            let inst = instance_for_cell(col, row, glyph, cell.fg, cell.bg, effective_attrs);
             if logged_non_empty < 6 {
                 log::trace!(
                     "instance[{i}]: cell_pos=({},{}) atlas_pos=({},{}) atlas_size=({},{}) fg={:#010x} bg={:#010x} codepoint=U+{:04X}",

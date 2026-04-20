@@ -22,6 +22,7 @@
 //! code identical — only the swapchain target changes.
 
 pub mod backend;
+pub mod clipboard;
 pub mod conpty;
 pub mod host_view;
 pub mod render;

@@ -28,19 +28,24 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::HBRUSH;
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{HBRUSH, ScreenToClient};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL, VK_SHIFT, VK_V,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
     HCURSOR, HICON, MoveWindow, RegisterClassExW, SW_SHOW, SetParent, SetWindowLongPtrW,
     ShowWindow, WINDOW_EX_STYLE, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WNDCLASSEXW, WS_CHILD,
+    WS_CLIPSIBLINGS, WS_VISIBLE,
 };
 
+use super::clipboard;
 use super::conpty::{ConPty, PtySize};
-use super::render::{Renderer, RendererConfig};
-use super::vt::VtScreen;
+use super::render::{Renderer, RendererConfig, Selection};
+use super::vt::{ScreenSnapshot, VtScreen};
 
 const WINDOW_CLASS_NAME: windows::core::PCWSTR =
     windows::core::w!("ConWindowsTerminalHostView");
@@ -57,6 +62,9 @@ struct HostState {
     /// `WM_DPICHANGED` so we rebuild the atlas from the same base.
     base_font_size_px: f32,
     current_dpi: u32,
+    /// Cell under the cursor when LMB went down. `Some` only while
+    /// the button is held. Cleared on WM_LBUTTONUP / focus loss.
+    drag_anchor: Mutex<Option<(u16, u16)>>,
 }
 
 /// A live terminal pane: child HWND + renderer + PTY + parser.
@@ -157,6 +165,7 @@ impl HostView {
             config: renderer_config,
             base_font_size_px,
             current_dpi,
+            drag_anchor: Mutex::new(None),
         });
         let state_ptr = Box::into_raw(state);
 
@@ -258,6 +267,134 @@ impl Drop for HostView {
 /// visible banding across the jump from 100%→125%→150% scaling.
 fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
     logical_px * (dpi as f32) / 96.0
+}
+
+/// Turn an `lparam` carrying client-space (x, y) coords into a `(col,
+/// row)` cell address using the renderer's current cell metrics. Out-
+/// of-window negative coords clamp to zero. Returns `None` if cell
+/// metrics aren't known yet.
+fn client_cell(state: &HostState, lparam: LPARAM) -> Option<(u16, u16)> {
+    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+    let renderer = state.renderer.lock();
+    let m = renderer.metrics();
+    drop(renderer);
+    let cell_w = m.cell_width_px.max(1) as i32;
+    let cell_h = m.cell_height_px.max(1) as i32;
+    let col = (x.max(0) / cell_w).min(u16::MAX as i32) as u16;
+    let row = (y.max(0) / cell_h).min(u16::MAX as i32) as u16;
+    Some((col, row))
+}
+
+/// `GetKeyState` returns a SHORT: high bit = physically down, low bit
+/// = toggled (e.g. caps lock). We care about the high bit for modifier
+/// keys during WM_KEYDOWN handling.
+fn is_key_down(vk: u16) -> bool {
+    // SAFETY: GetKeyState is a pure read of the thread-local key state
+    // table; safe for any VK.
+    let state = unsafe { GetKeyState(vk as i32) };
+    (state as u16 & 0x8000) != 0
+}
+
+/// Walk the current VT snapshot and emit the codepoints that fall
+/// inside the current selection as a `String`. Row breaks are rendered
+/// as '\n'. Returns `None` if there's no selection.
+fn copy_selection(state: &HostState) -> Option<String> {
+    let renderer = state.renderer.lock();
+    let selection = renderer.selection()?;
+    drop(renderer);
+    let snapshot = state.vt.snapshot();
+    Some(extract_selection_text(&snapshot, selection))
+}
+
+fn extract_selection_text(snapshot: &ScreenSnapshot, sel: Selection) -> String {
+    let cols = snapshot.cols;
+    if cols == 0 || snapshot.cells.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    let rows = snapshot.rows;
+    for row in 0..rows {
+        let mut row_buf = String::new();
+        let mut row_has_cell = false;
+        // Trailing empty cells are trimmed per-row so we don't emit
+        // long runs of whitespace for a drag that ends at the right
+        // margin. We detect "empty" via codepoint == 0 (blank cell).
+        let mut last_non_blank: i32 = -1;
+        for col in 0..cols {
+            if !sel.contains(col, row, cols) {
+                continue;
+            }
+            row_has_cell = true;
+            let idx = row as usize * cols as usize + col as usize;
+            let cell = snapshot.cells.get(idx).copied().unwrap_or_default();
+            let ch = if cell.codepoint == 0 {
+                ' '
+            } else {
+                char::from_u32(cell.codepoint).unwrap_or(' ')
+            };
+            row_buf.push(ch);
+            if cell.codepoint != 0 && cell.codepoint != 0x20 {
+                last_non_blank = row_buf.chars().count() as i32 - 1;
+            }
+        }
+        if !row_has_cell {
+            continue;
+        }
+        // Trim trailing whitespace on the row (xterm/Terminal behavior).
+        if last_non_blank >= 0 {
+            let trimmed: String = row_buf.chars().take(last_non_blank as usize + 1).collect();
+            out.push_str(&trimmed);
+        }
+        out.push('\n');
+    }
+    // Drop the final '\n' — selections that end mid-line shouldn't get
+    // a trailing newline tacked on. The caller can paste verbatim.
+    if out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+/// Encode a mouse-wheel tick as an xterm SGR mouse report and write it
+/// to the PTY. Button codes per xterm: 64 = wheel up, 65 = wheel down.
+/// The report is `ESC [ < Button ; Col ; Row M` (M because wheel is a
+/// press; there is no release). Col/row are 1-based cell coordinates
+/// derived from the cursor client-area position.
+fn forward_wheel(hwnd: HWND, state: &HostState, wparam: WPARAM, lparam: LPARAM) {
+    // HIWORD(wparam) is a signed 16-bit wheel delta. One notch on a
+    // standard mouse is `WHEEL_DELTA` (120); hi-res / trackpad sends
+    // smaller fractional ticks. We only care about sign to pick the
+    // button — coalescing the delta is left for a future refinement.
+    let delta = ((wparam.0 >> 16) & 0xFFFF) as i16;
+    if delta == 0 {
+        return;
+    }
+    let button: u8 = if delta > 0 { 64 } else { 65 };
+
+    // lparam is screen-space (x, y) for mouse wheel messages (unlike
+    // WM_MOUSEMOVE / WM_LBUTTONDOWN which are client-space). Convert.
+    let x_screen = (lparam.0 & 0xFFFF) as i16 as i32;
+    let y_screen = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+    let mut pt = POINT { x: x_screen, y: y_screen };
+    // SAFETY: hwnd is valid for the duration of the message pump.
+    let ok = unsafe { ScreenToClient(hwnd, &mut pt) };
+    if !ok.as_bool() {
+        return;
+    }
+
+    let renderer = state.renderer.lock();
+    let metrics = renderer.metrics();
+    drop(renderer);
+    let cell_w = metrics.cell_width_px.max(1) as i32;
+    let cell_h = metrics.cell_height_px.max(1) as i32;
+    // 1-based cell coords per SGR mouse spec; clamp to 1 so the
+    // terminal app never sees a 0 (some apps treat 0 as "unknown").
+    let col = (pt.x.max(0) / cell_w + 1).min(u16::MAX as i32) as u16;
+    let row = (pt.y.max(0) / cell_h + 1).min(u16::MAX as i32) as u16;
+
+    let seq = format!("\x1b[<{button};{col};{row}M");
+    let _ = state.conpty.write(seq.as_bytes());
 }
 
 fn ensure_window_class() -> Result<()> {
@@ -431,12 +568,121 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(0)
         }
         WM_KEYDOWN => {
+            // Ctrl+Shift+C / Ctrl+Shift+V: copy-selection / paste. We
+            // need to intercept here (not in WM_CHAR) because Ctrl-
+            // modified keys don't produce a WM_CHAR for plain letters,
+            // and even if they did we'd want Ctrl+Shift+C to NOT send
+            // the Ctrl+C (^C / SIGINT) byte. VK_C = 0x43, VK_V = 0x56.
+            if !state_ptr.is_null() {
+                let vk = (wparam.0 & 0xFFFF) as u16;
+                let ctrl = is_key_down(VK_CONTROL.0);
+                let shift = is_key_down(VK_SHIFT.0);
+                if ctrl && shift {
+                    // SAFETY: state_ptr valid.
+                    let state = unsafe { &*state_ptr };
+                    if vk == VK_C.0 {
+                        if let Some(text) = copy_selection(state) {
+                            if let Err(err) = clipboard::set_text(hwnd, &text) {
+                                log::warn!("clipboard::set_text failed: {err:#}");
+                            }
+                        }
+                        return LRESULT(0);
+                    } else if vk == VK_V.0 {
+                        match clipboard::get_text(hwnd) {
+                            Ok(Some(text)) if !text.is_empty() => {
+                                // ConPTY is a virtual keyboard: convert
+                                // \r\n (Windows) and bare \n (Unix-origin
+                                // clipboard payloads) into \r so the
+                                // shell actually executes multi-line
+                                // paste line-by-line.
+                                let payload =
+                                    text.replace("\r\n", "\r").replace('\n', "\r");
+                                let _ = state.conpty.write(payload.as_bytes());
+                            }
+                            Ok(_) => {}
+                            Err(err) => log::warn!("clipboard::get_text failed: {err:#}"),
+                        }
+                        return LRESULT(0);
+                    }
+                }
+            }
             // TODO(phase-3-keys): translate VK_* to xterm escape
             // sequences for arrows / F-keys / Home / End / etc.
             LRESULT(0)
         }
-        WM_LBUTTONDOWN | WM_MOUSEWHEEL => {
-            // TODO(phase-3-mouse): forward to mouse-tracking modes.
+        WM_LBUTTONDOWN => {
+            if !state_ptr.is_null() {
+                // SAFETY: state_ptr valid.
+                let state = unsafe { &*state_ptr };
+                if let Some(cell) = client_cell(state, lparam) {
+                    *state.drag_anchor.lock() = Some(cell);
+                    // Starting a new drag clears any prior selection;
+                    // the extent catches up on the first mouse move.
+                    let renderer = state.renderer.lock();
+                    renderer.set_selection(Some(Selection {
+                        anchor: cell,
+                        extent: cell,
+                    }));
+                    drop(renderer);
+                    // Capture so mouse release outside the HWND still
+                    // delivers WM_LBUTTONUP and we don't get stuck in
+                    // "dragging" state.
+                    // SAFETY: SetCapture is safe on any HWND we own.
+                    unsafe {
+                        let _ = SetCapture(hwnd);
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            if !state_ptr.is_null() {
+                // SAFETY: state_ptr valid.
+                let state = unsafe { &*state_ptr };
+                let dragging = state.drag_anchor.lock().is_some();
+                if dragging {
+                    if let Some(extent) = client_cell(state, lparam) {
+                        let anchor = state.drag_anchor.lock().unwrap();
+                        let renderer = state.renderer.lock();
+                        renderer.set_selection(Some(Selection { anchor, extent }));
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            if !state_ptr.is_null() {
+                // SAFETY: state_ptr valid.
+                let state = unsafe { &*state_ptr };
+                let anchor = state.drag_anchor.lock().take();
+                // SAFETY: ReleaseCapture is a no-op if we don't hold it.
+                unsafe {
+                    let _ = ReleaseCapture();
+                }
+                // Click-without-drag (anchor == current cell) → clear
+                // the transient selection so an isolated click doesn't
+                // leave a 1-cell highlight behind.
+                if let (Some(anchor), Some(extent)) = (anchor, client_cell(state, lparam)) {
+                    if anchor == extent {
+                        let renderer = state.renderer.lock();
+                        renderer.set_selection(None);
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            if !state_ptr.is_null() {
+                // SAFETY: state_ptr valid until WM_DESTROY.
+                let state = unsafe { &*state_ptr };
+                if state.vt.mouse_tracking_active() {
+                    forward_wheel(hwnd, state, wparam, lparam);
+                }
+                // TODO(scrollback-ui): when not tracking, forward wheel
+                // to a scrollback viewport once we add one. For now we
+                // silently drop — matches Windows Terminal's behavior
+                // when scrollback lines == 0.
+            }
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },

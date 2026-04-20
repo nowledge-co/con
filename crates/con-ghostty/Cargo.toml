@@ -41,7 +41,10 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",               # RECT/POINT/HDC plumbing
     "Win32_UI_WindowsAndMessaging",     # CreateWindowExW, WM_* messages
     "Win32_UI_HiDpi",                   # GetDpiForWindow, per-monitor DPI
-    "Win32_UI_Input_KeyboardAndMouse",  # VK_* codes
+    "Win32_UI_Input_KeyboardAndMouse",  # VK_* codes, GetKeyState
+    "Win32_System_DataExchange",        # OpenClipboard / SetClipboardData / ...
+    "Win32_System_Memory",              # GlobalAlloc / GlobalLock for CF_UNICODETEXT
+    "Win32_System_Ole",                 # CF_UNICODETEXT constant
 ] }
 raw-window-handle = "0.6"
 # Skyline/shelf glyph-atlas packer. Same crate WebRender uses in
