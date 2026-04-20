@@ -41,6 +41,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
+use windows_numerics::Matrix3x2;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)] // offset_x/offset_y are wired in Phase 3b-2 (glyph bearing).
@@ -431,13 +432,17 @@ impl GlyphCache {
         // with near-zero sidebearings — they must render flush with the
         // cell edge. Icon-style PUA glyphs (U+F07B folder, U+F09B
         // github, ...) carry *negative* sidebearings so their ink box
-        // balloons past the advance on both sides; with plain LEADING
-        // alignment `D2D1_DRAW_TEXT_OPTIONS_CLIP` chops off the negative
-        // leftSideBearing and renders the icon as a half-glyph. Keep
-        // LEADING alignment for everyone, but shift the draw origin
-        // right by `|leftSideBearing_px|` when the lsb is negative so
-        // the overhang fits inside the slot. Glyphs with non-negative
-        // lsb get `lsb_shift_px == 0` and render unchanged.
+        // balloons past the advance on both sides. With LEADING
+        // alignment the pen origin sits at `draw_rect.left` and ink
+        // extends `lsb..advance-rsb` around it — for negative lsb the
+        // ink starts `|lsb|` pixels left of the draw rect. We allocate
+        // a slot that fits the natural ink width, size `draw_rect` to
+        // the slot (so `D2D1_DRAW_TEXT_OPTIONS_CLIP` clamps to slot
+        // bounds), and apply a `SetTransform(translation = |lsb|)` so
+        // the pen lands `|lsb|` pixels inside the slot. Net effect: the
+        // glyph's leftmost ink column renders flush with `slot.x`, the
+        // whole ink box stays within the clip rect, and Powerline
+        // arrows (non-negative lsb → translate 0) render unchanged.
         let is_wide_candidate = matches!(key.codepoint, 0xE000..=0xF8FF);
         let (glyph_w, lsb_shift_px) = if is_wide_candidate {
             match self.primary_glyph_metrics_px(key.codepoint) {
@@ -467,9 +472,9 @@ impl GlyphCache {
         };
 
         let draw_rect = D2D_RECT_F {
-            left: rect.min.x as f32 + lsb_shift_px,
+            left: rect.min.x as f32,
             top: rect.min.y as f32,
-            right: rect.max.x as f32 + lsb_shift_px,
+            right: rect.max.x as f32,
             bottom: rect.max.y as f32,
         };
 
@@ -478,6 +483,18 @@ impl GlyphCache {
         // DXGI-backed RT.
         unsafe {
             self.d2d_rt.BeginDraw();
+            if lsb_shift_px > 0.0 {
+                // Translation-only transform. Shifts the pen origin
+                // right by |lsb| so negative-lsb overhang lands inside
+                // the slot. CLIP still uses `draw_rect` (the slot), so
+                // ink can't leak into neighbouring atlas cells.
+                let m = Matrix3x2 {
+                    M11: 1.0, M12: 0.0,
+                    M21: 0.0, M22: 1.0,
+                    M31: lsb_shift_px, M32: 0.0,
+                };
+                self.d2d_rt.SetTransform(&m);
+            }
             self.d2d_rt.DrawText(
                 utf16_slice,
                 format,
@@ -486,6 +503,14 @@ impl GlyphCache {
                 D2D1_DRAW_TEXT_OPTIONS_CLIP,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
+            if lsb_shift_px > 0.0 {
+                let identity = Matrix3x2 {
+                    M11: 1.0, M12: 0.0,
+                    M21: 0.0, M22: 1.0,
+                    M31: 0.0, M32: 0.0,
+                };
+                self.d2d_rt.SetTransform(&identity);
+            }
             let _ = self.d2d_rt.EndDraw(None, None);
         }
 
