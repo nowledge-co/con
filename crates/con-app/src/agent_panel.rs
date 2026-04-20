@@ -3965,6 +3965,7 @@ impl Render for AgentPanel {
         // Use system proportional font for readable prose — the workspace root
         // sets Ioskeley Mono which would cascade here without this override.
         let mut panel = div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -4197,12 +4198,10 @@ impl Render for AgentPanel {
 
             panel = panel.child(
                 div()
-                    .flex_shrink_0()
-                    .w_full()
-                    .self_stretch()
-                    .pl(px(8.0))
-                    .pr(px(9.0))
-                    .py(px(8.0))
+                    .absolute()
+                    .left(px(8.0))
+                    .right(px(9.0))
+                    .bottom(px(8.0))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                         let key = event.keystroke.key.as_str();
                         let has_completions = !this.filtered_inline_skills(cx).is_empty();
@@ -4245,7 +4244,6 @@ impl Render for AgentPanel {
                             .flex()
                             .items_center()
                             .w_full()
-                            .self_stretch()
                             .min_h(px(46.0))
                             .gap(px(8.0))
                             .pl(px(7.0))
