@@ -33,6 +33,13 @@ pub enum AgentStatus {
     Responding,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FollowOutputState {
+    Auto,
+    Detached,
+    PendingJump,
+}
+
 struct ToolCallEntry {
     call_id: String,
     tool_name: String,
@@ -422,7 +429,7 @@ pub struct AgentPanel {
     recent_inputs: Vec<String>,
     inline_history_nav_index: Option<usize>,
     inline_history_nav_draft: Option<String>,
-    auto_follow_output: bool,
+    follow_output: FollowOutputState,
     /// Currently highlighted skill in inline autocomplete
     inline_skill_selection: usize,
     /// Tracks whether shift was held on the last enter keystroke (for inline input)
@@ -708,7 +715,7 @@ impl AgentPanel {
             recent_inputs: Vec::new(),
             inline_history_nav_index: None,
             inline_history_nav_draft: None,
-            auto_follow_output: true,
+            follow_output: FollowOutputState::Auto,
             inline_skill_selection: 0,
             inline_shift_enter: false,
             ui_opacity: 0.90,
@@ -785,7 +792,7 @@ impl AgentPanel {
             recent_inputs: Vec::new(),
             inline_history_nav_index: None,
             inline_history_nav_draft: None,
-            auto_follow_output: true,
+            follow_output: FollowOutputState::Auto,
             inline_skill_selection: 0,
             inline_shift_enter: false,
             ui_opacity: 0.90,
@@ -798,7 +805,7 @@ impl AgentPanel {
     pub fn swap_state(&mut self, new_state: PanelState, cx: &mut Context<Self>) -> PanelState {
         let old = std::mem::replace(&mut self.state, new_state);
         self.scroll_handle = ScrollHandle::new();
-        self.auto_follow_output = true;
+        self.follow_output = FollowOutputState::Auto;
         self.showing_history = false;
         cx.notify();
         old
@@ -1188,22 +1195,29 @@ impl AgentPanel {
     }
 
     fn should_follow_output_after_change(&self) -> bool {
-        self.auto_follow_output || self.is_scrolled_near_bottom()
+        self.follow_output != FollowOutputState::Detached || self.is_scrolled_near_bottom()
     }
 
     fn follow_output_after_change(&mut self) {
         if self.should_follow_output_after_change() {
-            self.auto_follow_output = true;
+            self.follow_output = FollowOutputState::PendingJump;
             self.scroll_to_bottom();
         } else {
-            self.auto_follow_output = false;
+            self.follow_output = FollowOutputState::Detached;
         }
     }
 
-    fn sync_auto_follow_output(&mut self, cx: &mut Context<Self>) {
-        let should_follow = self.is_scrolled_near_bottom();
-        if self.auto_follow_output != should_follow {
-            self.auto_follow_output = should_follow;
+    fn sync_follow_output_state(&mut self, cx: &mut Context<Self>) {
+        let near_bottom = self.is_scrolled_near_bottom();
+        let next = match (self.follow_output, near_bottom) {
+            (FollowOutputState::PendingJump, true) => FollowOutputState::Auto,
+            (FollowOutputState::PendingJump, false) => FollowOutputState::PendingJump,
+            (_, true) => FollowOutputState::Auto,
+            (FollowOutputState::Auto, false) => FollowOutputState::Detached,
+            (FollowOutputState::Detached, false) => FollowOutputState::Detached,
+        };
+        if self.follow_output != next {
+            self.follow_output = next;
             cx.notify();
         }
     }
@@ -1211,7 +1225,7 @@ impl AgentPanel {
     pub fn add_message(&mut self, role: &str, content: &str, cx: &mut Context<Self>) {
         self.state.add_message(role, content);
         if role == "user" {
-            self.auto_follow_output = true;
+            self.follow_output = FollowOutputState::PendingJump;
         }
         self.follow_output_after_change();
         cx.notify();
@@ -2506,6 +2520,7 @@ fn render_user_message_text(
 impl Render for AgentPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_inline_input_state(window, cx);
+        self.sync_follow_output_state(cx);
 
         let theme = cx.theme();
         let content_reveal = self.content_reveal.value(window);
@@ -4079,7 +4094,8 @@ impl Render for AgentPanel {
                     .vertical_scrollbar(&self.history_scroll_handle),
             );
         } else {
-            let show_jump_to_latest = !self.auto_follow_output && !self.is_scrolled_near_bottom();
+            let show_jump_to_latest =
+                self.follow_output == FollowOutputState::Detached && !self.is_scrolled_near_bottom();
             // Container: relative + scrollbar on container, content scrolls inside
             let mut messages_container = div()
                 .relative()
@@ -4087,7 +4103,7 @@ impl Render for AgentPanel {
                 .min_h_0()
                 .on_scroll_wheel(cx.listener(|_this, _event: &ScrollWheelEvent, window, cx| {
                     cx.on_next_frame(window, |this, _window, cx| {
-                        this.sync_auto_follow_output(cx);
+                        this.sync_follow_output_state(cx);
                     });
                 }))
                 .child(
@@ -4115,7 +4131,7 @@ impl Render for AgentPanel {
                                 .icon(Icon::default().path("phosphor/arrow-line-down.svg"))
                                 .label("Latest")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.auto_follow_output = true;
+                                    this.follow_output = FollowOutputState::PendingJump;
                                     this.scroll_to_bottom();
                                     cx.notify();
                                 })),
