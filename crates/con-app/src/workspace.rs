@@ -735,6 +735,19 @@ impl ConWorkspace {
             let _ = workspace_handle.update(cx, |workspace, cx| {
                 workspace.prepare_window_close(cx);
             });
+            // On Windows, closing the last window does NOT automatically
+            // exit the app — gpui_windows' event loop keeps running with
+            // no visible windows, which manifests as a "hang" (the user
+            // has to Ctrl+C the launching terminal to kill the process).
+            // macOS / NSApplication has its own convention (apps keep
+            // running without windows), so leave that platform alone.
+            // Con today is a single-window app; the first
+            // should_close that returns `true` is always the last
+            // window, so quitting here is correct.
+            #[cfg(target_os = "windows")]
+            {
+                cx.quit();
+            }
             true
         });
 
