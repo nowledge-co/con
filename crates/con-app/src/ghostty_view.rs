@@ -38,6 +38,7 @@ use objc::{class, msg_send, sel, sel_impl};
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
 
+const GHOSTTY_VIEW_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const LIVE_RESIZE_COMMIT_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Emitted when the terminal title changes.
@@ -110,17 +111,16 @@ impl GhosttyView {
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Tick ghostty periodically. The update() closure runs on the main
-        // thread, which is required for ghostty_app_tick (Metal rendering).
+        // Poll per-surface state periodically. The shared Ghostty app tick
+        // runs once per workspace; this loop only drains surface-local state
+        // and resize commits for this view.
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(8))
+                    .timer(GHOSTTY_VIEW_POLL_INTERVAL)
                     .await;
                 if this
                     .update(cx, |view, cx| {
-                        view.app.tick();
-
                         if let Some(ref terminal) = view.terminal {
                             for event in terminal.take_pending_events() {
                                 match event {
@@ -129,9 +129,7 @@ impl GhosttyView {
                                     }
                                 }
                             }
-                            if terminal.take_needs_render() {
-                                cx.notify();
-                            }
+                            let _ = terminal.take_needs_render();
                             if !terminal.is_alive() && !view.process_exit_emitted {
                                 view.process_exit_emitted = true;
                                 cx.emit(GhosttyProcessExited);
