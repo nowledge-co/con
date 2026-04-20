@@ -24,6 +24,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Ghostty is now the only terminal runtime in con. The old in-app VTE/PTTY fallback path has been removed, so every pane uses the same terminal engine and the same behavior.
 - Embedded Ghostty ticking on macOS now follows Ghostty's wakeup-driven runtime model instead of a host-side polling loop, and the hosted NSView stack now uses native live-resize redraw policies for smoother terminal window resizing.
 - Ghostty panes no longer run their own per-surface 60fps GPUI polling loops. Surface event draining and deferred resize/retry housekeeping now flow through one workspace-level Ghostty wake pump, which removes redundant host-side churn during resize and other heavy terminal activity.
+- The macOS window now adopts Ghostty-style cell-step resize increments from the active terminal surface, reducing pointless intermediate resize states during live drags and moving Con closer to Ghostty's own resize behavior.
 
 **AI Agent**
 - Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.

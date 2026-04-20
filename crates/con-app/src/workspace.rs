@@ -3,10 +3,16 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+use cocoa::base::id;
+#[cfg(target_os = "macos")]
+use cocoa::foundation::NSSize;
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{ActiveTheme, tooltip::Tooltip};
 use serde_json::json;
 use tokio::sync::oneshot;
+#[cfg(target_os = "macos")]
+use objc::{msg_send, sel, sel_impl};
 
 const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
@@ -255,6 +261,8 @@ pub struct ConWorkspace {
     ghostty_app: std::sync::Arc<con_ghostty::GhosttyApp>,
     /// Last wake generation observed from Ghostty's embedded runtime.
     last_ghostty_wake_generation: u64,
+    /// Last macOS content-resize increment applied to the window, in 1/1000th points.
+    last_window_resize_increment_millipoints: Option<(u32, u32)>,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -860,6 +868,7 @@ impl ConWorkspace {
             terminal_theme,
             ghostty_app,
             last_ghostty_wake_generation,
+            last_window_resize_increment_millipoints: None,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             control_request_rx,
@@ -970,6 +979,52 @@ impl ConWorkspace {
 
         changed
     }
+
+    #[cfg(target_os = "macos")]
+    fn sync_window_resize_increments(&mut self, window: &mut Window, cx: &App) {
+        let Some((cell_width_px, cell_height_px)) = self.active_terminal().cell_size_px(cx) else {
+            return;
+        };
+        if cell_width_px == 0 || cell_height_px == 0 {
+            return;
+        }
+
+        let scale = window.scale_factor().max(1.0);
+        let width_pt = (cell_width_px as f32 / scale).max(1.0);
+        let height_pt = (cell_height_px as f32 / scale).max(1.0);
+        let key = (
+            (width_pt * 1000.0).round() as u32,
+            (height_pt * 1000.0).round() as u32,
+        );
+        if self.last_window_resize_increment_millipoints == Some(key) {
+            return;
+        }
+
+        let raw_handle: raw_window_handle::WindowHandle<'_> =
+            match <Window as raw_window_handle::HasWindowHandle>::window_handle(window) {
+            Ok(handle) => handle,
+            Err(_) => return,
+        };
+        let gpui_nsview = match raw_handle.as_raw() {
+            raw_window_handle::RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr() as id,
+            _ => return,
+        };
+
+        unsafe {
+            let nswindow: id = msg_send![gpui_nsview, window];
+            if nswindow.is_null() {
+                return;
+            }
+            let _: () = msg_send![
+                nswindow,
+                setContentResizeIncrements: NSSize::new(f64::from(width_pt), f64::from(height_pt))
+            ];
+        }
+        self.last_window_resize_increment_millipoints = Some(key);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn sync_window_resize_increments(&mut self, _window: &mut Window, _cx: &App) {}
 
     fn schedule_terminal_bootstrap_reassert(
         terminal: &TerminalPane,
@@ -5716,6 +5771,8 @@ impl Render for ConWorkspace {
         if !self.has_active_tab() {
             return div().size_full().into_any_element();
         }
+
+        self.sync_window_resize_increments(window, cx);
 
         let active_terminal = self.active_terminal().clone();
 
