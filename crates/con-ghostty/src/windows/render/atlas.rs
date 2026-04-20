@@ -33,11 +33,11 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_PIXEL_GEOMETRY_RGB, DWRITE_RENDERING_MODE_NATURAL, DWRITE_TEXT_METRICS,
-    IDWriteFactory, IDWriteFontCollection, IDWriteFontFallback, IDWriteRenderingParams,
-    IDWriteTextFormat, IDWriteTextFormat1,
+    DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
+    DWRITE_GLYPH_METRICS, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PIXEL_GEOMETRY_RGB,
+    DWRITE_RENDERING_MODE_NATURAL, IDWriteFactory, IDWriteFontCollection, IDWriteFontFace,
+    IDWriteFontFallback, IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextFormat1,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -153,7 +153,12 @@ impl GlyphCache {
             true,
         )?;
 
-        let metrics = measure_cell(dwrite, &text_format_regular, font_size_px)?;
+        let metrics = measure_cell(
+            dwrite,
+            bundled_collection.as_ref(),
+            font_family,
+            font_size_px,
+        )?;
 
         let atlas_desc = D3D11_TEXTURE2D_DESC {
             Width: atlas_size,
@@ -452,7 +457,12 @@ impl GlyphCache {
             true,
             true,
         )?;
-        self.metrics = measure_cell(&self.dwrite, &self.text_format_regular, font_size_px)?;
+        self.metrics = measure_cell(
+            &self.dwrite,
+            self.bundled_collection.as_ref(),
+            &self.font_family,
+            font_size_px,
+        )?;
         // Clear the atlas texture so fresh rasterization doesn't blend
         // with stale pixels from the previous size. BeginDraw/Clear/End
         // is a single D2D op — the DXGI-backed RT aliases the same
@@ -541,46 +551,70 @@ fn make_text_format(
 
 fn measure_cell(
     dwrite: &IDWriteFactory,
-    format: &IDWriteTextFormat,
+    bundled: Option<&IDWriteFontCollection>,
+    family: &str,
     font_size_px: f32,
 ) -> Result<CellMetrics> {
-    // Measure a single 'M' via IDWriteTextLayout. For a monospace font
-    // every glyph has the same advance, so one glyph is representative.
-    // TextMetrics.width returns the exact advance (in DIPs at the
-    // format's font size) and .height returns the full line height
-    // (ascent + descent + lineGap) — both in the same DIP space we pass
-    // to D2D, so no unit conversion is needed.
+    // Resolve the advance directly from the font's design metrics.
     //
-    // The previous `fs * 0.6` heuristic undercounted the advance on
-    // Consolas / Cascadia / Ioskeley, leaving every cell ~1px narrow and
-    // manifesting as visible kerning gaps ("W ndows", "M trosoft") in
-    // the pwsh banner.
-    let text: Vec<u16> = "M".encode_utf16().collect();
-    // SAFETY: text outlives the layout; format is owned by caller.
-    let layout = unsafe {
-        dwrite.CreateTextLayout(&text, format, 4096.0, 4096.0)
-    }
-    .context("IDWriteFactory::CreateTextLayout failed")?;
+    // We previously used IDWriteTextLayout::GetMetrics, which returns
+    // layout-rounded dimensions from whichever font DWrite's shaper
+    // eventually picked. When our bundled IoskeleyMono collection
+    // silently fails to match the requested family name (e.g. a
+    // mis-patched `name` table or unsupported cast path), DWrite
+    // happily falls back to the system collection and returns the
+    // width of Segoe UI's 'M' glyph — that's ~28 px at font size 28,
+    // roughly 1.6× IoskeleyMono's actual advance, and the whole grid
+    // stretches visibly ("W i n d o w s  PowerShell" instead of
+    // tightly packed).
+    //
+    // Design metrics bypass the layout engine entirely: we get the
+    // literal advanceWidth stored in the TTF 'hmtx' table, converted
+    // from design units to pixels via the font's UPM. For a strict
+    // monospace font every glyph has the same advance, so measuring
+    // 'M' is representative; a missing-glyph fallback doesn't factor
+    // in.
+    let (face, resolved) = resolve_font_face(dwrite, bundled, family)?;
 
-    let mut tm = DWRITE_TEXT_METRICS::default();
-    // SAFETY: out param sized per windows-rs binding.
-    unsafe { layout.GetMetrics(&mut tm) }
-        .context("IDWriteTextLayout::GetMetrics failed")?;
+    // Font-level design metrics (UPM, ascent, descent, lineGap).
+    // SAFETY: windows-rs signature takes a raw out pointer; we pass a
+    // sized stack slot.
+    let mut fm = DWRITE_FONT_METRICS::default();
+    unsafe { face.GetMetrics(&mut fm) };
+    let upm = fm.designUnitsPerEm as f32;
 
-    let cell_width_px = tm.width.ceil().max(1.0) as u32;
-    let cell_height_px = tm.height.ceil().max(1.0) as u32;
-    // Baseline isn't exposed on DWRITE_TEXT_METRICS; use a conservative
-    // ascent estimate. Not currently consumed by the pipeline, but we
-    // return something sensible so future callers don't get 0.
-    let baseline_px = (font_size_px * 0.8).ceil() as u32;
+    // Resolve 'M' to its glyph index in this face.
+    let codepoints: [u32; 1] = ['M' as u32];
+    let mut indices: [u16; 1] = [0];
+    // SAFETY: both arrays sized 1; DWrite writes one glyph index.
+    unsafe { face.GetGlyphIndices(codepoints.as_ptr(), 1, indices.as_mut_ptr()) }
+        .context("IDWriteFontFace::GetGlyphIndices failed")?;
+
+    let mut gm = [DWRITE_GLYPH_METRICS::default(); 1];
+    // SAFETY: indices and gm are both length 1; issideways=false picks
+    // horizontal advance.
+    unsafe { face.GetDesignGlyphMetrics(indices.as_ptr(), 1, gm.as_mut_ptr(), false) }
+        .context("IDWriteFontFace::GetDesignGlyphMetrics failed")?;
+
+    let advance_du = gm[0].advanceWidth as f32;
+    let cell_width_px = ((advance_du * font_size_px) / upm).ceil().max(1.0) as u32;
+    // Height from ascent + descent + lineGap, converted to pixels.
+    // lineGap can legitimately be negative on some fonts; clamp below.
+    let line_metric_du = fm.ascent as f32 + fm.descent as f32 + fm.lineGap as f32;
+    let cell_height_px = ((line_metric_du * font_size_px) / upm).ceil().max(1.0) as u32;
+    let baseline_px = ((fm.ascent as f32 * font_size_px) / upm).ceil() as u32;
 
     log::info!(
-        "measure_cell: font_size_px={} -> cell {}x{} (DWRITE width={} height={})",
-        font_size_px,
+        "measure_cell: resolved='{}' upm={} M_advance_du={} glyph_idx={} \
+         -> cell {}x{} baseline={} @ {}px",
+        resolved,
+        upm as u32,
+        advance_du as u32,
+        indices[0],
         cell_width_px,
         cell_height_px,
-        tm.width,
-        tm.height,
+        baseline_px,
+        font_size_px,
     );
 
     Ok(CellMetrics {
@@ -588,4 +622,93 @@ fn measure_cell(
         cell_height_px,
         baseline_px,
     })
+}
+
+/// Resolve `family` to a concrete [`IDWriteFontFace`] for measurement.
+///
+/// Order:
+/// 1. Bundled collection (our IoskeleyMono blobs).
+/// 2. System collection (for unbundled hosts).
+/// 3. System collection → "Segoe UI" (last-resort so we return *some*
+///    metrics instead of bailing the entire render setup).
+///
+/// Returns the face plus a human-readable "where it came from" string
+/// so the log line makes the fallback path obvious when we're debugging
+/// "cells are twice as wide as they should be" issues.
+fn resolve_font_face(
+    dwrite: &IDWriteFactory,
+    bundled: Option<&IDWriteFontCollection>,
+    family: &str,
+) -> Result<(IDWriteFontFace, String)> {
+    if let Some(coll) = bundled {
+        if let Some(face) = find_face_in_collection(coll, family)? {
+            return Ok((face, format!("{family} (bundled)")));
+        }
+        log::warn!(
+            "measure_cell: '{family}' not found in bundled collection; \
+             falling back to system collection"
+        );
+    }
+
+    let mut sys: Option<IDWriteFontCollection> = None;
+    // SAFETY: out param owned by us; `checkforupdates=false` is the
+    // cheap path — we don't care if the system font list changed.
+    unsafe { dwrite.GetSystemFontCollection(&mut sys, false) }
+        .context("IDWriteFactory::GetSystemFontCollection failed")?;
+    let sys = sys.context("GetSystemFontCollection returned None")?;
+
+    if let Some(face) = find_face_in_collection(&sys, family)? {
+        return Ok((face, format!("{family} (system)")));
+    }
+
+    log::warn!(
+        "measure_cell: '{family}' not found in system collection either; \
+         using Segoe UI for metrics (cells will be sized for Segoe UI, not {family})"
+    );
+    if let Some(face) = find_face_in_collection(&sys, "Segoe UI")? {
+        return Ok((face, "Segoe UI (last-resort fallback)".to_string()));
+    }
+
+    anyhow::bail!(
+        "measure_cell: neither '{family}' nor 'Segoe UI' resolved in any font collection"
+    );
+}
+
+fn find_face_in_collection(
+    collection: &IDWriteFontCollection,
+    family: &str,
+) -> Result<Option<IDWriteFontFace>> {
+    let family_w: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut index: u32 = 0;
+    let mut exists = windows::core::BOOL(0);
+    // SAFETY: buffers sized above; out params are stack-local.
+    unsafe {
+        collection.FindFamilyName(
+            windows::core::PCWSTR(family_w.as_ptr()),
+            &mut index,
+            &mut exists,
+        )
+    }
+    .context("IDWriteFontCollection::FindFamilyName failed")?;
+    if !exists.as_bool() {
+        return Ok(None);
+    }
+
+    // SAFETY: index is valid per DWrite contract when exists=TRUE.
+    let family_obj =
+        unsafe { collection.GetFontFamily(index) }.context("GetFontFamily failed")?;
+    // SAFETY: we want regular/normal for the measurement probe — bold
+    // and italic have the same advance on a monospace face, so the
+    // regular weight is representative and always present.
+    let font = unsafe {
+        family_obj.GetFirstMatchingFont(
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+        )
+    }
+    .context("GetFirstMatchingFont failed")?;
+    // SAFETY: font owned above.
+    let face = unsafe { font.CreateFontFace() }.context("IDWriteFont::CreateFontFace failed")?;
+    Ok(Some(face))
 }

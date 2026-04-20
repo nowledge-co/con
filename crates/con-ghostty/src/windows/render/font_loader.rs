@@ -115,19 +115,65 @@ pub fn build_bundled_collection(
     let collection = unsafe { factory5.CreateFontCollectionFromFontSet(&set) }
         .context("CreateFontCollectionFromFontSet failed")?;
 
-    log::info!(
-        "IoskeleyMono bundled font collection ready: 4 font files \
-         (regular/bold/italic/bold-italic)"
-    );
-
-    Ok(Some(collection.cast::<IDWriteFontCollection>().unwrap_or_else(
-        |_| {
+    let collection: IDWriteFontCollection =
+        collection.cast::<IDWriteFontCollection>().unwrap_or_else(|_| {
             // This can't fail — IDWriteFontCollection1 inherits from
             // IDWriteFontCollection — but use unwrap_or_else to avoid
             // introducing an Err path.
             unreachable!("IDWriteFontCollection1 → IDWriteFontCollection cast")
-        },
-    )))
+        });
+
+    // Sanity-check: verify DWrite can actually find BUNDLED_FONT_FAMILY
+    // in the collection. If this logs "not found", either the name table
+    // inside the TTF doesn't claim that exact family string, or the
+    // collection-build path didn't register the file. Either way the
+    // render pipeline will silently resolve to a system font downstream
+    // and cells will be sized for Segoe UI (hence the visible "wide
+    // cells" regression we've chased before). Surfacing it at init makes
+    // the root cause obvious in logs.
+    let family_w: Vec<u16> = BUNDLED_FONT_FAMILY
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut index: u32 = 0;
+    let mut exists = windows::core::BOOL(0);
+    // SAFETY: family_w is NUL-terminated; out params are stack-local.
+    let find_hr = unsafe {
+        collection.FindFamilyName(
+            windows::core::PCWSTR(family_w.as_ptr()),
+            &mut index,
+            &mut exists,
+        )
+    };
+
+    let total_families = unsafe { collection.GetFontFamilyCount() };
+    match find_hr {
+        Ok(()) if exists.as_bool() => {
+            log::info!(
+                "IoskeleyMono bundled collection ready: {total_families} \
+                 famil{y_plural}, '{BUNDLED_FONT_FAMILY}' at index {index} \
+                 (4 TTF weights registered)",
+                y_plural = if total_families == 1 { "y" } else { "ies" },
+            );
+        }
+        Ok(()) => {
+            log::warn!(
+                "IoskeleyMono bundled collection built with {total_families} \
+                 famil{y_plural} but '{BUNDLED_FONT_FAMILY}' NOT found — name \
+                 table mismatch; downstream text will resolve to a system \
+                 font and cells will be sized for that font's 'M' advance",
+                y_plural = if total_families == 1 { "y" } else { "ies" },
+            );
+        }
+        Err(err) => {
+            log::warn!(
+                "IoskeleyMono bundled collection built but FindFamilyName \
+                 failed: {err:?}"
+            );
+        }
+    }
+
+    Ok(Some(collection))
 }
 
 /// Return the OS-default [`IDWriteFontFallback`]. The system fallback
