@@ -131,6 +131,58 @@ fn supports_transparent_main_window() -> bool {
     true
 }
 
+/// Enable Windows 11 Mica backdrop on the top-level window via DWM.
+///
+/// Returns `true` when the DWM attribute was accepted — we use that
+/// signal to keep the GPUI Root transparent so the backdrop shows
+/// through. On Windows 10 / older Win11 / RDP / Arm32 / any host where
+/// DwmSetWindowAttribute rejects `DWMWA_SYSTEMBACKDROP_TYPE`, we fall
+/// back to an opaque theme fill in `open_con_window` (otherwise the
+/// compositor shows the desktop through the window, which is what the
+/// user observed when a modal hid the pane HWND).
+#[cfg(target_os = "windows")]
+fn apply_windows_backdrop(window: &mut Window) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
+    };
+
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return false;
+    };
+    let hwnd = match handle.as_raw() {
+        RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
+        _ => return false,
+    };
+
+    let backdrop: i32 = DWMSBT_MAINWINDOW.0;
+    // SAFETY: hwnd is a live top-level window (we just received it
+    // from GPUI's window-handle surface); DWMWA_SYSTEMBACKDROP_TYPE
+    // takes a 4-byte integer by pointer.
+    let hr = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            &backdrop as *const i32 as *const std::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+    match hr {
+        Ok(()) => {
+            log::info!("Windows: enabled DWM Mica backdrop on main window");
+            true
+        }
+        Err(err) => {
+            log::info!(
+                "Windows: Mica backdrop unavailable ({err:?}); \
+                 falling back to opaque theme fill"
+            );
+            false
+        }
+    }
+}
+
 // On non-macOS targets, the terminal backend is a placeholder (see
 // `stub_view.rs`). The binary builds and runs — agent panel, settings,
 // command palette, the control socket — but the terminal surface paints a
@@ -162,8 +214,25 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
             let restored_session = session.clone();
             let view = cx
                 .new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
+            #[cfg(target_os = "windows")]
+            let mica_applied = apply_windows_backdrop(window);
+            #[cfg(not(target_os = "windows"))]
+            let mica_applied = false;
             cx.new(|cx| {
-                let background = if supports_transparent_main_window() {
+                // On Windows we want the DWM-provided backdrop (Mica)
+                // to shine through wherever the app isn't painting —
+                // most importantly, the terminal area when the child
+                // pane HWND is hidden behind a modal. That requires a
+                // transparent Root. If Mica isn't available (Win10,
+                // RDP, older Win11), fall back to an opaque theme fill
+                // so the window doesn't look "see-through to desktop".
+                let background = if cfg!(target_os = "windows") {
+                    if mica_applied {
+                        cx.theme().transparent
+                    } else {
+                        cx.theme().background
+                    }
+                } else if supports_transparent_main_window() {
                     cx.theme().transparent
                 } else {
                     cx.theme().background
