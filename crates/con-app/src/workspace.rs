@@ -174,14 +174,17 @@ use crate::{
     CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit, SplitDown,
     SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
 };
-use con_agent::{Conversation, TerminalExecRequest, TerminalExecResponse};
+use con_agent::{AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
 };
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
-use con_core::session::{GlobalHistoryState, PaneLayoutState, PaneSplitDirection, Session};
+use con_core::session::{
+    AgentModelOverrideState, AgentRoutingState, GlobalHistoryState, PaneLayoutState,
+    PaneSplitDirection, Session,
+};
 use con_core::{SuggestionContext, SuggestionEngine};
 
 struct Tab {
@@ -189,6 +192,7 @@ struct Tab {
     title: String,
     needs_attention: bool,
     session: AgentSession,
+    agent_routing: AgentRoutingState,
     panel_state: PanelState,
     runtime_trackers: RefCell<HashMap<usize, con_agent::context::PaneRuntimeTracker>>,
     runtime_cache: RefCell<HashMap<usize, con_agent::context::PaneRuntimeState>>,
@@ -624,6 +628,11 @@ impl ConWorkspace {
                     },
                     needs_attention: false,
                     session: agent_session,
+                    agent_routing: if tab_state.agent_routing.is_empty() {
+                        Self::default_agent_routing(&config.agent)
+                    } else {
+                        tab_state.agent_routing.clone()
+                    },
                     panel_state,
                     runtime_trackers: RefCell::new(HashMap::new()),
                     runtime_cache: RefCell::new(HashMap::new()),
@@ -638,6 +647,7 @@ impl ConWorkspace {
                 title: "Terminal".to_string(),
                 needs_attention: false,
                 session: AgentSession::new(),
+                agent_routing: Self::default_agent_routing(&config.agent),
                 panel_state: PanelState::new(),
                 runtime_trackers: RefCell::new(HashMap::new()),
                 runtime_cache: RefCell::new(HashMap::new()),
@@ -2210,6 +2220,7 @@ impl ConWorkspace {
 
                     let context = self.build_agent_context_for_tab(tab_idx, cx);
                     let session = &self.tabs[tab_idx].session;
+                    let agent_config = self.tab_agent_config(tab_idx);
                     let request_id = self.next_control_agent_request_id;
                     self.next_control_agent_request_id =
                         self.next_control_agent_request_id.wrapping_add(1);
@@ -2230,7 +2241,8 @@ impl ConWorkspace {
                             cx,
                         );
                     }
-                    self.harness.send_message(session, prompt, context);
+                    self.harness
+                        .send_message(session, agent_config, prompt, context);
                 }
                 Err(err) => Self::send_control_result(response_tx, Err(err)),
             },
@@ -2340,6 +2352,7 @@ impl ConWorkspace {
                     panes: pane_states,
                     shell_history,
                     conversation_id: Some(tab.session.conversation_id()),
+                    agent_routing: tab.agent_routing.clone(),
                 }
             })
             .collect();
@@ -2493,6 +2506,88 @@ impl ConWorkspace {
             }
         }
         aggregated
+    }
+
+    fn default_agent_routing(config: &AgentConfig) -> AgentRoutingState {
+        let mut model_overrides = Vec::new();
+        for provider in [
+            ProviderKind::Anthropic,
+            ProviderKind::OpenAI,
+            ProviderKind::ChatGPT,
+            ProviderKind::GitHubCopilot,
+            ProviderKind::OpenAICompatible,
+            ProviderKind::MiniMax,
+            ProviderKind::MiniMaxAnthropic,
+            ProviderKind::Moonshot,
+            ProviderKind::MoonshotAnthropic,
+            ProviderKind::ZAI,
+            ProviderKind::ZAIAnthropic,
+            ProviderKind::DeepSeek,
+            ProviderKind::Groq,
+            ProviderKind::Cohere,
+            ProviderKind::Gemini,
+            ProviderKind::Ollama,
+            ProviderKind::OpenRouter,
+            ProviderKind::Perplexity,
+            ProviderKind::Mistral,
+            ProviderKind::Together,
+            ProviderKind::XAI,
+        ] {
+            if let Some(model) = config.providers.get(&provider).and_then(|entry| entry.model.clone()) {
+                model_overrides.push(AgentModelOverrideState { provider, model });
+            }
+        }
+
+        AgentRoutingState {
+            provider: Some(config.provider.clone()),
+            model_overrides,
+        }
+    }
+
+    fn apply_agent_routing(base: &AgentConfig, routing: &AgentRoutingState) -> AgentConfig {
+        let mut config = base.clone();
+        if let Some(provider) = routing.provider.as_ref() {
+            config.provider = provider.clone();
+        }
+
+        for override_state in &routing.model_overrides {
+            if override_state.model.trim().is_empty() {
+                continue;
+            }
+            let mut provider_config = config.providers.get_or_default(&override_state.provider);
+            provider_config.model = Some(override_state.model.clone());
+            config.providers.set(&override_state.provider, provider_config);
+        }
+
+        config
+    }
+
+    fn tab_agent_config(&self, tab_idx: usize) -> AgentConfig {
+        Self::apply_agent_routing(self.harness.config(), &self.tabs[tab_idx].agent_routing)
+    }
+
+    fn active_tab_agent_config(&self) -> AgentConfig {
+        self.tab_agent_config(self.active_tab)
+    }
+
+    fn set_tab_provider_override(&mut self, tab_idx: usize, provider: ProviderKind) {
+        self.tabs[tab_idx].agent_routing.provider = Some(provider);
+    }
+
+    fn set_tab_model_override(&mut self, tab_idx: usize, provider: ProviderKind, model: String) {
+        let routing = &mut self.tabs[tab_idx].agent_routing;
+        if let Some(existing) = routing
+            .model_overrides
+            .iter_mut()
+            .find(|entry| entry.provider == provider)
+        {
+            existing.model = model;
+            return;
+        }
+
+        routing
+            .model_overrides
+            .push(AgentModelOverrideState { provider, model });
     }
 
     fn merge_shell_histories(
@@ -2663,12 +2758,9 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut config = self.harness.config().clone();
-        let provider = config.provider.clone();
-        let mut provider_config = config.providers.get_or_default(&provider);
-        provider_config.model = Some(event.model.clone());
-        config.providers.set(&provider, provider_config);
-        self.harness.update_config(config.clone());
+        let provider = self.tab_agent_config(self.active_tab).provider.clone();
+        self.set_tab_model_override(self.active_tab, provider.clone(), event.model.clone());
+        let config = self.tab_agent_config(self.active_tab);
 
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_session_provider_options(
@@ -2680,12 +2772,7 @@ impl ConWorkspace {
             panel.set_session_model_options(self.model_registry.models_for(&provider), window, cx);
         });
 
-        self.settings_panel.update(cx, |settings, _cx| {
-            let agent = settings.agent_config_mut();
-            agent.provider = config.provider.clone();
-            agent.providers = config.providers.clone();
-        });
-
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -2696,12 +2783,11 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut config = self.harness.config().clone();
-        config.provider = event.provider.clone();
-        self.harness.update_config(config.clone());
+        self.set_tab_provider_override(self.active_tab, event.provider.clone());
+        let config = self.tab_agent_config(self.active_tab);
 
         let provider = config.provider.clone();
-        let model_name = self.harness.active_model_name();
+        let model_name = AgentHarness::active_model_name_for(&config);
         let available_models = self.model_registry.models_for(&provider);
 
         self.agent_panel.update(cx, |panel, cx| {
@@ -2715,12 +2801,7 @@ impl ConWorkspace {
             panel.set_session_model_options(available_models, window, cx);
         });
 
-        self.settings_panel.update(cx, |settings, _cx| {
-            let agent = settings.agent_config_mut();
-            agent.provider = config.provider.clone();
-            agent.providers = config.providers.clone();
-        });
-
+        self.save_session(cx);
         cx.notify();
     }
 
@@ -2740,6 +2821,7 @@ impl ConWorkspace {
 
         let context = self.build_agent_context(cx);
         let session = &self.tabs[self.active_tab].session;
+        let agent_config = self.active_tab_agent_config();
         if event.content.trim().starts_with('/') {
             match self.harness.classify_input(
                 &event.content,
@@ -2749,7 +2831,7 @@ impl ConWorkspace {
                 InputKind::SkillInvoke(name, args) => {
                     if let Some(desc) =
                         self.harness
-                            .invoke_skill(session, &name, args.as_deref(), context)
+                            .invoke_skill(session, agent_config.clone(), &name, args.as_deref(), context)
                     {
                         self.agent_panel.update(cx, |panel, cx| {
                             panel.add_step(&desc, cx);
@@ -2758,11 +2840,11 @@ impl ConWorkspace {
                 }
                 _ => self
                     .harness
-                    .send_message(session, event.content.clone(), context),
+                    .send_message(session, agent_config.clone(), event.content.clone(), context),
             }
         } else {
             self.harness
-                .send_message(session, event.content.clone(), context);
+                .send_message(session, agent_config, event.content.clone(), context);
         }
     }
 
@@ -2902,12 +2984,20 @@ impl ConWorkspace {
         self.harness.update_config(new_config);
         self.shell_suggestion_engine = self.harness.suggestion_engine(180);
         self.shell_suggestion_engine.clear_cache();
+        let active_agent_config = self.active_tab_agent_config();
 
         // Sync auto-approve to agent panel UI
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_auto_approve(auto_approve);
             panel.set_session_provider_options(
-                AgentPanel::configured_session_providers(self.harness.config()),
+                AgentPanel::configured_session_providers(&active_agent_config),
+                window,
+                cx,
+            );
+            panel.set_provider_name(active_agent_config.provider.clone(), window, cx);
+            panel.set_model_name(AgentHarness::active_model_name_for(&active_agent_config));
+            panel.set_session_model_options(
+                self.model_registry.models_for(&active_agent_config.provider),
                 window,
                 cx,
             );
@@ -3140,9 +3230,10 @@ impl ConWorkspace {
                     InputKind::SkillInvoke(name, args) => {
                         let context = self.build_agent_context(cx);
                         let session = &self.tabs[self.active_tab].session;
+                        let agent_config = self.active_tab_agent_config();
                         if let Some(desc) =
                             self.harness
-                                .invoke_skill(session, &name, args.as_deref(), context)
+                                .invoke_skill(session, agent_config, &name, args.as_deref(), context)
                         {
                             if !self.agent_panel_open {
                                 self.agent_panel_open = true;
@@ -4731,6 +4822,7 @@ impl ConWorkspace {
             title: format!("Terminal {}", tab_number),
             needs_attention: false,
             session: AgentSession::new(),
+            agent_routing: Self::default_agent_routing(self.harness.config()),
             panel_state: PanelState::new(),
             runtime_trackers: RefCell::new(HashMap::new()),
             runtime_cache: RefCell::new(HashMap::new()),
@@ -5509,8 +5601,9 @@ impl ConWorkspace {
         });
         let context = self.build_agent_context(cx);
         let session = &self.tabs[self.active_tab].session;
+        let agent_config = self.active_tab_agent_config();
         self.harness
-            .send_message(session, content.to_string(), context);
+            .send_message(session, agent_config, content.to_string(), context);
         self.save_session(cx);
     }
 
@@ -5924,7 +6017,7 @@ impl Render for ConWorkspace {
         }
         self.modal_was_open = is_modal_open;
 
-        if !needs_ghostty_hidden {
+        if !needs_ghostty_hidden && !is_modal_open {
             for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
                 terminal.set_native_view_visible(true, cx);
             }
@@ -5999,8 +6092,9 @@ impl Render for ConWorkspace {
             .update(cx, |bar, _cx| bar.set_recent_commands(recent_commands));
 
         // Sync model name, inline input, and skills to agent panel
-        let model_name = self.harness.active_model_name();
-        let provider = self.harness.config().provider.clone();
+        let active_agent_config = self.active_tab_agent_config();
+        let model_name = AgentHarness::active_model_name_for(&active_agent_config);
+        let provider = active_agent_config.provider.clone();
         let available_models = self.model_registry.models_for(&provider);
         let show_inline = !self.input_bar_visible && self.agent_panel_open;
         let panel_skills: Vec<crate::input_bar::SkillEntry> = self
@@ -6014,7 +6108,7 @@ impl Render for ConWorkspace {
             .collect();
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_session_provider_options(
-                AgentPanel::configured_session_providers(self.harness.config()),
+                AgentPanel::configured_session_providers(&active_agent_config),
                 window,
                 cx,
             );
