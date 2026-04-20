@@ -370,25 +370,10 @@ impl Renderer {
         instances.clear();
         instances.reserve(snapshot.cells.len());
         let mut logged_non_empty: u32 = 0;
-        // Counts how many subsequent cells (in the current row) are
-        // visually covered by a wide glyph we already emitted. When > 0,
-        // we skip emitting the cell's own quad to avoid overdrawing the
-        // right half of the wide glyph with a bg-color block.
-        let mut cells_to_skip: u32 = 0;
-        let cell_w_px = atlas.metrics().cell_width_px.max(1);
 
         for (i, cell) in snapshot.cells.iter().enumerate() {
             let col = (i % snapshot.cols as usize) as u16;
             let row = (i / snapshot.cols as usize) as u16;
-
-            // New row: wide-glyph overflow doesn't cross rows.
-            if col == 0 {
-                cells_to_skip = 0;
-            }
-            if cells_to_skip > 0 {
-                cells_to_skip -= 1;
-                continue;
-            }
 
             // XOR-toggle ATTR_INVERSE (bit 4 / 0x10) on cells that fall
             // inside the current selection. The pixel shader already
@@ -474,14 +459,15 @@ impl Renderer {
                 );
                 logged_non_empty += 1;
             }
-            // If the atlas rasterized this glyph wider than one cell
-            // (Nerd-Font icon overflow), the shader's quad spans extra
-            // cells on screen — skip those so their own bg-color quad
-            // doesn't paint over the icon.
-            if (glyph.w as u32) > cell_w_px {
-                let extra = (glyph.w as u32 - 1) / cell_w_px;
-                cells_to_skip = extra;
-            }
+            // Wide Nerd-Font glyphs (ink wider than one cell) are
+            // emitted with `atlas_size.x > cell_w`, so the shader stretches
+            // the quad across the overflow. The next cell still emits its
+            // own bg+glyph instance — on powerline prompts its bg matches
+            // and the icon extension is preserved; on non-powerline output
+            // the adjacent cell overdraws the overflow, which matches how
+            // Ghostty / Windows Terminal render single-cell PUA glyphs.
+            // Keeping 1:1 cell↔instance mapping is required by the cursor
+            // re-emit (below), which indexes by `row*cols+col`.
             instances.push(inst);
         }
 

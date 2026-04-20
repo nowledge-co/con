@@ -6281,6 +6281,13 @@ impl Render for ConWorkspace {
                 .size(px(22.0))
                 .rounded(px(5.0))
                 .cursor_pointer()
+                // `.occlude()` is required on Windows so the parent
+                // top_bar's `WindowControlArea::Drag` hit-test doesn't
+                // swallow this button (the OS would return HTCAPTION and
+                // start a window-drag on click instead of firing the
+                // click listener). Same treatment as the Min/Max/Close
+                // caption buttons at the top of this file.
+                .occlude()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .tooltip(|window, cx| {
                     chrome_tooltip(
@@ -6317,6 +6324,7 @@ impl Render for ConWorkspace {
                 .size(px(22.0))
                 .rounded(px(5.0))
                 .cursor_pointer()
+                .occlude()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .tooltip(move |window, cx| {
                     chrome_tooltip(
@@ -6356,6 +6364,7 @@ impl Render for ConWorkspace {
                 .size(px(22.0))
                 .rounded(px(5.0))
                 .cursor_pointer()
+                .occlude()
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .tooltip(move |window, cx| {
                     chrome_tooltip(

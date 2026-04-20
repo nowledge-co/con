@@ -395,20 +395,33 @@ impl GlyphCache {
         let cell_w = self.metrics.cell_width_px as i32;
         let cell_h = self.metrics.cell_height_px as i32;
 
-        // Nerd-Font PUA icons (and other oversize glyphs) are authored
-        // with an advance of 1 cell but an ink box that extends well past
-        // that — e.g. IoskeleyMono's U+F07B folder has a 924du ink box
-        // against a 600du advance. Rather than scale the glyph down (the
-        // prior approach, which made icons visibly tiny inside oh-my-posh
-        // prompts), allocate a wider atlas slot so the glyph renders at
-        // its natural width. The shader uses `atlasSize.x` as the quad
-        // width, so the glyph draws across two grid cells on screen; the
-        // renderer skips the cell immediately to the right when a space
-        // or empty cell sits there (which is the common case in prompts
-        // and `ls`-style output). Cap at 2× cell to bound atlas pressure.
-        let ink_px = self.primary_ink_px(key.codepoint).unwrap_or(0.0);
-        let glyph_w = if ink_px > cell_w as f32 {
-            (cell_w * 2).min(ink_px.ceil() as i32)
+        // Nerd-Font PUA icons are authored with an advance of 1 cell
+        // but an ink box that extends well past that — e.g. IoskeleyMono's
+        // U+F07B folder has a 924du ink box against a 600du advance.
+        // Rather than scale the glyph down (the prior approach, which
+        // made icons visibly tiny inside oh-my-posh prompts), allocate
+        // a wider atlas slot so the glyph renders at its natural width.
+        // The shader uses `atlasSize.x` as the quad width, so the glyph
+        // draws across two grid cells on screen; cell N+1 still emits
+        // its own bg+glyph instance, which on powerline prompts has the
+        // same bg as cell N (making the overflow visible) and on other
+        // contexts overdraws the overflow (matching how Ghostty /
+        // Windows Terminal render single-cell wide PUA glyphs).
+        //
+        // Restricted to PUA codepoints. Normal glyphs with ink just
+        // slightly wider than their advance (common in monospace fonts
+        // with negative sidebearings) would otherwise each allocate a
+        // ~1px-wider slot, and the 1-cell-wide instance of the next
+        // cell would partially overdraw the ClearType edge coverage —
+        // visible as "disconnected" spacing between letters.
+        let is_wide_candidate = matches!(key.codepoint, 0xE000..=0xF8FF);
+        let glyph_w = if is_wide_candidate {
+            let ink_px = self.primary_ink_px(key.codepoint).unwrap_or(cell_w as f32);
+            if ink_px > cell_w as f32 {
+                (cell_w * 2).min(ink_px.ceil() as i32)
+            } else {
+                cell_w
+            }
         } else {
             cell_w
         };
