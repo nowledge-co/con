@@ -277,6 +277,7 @@ impl TerminalPane {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub fn cell_size_px(&self, cx: &App) -> Option<(u32, u32)> {
         self.entity.read(cx).terminal().map(|terminal| {
             let size = terminal.size();
