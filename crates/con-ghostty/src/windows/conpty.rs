@@ -25,7 +25,7 @@ use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result, anyhow};
 use parking_lot::Mutex;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, TRUE};
+use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, TRUE};
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 use windows::Win32::System::Console::{
@@ -34,32 +34,29 @@ use windows::Win32::System::Console::{
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-    STARTUPINFOEXW, STARTUPINFOW, TerminateProcess, UpdateProcThreadAttribute,
+    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, INFINITE,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use windows::core::PWSTR;
 
-/// Newtype-wrapped HPCON so we can implement Drop / Send safely.
-struct PseudoConsole(HPCON);
-
-impl Drop for PseudoConsole {
-    fn drop(&mut self) {
-        if self.0.0 == 0 {
-            // Already closed by `ConPty::drop` (which takes the HPCON
-            // out to sequence teardown manually — see the comment
-            // there). Nothing to do.
-            return;
-        }
-        // SAFETY: HPCON is owned by us; closing on drop is the documented
-        // teardown contract. Blocks until the child has finished draining
-        // its output pipe.
-        unsafe { ClosePseudoConsole(self.0) }
+/// Close the pseudo-console if it hasn't been closed yet, clearing the
+/// slot so a second caller becomes a no-op. Called from two places —
+/// `ConPty::drop` (teardown triggered by the UI) and the exit-watcher
+/// thread (teardown triggered by the child shell exiting on its own,
+/// e.g. the user typing `exit`). Whichever runs first closes; the
+/// other finds `None` and returns immediately.
+fn close_hpcon_slot(slot: &Mutex<Option<HPCON>>) {
+    if let Some(hpcon) = slot.lock().take() {
+        // SAFETY: We own the HPCON; the `take` guarantees no one
+        // else can close it. `ClosePseudoConsole` blocks until
+        // conhost drains the output pipe, which is why the caller
+        // force-kills the shell first when needed (see
+        // `ConPty::drop`).
+        unsafe { ClosePseudoConsole(hpcon) }
     }
 }
-
-unsafe impl Send for PseudoConsole {}
-unsafe impl Sync for PseudoConsole {}
 
 /// Owned HANDLE that closes itself on drop.
 ///
@@ -94,7 +91,11 @@ impl Drop for OwnedHandle {
 
 /// A live ConPTY session.
 pub struct ConPty {
-    pcon: PseudoConsole,
+    /// Pseudo-console handle, shared with the exit-watcher thread.
+    /// Either `ConPty::drop` or the watcher takes the `Option<HPCON>`
+    /// out and calls `ClosePseudoConsole`; the loser finds `None` and
+    /// skips. See `close_hpcon_slot`.
+    pcon: Arc<Mutex<Option<HPCON>>>,
     /// Host end of the pipe the child reads from.
     input_write: Arc<Mutex<OwnedHandle>>,
     /// Process handle (kept so callers can `WaitForSingleObject` for exit).
@@ -103,6 +104,13 @@ pub struct ConPty {
     _thread: OwnedHandle,
     /// Output reader thread; joined on drop.
     output_thread: Option<JoinHandle<()>>,
+    /// Background thread that waits on the child process handle and
+    /// closes the pseudo-console when the shell exits on its own
+    /// (e.g. user typed `exit`). Without this, conhost keeps the
+    /// output pipe alive after the shell dies and the reader sits in
+    /// `ReadFile` forever — the pane looks frozen and typing into it
+    /// writes into a dead PTY. Joined on drop.
+    exit_watcher: Option<JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -139,7 +147,7 @@ impl ConPty {
         drop(input_read);
         drop(output_write);
 
-        let pcon = PseudoConsole(hpcon);
+        let pcon = Arc::new(Mutex::new(Some(hpcon)));
 
         let (startup_info, attribute_buffer) = build_startup_info(hpcon)?;
 
@@ -196,12 +204,66 @@ impl ConPty {
         let input_write = Arc::new(Mutex::new(input_write));
         let output_thread = spawn_output_reader(output_read, on_output);
 
+        // Duplicate the process handle so the watcher thread can wait
+        // on it independently of the `OwnedHandle` stored on `Self`.
+        // The original is still needed for `process_handle()` and gets
+        // closed by `OwnedHandle::drop` when `ConPty` is dropped; the
+        // duplicate is closed by the watcher thread when it finishes.
+        // SAFETY: GetCurrentProcess returns a pseudo-handle that does
+        // not need closing; process_info.hProcess is a valid handle we
+        // own; DUPLICATE_SAME_ACCESS copies the ACCESS mask verbatim.
+        let mut dup_handle = HANDLE::default();
+        let dup_ok = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                process_info.hProcess,
+                GetCurrentProcess(),
+                &mut dup_handle,
+                0,
+                false,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        let exit_watcher = if dup_ok.is_ok() {
+            let dup_owned = OwnedHandle::from_handle(dup_handle);
+            let pcon_for_watcher = Arc::clone(&pcon);
+            let watcher = thread::Builder::new()
+                .name("conpty-exit-watcher".into())
+                .spawn(move || {
+                    let h = dup_owned.as_handle();
+                    // SAFETY: dup_owned keeps the handle alive for
+                    // the duration of this thread; INFINITE blocks
+                    // until the child process terminates.
+                    let wait_result = unsafe { WaitForSingleObject(h, INFINITE) };
+                    log::info!(
+                        "conpty exit-watcher: child exited (wait_result={:?}), closing pseudo-console",
+                        wait_result
+                    );
+                    // Close the pseudo-console so conhost releases
+                    // the pipe write-end; the output reader's
+                    // `ReadFile` will then see EOF and the reader
+                    // thread exits. If `ConPty::drop` raced us and
+                    // already closed the HPCON, `close_hpcon_slot`
+                    // finds `None` and returns immediately.
+                    close_hpcon_slot(&pcon_for_watcher);
+                    // dup_owned drops here, closing the duplicate.
+                })
+                .expect("conpty exit-watcher spawn failed");
+            Some(watcher)
+        } else {
+            log::warn!(
+                "DuplicateHandle for exit-watcher failed; pane will not auto-close on `exit`"
+            );
+            None
+        };
+
         Ok(Self {
             pcon,
             input_write,
             process,
             _thread: thread,
             output_thread: Some(output_thread),
+            exit_watcher,
         })
     }
 
@@ -221,8 +283,16 @@ impl ConPty {
             X: size.cols as i16,
             Y: size.rows as i16,
         };
-        // SAFETY: pcon.0 is a valid HPCON owned by us.
-        unsafe { ResizePseudoConsole(self.pcon.0, coord) }
+        // Read the HPCON through the shared slot. If the shell has
+        // already exited (exit-watcher took the handle), the slot is
+        // `None` and the resize is a no-op — there's nothing to resize.
+        let guard = self.pcon.lock();
+        let Some(hpcon) = *guard else {
+            return Ok(());
+        };
+        // SAFETY: hpcon is a valid HPCON owned by this ConPty; the
+        // lock guards against a concurrent close.
+        unsafe { ResizePseudoConsole(hpcon, coord) }
             .map_err(|e| anyhow!("ResizePseudoConsole failed: {}", e.message()))
     }
 
@@ -247,6 +317,8 @@ impl Drop for ConPty {
         //   1. TerminateProcess(child)      — makes (2) return promptly
         //   2. ClosePseudoConsole(hpcon)    — releases the pipe write-end
         //   3. JoinHandle::join(reader)     — reader's ReadFile now sees EOF
+        //   4. JoinHandle::join(watcher)    — watcher's WaitForSingleObject
+        //                                     returns now that the child died
         //
         // SAFETY: process handle is owned by us; TerminateProcess with
         // exit code 0 is the Windows equivalent of SIGKILL. We don't
@@ -259,17 +331,14 @@ impl Drop for ConPty {
             }
         }
 
-        // Take the HPCON out and null it so field-drop (PseudoConsole
-        // Drop) doesn't double-close. Closing here sequences the
-        // teardown correctly relative to the reader join.
-        let hpcon = std::mem::replace(&mut self.pcon.0, HPCON(0));
-        if hpcon.0 != 0 {
-            // SAFETY: HPCON is owned by us; we've nulled the field so
-            // no double-close can happen.
-            unsafe { ClosePseudoConsole(hpcon) };
-        }
+        // Close the pseudo-console (idempotent with the watcher's
+        // close via `close_hpcon_slot`).
+        close_hpcon_slot(&self.pcon);
 
         if let Some(handle) = self.output_thread.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.exit_watcher.take() {
             let _ = handle.join();
         }
     }
