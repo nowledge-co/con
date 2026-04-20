@@ -4819,16 +4819,32 @@ impl ConWorkspace {
     /// modal can see them. On macOS `set_visible` on NSView is
     /// cheap / idempotent, so this is a no-op in practice.
     fn sync_pane_visibility_for_modals(&self, cx: &App) {
-        let modal_open = self.is_modal_open(cx);
-        let want_visible = !modal_open;
-        log::info!(
-            "sync_pane_visibility_for_modals: modal_open={modal_open} \
-             → panes want_visible={want_visible}"
-        );
-        for tab in &self.tabs {
-            for t in tab.pane_tree.all_terminals() {
-                t.set_native_view_visible(want_visible, cx);
+        // Windows-only workaround: a WS_CHILD HWND with WS_VISIBLE always
+        // paints over the parent D3D swapchain and also eats every mouse
+        // click that lands on its rect, so a GPUI-rendered modal
+        // (settings, command palette) has to explicitly hide the pane
+        // HWND to receive input. macOS NSView overlays honour Z-order
+        // natively — if we run this path on macOS the ghostty NSView
+        // becomes hidden and, because the main window is transparent on
+        // macOS 13+, the user sees the desktop through the settings
+        // modal's dim overlay instead of the terminal behind it.
+        #[cfg(target_os = "windows")]
+        {
+            let modal_open = self.is_modal_open(cx);
+            let want_visible = !modal_open;
+            log::info!(
+                "sync_pane_visibility_for_modals: modal_open={modal_open} \
+                 → panes want_visible={want_visible}"
+            );
+            for tab in &self.tabs {
+                for t in tab.pane_tree.all_terminals() {
+                    t.set_native_view_visible(want_visible, cx);
+                }
             }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = cx;
         }
     }
 
