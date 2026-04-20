@@ -2818,9 +2818,13 @@ impl ConWorkspace {
                 self.toggle_agent_panel(&ToggleAgentPanel, window, cx);
             }
             "settings" => {
-                self.settings_panel.update(cx, |panel, cx| {
-                    panel.toggle(window, cx);
-                });
+                // Route through the full toggle_settings action so
+                // `sync_pane_visibility_for_modals` fires. Opening the
+                // panel directly (via settings_panel.update.toggle)
+                // leaves pane WS_CHILD HWNDs visible on Windows, and
+                // they sit above the GPUI-drawn modal and swallow its
+                // clicks.
+                self.toggle_settings(&settings_panel::ToggleSettings, window, cx);
             }
             "new-tab" => {
                 self.new_tab(&NewTab, window, cx);

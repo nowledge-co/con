@@ -36,8 +36,9 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_GLYPH_METRICS, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PIXEL_GEOMETRY_RGB,
-    DWRITE_RENDERING_MODE_NATURAL, IDWriteFactory, IDWriteFontCollection, IDWriteFontFace,
-    IDWriteFontFallback, IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextFormat1,
+    DWRITE_RENDERING_MODE_NATURAL, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    IDWriteFactory, IDWriteFontCollection, IDWriteFontFace, IDWriteFontFallback,
+    IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextFormat1,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -447,10 +448,23 @@ impl GlyphCache {
             bottom: rect.max.y as f32,
         };
 
+        // Wide PUA glyphs typically have symmetric negative sidebearings
+        // (ink extends equally past the advance on both sides). DrawText
+        // with default LEADING alignment places the glyph's advance origin
+        // at `draw_rect.left`, which means D2D1_DRAW_TEXT_OPTIONS_CLIP
+        // chops off the negative leftSideBearing and renders the icon as
+        // a half-glyph. Switching to CENTER alignment for the wider slot
+        // places the advance-box at the rect's center so both negative
+        // sidebearings fit inside the clip region.
+        let needs_center = is_wide_candidate && glyph_w > cell_w;
+
         // SAFETY: d2d_rt, format, brush owned by self. BeginDraw / EndDraw
         // bracket a valid D2D scene; DrawText writes into the atlas via the
         // DXGI-backed RT.
         unsafe {
+            if needs_center {
+                let _ = format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            }
             self.d2d_rt.BeginDraw();
             self.d2d_rt.DrawText(
                 utf16_slice,
@@ -461,6 +475,9 @@ impl GlyphCache {
                 DWRITE_MEASURING_MODE_NATURAL,
             );
             let _ = self.d2d_rt.EndDraw(None, None);
+            if needs_center {
+                let _ = format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            }
         }
 
         let glyph_rect = GlyphRect {
