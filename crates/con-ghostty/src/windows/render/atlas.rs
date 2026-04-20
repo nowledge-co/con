@@ -463,36 +463,44 @@ impl GlyphCache {
             && !matches!(codepoint, 0xE0A0..=0xE0D4);
         let (glyph_w, lsb_shift_px) = if is_wide_candidate {
             match self.primary_glyph_metrics_px(codepoint) {
-                Some(m) if m.ink_px > cell_w as f32 + 1.5 => {
+                Some(m) => {
+                    // Nerd-Font icon glyphs (folder U+F07B, github U+F09B,
+                    // ...) frequently carry a *negative* leftSideBearing:
+                    // ink starts `|lsb|` pixels LEFT of the pen origin.
+                    // With LEADING alignment DirectWrite places the pen at
+                    // `draw_rect.left` and D2D1_DRAW_TEXT_OPTIONS_CLIP
+                    // then chops anything outside the layout rect — so
+                    // the leftmost `|lsb|` pixels of the glyph are lost
+                    // (the "half folder icon" symptom). Shift the pen
+                    // right by `|lsb|` so the ink box lands flush with
+                    // the slot's left edge.
                     let lsb_shift = (-m.lsb_px).max(0.0);
                     let natural = (m.ink_px + lsb_shift).ceil() as i32;
-                    let w = (cell_w * 2).min(natural.max(cell_w));
-                    log::debug!(
-                        "atlas: wide PUA glyph U+{:04X} ink={:.1}px lsb={:.1}px \
-                         → slot={}px (cell={})",
+                    // Widen to two cells only when the glyph's ink genuinely
+                    // overflows a single cell. Powerline / arrow glyphs
+                    // that already fit keep their 1-cell slot (widening
+                    // them would overlap the next column on screen).
+                    let glyph_w = if natural > cell_w + 1 {
+                        (cell_w * 2).min(natural)
+                    } else {
+                        cell_w
+                    };
+                    log::info!(
+                        "atlas: PUA U+{:04X} ink={:.1}px lsb={:.1}px \
+                         slot={}px shift={:.1}px (cell={})",
                         codepoint,
                         m.ink_px,
                         m.lsb_px,
-                        w,
+                        glyph_w,
+                        lsb_shift,
                         cell_w,
                     );
-                    (w, lsb_shift)
-                }
-                Some(m) => {
-                    log::trace!(
-                        "atlas: PUA glyph U+{:04X} fits cell (ink={:.1}px lsb={:.1}px \
-                         cell={}px)",
-                        codepoint,
-                        m.ink_px,
-                        m.lsb_px,
-                        cell_w,
-                    );
-                    (cell_w, 0.0)
+                    (glyph_w, lsb_shift)
                 }
                 None => {
-                    log::trace!(
-                        "atlas: PUA glyph U+{:04X} not in primary face; \
-                         using fallback via DirectWrite",
+                    log::info!(
+                        "atlas: PUA U+{:04X} not in primary face; \
+                         using DirectWrite fallback",
                         codepoint,
                     );
                     (cell_w, 0.0)
