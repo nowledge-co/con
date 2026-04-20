@@ -136,6 +136,8 @@ The host also must not invent viewport state that Ghostty has not emitted. Stand
 
 Con also no longer tries to outsmart Ghostty's resize path with host-side coalescing. The embedded surface now updates its core size immediately on layout using AppKit backing-size conversion, which is much closer to how Ghostty's own macOS app drives `ghostty_surface_set_size`.
 
+Another macOS detail is that Ghostty sizes the core surface from the scroll view's real content area, not from an outer host frame guessed by the embedding UI toolkit. Con now follows that too: the embedded surface frame and backing-size calculation come from the scroll container's visible rect and content size. That keeps the PTY resize and the native viewport math aligned during live window drags.
+
 ## Agent execution
 
 The `terminal_exec` tool writes the command into the visible Ghostty pane.
