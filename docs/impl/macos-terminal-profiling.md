@@ -5,6 +5,7 @@ This note exists for one specific class of bugs:
 - a heavy TUI such as Claude Code resizes instantly in Ghostty or iTerm2
 - the same TUI in Con appears to repaint from upper rows down to the bottom
 - Con feels hung or many seconds behind during live resize
+- the same lag can reproduce even with a minimal TUI such as an otherwise empty `tmux`, which means the issue is not Claude-specific
 
 At that point, guessing is lower value than measuring.
 
@@ -33,6 +34,12 @@ Time Profiler capture:
 
 ```bash
 ./scripts/macos/profile-terminal-resize-xctrace.sh
+```
+
+If `cargo` is not on the non-interactive launch PATH that `xctrace` sees, set it explicitly:
+
+```bash
+CARGO_BIN="$(command -v cargo)" ./scripts/macos/profile-terminal-resize-xctrace.sh
 ```
 
 Equivalent manual form:
@@ -83,13 +90,13 @@ Suggested workflow:
 
 1. Launch Con from Xcode Instruments or attach Instruments to the running process.
 2. Start a heavy TUI, for example `claude --resume`.
-3. Record while resizing the window for 3-5 seconds.
+3. Also capture the simpler control case: launch `tmux`, then resize for 3-5 seconds.
 4. Repeat the same capture with Ghostty.
 
 The helper script above automates the `Time Profiler` launch for Con by wrapping:
 
 ```bash
-xcrun xctrace record --template 'Time Profiler' --launch -- cargo run -p con
+xcrun xctrace record --template 'Time Profiler' --launch -- /absolute/path/to/cargo run -p con
 ```
 
 Look for:

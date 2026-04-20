@@ -7,6 +7,12 @@ cd "$ROOT_DIR"
 OUT_DIR="${1:-$ROOT_DIR/dist/xctrace}"
 mkdir -p "$OUT_DIR"
 
+CARGO_BIN="${CARGO_BIN:-$(command -v cargo || true)}"
+if [[ -z "$CARGO_BIN" ]]; then
+  echo "error: cargo not found in PATH. Set CARGO_BIN to an absolute cargo path." >&2
+  exit 1
+fi
+
 TRACE_NAME="con-terminal-resize-$(date +%Y%m%d-%H%M%S).trace"
 TRACE_PATH="$OUT_DIR/$TRACE_NAME"
 
@@ -26,4 +32,4 @@ xcrun xctrace record \
   --template 'Time Profiler' \
   --output "$TRACE_PATH" \
   --launch -- \
-  cargo run -p con
+  "$CARGO_BIN" run -p con
