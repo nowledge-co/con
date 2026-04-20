@@ -27,7 +27,6 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The macOS window now adopts Ghostty-style cell-step resize increments from the active terminal surface, reducing pointless intermediate resize states during live drags and moving Con closer to Ghostty's own resize behavior.
 - The normal workspace render path no longer forces fresh terminal observations just to populate pane metadata. Runtime facts are now cached from explicit observation paths and reused by the UI, which avoids reading terminal text during ordinary renders while a heavy TUI is active.
 - The embedded macOS Ghostty host no longer synthesizes a fake scrollbar-at-top state before Ghostty emits real viewport data. The native scroll container now stays inert until Ghostty provides actual scrollbar state, which avoids forcing heavy TUIs through upper scrollback on startup or during reflow.
-- The embedded macOS Ghostty host now sizes the core surface from the scroll container's actual content area and visible rect instead of raw GPUI pane bounds. That keeps Con's resize path closer to Ghostty's own host logic during live window drags.
 
 **AI Agent**
 - Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.

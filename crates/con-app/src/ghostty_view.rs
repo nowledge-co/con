@@ -486,20 +486,13 @@ impl GhosttyView {
             return;
         };
 
-        let fallback_visible_width = f64::from(bounds.size.width.as_f32().max(1.0));
-        let fallback_visible_height = f64::from(bounds.size.height.as_f32().max(1.0));
+        let visible_width = f64::from(bounds.size.width.as_f32().max(1.0));
+        let visible_height = f64::from(bounds.size.height.as_f32().max(1.0));
         let size = terminal.size();
         let cell_height = if size.cell_height_px > 0 && self.scale_factor > 0.0 {
             f64::from(size.cell_height_px) / f64::from(self.scale_factor)
         } else {
             0.0
-        };
-        let (visible_width, visible_height) = unsafe {
-            let content_size: cocoa::foundation::NSSize = msg_send![scroll_view, contentSize];
-            (
-                content_size.width.max(fallback_visible_width).max(1.0),
-                content_size.height.max(fallback_visible_height).max(1.0),
-            )
         };
         let scrollbar = terminal.scrollbar();
         let document_height = if let Some(scrollbar) = scrollbar {
@@ -550,7 +543,7 @@ impl GhosttyView {
             let visible_rect: NSRect = msg_send![content_view, documentVisibleRect];
             let surface_frame = NSRect::new(
                 visible_rect.origin,
-                visible_rect.size,
+                cocoa::foundation::NSSize::new(visible_width, visible_height),
             );
             let _: () = msg_send![nsview, setFrame:surface_frame];
         }
@@ -566,20 +559,10 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn surface_size_in_backing_pixels(&self, bounds: Bounds<Pixels>) -> (u32, u32) {
-        let mut logical_size = cocoa::foundation::NSSize::new(
+        let logical_size = cocoa::foundation::NSSize::new(
             f64::from(bounds.size.width.as_f32().max(1.0)),
             f64::from(bounds.size.height.as_f32().max(1.0)),
         );
-
-        if let Some(scroll_view) = self.host_view {
-            unsafe {
-                let content_size: cocoa::foundation::NSSize = msg_send![scroll_view, contentSize];
-                logical_size = cocoa::foundation::NSSize::new(
-                    content_size.width.max(1.0),
-                    content_size.height.max(1.0),
-                );
-            }
-        }
 
         if let Some(nsview) = self.nsview {
             unsafe {
