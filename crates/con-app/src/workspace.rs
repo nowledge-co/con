@@ -272,6 +272,7 @@ pub struct ConWorkspace {
     /// Last wake generation observed from Ghostty's embedded runtime.
     last_ghostty_wake_generation: u64,
     /// Last macOS content-resize increment applied to the window, in 1/1000th points.
+    #[cfg(target_os = "macos")]
     last_window_resize_increment_millipoints: Option<(u32, u32)>,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
@@ -893,6 +894,7 @@ impl ConWorkspace {
             terminal_theme,
             ghostty_app,
             last_ghostty_wake_generation,
+            #[cfg(target_os = "macos")]
             last_window_resize_increment_millipoints: None,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
