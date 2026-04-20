@@ -332,13 +332,16 @@ impl GhosttyView {
             let _: () = msg_send![host, setDrawsBackground:NO];
             let _: () = msg_send![host, setHasVerticalScroller:NO];
             let _: () = msg_send![host, setHasHorizontalScroller:NO];
-            let _: () = msg_send![host, setAutohidesScrollers:YES];
+            let _: () = msg_send![host, setAutohidesScrollers:NO];
+            let _: () = msg_send![host, setUsesPredominantAxisScrolling:YES];
             let _: () = msg_send![host, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
             let _: () = msg_send![host, setAutoresizesSubviews:YES];
             let _: () = msg_send![
                 host,
                 setLayerContentsRedrawPolicy:NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE
             ];
+            let content_view: id = msg_send![host, contentView];
+            let _: () = msg_send![content_view, setClipsToBounds:NO];
             let _: () = msg_send![
                 parent_nsview,
                 addSubview: host
@@ -491,32 +494,23 @@ impl GhosttyView {
         } else {
             0.0
         };
-        let scrollbar = terminal.scrollbar().unwrap_or(con_ghostty::GhosttyScrollbar {
-            total: u64::from(size.rows.max(1)),
-            offset: 0,
-            len: u64::from(size.rows.max(1)),
-        });
-        let total_rows = scrollbar.total.max(scrollbar.len).max(1);
-        let visible_rows = scrollbar.len.max(1).min(total_rows);
-        let padding = if cell_height > 0.0 {
-            (visible_height - (visible_rows as f64 * cell_height)).max(0.0)
-        } else {
-            0.0
-        };
-        let document_height = if cell_height > 0.0 {
-            (total_rows as f64 * cell_height + padding).max(visible_height)
+        let scrollbar = terminal.scrollbar();
+        let document_height = if let Some(scrollbar) = scrollbar {
+            let total_rows = scrollbar.total.max(scrollbar.len).max(1);
+            let visible_rows = scrollbar.len.max(1).min(total_rows);
+            let padding = if cell_height > 0.0 {
+                (visible_height - (visible_rows as f64 * cell_height)).max(0.0)
+            } else {
+                0.0
+            };
+            if cell_height > 0.0 {
+                (total_rows as f64 * cell_height + padding).max(visible_height)
+            } else {
+                visible_height
+            }
         } else {
             visible_height
         };
-        let offset_from_bottom = if cell_height > 0.0 {
-            (total_rows
-                .saturating_sub(scrollbar.offset.min(total_rows))
-                .saturating_sub(visible_rows)) as f64
-                * cell_height
-        } else {
-            0.0
-        };
-        let scroll_y = offset_from_bottom.clamp(0.0, (document_height - visible_height).max(0.0));
 
         unsafe {
             let document_frame = NSRect::new(
@@ -526,10 +520,24 @@ impl GhosttyView {
             let _: () = msg_send![document_view, setFrame:document_frame];
 
             let content_view: id = msg_send![scroll_view, contentView];
-            let _: () = msg_send![
-                content_view,
-                scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
-            ];
+            if let Some(scrollbar) = scrollbar {
+                let total_rows = scrollbar.total.max(scrollbar.len).max(1);
+                let visible_rows = scrollbar.len.max(1).min(total_rows);
+                let offset_from_bottom = if cell_height > 0.0 {
+                    (total_rows
+                        .saturating_sub(scrollbar.offset.min(total_rows))
+                        .saturating_sub(visible_rows)) as f64
+                        * cell_height
+                } else {
+                    0.0
+                };
+                let scroll_y =
+                    offset_from_bottom.clamp(0.0, (document_height - visible_height).max(0.0));
+                let _: () = msg_send![
+                    content_view,
+                    scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
+                ];
+            }
             let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
 
             let visible_rect: NSRect = msg_send![content_view, documentVisibleRect];

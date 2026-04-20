@@ -132,6 +132,8 @@ One more host-side rule matters for TUI performance: normal UI renders must not 
 
 One more embedded-macOS detail turned out to matter: standalone Ghostty does not host the surface in a bare `NSView`. It wraps the surface in a scroll container and consumes `GHOSTTY_ACTION_SCROLLBAR` updates so the visible viewport stays synchronized with Ghostty's scrollback model during reflow and resize. Con now mirrors that contract by caching Ghostty scrollbar actions in `con-ghostty` and positioning the embedded surface inside a native scroll container. Without that, heavy TUIs could briefly render from upper scrollback during resize and only later settle back to the bottom.
 
+The host also must not invent viewport state that Ghostty has not emitted. Standalone Ghostty only scrolls its native container when a real scrollbar update exists. Con now follows that rule too: before Ghostty publishes scrollbar data, the scroll container stays at its current position instead of being forced to a synthetic `offset = 0` state. That matters for TUI startup and reflow, where a fake top-of-history viewport can make the embed briefly paint from upper scrollback before Ghostty settles on the real bottom-anchored viewport.
+
 Con also no longer tries to outsmart Ghostty's resize path with host-side coalescing. The embedded surface now updates its core size immediately on layout using AppKit backing-size conversion, which is much closer to how Ghostty's own macOS app drives `ghostty_surface_set_size`.
 
 ## Agent execution
