@@ -3,6 +3,7 @@ name = "con"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+default-run = "con"
 
 # Two binaries pointing at the same `main.rs`, gated by mutually-exclusive
 # features. `CON` is a reserved DOS device name on Windows so `con.exe` is

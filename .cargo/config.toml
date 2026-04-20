@@ -15,5 +15,5 @@
 [alias]
 wcheck = "check --no-default-features --features con/bin-con-app"
 wbuild = "build --no-default-features --features con/bin-con-app"
-wrun   = "run   --no-default-features --features con/bin-con-app"
+wrun   = "run   --no-default-features --features con/bin-con-app --bin con-app"
 wtest  = "test  --no-default-features --features con/bin-con-app"
