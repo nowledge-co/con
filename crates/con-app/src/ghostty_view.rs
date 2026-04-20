@@ -40,6 +40,7 @@ use raw_window_handle::HasWindowHandle;
 
 const GHOSTTY_VIEW_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const LIVE_RESIZE_COMMIT_INTERVAL: Duration = Duration::from_millis(16);
+const LIVE_RESIZE_SETTLE_INTERVAL: Duration = Duration::from_millis(120);
 
 /// Emitted when the terminal title changes.
 #[allow(dead_code)]
@@ -476,19 +477,30 @@ impl GhosttyView {
             return;
         }
 
+        let target_grid = if size.cell_width_px > 0 && size.cell_height_px > 0 {
+            Some((
+                (width_px / size.cell_width_px).max(1) as u16,
+                (height_px / size.cell_height_px).max(1) as u16,
+            ))
+        } else {
+            None
+        };
+        let current_grid = if size.columns > 0 && size.rows > 0 {
+            Some((size.columns, size.rows))
+        } else {
+            None
+        };
+
         let now = Instant::now();
         let due = self
             .last_resize_commit_at
             .is_none_or(|last| now.duration_since(last) >= LIVE_RESIZE_COMMIT_INTERVAL);
 
-        if due {
+        if target_grid.is_some() && target_grid != current_grid && due {
             self.commit_surface_resize(bounds);
         } else {
             self.pending_resize_bounds = Some(bounds);
-            self.next_resize_commit_at = self
-                .last_resize_commit_at
-                .map(|last| last + LIVE_RESIZE_COMMIT_INTERVAL)
-                .or(Some(now + LIVE_RESIZE_COMMIT_INTERVAL));
+            self.next_resize_commit_at = Some(now + LIVE_RESIZE_SETTLE_INTERVAL);
         }
     }
 
@@ -515,12 +527,11 @@ impl GhosttyView {
         self.last_resize_commit_at = Some(Instant::now());
         self.next_resize_commit_at = None;
 
-        let current_bounds = self.last_bounds.as_ref();
-        if current_bounds != Some(&bounds) {
-            self.pending_resize_bounds = Some(bounds);
+        if self.last_bounds != Some(bounds) {
+            self.pending_resize_bounds = self.last_bounds;
             self.next_resize_commit_at = self
                 .last_resize_commit_at
-                .map(|last| last + LIVE_RESIZE_COMMIT_INTERVAL);
+                .map(|last| last + LIVE_RESIZE_SETTLE_INTERVAL);
         } else {
             self.pending_resize_bounds = None;
         }
