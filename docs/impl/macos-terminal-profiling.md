@@ -36,10 +36,14 @@ Time Profiler capture:
 ./scripts/macos/profile-terminal-resize-xctrace.sh
 ```
 
-If `cargo` is not on the non-interactive launch PATH that `xctrace` sees, set it explicitly:
+The helper now builds `con` first and then launches the actual built binary under `xctrace`. This is important: profiling `cargo run -p con` captures the Cargo wrapper process, not the app you are resizing.
+
+If your toolchain or output path is non-standard, set them explicitly:
 
 ```bash
-CARGO_BIN="$(command -v cargo)" ./scripts/macos/profile-terminal-resize-xctrace.sh
+CARGO_BIN="$(command -v cargo)" \
+CON_APP_BIN="$PWD/target/debug/con" \
+./scripts/macos/profile-terminal-resize-xctrace.sh
 ```
 
 Equivalent manual form:
@@ -93,10 +97,11 @@ Suggested workflow:
 3. Also capture the simpler control case: launch `tmux`, then resize for 3-5 seconds.
 4. Repeat the same capture with Ghostty.
 
-The helper script above automates the `Time Profiler` launch for Con by wrapping:
+The helper script above automates the `Time Profiler` launch for Con by building and then wrapping:
 
 ```bash
-xcrun xctrace record --template 'Time Profiler' --launch -- /absolute/path/to/cargo run -p con
+/absolute/path/to/cargo build -p con
+xcrun xctrace record --template 'Time Profiler' --launch -- /absolute/path/to/target/debug/con
 ```
 
 Look for:

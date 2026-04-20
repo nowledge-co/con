@@ -13,6 +13,16 @@ if [[ -z "$CARGO_BIN" ]]; then
   exit 1
 fi
 
+CON_APP_BIN="${CON_APP_BIN:-$ROOT_DIR/target/debug/con}"
+
+echo "Building Con debug binary for profiling..."
+"$CARGO_BIN" build -p con >/dev/null
+
+if [[ ! -x "$CON_APP_BIN" ]]; then
+  echo "error: expected built app binary at $CON_APP_BIN. Set CON_APP_BIN to the executable to profile." >&2
+  exit 1
+fi
+
 TRACE_NAME="con-terminal-resize-$(date +%Y%m%d-%H%M%S).trace"
 TRACE_PATH="$OUT_DIR/$TRACE_NAME"
 
@@ -20,7 +30,7 @@ echo "Recording Time Profiler trace to:"
 echo "  $TRACE_PATH"
 echo
 echo "Workflow:"
-echo "  1. Con will launch under xctrace."
+echo "  1. The built Con binary will launch under xctrace."
 echo "  2. Reproduce 'claude --resume' and the bad live resize gesture."
 echo "  3. Stop recording with Ctrl+C in this terminal."
 echo
@@ -32,4 +42,4 @@ xcrun xctrace record \
   --template 'Time Profiler' \
   --output "$TRACE_PATH" \
   --launch -- \
-  "$CARGO_BIN" run -p con
+  "$CON_APP_BIN"
