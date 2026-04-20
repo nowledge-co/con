@@ -1,0 +1,82 @@
+[package]
+name = "con"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+default-run = "con"
+
+# Two binaries pointing at the same `main.rs`, gated by mutually-exclusive
+# features. `CON` is a reserved DOS device name on Windows so `con.exe` is
+# rejected by the Win32 file APIs; on that target we ship `con-app.exe`
+# instead. macOS / Linux keep the plain `con` binary so existing scripts
+# and the `.app` bundle structure are unchanged.
+#
+# Default feature set targets macOS / Linux. Windows users must build with
+# `--no-default-features --features bin-con-app`; the workspace
+# `.cargo/config.toml` exposes a `cargo wbuild` / `cargo wrun` alias for
+# this so the day-to-day command stays short.
+[[bin]]
+name = "con"
+path = "src/main.rs"
+required-features = ["bin-con"]
+
+[[bin]]
+name = "con-app"
+path = "src/main.rs"
+required-features = ["bin-con-app"]
+
+[features]
+default = ["bin-con"]
+bin-con = []
+bin-con-app = []
+
+[dependencies]
+con-core.workspace = true
+con-terminal.workspace = true
+con-agent.workspace = true
+con-ghostty.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui-component = { workspace = true, features = ["tree-sitter-languages"] }
+gpui-component-assets.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+tracing = { version = "0.1", features = ["log"] }
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+toml.workspace = true
+rust-embed.workspace = true
+dirs.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+pulldown-cmark.workspace = true
+markdown = { version = "1.0.0", features = ["serde"] }
+ropey.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "=0.26.0"
+objc = "0.2"
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = "0.6"
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",  # AddVectoredExceptionHandler
+    "Win32_System_Kernel",             # EXCEPTION_POINTERS definition
+] }
+
+[build-dependencies]
+cc = "1"
+
+[package.metadata.bundle]
+icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
+identifier = "co.nowledge.con"
+name = "con"
+osx_minimum_system_version = "10.15.7"

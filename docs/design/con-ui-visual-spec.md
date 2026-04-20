@@ -666,11 +666,11 @@ The design team should produce polished views for at least:
 
 The current code already points toward a strong architecture:
 
-- `crates/con/src/workspace.rs` gives a useful shell composition model
-- `crates/con/src/ghostty_view.rs` keeps the terminal primary
-- `crates/con/src/input_bar.rs` proves the value of a bottom-anchored composer
-- `crates/con/src/agent_panel.rs` is the seed of the future companion timeline
-- `crates/con/src/theme.rs` should evolve from hard-coded values into semantic design tokens
+- `crates/con-app/src/workspace.rs` gives a useful shell composition model
+- `crates/con-app/src/ghostty_view.rs` keeps the terminal primary
+- `crates/con-app/src/input_bar.rs` proves the value of a bottom-anchored composer
+- `crates/con-app/src/agent_panel.rs` is the seed of the future companion timeline
+- `crates/con-app/src/theme.rs` should evolve from hard-coded values into semantic design tokens
 
 The next design pass should refine this direction, not replace it with a totally different product shape.
 

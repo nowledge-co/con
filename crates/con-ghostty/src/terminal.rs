@@ -14,8 +14,13 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::os::raw::c_void;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Once};
+use std::sync::OnceLock;
+use std::time::Instant;
 
+use dispatch::Queue;
 use parking_lot::Mutex;
 
 use crate::ffi;
@@ -233,6 +238,13 @@ pub struct CommandRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GhosttyScrollbar {
+    pub total: u64,
+    pub offset: u64,
+    pub len: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GhosttySplitDirection {
     Right,
     Down,
@@ -272,6 +284,8 @@ pub struct TerminalState {
     pub surface: ffi::ghostty_surface_t,
     /// Pending host-side events emitted by Ghostty actions for this surface.
     pub pending_events: VecDeque<GhosttySurfaceEvent>,
+    /// Latest viewport scrollbar state emitted by Ghostty.
+    pub scrollbar: Option<GhosttyScrollbar>,
 }
 
 const MAX_COMMAND_HISTORY: usize = 20;
@@ -292,6 +306,7 @@ impl Default for TerminalState {
             last_command_finished_input_generation: 0,
             surface: std::ptr::null_mut(),
             pending_events: VecDeque::new(),
+            scrollbar: None,
         }
     }
 }
@@ -303,7 +318,17 @@ pub type StateRef = Arc<Mutex<TerminalState>>;
 static GHOSTTY_INIT: Once = Once::new();
 static mut GHOSTTY_INIT_RESULT: i32 = -1;
 
+fn perf_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE")
+            .is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
 fn ensure_ghostty_init() -> Result<(), String> {
+    ensure_resources_dir_env();
+
     GHOSTTY_INIT.call_once(|| {
         let ret = unsafe { ffi::ghostty_init(0, std::ptr::null_mut()) };
         unsafe { GHOSTTY_INIT_RESULT = ret };
@@ -313,6 +338,25 @@ fn ensure_ghostty_init() -> Result<(), String> {
         Err(format!("ghostty_init failed with code {}", ret))
     } else {
         Ok(())
+    }
+}
+
+fn ensure_resources_dir_env() {
+    if std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some() {
+        return;
+    }
+
+    let Some(resources_dir) = option_env!("CON_GHOSTTY_RESOURCES_DIR") else {
+        return;
+    };
+    if !Path::new(resources_dir).exists() {
+        return;
+    }
+
+    // SAFETY: this runs during Ghostty initialization before the app spins up
+    // worker threads, so mutating process env here is acceptable.
+    unsafe {
+        std::env::set_var("GHOSTTY_RESOURCES_DIR", resources_dir);
     }
 }
 
@@ -327,6 +371,23 @@ pub struct GhosttyApp {
     // Box prevents the runtime_config from being moved while ghostty holds a pointer.
     _runtime_config: Box<ffi::ghostty_runtime_config_s>,
     appearance: Mutex<GhosttyConfigPatch>,
+    wake_handle: Arc<GhosttyWakeHandle>,
+}
+
+struct GhosttyWakeHandle {
+    app: AtomicPtr<c_void>,
+    tick_scheduled: AtomicBool,
+    generation: AtomicU64,
+}
+
+impl Default for GhosttyWakeHandle {
+    fn default() -> Self {
+        Self {
+            app: AtomicPtr::new(std::ptr::null_mut()),
+            tick_scheduled: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+        }
+    }
 }
 
 impl GhosttyApp {
@@ -362,10 +423,9 @@ impl GhosttyApp {
         };
         let config = build_ghostty_config(&appearance)?;
 
-        // App-level userdata is not used for per-surface state.
-        // We keep it null — per-surface state is on surface userdata.
+        let wake_handle = Arc::new(GhosttyWakeHandle::default());
         let runtime_config = Box::new(ffi::ghostty_runtime_config_s {
-            userdata: std::ptr::null_mut(),
+            userdata: Arc::as_ptr(&wake_handle) as *mut c_void,
             supports_selection_clipboard: false,
             wakeup_cb: Some(wakeup_callback),
             action_cb: Some(action_callback),
@@ -384,11 +444,15 @@ impl GhosttyApp {
         if app.is_null() {
             return Err("ghostty_app_new returned null".into());
         }
+        wake_handle
+            .app
+            .store(app.cast::<c_void>(), Ordering::Release);
 
         Ok(Self {
             app,
             _runtime_config: runtime_config,
             appearance: Mutex::new(appearance),
+            wake_handle,
         })
     }
 
@@ -398,6 +462,11 @@ impl GhosttyApp {
     /// and AppKit operations require it.
     pub fn tick(&self) {
         unsafe { ffi::ghostty_app_tick(self.app) }
+    }
+
+    /// Monotonic counter bumped after every Ghostty wakeup-driven app tick.
+    pub fn wake_generation(&self) -> u64 {
+        self.wake_handle.generation.load(Ordering::Acquire)
     }
 
     /// Update the app's terminal colors at runtime.
@@ -530,6 +599,9 @@ impl GhosttyApp {
 
 impl Drop for GhosttyApp {
     fn drop(&mut self) {
+        self.wake_handle
+            .app
+            .store(std::ptr::null_mut(), Ordering::Release);
         // Free the app first — this allows ghostty to run any final cleanup
         // and fire callbacks while userdata is still valid.
         unsafe { ffi::ghostty_app_free(self.app) }
@@ -588,6 +660,10 @@ impl GhosttyTerminal {
             cell_width_px: s.cell_width_px,
             cell_height_px: s.cell_height_px,
         }
+    }
+
+    pub fn scrollbar(&self) -> Option<GhosttyScrollbar> {
+        self.state.lock().scrollbar
     }
 
     /// Set content scale (e.g., 2.0 for Retina).
@@ -1155,14 +1231,45 @@ unsafe fn resolve_surface_state(target: &ffi::ghostty_target_s) -> Option<StateR
     }
 }
 
-unsafe extern "C" fn wakeup_callback(_userdata: *mut c_void) {
-    // The wakeup callback signals that ghostty has work to do.
-    // The GPUI integration layer (ghostty_view.rs) uses on_next_frame
-    // to call tick() on the main thread. This callback is a signal
-    // that we should schedule that tick sooner rather than later.
-    //
-    // TODO: integrate with GPUI's event loop for lower-latency wakeup.
-    // For now, the 8ms timer in ghostty_view.rs provides adequate refresh.
+unsafe extern "C" fn wakeup_callback(userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+
+    let wake_ptr = userdata.cast::<GhosttyWakeHandle>();
+    unsafe {
+        Arc::increment_strong_count(wake_ptr);
+    }
+    let wake_handle = unsafe { Arc::from_raw(wake_ptr) };
+    if wake_handle.app.load(Ordering::Acquire).is_null() {
+        return;
+    }
+
+    if wake_handle.tick_scheduled.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let scheduled_at = Instant::now();
+    Queue::main().exec_async(move || {
+        wake_handle.tick_scheduled.store(false, Ordering::Release);
+        let app = wake_handle.app.load(Ordering::Acquire) as ffi::ghostty_app_t;
+        if app.is_null() {
+            return;
+        }
+        let queue_delay = scheduled_at.elapsed();
+        let tick_started = Instant::now();
+        unsafe { ffi::ghostty_app_tick(app) };
+        let tick_elapsed = tick_started.elapsed();
+        if perf_trace_enabled() {
+            log::info!(
+                target: "con_ghostty::perf",
+                "ghostty wake tick queue_delay_ms={:.3} tick_ms={:.3}",
+                queue_delay.as_secs_f64() * 1000.0,
+                tick_elapsed.as_secs_f64() * 1000.0
+            );
+        }
+        wake_handle.generation.fetch_add(1, Ordering::AcqRel);
+    });
 }
 
 unsafe extern "C" fn action_callback(
@@ -1195,6 +1302,15 @@ unsafe extern "C" fn action_callback(
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_RENDER => {
                 state.lock().needs_render = true;
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SCROLLBAR => {
+                let scrollbar = action.action.scrollbar;
+                state.lock().scrollbar = Some(GhosttyScrollbar {
+                    total: scrollbar.total,
+                    offset: scrollbar.offset,
+                    len: scrollbar.len,
+                });
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_NEW_SPLIT => {

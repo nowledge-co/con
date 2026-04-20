@@ -95,50 +95,124 @@ impl Default for AppearanceConfig {
     }
 }
 
+// Default keybindings are chosen per platform. On macOS the `secondary-`
+// modifier token (⌘) is the right primary: Cmd+<letter> doesn't collide
+// with anything the terminal expects. On Windows `secondary-` resolves
+// to `Ctrl`, and bare Ctrl+<letter> is already a meaningful byte to
+// every POSIX/PowerShell shell (Ctrl+L = clear, Ctrl+C = SIGINT, Ctrl+I
+// = Tab, Ctrl+D = EOF, Ctrl+W = kill-word, ...). Binding app actions
+// to those steals them from the shell, which is exactly the feedback
+// a previous session missed. So for Windows we prefer Ctrl+Shift+
+// <letter> for actions that share a letter with a common terminal key,
+// matching Windows Terminal's own convention. Non-letter bindings
+// (Ctrl+`, Ctrl+,, Ctrl+;, Ctrl+') stay on bare Ctrl because those
+// keys don't produce control characters.
+#[cfg(target_os = "macos")]
 fn default_toggle_agent() -> String {
-    "cmd-l".into()
+    "secondary-l".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_toggle_agent() -> String {
+    "ctrl-shift-l".into()
+}
+
 fn default_command_palette() -> String {
-    "cmd-shift-p".into()
+    // Ctrl+Shift+P on Windows / Linux, Cmd+Shift+P on macOS.
+    "secondary-shift-p".into()
 }
+
+#[cfg(target_os = "macos")]
 fn default_new_tab() -> String {
-    "cmd-t".into()
+    "secondary-t".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_new_tab() -> String {
+    "ctrl-shift-t".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_new_window() -> String {
-    "cmd-n".into()
+    "secondary-n".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_new_window() -> String {
+    "ctrl-shift-n".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_close_tab() -> String {
-    "cmd-w".into()
+    "secondary-w".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_close_tab() -> String {
+    "ctrl-shift-w".into()
+}
+
 fn default_next_tab() -> String {
     "ctrl-tab".into()
 }
 fn default_previous_tab() -> String {
     "ctrl-shift-tab".into()
 }
+
 fn default_settings() -> String {
-    "cmd-,".into()
+    // Ctrl+, is the cross-editor convention (VSCode, IntelliJ, Windows
+    // Terminal) and doesn't produce a control character, so it works
+    // the same on both platforms via `secondary-`.
+    "secondary-,".into()
 }
+
+#[cfg(target_os = "macos")]
 fn default_quit() -> String {
-    "cmd-q".into()
+    "secondary-q".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_quit() -> String {
+    // Alt+F4 is the Windows platform convention for "close the app
+    // window". Ctrl+Q is XOFF / pwsh's quoted-insert, so it can't be
+    // used without stealing it from the shell.
+    "alt-f4".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_split_right() -> String {
-    "cmd-d".into()
+    "secondary-d".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_split_right() -> String {
+    // Windows Terminal's "split pane right" is Alt+Shift+=. Ctrl+D is
+    // EOF in every shell so it must keep reaching the terminal.
+    "alt-shift-=".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_split_down() -> String {
-    "cmd-shift-d".into()
+    "secondary-shift-d".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_split_down() -> String {
+    // Mirrors Windows Terminal's "split pane down" (Alt+Shift+-).
+    "alt-shift--".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_focus_input() -> String {
-    "cmd-i".into()
+    "secondary-i".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_focus_input() -> String {
+    // Ctrl+I is the Tab character (0x09). Ctrl+Shift+I stays free.
+    "ctrl-shift-i".into()
+}
+
 fn default_toggle_input_bar() -> String {
     "ctrl-`".into()
 }
 fn default_cycle_input_mode() -> String {
-    "cmd-;".into()
+    "secondary-;".into()
 }
 fn default_toggle_pane_scope() -> String {
-    "cmd-'".into()
+    "secondary-'".into()
 }
 fn default_global_summon() -> String {
     "alt-space".into()
@@ -288,7 +362,7 @@ impl Config {
     pub fn config_path() -> PathBuf {
         dirs::config_dir()
             .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .unwrap_or_else(std::env::temp_dir)
             .join("con")
             .join("config.toml")
     }

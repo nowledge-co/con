@@ -4,14 +4,17 @@
 
 con is an open-source, macOS-native, GPU-accelerated terminal emulator with a built-in AI agent harness. Built in Rust.
 
+A Windows port is in preparation — the non-UI crates already build on `x86_64-pc-windows-*` targets. The staged plan lives in
+`docs/impl/windows-port.md` and the first preparation PR is summarized in `postmortem/2026-04-16-prepare-windows-port.md`.
+
 ## Stack
 
-- **UI**: GPUI-CE v0.3.3 (community edition of Zed's framework, Apache 2.0)
-- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView
-- **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API (surface lifecycle, action callbacks, clipboard, key/mouse input)
+- **UI**: upstream Zed GPUI (git dependency on `zed-industries/zed`, Apache 2.0). Windows backend is D3D11/DirectComposition; HWND child-embedding is the known gap for the Windows port.
+- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. macOS-only today; see `docs/impl/windows-port.md` for the Windows strategy (likely `libghostty-vt` + ConPTY + custom renderer).
+- **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API (surface lifecycle, action callbacks, clipboard, key/mouse input). Cfg-gated to macOS; on other targets the crate compiles to an empty shell so the workspace resolves.
 - **Terminal support crate**: con-terminal — theme and palette helpers only
 - **AI agent**: Rig v0.34.0 (from crates.io, 13 providers, Tool trait)
-- **Socket API**: Unix domain sockets + newline-delimited JSON-RPC, served by the app and consumed first by `con-cli`
+- **Socket API**: JSON-RPC 2.0 with a platform-specific transport — Unix domain sockets on Unix, Windows Named Pipes (`\\.\pipe\con`) on Windows. Served by the app and consumed first by `con-cli`.
 
 ## Repository Layout
 
@@ -46,15 +49,36 @@ The `3pp/` directory contains third-party source checkouts for **read-only refer
 ## Build
 
 ```bash
-# Prerequisites: rust (stable, edition 2024), cmake
-cargo build            # debug
-cargo build --release  # release
-cargo run -p con       # run the terminal
+# Prerequisites: rust (stable, edition 2024), cmake, zig (for libghostty on macOS)
+cargo build            # debug (macOS)
+cargo build --release  # release (macOS)
+cargo run -p con       # run the terminal (macOS)
 cargo test --workspace # test
-
-# GPUI needs runtime_shaders feature (already set)
-# con currently ships the embedded Ghostty runtime on macOS
 ```
+
+The `con` UI binary builds on macOS, Linux, and Windows. On non-macOS
+targets the terminal pane uses a placeholder view ("backend under
+construction") until the Windows/Linux backend lands — the rest of the
+app (agent panel, settings, command palette, control socket at
+`\\.\pipe\con` on Windows / `/tmp/con.sock` on Unix) is fully wired.
+See `docs/impl/windows-port.md` for the porting plan and the path to
+a working terminal on Windows.
+
+```bash
+# Windows (from a Developer Command Prompt for VS 2022; needs Zig 0.13+ on PATH
+# for libghostty-vt; the binary ships as `con-app.exe` because `CON` is a
+# reserved DOS device name):
+cargo wbuild -p con --release          # produces target\release\con-app.exe
+cargo wrun   -p con
+cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal
+
+# Linux (needs the GPUI linux runtime deps — see .github/workflows/ci-portable.yml):
+cargo build -p con --release
+```
+
+The `w*` aliases (declared in `.cargo/config.toml`) wrap the
+`--no-default-features --features con/bin-con-app` incantation the
+Windows-named binary requires.
 
 ## Control Plane
 
@@ -70,7 +94,7 @@ cargo test --workspace # test
 
 ## Design Language
 
-- **Font**: IoskeleyMono (embedded, all weights) for terminal chrome — tabs, sidebar, input bar. System font (.SystemUIFont / SF Pro) for AI panel prose text, settings panel, and any non-terminal UI. Code blocks and terminal previews use IoskeleyMono via `mono_font.family` in theme JSON.
+- **Font**: IoskeleyMono (embedded, all weights, Nerd-Font patched) for terminal chrome — tabs, sidebar, input bar. Patched TTFs carry ~10,400 PUA glyphs (Powerline, devicons, Font Awesome, Octicons, Codicons, Material Design) so oh-my-posh / Starship / Powerlevel10k prompts render out of the box. System font (.SystemUIFont / SF Pro) for AI panel prose text, settings panel, and any non-terminal UI. Code blocks and terminal previews use IoskeleyMono via `mono_font.family` in theme JSON.
 - **Default theme**: Flexoki Light. Dark available as Flexoki Dark.
 - **Icons**: Phosphor Icons only (phosphoricons.com). Copy SVGs from `3pp/phosphor-icons/SVGs/regular/` into `assets/icons/phosphor/`. Never draw icons manually — always use the Phosphor library. Reference as `"phosphor/icon-name.svg"` in code. **Critical**: always set `.text_color()` directly on every `svg()` element — parent container color does NOT propagate to SVG stroke colors in GPUI.
 - **Borderless**: No `border_1()`, `border_r_1()`, etc. Use opacity-based fills for surface separation.

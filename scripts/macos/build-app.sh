@@ -32,6 +32,14 @@ log "Creating app bundle at $app_root"
 rsync -a "$binary_path" "$macos_dir/con"
 chmod 755 "$macos_dir/con"
 
+ghostty_resources_dir="$(find "$REPO_ROOT/target/$CON_RUST_TARGET/release/build" -path '*/out/ghostty-src/zig-out/share/ghostty' | head -n 1)"
+if [[ -z "$ghostty_resources_dir" || ! -d "$ghostty_resources_dir" ]]; then
+  log "Ghostty resources not found in cargo build output"
+  exit 1
+fi
+rsync -a "$ghostty_resources_dir/" "$resources_dir/ghostty/"
+log "Embedded Ghostty resources from $ghostty_resources_dir"
+
 iconset_parent="$(mktemp -d "$CON_DIST_ROOT/iconset.XXXXXX")"
 iconset_dir="$iconset_parent/con.iconset"
 mkdir -p "$iconset_dir"

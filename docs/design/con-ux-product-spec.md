@@ -26,7 +26,7 @@ This brief is grounded in:
 - `DESIGN.md`
 - `docs/impl/*`
 - `docs/study/*`
-- `crates/con/src/*`
+- `crates/con-app/src/*`
 - the current MVP screenshots in `.context/attachments/`
 - the Nowledge Labs reference screenshots and design guide provided in this workspace
 

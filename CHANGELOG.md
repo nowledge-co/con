@@ -22,6 +22,11 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Instant command completion tracking — when a command finishes, con knows the exit code and exactly how long it took. The agent uses this to respond immediately instead of waiting on a timeout.
 - Clipboard integration — copy and paste work natively between the terminal and the system clipboard, including programmatic clipboard access via OSC 52.
 - Ghostty is now the only terminal runtime in con. The old in-app VTE/PTTY fallback path has been removed, so every pane uses the same terminal engine and the same behavior.
+- Embedded Ghostty ticking on macOS now follows Ghostty's wakeup-driven runtime model instead of a host-side polling loop, and the hosted NSView stack now uses native live-resize redraw policies for smoother terminal window resizing.
+- Ghostty panes no longer run their own per-surface 60fps GPUI polling loops. Surface event draining and deferred resize/retry housekeeping now flow through one workspace-level Ghostty wake pump, which removes redundant host-side churn during resize and other heavy terminal activity.
+- The macOS window now adopts Ghostty-style cell-step resize increments from the active terminal surface, reducing pointless intermediate resize states during live drags and moving Con closer to Ghostty's own resize behavior.
+- The normal workspace render path no longer forces fresh terminal observations just to populate pane metadata. Runtime facts are now cached from explicit observation paths and reused by the UI, which avoids reading terminal text during ordinary renders while a heavy TUI is active.
+- The embedded macOS Ghostty host no longer synthesizes a fake scrollbar-at-top state before Ghostty emits real viewport data. The native scroll container now stays inert until Ghostty provides actual scrollbar state, which avoids forcing heavy TUIs through upper scrollback on startup or during reflow.
 
 **AI Agent**
 - Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.
@@ -34,6 +39,9 @@ con is still pre-release, so entries may group larger areas of work while the pr
 
 **Interface**
 - The agent panel can now expand with the window instead of stopping at a fixed width ceiling, while still preserving a minimum terminal area. Wide markdown content such as tables and code blocks now uses the panel's full available width instead of being forced through the prose column.
+- macOS terminal profiling now has a dedicated runbook and opt-in host-path logs, making it easier to distinguish Ghostty core time from Con's embedding/composition cost when diagnosing heavy TUI resize issues.
+- The macOS `xctrace` profiling helper now builds and launches the real `con` binary instead of profiling the `cargo` wrapper process, so resize traces reflect the app under test.
+- The macOS Ghostty runtime is now built with Zig `-Doptimize=ReleaseFast` by default. Embedded debug-grade Ghostty builds made dense TUI startup and resize behavior much slower than standalone Ghostty and invalidated performance comparisons.
 
 **Release and Packaging**
 - The macOS app bundle, updater, and release pipeline are now documented and exercised as real product surfaces. Local updater testing now runs from a bundled beta app instead of `cargo run`, and version metadata is visible in both Settings and the About window.
@@ -161,6 +169,9 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed tmux native control helper quoting so tmux list/capture/exec commands no longer leak into the target shell as broken `quote>` input when a quoted tmux target is present
 - Fixed a visible-panel performance regression where assistant messages were reparsed as markdown on every render.
 - Fixed a second visible-panel performance regression where fenced code blocks rebuilt syntax-highlight runs on every render.
+- Aligned embedded Ghostty viewport hosting with standalone Ghostty on macOS by consuming Ghostty scrollbar actions and wrapping each surface in a native scroll container. This keeps bottom anchoring stable during heavy TUI resize instead of briefly jumping into upper scrollback.
+- Removed Con-specific live-resize coalescing from the embedded Ghostty surface path on macOS. Surface resizes now follow Ghostty's own immediate backing-size update model instead of deferring commits behind host-side heuristics.
+- Fixed Ghostty resource packaging and dev-run bootstrap on macOS. Con now embeds Ghostty's `Resources/ghostty` payload into app bundles and points debug runs at the built Ghostty resources so child processes get `xterm-ghostty`, `TERMINFO`, and Ghostty shell integration instead of silently falling back to `xterm-256color`.
 
 **Terminal**
 - Full terminal emulation with 256-color and truecolor support

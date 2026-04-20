@@ -11,7 +11,43 @@ log.workspace = true
 parking_lot.workspace = true
 
 [build-dependencies]
+cc = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 objc = "0.2"
+dispatch = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Win32 API surface for the Windows terminal backend (Phase 3).
+# See docs/impl/windows-port.md for the staged plan.
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",             # ConPTY: CreatePseudoConsole etc.
+    "Win32_System_Threading",           # CreateProcessW, STARTUPINFOEXW
+    "Win32_System_Pipes",               # CreatePipe (ConPTY I/O)
+    "Win32_System_IO",                  # OVERLAPPED
+    "Win32_Storage_FileSystem",         # ReadFile, WriteFile
+    "Win32_Security",                   # SECURITY_ATTRIBUTES
+    "Win32_System_Com",                 # CoInitialize (D2D factory lifecycle)
+    "Win32_Graphics_Direct3D",          # D3D_FEATURE_LEVEL, D3D_DRIVER_TYPE
+    "Win32_Graphics_Direct3D11",        # D3D11 device, swapchain, shaders, buffers
+    "Win32_Graphics_Direct3D_Fxc",      # D3DCompile (runtime HLSL compile)
+    "Win32_Graphics_Direct2D",          # ID2D1Factory, DrawGlyphRun into atlas
+    "Win32_Graphics_Direct2D_Common",   # D2D1_COLOR_F etc.
+    "Win32_Graphics_Dxgi",              # IDXGIFactory, swapchain creation
+    "Win32_Graphics_Dxgi_Common",       # DXGI_FORMAT, DXGI_SAMPLE_DESC
+    "Win32_Graphics_DirectComposition", # IDCompositionDevice/Target/Visual
+    "Win32_Graphics_DirectWrite",       # IDWriteFactory, glyph metrics + runs
+    "Win32_Graphics_Gdi",               # RECT/POINT/HDC plumbing
+    "Win32_UI_WindowsAndMessaging",     # CreateWindowExW, WM_* messages
+    "Win32_UI_HiDpi",                   # GetDpiForWindow, per-monitor DPI
+    "Win32_UI_Input_KeyboardAndMouse",  # VK_* codes, GetKeyState
+    "Win32_System_DataExchange",        # OpenClipboard / SetClipboardData / ...
+    "Win32_System_Memory",              # GlobalAlloc / GlobalLock for CF_UNICODETEXT
+    "Win32_System_Ole",                 # CF_UNICODETEXT constant
+] }
+raw-window-handle = "0.6"
+# Skyline/shelf glyph-atlas packer. Same crate WebRender uses in
+# production; adopted by glyphon and several wgpu text renderers.
+etagere = "0.2"

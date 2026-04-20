@@ -1,0 +1,19 @@
+# Build/run shortcuts for targets that can't use the default `[[bin]] con`.
+#
+# `CON` is a reserved DOS device name on Windows, so the Windows build
+# ships as `con-app.exe` via the `bin-con-app` feature. These aliases
+# wrap the longer `--no-default-features --features` incantation so day-
+# to-day commands stay ergonomic:
+#
+#   cargo wcheck -p con        # same as `cargo check -p con` on Windows
+#   cargo wbuild -p con --release
+#   cargo wrun   -p con
+#
+# On macOS and Linux keep using the normal `cargo build` / `cargo run` —
+# the default feature set targets those platforms.
+
+[alias]
+wcheck = "check --no-default-features --features con/bin-con-app"
+wbuild = "build --no-default-features --features con/bin-con-app"
+wrun   = "run   --no-default-features --features con/bin-con-app --bin con-app"
+wtest  = "test  --no-default-features --features con/bin-con-app"

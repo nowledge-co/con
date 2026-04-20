@@ -1,13 +1,13 @@
 [workspace]
 members = [
-    "crates/con",
+    "crates/con-app",
     "crates/con-core",
     "crates/con-terminal",
     "crates/con-ghostty",
     "crates/con-agent",
     "crates/con-cli",
 ]
-default-members = ["crates/con"]
+default-members = ["crates/con-app"]
 resolver = "2"
 
 [workspace.package]

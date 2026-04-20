@@ -142,7 +142,7 @@ impl Session {
         }
         dirs::data_dir()
             .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .unwrap_or_else(std::env::temp_dir)
             .join("con")
             .join("session.json")
     }
@@ -176,7 +176,7 @@ impl GlobalHistoryState {
         }
         dirs::data_dir()
             .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .unwrap_or_else(std::env::temp_dir)
             .join("con")
             .join("history.json")
     }

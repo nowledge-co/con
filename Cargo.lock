@@ -1104,6 +1104,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "uuid",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -1164,10 +1165,15 @@ name = "con-ghostty"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cc",
  "core-foundation 0.10.0",
+ "dispatch",
+ "etagere",
  "log",
  "objc",
  "parking_lot",
+ "raw-window-handle",
+ "windows 0.61.3",
 ]
 
 [[package]]

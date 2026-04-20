@@ -6,14 +6,26 @@ use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 
 use con_agent::{PaneCreateLocation, TmuxExecLocation};
 
+/// Default control endpoint location.
+///
+/// On Unix this is a filesystem-backed Unix domain socket. On Windows it is
+/// a Named Pipe — the host portion `\\.\pipe\` is required by the Win32
+/// `CreateNamedPipeW` API and the leaf `con` matches the Unix default name.
+/// The default can be overridden with the `CON_SOCKET_PATH` env var on
+/// every platform.
+#[cfg(unix)]
 pub const DEFAULT_SOCKET_PATH: &str = "/tmp/con.sock";
+#[cfg(windows)]
+pub const DEFAULT_SOCKET_PATH: &str = r"\\.\pipe\con";
+#[cfg(not(any(unix, windows)))]
+pub const DEFAULT_SOCKET_PATH: &str = "con.sock";
+
 pub const JSON_RPC_VERSION: &str = "2.0";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -608,7 +620,14 @@ impl ControlSocketHandle {
 
 impl Drop for ControlSocketHandle {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        // Unix sockets leave a filesystem entry that we created; on Windows,
+        // a Named Pipe disappears once the last server handle drops, so the
+        // remove_file is both unnecessary and would silently fail on the
+        // `\\.\pipe\…` namespace.
+        #[cfg(unix)]
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -619,10 +638,13 @@ pub fn control_socket_path() -> PathBuf {
     }
 }
 
+#[cfg(unix)]
 pub fn spawn_control_socket_server(
     runtime: Arc<Runtime>,
     request_tx: Sender<ControlRequestEnvelope>,
 ) -> Result<ControlSocketHandle> {
+    use tokio::net::UnixListener;
+
     let path = control_socket_path();
     prepare_socket_path(&path)?;
 
@@ -634,7 +656,7 @@ pub fn spawn_control_socket_server(
     set_socket_permissions(&path)?;
 
     runtime.spawn(async move {
-        if let Err(err) = accept_loop(listener, request_tx).await {
+        if let Err(err) = unix_accept_loop(listener, request_tx).await {
             log::error!("[control] socket accept loop failed: {err}");
         }
     });
@@ -642,8 +664,56 @@ pub fn spawn_control_socket_server(
     Ok(ControlSocketHandle { path })
 }
 
-async fn accept_loop(
-    listener: UnixListener,
+#[cfg(windows)]
+pub fn spawn_control_socket_server(
+    runtime: Arc<Runtime>,
+    request_tx: Sender<ControlRequestEnvelope>,
+) -> Result<ControlSocketHandle> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let path = control_socket_path();
+    let pipe_name = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("named pipe path must be valid UTF-8"))?
+        .to_string();
+
+    // Bind one server eagerly so callers can detect "address in use" before
+    // spawn returns. ServerOptions::create with `first_pipe_instance(true)`
+    // is the Windows analog of Unix's "another listener already owns this
+    // path" check.
+    let initial_server = {
+        let _guard = runtime.enter();
+        ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .with_context(|| format!("failed to bind control pipe at {pipe_name}"))?
+    };
+
+    let pipe_name_for_loop = pipe_name.clone();
+    runtime.spawn(async move {
+        if let Err(err) = windows_accept_loop(initial_server, pipe_name_for_loop, request_tx).await
+        {
+            log::error!("[control] pipe accept loop failed: {err}");
+        }
+    });
+
+    Ok(ControlSocketHandle { path })
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn spawn_control_socket_server(
+    _runtime: Arc<Runtime>,
+    _request_tx: Sender<ControlRequestEnvelope>,
+) -> Result<ControlSocketHandle> {
+    anyhow::bail!(
+        "con control socket is not supported on this target — \
+         see docs/impl/windows-port.md"
+    )
+}
+
+#[cfg(unix)]
+async fn unix_accept_loop(
+    listener: tokio::net::UnixListener,
     request_tx: Sender<ControlRequestEnvelope>,
 ) -> Result<()> {
     loop {
@@ -657,11 +727,46 @@ async fn accept_loop(
     }
 }
 
-async fn handle_client(
-    stream: UnixStream,
+#[cfg(windows)]
+async fn windows_accept_loop(
+    initial_server: tokio::net::windows::named_pipe::NamedPipeServer,
+    pipe_name: String,
     request_tx: Sender<ControlRequestEnvelope>,
 ) -> Result<()> {
-    let (read_half, mut write_half) = stream.into_split();
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    // The Win32 named-pipe pattern: each connection owns one server
+    // instance. Before accepting the current connection, eagerly create the
+    // *next* server so a fast-reconnecting client can never observe an
+    // empty namespace.
+    let mut server = initial_server;
+    loop {
+        server
+            .connect()
+            .await
+            .context("named pipe connect failed")?;
+        let connected = server;
+
+        server = ServerOptions::new()
+            .create(&pipe_name)
+            .with_context(|| format!("failed to spawn next pipe instance at {pipe_name}"))?;
+
+        let request_tx = request_tx.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle_client(connected, request_tx).await {
+                log::warn!("[control] client connection failed: {err}");
+            }
+        });
+    }
+}
+
+/// Generic over any duplex byte stream so the same JSON-RPC framing serves
+/// Unix sockets and Windows Named Pipes.
+async fn handle_client<S>(stream: S, request_tx: Sender<ControlRequestEnvelope>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    let (read_half, mut write_half) = tokio::io::split(stream);
     let mut lines = BufReader::new(read_half).lines();
 
     while let Some(line) = lines.next_line().await? {
@@ -757,6 +862,13 @@ async fn handle_json_rpc_request(
     }
 }
 
+/// Sanitize the filesystem path for a Unix-socket-backed listener.
+///
+/// Stale socket files are removed; live ones cause a hard error. Windows
+/// Named Pipes don't live on the filesystem, so this is a no-op there
+/// (the equivalent collision check is `ServerOptions::first_pipe_instance`
+/// inside [`spawn_control_socket_server`]).
+#[cfg(unix)]
 fn prepare_socket_path(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -792,11 +904,6 @@ fn set_socket_permissions(path: &Path) -> Result<()> {
             path.display()
         )
     })
-}
-
-#[cfg(not(unix))]
-fn set_socket_permissions(_path: &Path) -> Result<()> {
-    Ok(())
 }
 
 fn default_read_lines() -> usize {
