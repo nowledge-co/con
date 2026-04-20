@@ -116,11 +116,24 @@ impl GlyphCache {
         // once here and shared across all four text-format weights.
         let font_fallback = super::font_loader::system_font_fallback(dwrite);
 
+        // Resolve the family name against the bundled collection up
+        // front. GPUI / config use the display form "Ioskeley Mono"
+        // (with a space), but the bundled TTFs advertise the
+        // PostScript-style one-word name "IoskeleyMono". DirectWrite
+        // does strict family-name matching, so asking for
+        // "Ioskeley Mono" misses the bundled collection entirely and
+        // cascades to Segoe UI for both metrics AND glyph rasterization
+        // — cells sized for a 9/10-em Segoe 'M' advance, and glyphs
+        // drawn from Segoe UI rather than IoskeleyMono. Use the name
+        // that actually resolves in our bundled collection.
+        let resolved_family =
+            resolve_bundled_family(bundled_collection.as_ref(), font_family);
+
         let text_format_regular = make_text_format(
             dwrite,
             bundled_collection.as_ref(),
             font_fallback.as_ref(),
-            font_family,
+            &resolved_family,
             font_size_px,
             false,
             false,
@@ -129,7 +142,7 @@ impl GlyphCache {
             dwrite,
             bundled_collection.as_ref(),
             font_fallback.as_ref(),
-            font_family,
+            &resolved_family,
             font_size_px,
             true,
             false,
@@ -138,7 +151,7 @@ impl GlyphCache {
             dwrite,
             bundled_collection.as_ref(),
             font_fallback.as_ref(),
-            font_family,
+            &resolved_family,
             font_size_px,
             false,
             true,
@@ -147,7 +160,7 @@ impl GlyphCache {
             dwrite,
             bundled_collection.as_ref(),
             font_fallback.as_ref(),
-            font_family,
+            &resolved_family,
             font_size_px,
             true,
             true,
@@ -156,7 +169,7 @@ impl GlyphCache {
         let metrics = measure_cell(
             dwrite,
             bundled_collection.as_ref(),
-            font_family,
+            &resolved_family,
             font_size_px,
         )?;
 
@@ -319,7 +332,10 @@ impl GlyphCache {
             text_format_bold_italic,
             metrics,
             font_size_px,
-            font_family: font_family.to_string(),
+            // Store the RESOLVED family — downstream callers (rebuild,
+            // font-size changes) go through the same make_text_format /
+            // measure_cell path and must keep using the bundled name.
+            font_family: resolved_family,
         })
     }
 
@@ -711,4 +727,52 @@ fn find_face_in_collection(
     // SAFETY: font owned above.
     let face = unsafe { font.CreateFontFace() }.context("IDWriteFont::CreateFontFace failed")?;
     Ok(Some(face))
+}
+
+/// Pick a family name that actually exists in the bundled collection.
+///
+/// The GPUI / config layer uses "Ioskeley Mono" (display form), but the
+/// bundled TTF `name` table advertises "IoskeleyMono" (one word). Try
+/// the verbatim name first, then the whitespace-stripped variant, then
+/// give up and return the input — the downstream code will hit the
+/// system-cascade fallback path and log a warning.
+fn resolve_bundled_family(bundled: Option<&IDWriteFontCollection>, family: &str) -> String {
+    let Some(coll) = bundled else {
+        return family.to_string();
+    };
+    if family_exists_in(coll, family) {
+        log::info!("resolve_bundled_family: '{family}' matched bundled collection verbatim");
+        return family.to_string();
+    }
+    let stripped: String = family.chars().filter(|c| !c.is_whitespace()).collect();
+    if stripped != family && family_exists_in(coll, &stripped) {
+        log::info!(
+            "resolve_bundled_family: '{family}' missed; '{stripped}' matched bundled \
+             collection — using that for DWrite lookups"
+        );
+        return stripped;
+    }
+    log::warn!(
+        "resolve_bundled_family: neither '{family}' nor its no-space form resolved \
+         in the bundled collection; downstream make_text_format / measure_cell will \
+         fall back to the system cascade"
+    );
+    family.to_string()
+}
+
+fn family_exists_in(collection: &IDWriteFontCollection, family: &str) -> bool {
+    let family_w: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut index: u32 = 0;
+    let mut exists = windows::core::BOOL(0);
+    // SAFETY: buffer is NUL-terminated; out params are stack-local. A
+    // non-Ok HRESULT here is treated as "not found"; we don't want to
+    // propagate it because the caller has a well-defined fallback.
+    let hr = unsafe {
+        collection.FindFamilyName(
+            windows::core::PCWSTR(family_w.as_ptr()),
+            &mut index,
+            &mut exists,
+        )
+    };
+    hr.is_ok() && exists.as_bool()
 }
