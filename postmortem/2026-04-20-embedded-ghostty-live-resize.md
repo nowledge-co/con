@@ -44,3 +44,8 @@ That third mistake was the one that matched the user-visible symptom most closel
 - Performance regressions also hide in “small” UI metadata paths. If the render path reads terminal text for sidebar/input-bar decoration, a dense TUI can make the whole app feel heavier even when the terminal surface itself is correct.
 - On macOS, Ghostty's scrollbar updates are not just UI chrome for a visible scrollbar. They are part of the viewport-hosting contract. Ignoring them leaves the embedder with the wrong mental model of what the surface view represents.
 - The host must also avoid guessing viewport state before Ghostty publishes it. A "helpful" fallback scrollbar model can be worse than no model at all because it actively drives the embed into the wrong part of scrollback.
+- The first hard profiling pass ruled out the easy blame targets. In Con's bad resize case:
+  - `ghostty_surface_set_size(...)` calls were effectively free
+  - Ghostty wakeup queue delay was near-zero
+  - `ghostty_app_tick(...)` time was near-zero
+  That points away from "Ghostty isn't using GPU" or "Rust resize logic is too slow" and toward the host/composition path around the embedded terminal view.

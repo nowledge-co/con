@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
@@ -23,6 +24,14 @@ const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
+
+fn perf_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE")
+            .is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
 
 fn chrome_tooltip(label: &str, stroke: Option<Keystroke>, window: &mut Window, cx: &mut App) -> AnyView {
     let label = label.to_string();
@@ -973,24 +982,51 @@ impl ConWorkspace {
     }
 
     fn pump_ghostty_views(&mut self, cx: &mut Context<Self>) -> bool {
+        let started = perf_trace_enabled().then(std::time::Instant::now);
         let mut changed = false;
+        let mut terminal_count = 0usize;
+        let mut drain_count = 0usize;
 
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_terminals() {
+                terminal_count += 1;
                 changed |= terminal.pump_surface_deferred_work(cx);
             }
         }
 
         let generation = self.ghostty_app.wake_generation();
         if generation == self.last_ghostty_wake_generation {
+            if let Some(started) = started {
+                if changed {
+                    log::info!(
+                        target: "con::perf",
+                        "pump_ghostty_views generation_unchanged terminals={} changed=1 elapsed_ms={:.3}",
+                        terminal_count,
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
+            }
             return changed;
         }
 
         self.last_ghostty_wake_generation = generation;
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_terminals() {
+                drain_count += 1;
                 changed |= terminal.drain_surface_state(cx);
             }
+        }
+
+        if let Some(started) = started {
+            log::info!(
+                target: "con::perf",
+                "pump_ghostty_views generation={} terminals={} drains={} changed={} elapsed_ms={:.3}",
+                generation,
+                terminal_count,
+                drain_count,
+                changed,
+                started.elapsed().as_secs_f64() * 1000.0
+            );
         }
 
         changed

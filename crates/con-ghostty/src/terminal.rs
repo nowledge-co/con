@@ -17,6 +17,8 @@ use std::os::raw::c_void;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Once};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use dispatch::Queue;
 use parking_lot::Mutex;
@@ -315,6 +317,14 @@ pub type StateRef = Arc<Mutex<TerminalState>>;
 
 static GHOSTTY_INIT: Once = Once::new();
 static mut GHOSTTY_INIT_RESULT: i32 = -1;
+
+fn perf_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE")
+            .is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
 
 fn ensure_ghostty_init() -> Result<(), String> {
     ensure_resources_dir_env();
@@ -1239,13 +1249,25 @@ unsafe extern "C" fn wakeup_callback(userdata: *mut c_void) {
         return;
     }
 
+    let scheduled_at = Instant::now();
     Queue::main().exec_async(move || {
         wake_handle.tick_scheduled.store(false, Ordering::Release);
         let app = wake_handle.app.load(Ordering::Acquire) as ffi::ghostty_app_t;
         if app.is_null() {
             return;
         }
+        let queue_delay = scheduled_at.elapsed();
+        let tick_started = Instant::now();
         unsafe { ffi::ghostty_app_tick(app) };
+        let tick_elapsed = tick_started.elapsed();
+        if perf_trace_enabled() {
+            log::info!(
+                target: "con_ghostty::perf",
+                "ghostty wake tick queue_delay_ms={:.3} tick_ms={:.3}",
+                queue_delay.as_secs_f64() * 1000.0,
+                tick_elapsed.as_secs_f64() * 1000.0
+            );
+        }
         wake_handle.generation.fetch_add(1, Ordering::AcqRel);
     });
 }

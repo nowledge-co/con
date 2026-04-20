@@ -16,6 +16,7 @@ use std::ops::Range;
 #[cfg(target_os = "macos")]
 use std::os::raw::c_void;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use con_ghostty::ffi;
@@ -44,6 +45,14 @@ const NS_VIEW_WIDTH_SIZABLE: usize = 1 << 1;
 const NS_VIEW_HEIGHT_SIZABLE: usize = 1 << 4;
 #[cfg(target_os = "macos")]
 const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
+
+fn perf_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE")
+            .is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
 
 /// Emitted when the terminal title changes.
 #[allow(dead_code)]
@@ -145,6 +154,7 @@ impl GhosttyView {
             return false;
         };
 
+        let started = perf_trace_enabled().then(Instant::now);
         let mut changed = false;
         for event in terminal.take_pending_events() {
             changed = true;
@@ -172,6 +182,16 @@ impl GhosttyView {
 
         #[cfg(target_os = "macos")]
         self.sync_native_scroll_view();
+
+        if let Some(started) = started {
+            if changed {
+                log::info!(
+                    target: "con::perf",
+                    "drain_surface_state changed=1 elapsed_ms={:.3}",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+        }
 
         changed
     }
@@ -444,6 +464,7 @@ impl GhosttyView {
         if self.last_bounds.as_ref() == Some(&bounds) {
             return;
         }
+        let started = perf_trace_enabled().then(Instant::now);
         self.last_bounds = Some(bounds);
 
         if let Some(host_view) = self.host_view {
@@ -467,6 +488,30 @@ impl GhosttyView {
 
         self.sync_native_scroll_view();
         self.commit_surface_resize(bounds);
+
+        if let Some(started) = started {
+            let in_live_resize = if let Some(host_view) = self.host_view {
+                unsafe {
+                    let nswindow: id = msg_send![host_view, window];
+                    if nswindow.is_null() {
+                        false
+                    } else {
+                        let live: cocoa::base::BOOL = msg_send![nswindow, inLiveResize];
+                        live == YES
+                    }
+                }
+            } else {
+                false
+            };
+            log::info!(
+                target: "con::perf",
+                "update_frame logical_pt={:.1}x{:.1} in_live_resize={} elapsed_ms={:.3}",
+                bounds.size.width.as_f32(),
+                bounds.size.height.as_f32(),
+                in_live_resize,
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
 
         if self.awaiting_first_layout_visibility {
             self.awaiting_first_layout_visibility = false;
@@ -593,7 +638,24 @@ impl GhosttyView {
             return;
         }
 
+        let started = perf_trace_enabled().then(Instant::now);
         terminal.set_size(width_px, height_px);
+        if let Some(started) = started {
+            let elapsed = started.elapsed();
+            log::info!(
+                target: "con::perf",
+                "surface resize request old_px={}x{} old_grid={}x{} new_px={}x{} logical_pt={:.1}x{:.1} call_ms={:.3}",
+                size.width_px,
+                size.height_px,
+                size.columns,
+                size.rows,
+                width_px,
+                height_px,
+                bounds.size.width.as_f32(),
+                bounds.size.height.as_f32(),
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
     }
 
     /// Show or hide the native NSView. Used to manage z-order when
