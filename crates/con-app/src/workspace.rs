@@ -6314,6 +6314,10 @@ impl Render for ConWorkspace {
                     .flex_shrink_0()
                     .rounded(px(4.0))
                     .cursor_pointer()
+                    // Windows: without `.occlude()` the parent top_bar's
+                    // `WindowControlArea::Drag` hit-test swallows the
+                    // click (returns HTCAPTION → window drag starts).
+                    .occlude()
                     .hover(|s| s.bg(theme.muted.opacity(0.15)));
                 if !is_active {
                     close_el = close_el.invisible().group_hover("tab", |s| s.visible());
@@ -6344,6 +6348,13 @@ impl Render for ConWorkspace {
                     .h(px(30.0))
                     .text_size(px(11.5))
                     .cursor_pointer()
+                    // Windows: without `.occlude()` the parent top_bar's
+                    // `WindowControlArea::Drag` hit-test routes the click
+                    // to the OS (HTCAPTION) and starts a window drag
+                    // before GPUI fires `on_click` — so the tab never
+                    // activates. Same treatment as the `+`, caption
+                    // buttons, and tab-close controls in this file.
+                    .occlude()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_tab(index, window, cx);
                     }))
