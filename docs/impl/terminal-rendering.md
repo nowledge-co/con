@@ -69,8 +69,9 @@ At the app level, con already does that. The remaining migration work is about r
 4. Ghostty writes input to the pane PTY, parses output, updates screen state, and renders into its Metal-backed view.
 5. The host `NSView` and child surface `NSView` both use native autoresizing plus `NSViewLayerContentsRedrawDuringViewResize` so AppKit keeps the embedded layer responsive during live window resize.
 6. Ghostty emits action callbacks such as title updates, PWD changes, and command-finished events.
-7. `con-ghostty` stores those facts in `TerminalState`.
-8. con reads `TerminalState` and visible text to build pane metadata for the agent, sidebar, and tab UI.
+7. `con-ghostty` stores those facts in `TerminalState` and bumps a wake generation after each wakeup-driven app tick.
+8. Con's workspace-level housekeeping loop notices that generation change, drains surface-local state once for the window, and also handles deferred resize commits and one-shot init retries.
+9. con reads `TerminalState` and visible text to build pane metadata for the agent, sidebar, and tab UI.
 
 This distinction matters. Ghostty's embedded API is designed around wakeup-driven ticking, not "tick it every N milliseconds and hope that is close enough."
 
@@ -122,6 +123,8 @@ It exposes the capabilities that the rest of the app needs:
 
 The point of `TerminalPane` is no longer backend abstraction.
 It is product abstraction: one stable pane API for the workspace and agent layers.
+
+One important integration detail: `GhosttyView` should not own its own perpetual 16ms GPUI polling loop. That duplicates host work once per pane and becomes visible during live resize. Con now keeps exactly one lightweight workspace pump for Ghostty-related housekeeping while leaving Ghostty's renderer itself wakeup-driven.
 
 ## Agent execution
 

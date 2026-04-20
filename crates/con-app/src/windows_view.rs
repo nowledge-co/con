@@ -127,7 +127,11 @@ impl GhosttyView {
         }
     }
 
-    pub fn ensure_initialized_for_control(&mut self, _window: &mut Window) {
+    pub fn ensure_initialized_for_control(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
         // Initialization happens lazily inside `Render::render` once we
         // have both a parent HWND and bounds. Marking initialized here
         // would lie about the HostView's existence.
@@ -142,6 +146,14 @@ impl GhosttyView {
     pub fn sync_window_background_blur(&self) {
         // No-op on Windows; the HWND's swapchain composes against
         // whatever DWM puts behind us.
+    }
+
+    pub fn drain_surface_state(&mut self, _cx: &mut Context<Self>) -> bool {
+        false
+    }
+
+    pub fn pump_deferred_work(&mut self, _cx: &mut Context<Self>) -> bool {
+        false
     }
 
     /// Bring up the HostView (HWND + renderer + ConPTY) at the given

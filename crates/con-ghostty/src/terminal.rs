@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Once};
 
 use dispatch::Queue;
@@ -335,6 +335,7 @@ pub struct GhosttyApp {
 struct GhosttyWakeHandle {
     app: AtomicPtr<c_void>,
     tick_scheduled: AtomicBool,
+    generation: AtomicU64,
 }
 
 impl Default for GhosttyWakeHandle {
@@ -342,6 +343,7 @@ impl Default for GhosttyWakeHandle {
         Self {
             app: AtomicPtr::new(std::ptr::null_mut()),
             tick_scheduled: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
         }
     }
 }
@@ -418,6 +420,11 @@ impl GhosttyApp {
     /// and AppKit operations require it.
     pub fn tick(&self) {
         unsafe { ffi::ghostty_app_tick(self.app) }
+    }
+
+    /// Monotonic counter bumped after every Ghostty wakeup-driven app tick.
+    pub fn wake_generation(&self) -> u64 {
+        self.wake_handle.generation.load(Ordering::Acquire)
     }
 
     /// Update the app's terminal colors at runtime.
@@ -1203,6 +1210,7 @@ unsafe extern "C" fn wakeup_callback(userdata: *mut c_void) {
             return;
         }
         unsafe { ffi::ghostty_app_tick(app) };
+        wake_handle.generation.fetch_add(1, Ordering::AcqRel);
     });
 }
 

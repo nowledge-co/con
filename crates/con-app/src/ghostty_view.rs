@@ -38,7 +38,6 @@ use objc::{class, msg_send, sel, sel_impl};
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
 
-const GHOSTTY_VIEW_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const LIVE_RESIZE_COMMIT_INTERVAL: Duration = Duration::from_millis(16);
 const LIVE_RESIZE_SETTLE_INTERVAL: Duration = Duration::from_millis(120);
 #[cfg(target_os = "macos")]
@@ -118,56 +117,6 @@ impl GhosttyView {
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Poll per-surface state periodically. The shared Ghostty app tick
-        // runs once per workspace; this loop only drains surface-local state
-        // and resize commits for this view.
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(GHOSTTY_VIEW_POLL_INTERVAL)
-                    .await;
-                if this
-                    .update(cx, |view, cx| {
-                        if let Some(ref terminal) = view.terminal {
-                            for event in terminal.take_pending_events() {
-                                match event {
-                                    GhosttySurfaceEvent::SplitRequest(direction) => {
-                                        cx.emit(GhosttySplitRequested(direction));
-                                    }
-                                }
-                            }
-                            let _ = terminal.take_needs_render();
-                            if !terminal.is_alive() && !view.process_exit_emitted {
-                                view.process_exit_emitted = true;
-                                cx.emit(GhosttyProcessExited);
-                            }
-                            let title = terminal.title();
-                            if title != view.last_title {
-                                view.last_title = title.clone();
-                                cx.emit(GhosttyTitleChanged(title));
-                            }
-                        } else if !view.initialized
-                            && view
-                                .next_surface_init_retry_at
-                                .is_some_and(|deadline| Instant::now() >= deadline)
-                        {
-                            view.next_surface_init_retry_at = None;
-                            cx.notify();
-                        } else if view
-                            .next_resize_commit_at
-                            .is_some_and(|deadline| Instant::now() >= deadline)
-                        {
-                            view.commit_pending_resize();
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
-
         Self {
             app,
             terminal: None,
@@ -193,6 +142,64 @@ impl GhosttyView {
             last_resize_commit_at: None,
             ime_marked_text: None,
         }
+    }
+
+    pub fn drain_surface_state(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(ref terminal) = self.terminal else {
+            return false;
+        };
+
+        let mut changed = false;
+        for event in terminal.take_pending_events() {
+            changed = true;
+            match event {
+                GhosttySurfaceEvent::SplitRequest(direction) => {
+                    cx.emit(GhosttySplitRequested(direction));
+                }
+            }
+        }
+
+        let _ = terminal.take_needs_render();
+
+        if !terminal.is_alive() && !self.process_exit_emitted {
+            self.process_exit_emitted = true;
+            changed = true;
+            cx.emit(GhosttyProcessExited);
+        }
+
+        let title = terminal.title();
+        if title != self.last_title {
+            self.last_title = title.clone();
+            changed = true;
+            cx.emit(GhosttyTitleChanged(title));
+        }
+
+        changed
+    }
+
+    pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
+        let now = Instant::now();
+        let mut changed = false;
+
+        if !self.initialized
+            && self
+                .next_surface_init_retry_at
+                .is_some_and(|deadline| now >= deadline)
+        {
+            self.next_surface_init_retry_at = None;
+            changed = true;
+            cx.notify();
+        }
+
+        if self
+            .next_resize_commit_at
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.commit_pending_resize();
+            changed = true;
+        }
+
+        changed
     }
 
     pub fn terminal(&self) -> Option<&Arc<GhosttyTerminal>> {
@@ -283,7 +290,12 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
-    fn ensure_initialized(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
+    fn ensure_initialized(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
         if self.initialized {
             return;
         }
@@ -410,7 +422,7 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn ensure_initialized_for_control(&mut self, window: &mut Window) {
+    pub fn ensure_initialized_for_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let fallback_bounds = self.last_bounds.unwrap_or_else(|| {
             let window_bounds = window.bounds();
             let width = (window_bounds.size.width.as_f32() * 0.45).clamp(360.0, 900.0);
@@ -419,7 +431,7 @@ impl GhosttyView {
         });
         let needs_real_layout = self.last_bounds.is_none();
         self.awaiting_first_layout_visibility = needs_real_layout;
-        self.ensure_initialized(fallback_bounds, window);
+        self.ensure_initialized(fallback_bounds, window, cx);
         // Control-created panes may need a live PTY before GPUI has laid them out,
         // but publishing a fallback frame makes the native view visibly jump across
         // the workspace. Keep the surface hidden until the first real on_layout.
@@ -472,10 +484,10 @@ impl GhosttyView {
         }
     }
 
-    fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
+    fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(target_os = "macos")]
         {
-            self.ensure_initialized(bounds, window);
+            self.ensure_initialized(bounds, window, cx);
             self.update_frame(bounds);
         }
     }
@@ -1104,7 +1116,7 @@ impl Render for GhosttyView {
                         let entity = entity.clone();
                         move |bounds, window, cx| {
                             let _ = entity.update(cx, |view: &mut GhosttyView, _cx| {
-                                view.on_layout(bounds, window);
+                                view.on_layout(bounds, window, _cx);
                             });
                         }
                     },

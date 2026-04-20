@@ -253,6 +253,8 @@ pub struct ConWorkspace {
     terminal_theme: TerminalTheme,
     /// Shared Ghostty app instance for all panes in this window.
     ghostty_app: std::sync::Arc<con_ghostty::GhosttyApp>,
+    /// Last wake generation observed from Ghostty's embedded runtime.
+    last_ghostty_wake_generation: u64,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -779,6 +781,10 @@ impl ConWorkspace {
                         got_event = true;
                         workspace.apply_shell_suggestion(result, cx);
                     }
+
+                    if workspace.pump_ghostty_views(cx) {
+                        got_event = true;
+                    }
                 })
                 .ok();
 
@@ -812,6 +818,7 @@ impl ConWorkspace {
         }
 
         let has_multiple_tabs = tabs.len() > 1;
+        let last_ghostty_wake_generation = ghostty_app.wake_generation();
 
         Self {
             sidebar,
@@ -852,6 +859,7 @@ impl ConWorkspace {
             agent_panel_drag: None,
             terminal_theme,
             ghostty_app,
+            last_ghostty_wake_generation,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             control_request_rx,
@@ -937,6 +945,30 @@ impl ConWorkspace {
         for (pane_id, terminal) in pane_terminals {
             terminal.set_focus_state(target_ids.contains(&pane_id), cx);
         }
+    }
+
+    fn pump_ghostty_views(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut changed = false;
+
+        for tab in &self.tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                changed |= terminal.pump_surface_deferred_work(cx);
+            }
+        }
+
+        let generation = self.ghostty_app.wake_generation();
+        if generation == self.last_ghostty_wake_generation {
+            return changed;
+        }
+
+        self.last_ghostty_wake_generation = generation;
+        for tab in &self.tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                changed |= terminal.drain_surface_state(cx);
+            }
+        }
+
+        changed
     }
 
     fn schedule_terminal_bootstrap_reassert(
