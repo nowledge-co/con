@@ -17,6 +17,7 @@
 //! actual shader code and `pipeline.rs` for the D3D11 plumbing.
 
 mod atlas;
+mod font_loader;
 mod pipeline;
 
 use std::sync::Mutex;
@@ -69,7 +70,12 @@ pub struct RendererConfig {
 impl Default for RendererConfig {
     fn default() -> Self {
         Self {
-            font_family: "Cascadia Mono".to_string(),
+            // IoskeleyMono is embedded in the binary and registered
+            // with DirectWrite at atlas-init time (font_loader.rs). If
+            // bundling fails on older Windows (<10 1607), CreateTextFormat
+            // gracefully resolves the name through the system collection,
+            // producing a sensible monospace fallback (usually Consolas).
+            font_family: font_loader::BUNDLED_FONT_FAMILY.to_string(),
             font_size_px: 14.0,
             initial_width: 800,
             initial_height: 600,
@@ -147,11 +153,22 @@ impl Renderer {
                 .context("DWriteCreateFactory failed")?;
         log::info!("Renderer: DWrite factory created");
 
+        // Bundled font collection (IoskeleyMono). `None` on pre-Win10-
+        // 1607 — GlyphCache falls back to the system collection.
+        let bundled_collection = font_loader::build_bundled_collection(&dwrite)
+            .unwrap_or_else(|err| {
+                log::warn!(
+                    "font bundling failed; using system fallback: {err:#}"
+                );
+                None
+            });
+
         log::info!("Renderer: creating GlyphCache (font={})", config.font_family);
         let atlas = GlyphCache::new(
             &device,
             &context,
             &dwrite,
+            bundled_collection,
             &config.font_family,
             config.font_size_px,
             ATLAS_SIZE_PX,

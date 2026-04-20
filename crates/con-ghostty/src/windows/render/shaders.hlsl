@@ -3,12 +3,14 @@
 // Single DrawIndexedInstanced(6, cells) per frame. Each cell is a quad
 // with per-instance inputs (IA layout, matching `VS_INSTANCE` in
 // pipeline.rs). VS computes the cell's screen-space position from its
-// grid coords; PS samples the grayscale glyph atlas (BGRA8, coverage in
-// the red channel) and lerps bg→fg by coverage.
+// grid coords; PS samples the ClearType-rendered glyph atlas (BGRA8,
+// per-subpixel coverage in R,G,B) and lerps fg→bg per channel for a
+// subpixel-accurate composite.
 //
-// Grayscale, not ClearType: portable across rotated panels / OLED pentile
-// / external monitors, avoids dual-source blending, matches Alacritty /
-// Kitty / Ghostty defaults.
+// Atlas contents: Direct2D draws a white brush through a ClearType-
+// enabled render target onto an opaque-black background. Result per
+// channel = subpixel coverage. The PS lerps (bg[c], fg[c], coverage[c])
+// per channel c in {R,G,B}.
 
 // ── Constant buffer (per-frame) ────────────────────────────────────────
 cbuffer Globals : register(b0) {
@@ -115,10 +117,9 @@ VSOut vs_main(uint vid : SV_VertexID, VSInstance inst) {
 // ── PS ─────────────────────────────────────────────────────────────────
 float4 ps_main(VSOut i) : SV_Target {
     // atlasUV arrives already normalized (VS divides pixel coords by
-    // invAtlasSize). Sample the grayscale coverage from the red channel —
-    // Direct2D's DrawText with GRAYSCALE antialias writes coverage into
-    // all RGB channels of the atlas; we pick R arbitrarily.
-    float coverage = atlas.Sample(samp, i.atlasUV).r;
+    // invAtlasSize). ClearType wrote per-subpixel coverage to R/G/B;
+    // sample all three channels for subpixel antialiasing.
+    float3 coverage = atlas.Sample(samp, i.atlasUV).rgb;
 
     // Inverse handling: swap fg/bg when attr bit 4 is set.
     float4 fg = i.fg;
@@ -152,10 +153,13 @@ float4 ps_main(VSOut i) : SV_Target {
         }
     }
 
-    float comp = max(coverage, band_coverage);
-
-    // Grayscale compositing: opaque background with fg painted on top
-    // by coverage. One draw call, no separate bg pass.
-    float3 rgb = lerp(bg.rgb, fg.rgb, comp);
+    // Per-channel lerp: subpixel ClearType for glyph coverage, mixed
+    // with a flat `band_coverage` for decorations so underline /
+    // strike bands don't show subpixel fringing.
+    float3 comp = max(coverage, float3(band_coverage, band_coverage, band_coverage));
+    float3 rgb;
+    rgb.r = lerp(bg.r, fg.r, comp.r);
+    rgb.g = lerp(bg.g, fg.g, comp.g);
+    rgb.b = lerp(bg.b, fg.b, comp.b);
     return float4(rgb, 1.0);
 }

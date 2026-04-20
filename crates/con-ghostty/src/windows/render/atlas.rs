@@ -2,8 +2,13 @@
 //!
 //! `BGRA8_UNORM` texture with skyline packing (`etagere`). Glyphs are
 //! rasterized via Direct2D `DrawText` onto a `ID2D1RenderTarget` that
-//! aliases the atlas texture through a DXGI surface. Grayscale
-//! antialiasing (`D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE`).
+//! aliases the atlas texture through a DXGI surface. ClearType
+//! antialiasing writes RGB subpixel coverage into the atlas (one
+//! coverage value per channel); the pixel shader lerps fg→bg per
+//! channel to produce the final subpixel result. We fall back to
+//! grayscale if `SetTextAntialiasMode(CLEARTYPE)` isn't supported on
+//! this GPU / display (rare: only shows up in RDP / forced-grayscale
+//! accessibility modes).
 
 use std::collections::HashMap;
 
@@ -11,14 +16,15 @@ use anyhow::{Context, Result};
 use etagere::{size2, AllocId, AtlasAllocator};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
+    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
-    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Factory,
-    ID2D1RenderTarget, ID2D1SolidColorBrush,
+    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE,
+    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Factory, ID2D1RenderTarget,
+    ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::{
@@ -29,7 +35,8 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_TEXT_METRICS, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_PIXEL_GEOMETRY_RGB, DWRITE_RENDERING_MODE_NATURAL, DWRITE_TEXT_METRICS,
+    IDWriteFactory, IDWriteFontCollection, IDWriteRenderingParams, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -63,6 +70,10 @@ pub struct GlyphCache {
     device: ID3D11Device,
     _context: ID3D11DeviceContext,
     dwrite: IDWriteFactory,
+    /// Bundled private collection (IoskeleyMono). `None` when the
+    /// runtime didn't support IDWriteFactory5; CreateTextFormat then
+    /// resolves through the system collection.
+    bundled_collection: Option<IDWriteFontCollection>,
     _d2d_factory: ID2D1Factory,
 
     atlas_size: u32,
@@ -89,18 +100,43 @@ impl GlyphCache {
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
         dwrite: &IDWriteFactory,
+        bundled_collection: Option<IDWriteFontCollection>,
         font_family: &str,
         font_size_px: f32,
         atlas_size: u32,
     ) -> Result<Self> {
-        let text_format_regular =
-            make_text_format(dwrite, font_family, font_size_px, false, false)?;
-        let text_format_bold =
-            make_text_format(dwrite, font_family, font_size_px, true, false)?;
-        let text_format_italic =
-            make_text_format(dwrite, font_family, font_size_px, false, true)?;
-        let text_format_bold_italic =
-            make_text_format(dwrite, font_family, font_size_px, true, true)?;
+        let text_format_regular = make_text_format(
+            dwrite,
+            bundled_collection.as_ref(),
+            font_family,
+            font_size_px,
+            false,
+            false,
+        )?;
+        let text_format_bold = make_text_format(
+            dwrite,
+            bundled_collection.as_ref(),
+            font_family,
+            font_size_px,
+            true,
+            false,
+        )?;
+        let text_format_italic = make_text_format(
+            dwrite,
+            bundled_collection.as_ref(),
+            font_family,
+            font_size_px,
+            false,
+            true,
+        )?;
+        let text_format_bold_italic = make_text_format(
+            dwrite,
+            bundled_collection.as_ref(),
+            font_family,
+            font_size_px,
+            true,
+            true,
+        )?;
 
         let metrics = measure_cell(dwrite, &text_format_regular, font_size_px)?;
 
@@ -161,11 +197,16 @@ impl GlyphCache {
         let dxgi_surface: IDXGISurface = atlas_texture
             .cast()
             .context("atlas texture -> IDXGISurface cast failed")?;
+        // ClearType requires an opaque-alpha render target: D2D composes
+        // the RGB subpixel coverage against the pre-painted surface
+        // directly. `ALPHA_MODE_IGNORE` leaves the alpha channel unused
+        // (we'll always sample BGRA8 with the 3 RGB channels carrying
+        // per-subpixel coverage; alpha stays 1.0).
         let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
             pixelFormat: D2D1_PIXEL_FORMAT {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                alphaMode: D2D1_ALPHA_MODE_IGNORE,
             },
             dpiX: 96.0,
             dpiY: 96.0,
@@ -178,10 +219,36 @@ impl GlyphCache {
         }
         .context("CreateDxgiSurfaceRenderTarget failed")?;
 
-        // SAFETY: grayscale AA — portable across rotated panels / OLED.
+        // Custom rendering params give us consistent ClearType output
+        // across machines regardless of the user's Control-Panel
+        // ClearType Tuner settings. Values mirror Windows Terminal's
+        // TextureAtlas (see microsoft/terminal renderer/atlas/...).
+        //
+        // If CreateCustomRenderingParams fails (very rare — it's a pure
+        // parameter validator) we leave the default params in place.
+        // SAFETY: constants are valid for IDWriteFactory.
+        let custom_params: Option<IDWriteRenderingParams> = unsafe {
+            dwrite
+                .CreateCustomRenderingParams(
+                    1.8,                         // gamma
+                    0.5,                         // enhanced contrast
+                    1.0,                         // ClearType level
+                    DWRITE_PIXEL_GEOMETRY_RGB,   // subpixel layout
+                    DWRITE_RENDERING_MODE_NATURAL,
+                )
+                .ok()
+        };
+        // SAFETY: ClearType AA. Fall back to grayscale if the display
+        // pipeline forces it (screen readers, RDP, color-filter modes)
+        // — setting the mode is always cheap; the D2D runtime picks the
+        // closest supported mode, so this is fire-and-forget.
         unsafe {
-            d2d_rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            d2d_rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+            if let Some(params) = custom_params.as_ref() {
+                d2d_rt.SetTextRenderingParams(params);
+            }
         }
+        let _ = D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE; // keep import live for docs
 
         let color = D2D1_COLOR_F {
             r: 1.0,
@@ -194,12 +261,29 @@ impl GlyphCache {
             unsafe { d2d_rt.CreateSolidColorBrush(&color, None) }
                 .context("CreateSolidColorBrush failed")?;
 
+        // Seed the atlas with black so ClearType has a defined blend
+        // target for the first DrawText. D3D11 zero-inits the texture
+        // but the 0-alpha of (0,0,0,0) can confuse D2D's internal state
+        // assertions in some drivers; an explicit Clear sidesteps that.
+        // SAFETY: d2d_rt owned by us and targets the atlas texture.
+        unsafe {
+            d2d_rt.BeginDraw();
+            d2d_rt.Clear(Some(&D2D1_COLOR_F {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            }));
+            let _ = d2d_rt.EndDraw(None, None);
+        }
+
         let allocator = AtlasAllocator::new(size2(atlas_size as i32, atlas_size as i32));
 
         Ok(Self {
             device: device.clone(),
             _context: context.clone(),
             dwrite: dwrite.clone(),
+            bundled_collection,
             _d2d_factory: d2d_factory,
             atlas_size,
             _atlas_texture: atlas_texture,
@@ -292,30 +376,59 @@ impl GlyphCache {
         self.entries.clear();
         self.allocator =
             AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
-        self.text_format_regular =
-            make_text_format(&self.dwrite, &self.font_family, font_size_px, false, false)?;
-        self.text_format_bold =
-            make_text_format(&self.dwrite, &self.font_family, font_size_px, true, false)?;
-        self.text_format_italic =
-            make_text_format(&self.dwrite, &self.font_family, font_size_px, false, true)?;
-        self.text_format_bold_italic =
-            make_text_format(&self.dwrite, &self.font_family, font_size_px, true, true)?;
+        self.text_format_regular = make_text_format(
+            &self.dwrite,
+            self.bundled_collection.as_ref(),
+            &self.font_family,
+            font_size_px,
+            false,
+            false,
+        )?;
+        self.text_format_bold = make_text_format(
+            &self.dwrite,
+            self.bundled_collection.as_ref(),
+            &self.font_family,
+            font_size_px,
+            true,
+            false,
+        )?;
+        self.text_format_italic = make_text_format(
+            &self.dwrite,
+            self.bundled_collection.as_ref(),
+            &self.font_family,
+            font_size_px,
+            false,
+            true,
+        )?;
+        self.text_format_bold_italic = make_text_format(
+            &self.dwrite,
+            self.bundled_collection.as_ref(),
+            &self.font_family,
+            font_size_px,
+            true,
+            true,
+        )?;
         self.metrics = measure_cell(&self.dwrite, &self.text_format_regular, font_size_px)?;
         // Clear the atlas texture so fresh rasterization doesn't blend
         // with stale pixels from the previous size. BeginDraw/Clear/End
         // is a single D2D op — the DXGI-backed RT aliases the same
         // texture the D3D11 pixel shader samples, so the clear is
         // visible to the next frame.
+        //
+        // Black (not transparent) — ClearType blends against the RT's
+        // current pixels. Starting from (0,0,0) + drawing with a white
+        // brush yields atlas values equal to per-subpixel coverage,
+        // which is what the PS expects.
         // SAFETY: d2d_rt is owned by self and targets the atlas texture.
         unsafe {
             self.d2d_rt.BeginDraw();
-            let transparent = D2D1_COLOR_F {
+            let black = D2D1_COLOR_F {
                 r: 0.0,
                 g: 0.0,
                 b: 0.0,
-                a: 0.0,
+                a: 1.0,
             };
-            self.d2d_rt.Clear(Some(&transparent));
+            self.d2d_rt.Clear(Some(&black));
             let _ = self.d2d_rt.EndDraw(None, None);
         }
         let _ = &self.device; // placeholder use so `device` field isn't dead
@@ -325,6 +438,7 @@ impl GlyphCache {
 
 fn make_text_format(
     dwrite: &IDWriteFactory,
+    collection: Option<&IDWriteFontCollection>,
     family: &str,
     size_px: f32,
     bold: bool,
@@ -344,11 +458,14 @@ fn make_text_format(
         DWRITE_FONT_STYLE_NORMAL
     };
 
+    // Pass the bundled collection when we have one so DWrite resolves
+    // the family name against our IoskeleyMono blobs instead of the
+    // system font table. `None` falls back to the system collection.
     // SAFETY: both buffers are NUL-terminated wide strings.
     let format = unsafe {
         dwrite.CreateTextFormat(
             windows::core::PCWSTR(family_w.as_ptr()),
-            None,
+            collection,
             weight,
             style,
             DWRITE_FONT_STRETCH_NORMAL,

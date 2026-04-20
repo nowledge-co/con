@@ -30,6 +30,7 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::HBRUSH;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
     HCURSOR, HICON, MoveWindow, RegisterClassExW, SW_SHOW, SetParent, SetWindowLongPtrW,
@@ -51,6 +52,11 @@ struct HostState {
     vt: Arc<VtScreen>,
     conpty: Arc<ConPty>,
     config: RendererConfig,
+    /// Logical (96-dpi) font size; the effective physical size is
+    /// `base_font_size_px * current_dpi / 96`. Preserved across
+    /// `WM_DPICHANGED` so we rebuild the atlas from the same base.
+    base_font_size_px: f32,
+    current_dpi: u32,
 }
 
 /// A live terminal pane: child HWND + renderer + PTY + parser.
@@ -99,11 +105,30 @@ impl HostView {
         }
         .context("CreateWindowExW failed for terminal host view")?;
 
+        // DPI: read from the child HWND (inherits from parent monitor).
+        // Scale the logical font size to physical px so text appears at
+        // the same on-screen size Windows Terminal shows on this
+        // monitor. Fall back to 96 if GetDpiForWindow returns 0 (happens
+        // on pre-Win10 or under screen-reader shims).
+        // SAFETY: hwnd just returned from CreateWindowExW; still alive.
+        let current_dpi = {
+            let dpi = unsafe { GetDpiForWindow(hwnd) };
+            if dpi == 0 { 96 } else { dpi }
+        };
+        let base_font_size_px = config.font_size_px;
+        log::info!(
+            "HostView::new dpi={current_dpi} base_font_size={base_font_size_px}"
+        );
+
         // Build the renderer now that we have an HWND.
         let mut renderer_config = config.clone();
         renderer_config.initial_width = width;
         renderer_config.initial_height = height;
-        log::info!("HostView: creating Renderer");
+        renderer_config.font_size_px = scale_font_size(base_font_size_px, current_dpi);
+        log::info!(
+            "HostView: creating Renderer (physical font_size_px={})",
+            renderer_config.font_size_px
+        );
         let renderer = Renderer::new(hwnd, &renderer_config)?;
         log::info!("HostView: Renderer created");
 
@@ -130,6 +155,8 @@ impl HostView {
             vt,
             conpty,
             config: renderer_config,
+            base_font_size_px,
+            current_dpi,
         });
         let state_ptr = Box::into_raw(state);
 
@@ -223,6 +250,14 @@ impl Drop for HostView {
             let _ = DestroyWindow(self.hwnd);
         }
     }
+}
+
+/// DPI-scale a logical (96-dpi) font size into physical pixels. Float
+/// math: DirectWrite's CreateTextFormat takes a float size, so we don't
+/// round to an integer — rounding to the nearest whole pixel causes
+/// visible banding across the jump from 100%→125%→150% scaling.
+fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
+    logical_px * (dpi as f32) / 96.0
 }
 
 fn ensure_window_class() -> Result<()> {
@@ -325,8 +360,54 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(0)
         }
         WM_DPICHANGED => {
-            // TODO(phase-3-dpi): rebuild glyph atlas at new DPI.
-            // The new DPI is in HIWORD(wparam); the suggested rect is in lparam.
+            if !state_ptr.is_null() {
+                let new_dpi = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                // lparam points at a RECT* in screen coords that the
+                // system suggests we move/resize to (so the window
+                // preserves its on-screen size under the new scale).
+                // SAFETY: Windows guarantees lparam is a valid RECT*
+                // for WM_DPICHANGED.
+                if lparam.0 != 0 {
+                    let suggested = unsafe { &*(lparam.0 as *const RECT) };
+                    unsafe {
+                        let _ = MoveWindow(
+                            hwnd,
+                            suggested.left,
+                            suggested.top,
+                            suggested.right - suggested.left,
+                            suggested.bottom - suggested.top,
+                            true,
+                        );
+                    }
+                }
+                // SAFETY: state_ptr valid.
+                let state = unsafe { &mut *state_ptr };
+                state.current_dpi = new_dpi.max(1);
+                let new_font = scale_font_size(state.base_font_size_px, state.current_dpi);
+                state.config.font_size_px = new_font;
+                {
+                    let renderer = state.renderer.lock();
+                    if let Err(err) = renderer.rebuild_atlas(new_font) {
+                        log::warn!("rebuild_atlas on DPI change failed: {err:#}");
+                    }
+                }
+                // Re-derive the grid from the new metrics; WM_SIZE will
+                // also fire but MoveWindow dispatch order isn't
+                // guaranteed, so do it here too to be robust.
+                let renderer = state.renderer.lock();
+                let (w, h) = renderer.dimensions_px();
+                let (cols, rows) = renderer.grid_for_dimensions(&state.config);
+                let (cell_w, cell_h) = (
+                    (w / cols as u32).max(1),
+                    (h / rows as u32).max(1),
+                );
+                drop(renderer);
+                let _ = state.vt.resize(cols, rows, cell_w, cell_h);
+                let _ = state.conpty.resize(PtySize { cols, rows });
+                log::info!(
+                    "WM_DPICHANGED: dpi={new_dpi} font_px={new_font:.2} grid={cols}x{rows}"
+                );
+            }
             LRESULT(0)
         }
         WM_CHAR => {
