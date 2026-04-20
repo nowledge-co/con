@@ -754,24 +754,44 @@ impl ConWorkspace {
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
             .detach();
         let workspace_handle = cx.weak_entity();
-        window.on_window_should_close(cx, move |_window, cx| {
-            let _ = workspace_handle.update(cx, |workspace, cx| {
-                workspace.prepare_window_close(cx);
-            });
-            // On Windows, closing the last window does NOT automatically
-            // exit the app — gpui_windows' event loop keeps running with
-            // no visible windows, which manifests as a "hang" (the user
-            // has to Ctrl+C the launching terminal to kill the process).
-            // macOS / NSApplication has its own convention (apps keep
-            // running without windows), so leave that platform alone.
-            // Con today is a single-window app; the first
-            // should_close that returns `true` is always the last
-            // window, so quitting here is correct.
+        window.on_window_should_close(cx, move |window, cx| {
+            // Two shutdown paths, two behaviours:
+            //
+            // macOS — run prepare + return true so NSApp destroys the
+            // window. Background tasks riding the main runloop finish
+            // naturally; NSApp keeps the process alive without windows
+            // per platform convention, so no explicit quit is needed.
+            //
+            // Windows — returning true tears the HWND down inside the
+            // same WM_CLOSE iteration that fired this callback. That
+            // races with pending async window tasks (e.g.
+            // `handle_activate_msg::async_block$0`) which then run on
+            // a dead HWND and log "Invalid window handle" / "window
+            // not found". Defer the cleanup so in-flight tasks drain
+            // first, then remove the window and quit (closing the
+            // last window does NOT auto-terminate the process on
+            // Windows). This mirrors `close_window_from_last_tab`,
+            // which the user confirmed shuts down cleanly from the
+            // pane-exit path.
             #[cfg(target_os = "windows")]
             {
-                cx.quit();
+                let _ = workspace_handle.update(cx, |_workspace, cx| {
+                    cx.defer_in(window, |workspace, window, cx| {
+                        workspace.prepare_window_close(cx);
+                        window.remove_window();
+                        cx.quit();
+                    });
+                });
+                return false;
             }
-            true
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = window;
+                let _ = workspace_handle.update(cx, |workspace, cx| {
+                    workspace.prepare_window_close(cx);
+                });
+                true
+            }
         });
 
         // Poll all tabs' agent sessions.
