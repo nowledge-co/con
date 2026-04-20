@@ -5937,8 +5937,12 @@ impl Render for ConWorkspace {
                     tab_el = tab_el
                         .rounded_t(px(6.0))
                         .mb(px(1.0))
-                        .text_color(theme.muted_foreground.opacity(0.45))
-                        .hover(|s| s.bg(theme.muted.opacity(0.06)));
+                        .bg(theme.background.opacity(0.14))
+                        .text_color(theme.muted_foreground.opacity(0.72))
+                        .hover(|s| {
+                            s.bg(theme.background.opacity(0.20))
+                                .text_color(theme.foreground.opacity(0.82))
+                        });
                 }
 
                 let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
@@ -5959,9 +5963,9 @@ impl Render for ConWorkspace {
                         .size(px(12.0))
                         .flex_shrink_0()
                         .text_color(if is_active {
-                            theme.foreground.opacity(0.7)
+                            theme.foreground.opacity(0.74)
                         } else {
-                            theme.muted_foreground.opacity(0.4)
+                            theme.muted_foreground.opacity(0.56)
                         }),
                 );
 
