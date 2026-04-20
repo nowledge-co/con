@@ -28,37 +28,51 @@ jobs:
     runs-on: windows-latest
     # GitHub hosted runners set $GITHUB_WORKSPACE to D:\a\<repo>\<repo>,
     # which for this repo is D:\a\con\con. `con` is a reserved DOS device
-    # name and git.exe fails `init` when the path component matches one
-    # (EINVAL from the Win32 Kernel on `.git` creation). Checking out
-    # into a subdirectory whose components are all non-reserved sidesteps
-    # the issue — everything from there uses `working-directory: src`.
+    # name and git.exe rejects any path whose components match one (CON,
+    # PRN, AUX, NUL, ...), failing `git init` with EINVAL on `.git`.
+    # Putting the checkout under a `path:` subdir doesn't help because
+    # the ancestor directory is still `con`. We sidestep the whole tree
+    # by cloning into C:\src\repo outside $GITHUB_WORKSPACE and pointing
+    # every subsequent step there.
     #
-    # CON_SKIP_GHOSTTY_VT skips the zig-driven libghostty-vt build that
-    # `cargo check -p con-ghostty` would otherwise trigger — we only want
-    # metadata here, no link step, and Zig 0.13+ isn't preinstalled on
-    # windows-latest images.
+    # CON_SKIP_GHOSTTY_VT tells con-ghostty's build.rs to skip the
+    # zig-driven libghostty-vt build. `cargo check` doesn't link, so
+    # unresolved symbols don't matter; Zig 0.13+ isn't preinstalled on
+    # windows-latest images so trying to build would panic.
     env:
       CON_SKIP_GHOSTTY_VT: "1"
+      CON_CHECKOUT_DIR: C:\src\repo
+    defaults:
+      run:
+        working-directory: C:\src\repo
     steps:
-      - uses: actions/checkout@v4
-        with:
-          path: src
+      - name: Clone repo outside the reserved-name path
+        working-directory: C:\
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CON_CHECKOUT_DIR | Out-Null
+          git -c core.longpaths=true clone `
+            "https://x-access-token:$env:GH_TOKEN@github.com/${{ github.repository }}.git" `
+            $env:CON_CHECKOUT_DIR
+          Set-Location $env:CON_CHECKOUT_DIR
+          git fetch origin "${{ github.event.pull_request.head.sha || github.sha }}"
+          git checkout "${{ github.event.pull_request.head.sha || github.sha }}"
+          git log -1 --oneline
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src
+          workspaces: C:\src\repo
       - name: cargo check — portable crates
-        working-directory: src
         run: cargo check -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
       - name: cargo check — UI binary (stub terminal backend)
-        working-directory: src
         # The default `bin-con` target compiles to `con.exe`, which Win32
         # file APIs reject because CON is a reserved device name. The
         # `bin-con-app` feature routes the same `main.rs` to `con-app.exe`
         # instead — mirrors what `cargo wbuild` / `cargo wrun` do locally.
         run: cargo check -p con --no-default-features --features con/bin-con-app
       - name: cargo test — portable crates
-        working-directory: src
         run: cargo test -p con-core -p con-cli -p con-agent -p con-terminal
 
   linux:
