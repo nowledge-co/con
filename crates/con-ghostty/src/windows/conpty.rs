@@ -45,6 +45,12 @@ struct PseudoConsole(HPCON);
 
 impl Drop for PseudoConsole {
     fn drop(&mut self) {
+        if self.0.0 == 0 {
+            // Already closed by `ConPty::drop` (which takes the HPCON
+            // out to sequence teardown manually — see the comment
+            // there). Nothing to do.
+            return;
+        }
         // SAFETY: HPCON is owned by us; closing on drop is the documented
         // teardown contract. Blocks until the child has finished draining
         // its output pipe.
@@ -227,11 +233,20 @@ impl ConPty {
 
 impl Drop for ConPty {
     fn drop(&mut self) {
-        // `ClosePseudoConsole` (inside PseudoConsole::drop) blocks
-        // waiting for the child to drain stdout — a hung shell makes
-        // it wait forever. Force-kill the child first so the drain
-        // terminates cleanly, then the output thread sees EOF and
-        // joins.
+        // Teardown order matters here. The reader thread reads the
+        // host side of the output pipe; the pipe's write-end lives
+        // inside conhost (spawned by CreatePseudoConsole), NOT inside
+        // the child shell. So terminating the child is not enough —
+        // conhost keeps the pipe open and `ReadFile` never returns
+        // EOF. We must close the pseudo-console to make conhost exit
+        // and release the write-end, THEN join the reader.
+        //
+        // But `ClosePseudoConsole` itself blocks waiting for the child
+        // to drain its output — a hung shell blocks forever. So the
+        // correct sequence is:
+        //   1. TerminateProcess(child)      — makes (2) return promptly
+        //   2. ClosePseudoConsole(hpcon)    — releases the pipe write-end
+        //   3. JoinHandle::join(reader)     — reader's ReadFile now sees EOF
         //
         // SAFETY: process handle is owned by us; TerminateProcess with
         // exit code 0 is the Windows equivalent of SIGKILL. We don't
@@ -243,6 +258,17 @@ impl Drop for ConPty {
                 let _ = TerminateProcess(process, 0);
             }
         }
+
+        // Take the HPCON out and null it so field-drop (PseudoConsole
+        // Drop) doesn't double-close. Closing here sequences the
+        // teardown correctly relative to the reader join.
+        let hpcon = std::mem::replace(&mut self.pcon.0, HPCON(0));
+        if hpcon.0 != 0 {
+            // SAFETY: HPCON is owned by us; we've nulled the field so
+            // no double-close can happen.
+            unsafe { ClosePseudoConsole(hpcon) };
+        }
+
         if let Some(handle) = self.output_thread.take() {
             let _ = handle.join();
         }
