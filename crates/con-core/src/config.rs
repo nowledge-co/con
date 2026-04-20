@@ -95,46 +95,116 @@ impl Default for AppearanceConfig {
     }
 }
 
-// Default keybindings use the `secondary-` modifier token, which GPUI
-// parses as ⌘ on macOS and Ctrl on Windows/Linux. This keeps a single
-// source of truth per action and lets the Kbd renderer show the right
-// glyph per platform.
+// Default keybindings are chosen per platform. On macOS the `secondary-`
+// modifier token (⌘) is the right primary: Cmd+<letter> doesn't collide
+// with anything the terminal expects. On Windows `secondary-` resolves
+// to `Ctrl`, and bare Ctrl+<letter> is already a meaningful byte to
+// every POSIX/PowerShell shell (Ctrl+L = clear, Ctrl+C = SIGINT, Ctrl+I
+// = Tab, Ctrl+D = EOF, Ctrl+W = kill-word, ...). Binding app actions
+// to those steals them from the shell, which is exactly the feedback
+// a previous session missed. So for Windows we prefer Ctrl+Shift+
+// <letter> for actions that share a letter with a common terminal key,
+// matching Windows Terminal's own convention. Non-letter bindings
+// (Ctrl+`, Ctrl+,, Ctrl+;, Ctrl+') stay on bare Ctrl because those
+// keys don't produce control characters.
+#[cfg(target_os = "macos")]
 fn default_toggle_agent() -> String {
     "secondary-l".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_toggle_agent() -> String {
+    "ctrl-shift-l".into()
+}
+
 fn default_command_palette() -> String {
+    // Ctrl+Shift+P on Windows / Linux, Cmd+Shift+P on macOS.
     "secondary-shift-p".into()
 }
+
+#[cfg(target_os = "macos")]
 fn default_new_tab() -> String {
     "secondary-t".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_new_tab() -> String {
+    "ctrl-shift-t".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_new_window() -> String {
     "secondary-n".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_new_window() -> String {
+    "ctrl-shift-n".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_close_tab() -> String {
     "secondary-w".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_close_tab() -> String {
+    "ctrl-shift-w".into()
+}
+
 fn default_next_tab() -> String {
     "ctrl-tab".into()
 }
 fn default_previous_tab() -> String {
     "ctrl-shift-tab".into()
 }
+
 fn default_settings() -> String {
+    // Ctrl+, is the cross-editor convention (VSCode, IntelliJ, Windows
+    // Terminal) and doesn't produce a control character, so it works
+    // the same on both platforms via `secondary-`.
     "secondary-,".into()
 }
+
+#[cfg(target_os = "macos")]
 fn default_quit() -> String {
     "secondary-q".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_quit() -> String {
+    // Alt+F4 is the Windows platform convention for "close the app
+    // window". Ctrl+Q is XOFF / pwsh's quoted-insert, so it can't be
+    // used without stealing it from the shell.
+    "alt-f4".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_split_right() -> String {
     "secondary-d".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_split_right() -> String {
+    // Windows Terminal's "split pane right" is Alt+Shift+=. Ctrl+D is
+    // EOF in every shell so it must keep reaching the terminal.
+    "alt-shift-=".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_split_down() -> String {
     "secondary-shift-d".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_split_down() -> String {
+    // Mirrors Windows Terminal's "split pane down" (Alt+Shift+-).
+    "alt-shift--".into()
+}
+
+#[cfg(target_os = "macos")]
 fn default_focus_input() -> String {
     "secondary-i".into()
 }
+#[cfg(not(target_os = "macos"))]
+fn default_focus_input() -> String {
+    // Ctrl+I is the Tab character (0x09). Ctrl+Shift+I stays free.
+    "ctrl-shift-i".into()
+}
+
 fn default_toggle_input_bar() -> String {
     "ctrl-`".into()
 }
