@@ -162,6 +162,15 @@ pub const MODE_ANY_MOUSE: GhosttyMode = ghostty_mode(1003, false);
 pub const MODE_X10_MOUSE: GhosttyMode = ghostty_mode(9, false);
 pub const MODE_SGR_MOUSE: GhosttyMode = ghostty_mode(1006, false);
 pub const MODE_ALT_SCROLL: GhosttyMode = ghostty_mode(1007, false);
+/// DEC private mode 2004 — bracketed paste. Apps that set this want
+/// pasted text wrapped in `ESC[200~ … ESC[201~` so the line editor can
+/// distinguish typed-from-pasted input (e.g. to bypass auto-indent).
+pub const MODE_BRACKETED_PASTE: GhosttyMode = ghostty_mode(2004, false);
+/// DEC private mode 1 — DECCKM (cursor key mode). When set, arrow
+/// keys send `ESC O [ABCD]` (application mode) instead of the default
+/// `ESC [ [ABCD]` (cursor mode). Interactive readers like readline
+/// and vim set this to distinguish their keymap lookup.
+pub const MODE_DECCKM: GhosttyMode = ghostty_mode(1, false);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -711,6 +720,20 @@ impl VtScreen {
     /// reports. Apps like less / vim opt in.
     pub fn is_alt_scroll(&self) -> bool {
         self.mode_active(MODE_ALT_SCROLL)
+    }
+
+    /// Bracketed-paste mode (2004). When `true`, paste operations
+    /// should wrap the payload in `ESC[200~ … ESC[201~` so the shell
+    /// can treat it as a single paste.
+    pub fn is_bracketed_paste(&self) -> bool {
+        self.mode_active(MODE_BRACKETED_PASTE)
+    }
+
+    /// DECCKM (mode 1). When `true`, arrow keys must be encoded in
+    /// application-cursor form (`ESC O A/B/C/D`) rather than the
+    /// default cursor form (`ESC [ A/B/C/D`).
+    pub fn is_decckm(&self) -> bool {
+        self.mode_active(MODE_DECCKM)
     }
 
     /// Generic mode query — returns `false` when the FFI call fails

@@ -32,7 +32,8 @@ use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, 
 use windows::Win32::Graphics::Gdi::{HBRUSH, ScreenToClient};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL, VK_SHIFT, VK_V,
+    GetKeyState, ReleaseCapture, SetCapture, VK_C, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT,
+    VK_RIGHT, VK_SHIFT, VK_UP, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
@@ -269,6 +270,35 @@ fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
     logical_px * (dpi as f32) / 96.0
 }
 
+/// Single resize chain: `ResizeBuffers` → derive cell grid → forward
+/// to the VT parser and the PTY. Each step returns a `Result`; `?`
+/// bubbles the first failure so WM_SIZE can log precisely which link
+/// broke. Returning `Err` from here doesn't abort the program — the
+/// caller just logs and lets the next WM_SIZE try again.
+fn apply_resize(state: &HostState, width: u32, height: u32) -> Result<()> {
+    {
+        let mut renderer = state.renderer.lock();
+        renderer
+            .resize(width, height)
+            .context("Renderer::resize (ResizeBuffers)")?;
+    }
+    let (cols, rows) = {
+        let renderer = state.renderer.lock();
+        renderer.grid_for_dimensions(&state.config)
+    };
+    let cell_w = (width / cols.max(1) as u32).max(1);
+    let cell_h = (height / rows.max(1) as u32).max(1);
+    state
+        .vt
+        .resize(cols, rows, cell_w, cell_h)
+        .context("VtScreen::resize")?;
+    state
+        .conpty
+        .resize(PtySize { cols, rows })
+        .context("ConPty::resize")?;
+    Ok(())
+}
+
 /// Turn an `lparam` carrying client-space (x, y) coords into a `(col,
 /// row)` cell address using the renderer's current cell metrics. Out-
 /// of-window negative coords clamp to zero. Returns `None` if cell
@@ -354,6 +384,26 @@ fn extract_selection_text(snapshot: &ScreenSnapshot, sel: Selection) -> String {
         out.pop();
     }
     out
+}
+
+/// Encode arrow / Home / End as an xterm escape sequence, respecting
+/// DECCKM (application-cursor vs. cursor mode). Returns the byte
+/// payload to write to the PTY, or `None` if `vk` isn't a cursor key.
+fn encode_cursor_key(vk: u16, app_mode: bool) -> Option<&'static [u8]> {
+    // Application-cursor uses the `ESC O X` form; default (cursor mode)
+    // uses `ESC [ X`. Home / End don't move with DECCKM in xterm, but
+    // we route them through the same helper for symmetry — both forms
+    // are accepted by readline / vim.
+    let (csi_form, ss3_form): (&[u8], &[u8]) = match vk {
+        v if v == VK_UP.0 => (b"\x1b[A", b"\x1bOA"),
+        v if v == VK_DOWN.0 => (b"\x1b[B", b"\x1bOB"),
+        v if v == VK_RIGHT.0 => (b"\x1b[C", b"\x1bOC"),
+        v if v == VK_LEFT.0 => (b"\x1b[D", b"\x1bOD"),
+        v if v == VK_HOME.0 => (b"\x1b[H", b"\x1bOH"),
+        v if v == VK_END.0 => (b"\x1b[F", b"\x1bOF"),
+        _ => return None,
+    };
+    Some(if app_mode { ss3_form } else { csi_form })
 }
 
 /// Encode a mouse-wheel tick as an xterm SGR mouse report and write it
@@ -478,21 +528,14 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let width = (lparam.0 & 0xFFFF) as u32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
                 // SAFETY: state_ptr is valid for the lifetime of the
-                // window; renderer is mutex-protected.
+                // window; the resize chain uses interior-mutex access
+                // on the renderer and owned Arcs for vt / conpty.
                 let state = unsafe { &*state_ptr };
-                {
-                    let mut renderer = state.renderer.lock();
-                    let _ = renderer.resize(width, height);
+                if let Err(err) = apply_resize(state, width, height) {
+                    log::warn!(
+                        "WM_SIZE resize chain failed ({width}x{height}): {err:#}"
+                    );
                 }
-                let renderer = state.renderer.lock();
-                let (cols, rows) = renderer.grid_for_dimensions(&state.config);
-                let (cell_w, cell_h) = (
-                    (width / cols as u32).max(1),
-                    (height / rows as u32).max(1),
-                );
-                drop(renderer);
-                let _ = state.vt.resize(cols, rows, cell_w, cell_h);
-                let _ = state.conpty.resize(PtySize { cols, rows });
             }
             LRESULT(0)
         }
@@ -595,9 +638,22 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                                 // clipboard payloads) into \r so the
                                 // shell actually executes multi-line
                                 // paste line-by-line.
-                                let payload =
+                                let normalized =
                                     text.replace("\r\n", "\r").replace('\n', "\r");
-                                let _ = state.conpty.write(payload.as_bytes());
+                                // Bracketed paste: when the shell has
+                                // asked for it (DEC 2004), wrap the
+                                // payload in ESC[200~ … ESC[201~ so
+                                // it can disable line-editing hooks
+                                // for the duration. Safe to interleave
+                                // with the normalized CR translation —
+                                // the markers are plain bytes.
+                                if state.vt.is_bracketed_paste() {
+                                    let _ = state.conpty.write(b"\x1b[200~");
+                                    let _ = state.conpty.write(normalized.as_bytes());
+                                    let _ = state.conpty.write(b"\x1b[201~");
+                                } else {
+                                    let _ = state.conpty.write(normalized.as_bytes());
+                                }
                             }
                             Ok(_) => {}
                             Err(err) => log::warn!("clipboard::get_text failed: {err:#}"),
@@ -605,9 +661,21 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         return LRESULT(0);
                     }
                 }
+                // Arrow / Home / End. These never produce a WM_CHAR,
+                // so WM_KEYDOWN is the only place we see them. DECCKM
+                // toggles between CSI (ESC[X) and SS3 (ESCOx) forms —
+                // readline / vim / less flip it on entry.
+                let vk = (wparam.0 & 0xFFFF) as u16;
+                // SAFETY: state_ptr valid.
+                let state = unsafe { &*state_ptr };
+                let app_mode = state.vt.is_decckm();
+                if let Some(bytes) = encode_cursor_key(vk, app_mode) {
+                    let _ = state.conpty.write(bytes);
+                    return LRESULT(0);
+                }
             }
-            // TODO(phase-3-keys): translate VK_* to xterm escape
-            // sequences for arrows / F-keys / Home / End / etc.
+            // TODO(phase-3-keys): translate F-keys and Page Up / Down
+            // (VK_F1..F24, VK_PRIOR, VK_NEXT) to xterm escape sequences.
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
@@ -639,10 +707,15 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             if !state_ptr.is_null() {
                 // SAFETY: state_ptr valid.
                 let state = unsafe { &*state_ptr };
-                let dragging = state.drag_anchor.lock().is_some();
-                if dragging {
+                // Snapshot the anchor under a single lock. Reading via
+                // `is_some()` + `.unwrap()` would race: in principle the
+                // field can only change on the same message thread we're
+                // on, but the `Option::unwrap()` is still a latent panic
+                // site if WM_LBUTTONUP ever executes between them (e.g.
+                // a future scheduler quirk or re-entrant DispatchMessage).
+                let anchor = *state.drag_anchor.lock();
+                if let Some(anchor) = anchor {
                     if let Some(extent) = client_cell(state, lparam) {
-                        let anchor = state.drag_anchor.lock().unwrap();
                         let renderer = state.renderer.lock();
                         renderer.set_selection(Some(Selection { anchor, extent }));
                     }

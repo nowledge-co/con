@@ -263,18 +263,27 @@ impl Renderer {
     /// Cell metrics the host_view uses to decide `ResizePseudoConsole`
     /// / `ghostty_terminal_resize` arguments.
     pub fn metrics(&self) -> CellMetrics {
-        self.atlas.lock().unwrap().metrics()
+        self.atlas
+            .lock()
+            .expect("atlas mutex poisoned in metrics()")
+            .metrics()
     }
 
     /// Install / clear the current selection. The render-gate combines
     /// `snapshot.generation` with the selection fingerprint, so setting
     /// a new selection naturally invalidates the last frame.
     pub fn set_selection(&self, selection: Option<Selection>) {
-        *self.selection.lock().unwrap() = selection;
+        *self
+            .selection
+            .lock()
+            .expect("selection mutex poisoned in set_selection()") = selection;
     }
 
     pub fn selection(&self) -> Option<Selection> {
-        *self.selection.lock().unwrap()
+        *self
+            .selection
+            .lock()
+            .expect("selection mutex poisoned in selection()")
     }
 
     pub fn grid_for_dimensions(&self, _config: &RendererConfig) -> (u16, u16) {
@@ -300,14 +309,20 @@ impl Renderer {
         // so selection-only changes (drag motion when cell contents are
         // stable) force a repaint. `wrapping_mul` keeps the math
         // non-wrapping-panic under debug overflow checks.
-        let selection = *self.selection.lock().unwrap();
+        let selection = *self
+            .selection
+            .lock()
+            .expect("selection mutex poisoned in render()");
         let sel_hash = selection.map(|s| s.hash_u64()).unwrap_or(0);
         let combined = snapshot
             .generation
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
             .wrapping_add(sel_hash);
         {
-            let mut last = self.last_generation.lock().unwrap();
+            let mut last = self
+                .last_generation
+                .lock()
+                .expect("last_generation mutex poisoned in render()");
             if *last == combined {
                 return Ok(());
             }
@@ -344,8 +359,14 @@ impl Renderer {
         }
 
         // Build per-instance array.
-        let mut atlas = self.atlas.lock().unwrap();
-        let mut instances = self.instances.lock().unwrap();
+        let mut atlas = self
+            .atlas
+            .lock()
+            .expect("atlas mutex poisoned in render() glyph pass");
+        let mut instances = self
+            .instances
+            .lock()
+            .expect("instances mutex poisoned in render()");
         instances.clear();
         instances.reserve(snapshot.cells.len());
         let mut logged_non_empty: u32 = 0;
@@ -388,17 +409,43 @@ impl Renderer {
                 bold: (cell.attrs & 1) != 0,
                 italic: (cell.attrs & 2) != 0,
             };
-            let Some(glyph) = atlas.get_or_rasterize(key) else {
-                // Atlas exhausted — emit a bg quad; TODO(3b+): resize atlas.
-                instances.push(Instance {
-                    cell_pos: [col as u32, row as u32],
-                    atlas_pos: [0, 0],
-                    atlas_size: [0, 0],
-                    fg: cell.fg,
-                    bg: cell.bg,
-                    attrs: effective_attrs as u32,
-                });
-                continue;
+            let glyph = match atlas.get_or_rasterize(key) {
+                Some(g) => g,
+                None => {
+                    // Skyline packer ran out of space. Evict and retry
+                    // once — typical cause is a heavy emoji/CJK burst on
+                    // a long-running session, where the atlas has been
+                    // filled with one-shot glyphs. Previously cached
+                    // glyphs for the current frame will re-rasterize on
+                    // demand as the loop continues.
+                    log::debug!(
+                        "atlas overflow at cell ({col},{row}) U+{:04X}; purging and retrying",
+                        cell.codepoint
+                    );
+                    atlas.purge();
+                    match atlas.get_or_rasterize(key) {
+                        Some(g) => g,
+                        None => {
+                            // Glyph bigger than the atlas, or the D2D
+                            // DrawText failed mid-frame. Emit a
+                            // background-only quad so the cell renders
+                            // as whitespace rather than garbage.
+                            log::warn!(
+                                "glyph larger than atlas capacity at U+{:04X}; skipping",
+                                cell.codepoint
+                            );
+                            instances.push(Instance {
+                                cell_pos: [col as u32, row as u32],
+                                atlas_pos: [0, 0],
+                                atlas_size: [0, 0],
+                                fg: cell.fg,
+                                bg: cell.bg,
+                                attrs: effective_attrs as u32,
+                            });
+                            continue;
+                        }
+                    }
+                }
             };
 
             let inst = instance_for_cell(col, row, glyph, cell.fg, cell.bg, effective_attrs);
@@ -479,7 +526,11 @@ impl Renderer {
 
         // Globals.
         let metrics = self.metrics();
-        let atlas_size = self.atlas.lock().unwrap().atlas_size() as f32;
+        let atlas_size = self
+            .atlas
+            .lock()
+            .expect("atlas mutex poisoned reading atlas_size")
+            .atlas_size() as f32;
         let inv_viewport = [
             2.0 / self.width_px.max(1) as f32,
             -2.0 / self.height_px.max(1) as f32,
@@ -503,7 +554,10 @@ impl Renderer {
         drop(instances);
 
         // Atlas SRV: re-lock to hand a reference to the pipeline.
-        let atlas = self.atlas.lock().unwrap();
+        let atlas = self
+            .atlas
+            .lock()
+            .expect("atlas mutex poisoned before bind_and_draw");
         pipeline.bind_and_draw(&self.context, atlas.atlas_srv(), instance_count);
         drop(atlas);
         drop(pipeline);
@@ -521,7 +575,10 @@ impl Renderer {
 
     /// Rebuild atlas at a new font size (WM_DPICHANGED / theme change).
     pub fn rebuild_atlas(&self, font_size_px: f32) -> Result<()> {
-        self.atlas.lock().unwrap().rebuild(font_size_px)
+        self.atlas
+            .lock()
+            .expect("atlas mutex poisoned in rebuild_atlas()")
+            .rebuild(font_size_px)
     }
 }
 

@@ -371,6 +371,30 @@ impl GlyphCache {
         Some(glyph_rect)
     }
 
+    /// Evict every cached glyph and reset the skyline allocator without
+    /// touching the text formats. Used by the renderer when a frame's
+    /// glyph set exceeds the atlas capacity: drop the old set, try
+    /// again. Re-rasterizing the live frame is O(cells) and cheap
+    /// compared to the D3D stall a texture recreate would cause.
+    pub fn purge(&mut self) {
+        self.entries.clear();
+        self.allocator =
+            AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
+        // SAFETY: d2d_rt owned by self and aliases the atlas texture.
+        // Re-clear so stale subpixel coverage doesn't bleed into freshly-
+        // allocated slots.
+        unsafe {
+            self.d2d_rt.BeginDraw();
+            self.d2d_rt.Clear(Some(&D2D1_COLOR_F {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            }));
+            let _ = self.d2d_rt.EndDraw(None, None);
+        }
+    }
+
     pub fn rebuild(&mut self, font_size_px: f32) -> Result<()> {
         self.font_size_px = font_size_px;
         self.entries.clear();
