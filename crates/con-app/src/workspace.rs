@@ -90,6 +90,12 @@ fn caption_buttons(
             .flex()
             .items_center()
             .justify_center()
+            // `.occlude()` is required so the parent top_bar's
+            // `WindowControlArea::Drag` hit-test doesn't swallow these
+            // child buttons on Windows (HTCLOSE/HTMAXBUTTON/HTMINBUTTON
+            // won't fire without it). Matches Zed's platform_windows
+            // caption-button implementation.
+            .occlude()
             .w(px(36.0))
             .h(px(height))
             .flex_shrink_0()
