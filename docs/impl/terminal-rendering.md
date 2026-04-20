@@ -70,7 +70,7 @@ At the app level, con already does that. The remaining migration work is about r
 5. The host `NSView` and child surface `NSView` both use native autoresizing plus `NSViewLayerContentsRedrawDuringViewResize` so AppKit keeps the embedded layer responsive during live window resize.
 6. Ghostty emits action callbacks such as title updates, PWD changes, and command-finished events.
 7. `con-ghostty` stores those facts in `TerminalState` and bumps a wake generation after each wakeup-driven app tick.
-8. Con's workspace-level housekeeping loop notices that generation change, drains surface-local state once for the window, and also handles deferred resize commits and one-shot init retries.
+8. Con's workspace-level housekeeping loop notices that generation change, drains surface-local state once for the window, and handles one-shot init retries.
 9. con reads `TerminalState` and visible text to build pane metadata for the agent, sidebar, and tab UI.
 
 This distinction matters. Ghostty's embedded API is designed around wakeup-driven ticking, not "tick it every N milliseconds and hope that is close enough."
@@ -131,6 +131,8 @@ Another important macOS alignment point is window step-resize. Standalone Ghostt
 One more host-side rule matters for TUI performance: normal UI renders must not force fresh terminal observations. Con previously used runtime observation in the workspace render path just to derive pane labels and remote-host hints for the input bar. That path could pull visible/recent terminal text while a dense TUI was active. The UI now reads only cached runtime state during render; explicit terminal observation stays on agent/control paths where that cost is intentional.
 
 One more embedded-macOS detail turned out to matter: standalone Ghostty does not host the surface in a bare `NSView`. It wraps the surface in a scroll container and consumes `GHOSTTY_ACTION_SCROLLBAR` updates so the visible viewport stays synchronized with Ghostty's scrollback model during reflow and resize. Con now mirrors that contract by caching Ghostty scrollbar actions in `con-ghostty` and positioning the embedded surface inside a native scroll container. Without that, heavy TUIs could briefly render from upper scrollback during resize and only later settle back to the bottom.
+
+Con also no longer tries to outsmart Ghostty's resize path with host-side coalescing. The embedded surface now updates its core size immediately on layout using AppKit backing-size conversion, which is much closer to how Ghostty's own macOS app drives `ghostty_surface_set_size`.
 
 ## Agent execution
 

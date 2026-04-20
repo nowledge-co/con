@@ -166,6 +166,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed a visible-panel performance regression where assistant messages were reparsed as markdown on every render.
 - Fixed a second visible-panel performance regression where fenced code blocks rebuilt syntax-highlight runs on every render.
 - Aligned embedded Ghostty viewport hosting with standalone Ghostty on macOS by consuming Ghostty scrollbar actions and wrapping each surface in a native scroll container. This keeps bottom anchoring stable during heavy TUI resize instead of briefly jumping into upper scrollback.
+- Removed Con-specific live-resize coalescing from the embedded Ghostty surface path on macOS. Surface resizes now follow Ghostty's own immediate backing-size update model instead of deferring commits behind host-side heuristics.
 
 **Terminal**
 - Full terminal emulation with 256-color and truecolor support

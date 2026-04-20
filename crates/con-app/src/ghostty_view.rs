@@ -38,8 +38,6 @@ use objc::{class, msg_send, sel, sel_impl};
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
 
-const LIVE_RESIZE_COMMIT_INTERVAL: Duration = Duration::from_millis(16);
-const LIVE_RESIZE_SETTLE_INTERVAL: Duration = Duration::from_millis(120);
 #[cfg(target_os = "macos")]
 const NS_VIEW_WIDTH_SIZABLE: usize = 1 << 1;
 #[cfg(target_os = "macos")]
@@ -96,9 +94,6 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     /// Retry surface creation after transient libghostty initialization failures.
     next_surface_init_retry_at: Option<Instant>,
-    pending_resize_bounds: Option<Bounds<Pixels>>,
-    next_resize_commit_at: Option<Instant>,
-    last_resize_commit_at: Option<Instant>,
     ime_marked_text: Option<String>,
 }
 
@@ -141,9 +136,6 @@ impl GhosttyView {
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
             next_surface_init_retry_at: None,
-            pending_resize_bounds: None,
-            next_resize_commit_at: None,
-            last_resize_commit_at: None,
             ime_marked_text: None,
         }
     }
@@ -196,14 +188,6 @@ impl GhosttyView {
             self.next_surface_init_retry_at = None;
             changed = true;
             cx.notify();
-        }
-
-        if self
-            .next_resize_commit_at
-            .is_some_and(|deadline| now >= deadline)
-        {
-            self.commit_pending_resize();
-            changed = true;
         }
 
         changed
@@ -279,9 +263,6 @@ impl GhosttyView {
         self.last_title = None;
         self.pending_write = None;
         self.next_surface_init_retry_at = None;
-        self.pending_resize_bounds = None;
-        self.next_resize_commit_at = None;
-        self.last_resize_commit_at = None;
         self.ime_marked_text = None;
     }
 
@@ -403,9 +384,6 @@ impl GhosttyView {
                 self.nsview = Some(nsview);
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
-                self.pending_resize_bounds = None;
-                self.next_resize_commit_at = None;
-                self.last_resize_commit_at = Some(Instant::now());
                 self.set_visible(
                     self.native_view_visible.get() && !self.awaiting_first_layout_visibility,
                 );
@@ -485,7 +463,7 @@ impl GhosttyView {
         }
 
         self.sync_native_scroll_view();
-        self.request_surface_resize(bounds);
+        self.commit_surface_resize(bounds);
 
         if self.awaiting_first_layout_visibility {
             self.awaiting_first_layout_visibility = false;
@@ -572,78 +550,42 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
-    fn request_surface_resize(&mut self, bounds: Bounds<Pixels>) {
-        let Some(ref terminal) = self.terminal else {
-            return;
-        };
+    fn surface_size_in_backing_pixels(&self, bounds: Bounds<Pixels>) -> (u32, u32) {
+        let logical_size = cocoa::foundation::NSSize::new(
+            f64::from(bounds.size.width.as_f32().max(1.0)),
+            f64::from(bounds.size.height.as_f32().max(1.0)),
+        );
 
-        let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
-        let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
-        let size = terminal.size();
-        if size.width_px == width_px && size.height_px == height_px {
-            self.pending_resize_bounds = None;
-            self.next_resize_commit_at = None;
-            return;
+        if let Some(nsview) = self.nsview {
+            unsafe {
+                let backing: cocoa::foundation::NSSize =
+                    msg_send![nsview, convertSizeToBacking: logical_size];
+                return (
+                    backing.width.max(1.0).round() as u32,
+                    backing.height.max(1.0).round() as u32,
+                );
+            }
         }
 
-        let target_grid = if size.cell_width_px > 0 && size.cell_height_px > 0 {
-            Some((
-                (width_px / size.cell_width_px).max(1) as u16,
-                (height_px / size.cell_height_px).max(1) as u16,
-            ))
-        } else {
-            None
-        };
-        let current_grid = if size.columns > 0 && size.rows > 0 {
-            Some((size.columns, size.rows))
-        } else {
-            None
-        };
-
-        let now = Instant::now();
-        let due = self
-            .last_resize_commit_at
-            .is_none_or(|last| now.duration_since(last) >= LIVE_RESIZE_COMMIT_INTERVAL);
-
-        if target_grid.is_some() && target_grid != current_grid && due {
-            self.commit_surface_resize(bounds);
-        } else {
-            self.pending_resize_bounds = Some(bounds);
-            self.next_resize_commit_at = Some(now + LIVE_RESIZE_SETTLE_INTERVAL);
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn commit_pending_resize(&mut self) {
-        let Some(bounds) = self.pending_resize_bounds.take() else {
-            self.next_resize_commit_at = None;
-            return;
-        };
-        self.commit_surface_resize(bounds);
+        (
+            (logical_size.width * f64::from(self.scale_factor)).max(1.0).round() as u32,
+            (logical_size.height * f64::from(self.scale_factor)).max(1.0).round() as u32,
+        )
     }
 
     #[cfg(target_os = "macos")]
     fn commit_surface_resize(&mut self, bounds: Bounds<Pixels>) {
         let Some(ref terminal) = self.terminal else {
-            self.pending_resize_bounds = None;
-            self.next_resize_commit_at = None;
             return;
         };
 
-        let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
-        let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
-        terminal.set_size(width_px, height_px);
-        self.last_resize_commit_at = Some(Instant::now());
-        self.next_resize_commit_at = None;
-
-        if self.last_bounds != Some(bounds) {
-            self.pending_resize_bounds = self.last_bounds;
-            self.next_resize_commit_at = self
-                .last_resize_commit_at
-                .map(|last| last + LIVE_RESIZE_SETTLE_INTERVAL);
-        } else {
-            self.pending_resize_bounds = None;
+        let (width_px, height_px) = self.surface_size_in_backing_pixels(bounds);
+        let size = terminal.size();
+        if size.width_px == width_px && size.height_px == height_px {
+            return;
         }
+
+        terminal.set_size(width_px, height_px);
     }
 
     /// Show or hide the native NSView. Used to manage z-order when

@@ -27,10 +27,11 @@ That third mistake was the one that matched the user-visible symptom most closel
 - `con-ghostty` now stores a small wake handle in app userdata and uses Ghostty's `wakeup_cb` to dispatch `ghostty_app_tick()` onto the macOS main queue, with atomic deduping so repeated wakeups coalesce cleanly.
 - Con's old workspace-level 8ms Ghostty tick loop was removed.
 - `GhosttyView` now gives the embedded host and child surface views native width/height autoresizing masks and `NSViewLayerContentsRedrawDuringViewResize`.
-- The remaining per-surface 16ms GPUI polling loops were removed. Surface event draining and deferred resize/retry housekeeping now run from one workspace-level Ghostty wake pump instead of N independent pane loops.
+- The remaining per-surface 16ms GPUI polling loops were removed. Surface event draining and init-retry housekeeping now run from one workspace-level Ghostty wake pump instead of N independent pane loops.
 - Con now also mirrors Ghostty's macOS cell-step window resize behavior by setting `contentResizeIncrements` from the active terminal surface's cell size. That reduces the number of meaningless sub-cell resize states the host and renderer ever see.
 - The workspace render path stopped performing fresh terminal observations for pane-metadata UI. It now reuses cached runtime state so normal UI renders do not pull terminal text while a heavy TUI is active.
 - `con-ghostty` now exposes Ghostty scrollbar actions through `TerminalState`, and `GhosttyView` hosts the embedded surface inside a native scroll container with a document view sized from Ghostty's scrollbar model. Con now keeps the viewport position synchronized with Ghostty during resize instead of treating the surface as a plain fixed-origin child view.
+- Con's embedded macOS host no longer defers Ghostty surface size commits behind a custom coalescing policy. It now updates the core surface immediately on layout using AppKit backing-size conversion, which matches Ghostty's own macOS size propagation more closely.
 
 ## What we learned
 
