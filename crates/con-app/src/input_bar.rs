@@ -147,13 +147,17 @@ impl InputBar {
                 Some("ConCommandInput > Input"),
             ),
             KeyBinding::new(
-                "cmd-e",
+                "secondary-e",
                 AcceptSuggestionOrMoveEnd,
                 Some("ConCommandInput > Input"),
             ),
-            KeyBinding::new("cmd-w", DeletePreviousWord, Some("ConCommandInput > Input")),
             KeyBinding::new(
-                "cmd-right",
+                "secondary-w",
+                DeletePreviousWord,
+                Some("ConCommandInput > Input"),
+            ),
+            KeyBinding::new(
+                "secondary-right",
                 AcceptSuggestionOrMoveEnd,
                 Some("ConCommandInput > Input"),
             ),

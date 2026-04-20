@@ -3954,11 +3954,24 @@ impl SettingsPanel {
                 .child(group_label("Terminal", &theme))
                 .child(
                     card(theme, card_opacity)
-                        .child(key_row("Copy", "cmd-c", theme))
+                        // Terminal clipboard uses ⌘C/V on macOS and the
+                        // Windows-Terminal-standard Ctrl+Shift+C/V on
+                        // Windows (plain Ctrl+C would raise SIGINT in
+                        // the shell). `secondary-` would collapse to
+                        // Ctrl-only on Windows, so we branch explicitly.
+                        .child(key_row(
+                            "Copy",
+                            if cfg!(target_os = "macos") { "cmd-c" } else { "ctrl-shift-c" },
+                            theme,
+                        ))
                         .child(row_separator(theme))
-                        .child(key_row("Paste", "cmd-v", theme))
+                        .child(key_row(
+                            "Paste",
+                            if cfg!(target_os = "macos") { "cmd-v" } else { "ctrl-shift-v" },
+                            theme,
+                        ))
                         .child(row_separator(theme))
-                        .child(key_row("Select All", "cmd-a", theme)),
+                        .child(key_row("Select All", "secondary-a", theme)),
                 ),
         )
     }

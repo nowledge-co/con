@@ -36,7 +36,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
     DWRITE_PIXEL_GEOMETRY_RGB, DWRITE_RENDERING_MODE_NATURAL, DWRITE_TEXT_METRICS,
-    IDWriteFactory, IDWriteFontCollection, IDWriteRenderingParams, IDWriteTextFormat,
+    IDWriteFactory, IDWriteFontCollection, IDWriteFontFallback, IDWriteRenderingParams,
+    IDWriteTextFormat, IDWriteTextFormat1,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -74,6 +75,12 @@ pub struct GlyphCache {
     /// runtime didn't support IDWriteFactory5; CreateTextFormat then
     /// resolves through the system collection.
     bundled_collection: Option<IDWriteFontCollection>,
+    /// System font-fallback cascade. Attached to each
+    /// `IDWriteTextFormat1` so DirectWrite transparently swaps in
+    /// Segoe UI Emoji / Symbol / CJK fonts for codepoints the bundled
+    /// IoskeleyMono lacks. `None` on pre-Win8.1 hosts or if
+    /// `GetSystemFontFallback` fails at init.
+    font_fallback: Option<IDWriteFontFallback>,
     _d2d_factory: ID2D1Factory,
 
     atlas_size: u32,
@@ -105,9 +112,14 @@ impl GlyphCache {
         font_size_px: f32,
         atlas_size: u32,
     ) -> Result<Self> {
+        // OS-default fallback cascade (emoji / symbol / CJK). Built
+        // once here and shared across all four text-format weights.
+        let font_fallback = super::font_loader::system_font_fallback(dwrite);
+
         let text_format_regular = make_text_format(
             dwrite,
             bundled_collection.as_ref(),
+            font_fallback.as_ref(),
             font_family,
             font_size_px,
             false,
@@ -116,6 +128,7 @@ impl GlyphCache {
         let text_format_bold = make_text_format(
             dwrite,
             bundled_collection.as_ref(),
+            font_fallback.as_ref(),
             font_family,
             font_size_px,
             true,
@@ -124,6 +137,7 @@ impl GlyphCache {
         let text_format_italic = make_text_format(
             dwrite,
             bundled_collection.as_ref(),
+            font_fallback.as_ref(),
             font_family,
             font_size_px,
             false,
@@ -132,6 +146,7 @@ impl GlyphCache {
         let text_format_bold_italic = make_text_format(
             dwrite,
             bundled_collection.as_ref(),
+            font_fallback.as_ref(),
             font_family,
             font_size_px,
             true,
@@ -284,6 +299,7 @@ impl GlyphCache {
             _context: context.clone(),
             dwrite: dwrite.clone(),
             bundled_collection,
+            font_fallback,
             _d2d_factory: d2d_factory,
             atlas_size,
             _atlas_texture: atlas_texture,
@@ -403,6 +419,7 @@ impl GlyphCache {
         self.text_format_regular = make_text_format(
             &self.dwrite,
             self.bundled_collection.as_ref(),
+            self.font_fallback.as_ref(),
             &self.font_family,
             font_size_px,
             false,
@@ -411,6 +428,7 @@ impl GlyphCache {
         self.text_format_bold = make_text_format(
             &self.dwrite,
             self.bundled_collection.as_ref(),
+            self.font_fallback.as_ref(),
             &self.font_family,
             font_size_px,
             true,
@@ -419,6 +437,7 @@ impl GlyphCache {
         self.text_format_italic = make_text_format(
             &self.dwrite,
             self.bundled_collection.as_ref(),
+            self.font_fallback.as_ref(),
             &self.font_family,
             font_size_px,
             false,
@@ -427,6 +446,7 @@ impl GlyphCache {
         self.text_format_bold_italic = make_text_format(
             &self.dwrite,
             self.bundled_collection.as_ref(),
+            self.font_fallback.as_ref(),
             &self.font_family,
             font_size_px,
             true,
@@ -463,6 +483,7 @@ impl GlyphCache {
 fn make_text_format(
     dwrite: &IDWriteFactory,
     collection: Option<&IDWriteFontCollection>,
+    fallback: Option<&IDWriteFontFallback>,
     family: &str,
     size_px: f32,
     bold: bool,
@@ -498,6 +519,23 @@ fn make_text_format(
         )
     }
     .context("CreateTextFormat failed")?;
+
+    // Attach the system fallback cascade via IDWriteTextFormat1 (Win8.1+).
+    // DirectWrite then substitutes Segoe UI Emoji / Symbol / CJK for
+    // codepoints IoskeleyMono lacks — no per-glyph retry needed; the
+    // D2D DrawText at rasterize time picks the fallback transparently.
+    //
+    // Cast failures fall back silently: the format without a fallback
+    // still draws primary-font glyphs correctly; only the missing-glyph
+    // boxes stay visible.
+    if let Some(fb) = fallback {
+        if let Ok(fmt1) = format.cast::<IDWriteTextFormat1>() {
+            // SAFETY: fmt1 is a valid IDWriteTextFormat1 we own; fb is
+            // a live COM reference from GetSystemFontFallback.
+            let _ = unsafe { fmt1.SetFontFallback(fb) };
+        }
+    }
+
     Ok(format)
 }
 

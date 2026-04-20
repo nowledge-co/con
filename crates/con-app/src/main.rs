@@ -433,8 +433,8 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.new_tab, NewTab, None),
         KeyBinding::new(&kb.next_tab, NextTab, None),
         KeyBinding::new(&kb.previous_tab, PreviousTab, None),
-        KeyBinding::new("cmd-shift-]", NextTab, None),
-        KeyBinding::new("cmd-shift-[", PreviousTab, None),
+        KeyBinding::new("secondary-shift-]", NextTab, None),
+        KeyBinding::new("secondary-shift-[", PreviousTab, None),
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
         KeyBinding::new(&kb.close_tab, CloseTab, None),
         KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
@@ -449,16 +449,13 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, None),
         KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
         KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, None),
-        KeyBinding::new("cmd-h", HideApp, None),
-        KeyBinding::new("cmd-alt-h", HideOtherApps, None),
-        KeyBinding::new("cmd-alt-shift-h", ShowAllApps, None),
         KeyBinding::new(&kb.quit, Quit, Some("Input")),
         KeyBinding::new(&kb.new_window, NewWindow, Some("Input")),
         KeyBinding::new(&kb.new_tab, NewTab, Some("Input")),
         KeyBinding::new(&kb.next_tab, NextTab, Some("Input")),
         KeyBinding::new(&kb.previous_tab, PreviousTab, Some("Input")),
-        KeyBinding::new("cmd-shift-]", NextTab, Some("Input")),
-        KeyBinding::new("cmd-shift-[", PreviousTab, Some("Input")),
+        KeyBinding::new("secondary-shift-]", NextTab, Some("Input")),
+        KeyBinding::new("secondary-shift-[", PreviousTab, Some("Input")),
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, Some("Input")),
         KeyBinding::new(&kb.close_tab, CloseTab, Some("Input")),
         KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, Some("Input")),
@@ -473,6 +470,17 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, Some("Input")),
         KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, Some("Input")),
         KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, Some("Input")),
+    ]);
+
+    // Hide app / Hide others / Show all are macOS system-menu conventions
+    // with no equivalent on Windows or Linux — cmd-h, cmd-alt-h, and
+    // cmd-alt-shift-h are the canonical modifiers, so we keep them
+    // verbatim inside a cfg gate rather than routing through `secondary`.
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([
+        KeyBinding::new("cmd-h", HideApp, None),
+        KeyBinding::new("cmd-alt-h", HideOtherApps, None),
+        KeyBinding::new("cmd-alt-shift-h", ShowAllApps, None),
         KeyBinding::new("cmd-h", HideApp, Some("Input")),
         KeyBinding::new("cmd-alt-h", HideOtherApps, Some("Input")),
         KeyBinding::new("cmd-alt-shift-h", ShowAllApps, Some("Input")),

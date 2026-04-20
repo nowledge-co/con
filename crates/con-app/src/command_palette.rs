@@ -17,17 +17,19 @@ struct PaletteAction {
     category: &'static str,
 }
 
+// Shortcut strings are parsed by `Keystroke::parse` and rendered by
+// `Kbd`, so `secondary-` shows as ⌘ on macOS and Ctrl on Windows/Linux.
 const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "new-window",
         label: "New Window",
-        shortcut: "cmd-n",
+        shortcut: "secondary-n",
         category: "App",
     },
     PaletteAction {
         id: "new-tab",
         label: "New Tab",
-        shortcut: "cmd-t",
+        shortcut: "secondary-t",
         category: "Terminal",
     },
     PaletteAction {
@@ -45,13 +47,13 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "close-tab",
         label: "Close Tab",
-        shortcut: "cmd-w",
+        shortcut: "secondary-w",
         category: "Terminal",
     },
     PaletteAction {
         id: "clear-terminal",
         label: "Clear Terminal",
-        shortcut: "cmd-k",
+        shortcut: "secondary-k",
         category: "Terminal",
     },
     PaletteAction {
@@ -63,25 +65,25 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "toggle-agent",
         label: "Toggle Agent Panel",
-        shortcut: "cmd-l",
+        shortcut: "secondary-l",
         category: "Agent",
     },
     PaletteAction {
         id: "cycle-input-mode",
         label: "Cycle Input Mode",
-        shortcut: "cmd-;",
+        shortcut: "secondary-;",
         category: "Input",
     },
     PaletteAction {
         id: "split-right",
         label: "Split Right",
-        shortcut: "cmd-d",
+        shortcut: "secondary-d",
         category: "Pane",
     },
     PaletteAction {
         id: "split-down",
         label: "Split Down",
-        shortcut: "cmd-shift-d",
+        shortcut: "secondary-shift-d",
         category: "Pane",
     },
     PaletteAction {
@@ -93,13 +95,13 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "settings",
         label: "Open Settings",
-        shortcut: "cmd-,",
+        shortcut: "secondary-,",
         category: "Settings",
     },
     PaletteAction {
         id: "quit",
         label: "Quit",
-        shortcut: "cmd-q",
+        shortcut: "secondary-q",
         category: "App",
     },
 ];

@@ -47,6 +47,83 @@ fn max_agent_panel_width(window_width: f32) -> f32 {
     (window_width - TERMINAL_MIN_CONTENT_WIDTH).max(AGENT_PANEL_MIN_WIDTH)
 }
 
+/// Windows / Linux caption buttons (Min / Max+Restore / Close).
+///
+/// Each button is marked with `.window_control_area(..)` so GPUI's
+/// platform layer hit-tests it during `WM_NCHITTEST` on Windows (or
+/// the equivalent on Linux) and dispatches the OS-level action on
+/// click — no explicit `minimize_window()` / `zoom_window()` /
+/// `remove_window()` plumbing needed here.
+///
+/// Uses Phosphor SVGs instead of Segoe Fluent Icons so the bar
+/// renders identically on hosts where Segoe Fluent Icons isn't
+/// installed (Win10 without the 2022 optional feature, Linux,
+/// tests). Size and hover colors mirror Windows 11's native caption
+/// buttons: 36px wide, 45px min height doesn't apply here (we honour
+/// the shared `top_bar_height` instead), red hover on Close.
+#[cfg(not(target_os = "macos"))]
+fn caption_buttons(
+    window: &Window,
+    theme: &gpui_component::theme::ThemeColor,
+    height: f32,
+) -> impl IntoElement {
+    use gpui::{div, px, svg, Hsla, IntoElement, ParentElement, Rgba, Styled, WindowControlArea};
+
+    let close_red: Hsla = Rgba {
+        r: 232.0 / 255.0,
+        g: 17.0 / 255.0,
+        b: 32.0 / 255.0,
+        a: 1.0,
+    }
+    .into();
+    let fg = theme.muted_foreground.opacity(0.7);
+    let hover_bg = theme.muted.opacity(0.12);
+
+    let button = |id: &'static str,
+                  icon: &'static str,
+                  area: WindowControlArea,
+                  close: bool| {
+        let hover = if close { close_red } else { hover_bg };
+        let text = if close { gpui::white() } else { fg };
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(36.0))
+            .h(px(height))
+            .flex_shrink_0()
+            .window_control_area(area)
+            .hover(move |s| s.bg(hover))
+            .child(svg().path(icon).size(px(10.0)).text_color(text))
+    };
+
+    let (max_icon, max_area) = if window.is_maximized() {
+        ("phosphor/copy.svg", WindowControlArea::Max)
+    } else {
+        ("phosphor/square.svg", WindowControlArea::Max)
+    };
+
+    div()
+        .flex()
+        .flex_row()
+        .flex_shrink_0()
+        .h(px(height))
+        .child(button(
+            "win-min",
+            "phosphor/minus.svg",
+            WindowControlArea::Min,
+            false,
+        ))
+        .child(button("win-max", max_icon, max_area, false))
+        .child(button(
+            "win-close",
+            "phosphor/x.svg",
+            WindowControlArea::Close,
+            true,
+        ))
+}
+
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
     InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
@@ -5846,14 +5923,28 @@ impl Render for ConWorkspace {
         let top_bar_height = self.current_top_bar_height();
         let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
+        // macOS: leave 78px for the system traffic-light cluster that
+        // the OS paints over our content. Windows / Linux: start flush
+        // at the left; the Min/Max/Close cluster gets appended at the
+        // right end of the bar below. Marking the whole bar as a
+        // `Drag` control area makes it move the window on non-macOS
+        // (GPUI's hit-test walks buttons first so child clickables
+        // still work) and still lets macOS react to
+        // `titlebar_double_click`.
+        let leading_pad = if cfg!(target_os = "macos") {
+            78.0
+        } else {
+            8.0
+        };
         let mut top_bar = div()
             .id("tab-bar")
             .flex()
             .h(px(top_bar_height))
             .items_end()
-            .pl(px(78.0)) // leave room for traffic lights
+            .pl(px(leading_pad))
             .pr(px(6.0))
             .bg(theme.title_bar.opacity(ui_surface_opacity))
+            .window_control_area(WindowControlArea::Drag)
             .on_click(|event, window, _cx| {
                 if event.click_count() == 2 {
                     window.titlebar_double_click();
@@ -6115,6 +6206,15 @@ impl Render for ConWorkspace {
         );
 
         top_bar = top_bar.child(tab_controls);
+
+        // Non-macOS caption buttons: Min / (Max|Restore) / Close.
+        // macOS gets its traffic-light cluster from the system. We
+        // render these *inside* the top bar so they share the same
+        // vertical strip and never occlude terminal content.
+        #[cfg(not(target_os = "macos"))]
+        {
+            top_bar = top_bar.child(caption_buttons(window, theme, top_bar_height));
+        }
 
         let mut root = div()
             .relative()
@@ -6573,7 +6673,7 @@ impl Render for ConWorkspace {
                             .flex()
                             .items_center()
                             .gap(px(5.0))
-                            .child(crate::keycaps::keycaps_for_binding("cmd-'", theme))
+                            .child(crate::keycaps::keycaps_for_binding("secondary-'", theme))
                             .child(
                                 div()
                                     .h(px(19.0))

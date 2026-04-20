@@ -95,20 +95,24 @@ impl Default for AppearanceConfig {
     }
 }
 
+// Default keybindings use the `secondary-` modifier token, which GPUI
+// parses as ⌘ on macOS and Ctrl on Windows/Linux. This keeps a single
+// source of truth per action and lets the Kbd renderer show the right
+// glyph per platform.
 fn default_toggle_agent() -> String {
-    "cmd-l".into()
+    "secondary-l".into()
 }
 fn default_command_palette() -> String {
-    "cmd-shift-p".into()
+    "secondary-shift-p".into()
 }
 fn default_new_tab() -> String {
-    "cmd-t".into()
+    "secondary-t".into()
 }
 fn default_new_window() -> String {
-    "cmd-n".into()
+    "secondary-n".into()
 }
 fn default_close_tab() -> String {
-    "cmd-w".into()
+    "secondary-w".into()
 }
 fn default_next_tab() -> String {
     "ctrl-tab".into()
@@ -117,28 +121,28 @@ fn default_previous_tab() -> String {
     "ctrl-shift-tab".into()
 }
 fn default_settings() -> String {
-    "cmd-,".into()
+    "secondary-,".into()
 }
 fn default_quit() -> String {
-    "cmd-q".into()
+    "secondary-q".into()
 }
 fn default_split_right() -> String {
-    "cmd-d".into()
+    "secondary-d".into()
 }
 fn default_split_down() -> String {
-    "cmd-shift-d".into()
+    "secondary-shift-d".into()
 }
 fn default_focus_input() -> String {
-    "cmd-i".into()
+    "secondary-i".into()
 }
 fn default_toggle_input_bar() -> String {
     "ctrl-`".into()
 }
 fn default_cycle_input_mode() -> String {
-    "cmd-;".into()
+    "secondary-;".into()
 }
 fn default_toggle_pane_scope() -> String {
-    "cmd-'".into()
+    "secondary-'".into()
 }
 fn default_global_summon() -> String {
     "alt-space".into()

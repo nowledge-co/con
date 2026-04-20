@@ -16,8 +16,8 @@
 use anyhow::{Context, Result};
 use windows::core::Interface;
 use windows::Win32::Graphics::DirectWrite::{
-    IDWriteFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteFontFile,
-    IDWriteFontSet, IDWriteFontSetBuilder1, IDWriteInMemoryFontFileLoader,
+    IDWriteFactory, IDWriteFactory2, IDWriteFactory5, IDWriteFontCollection, IDWriteFontFallback,
+    IDWriteFontFile, IDWriteFontSet, IDWriteFontSetBuilder1, IDWriteInMemoryFontFileLoader,
 };
 
 /// Family name the bundled TTFs advertise (must match the `name` table's
@@ -120,4 +120,49 @@ pub fn build_bundled_collection(
             unreachable!("IDWriteFontCollection1 → IDWriteFontCollection cast")
         },
     )))
+}
+
+/// Return the OS-default [`IDWriteFontFallback`]. The system fallback
+/// already knows to cascade through Segoe UI Emoji, Segoe UI Symbol,
+/// Segoe UI (Han + Hiragana + Hangul), and the default sans-serif for
+/// the active locale — it's the single biggest win for "missing glyph
+/// box" bugs and costs zero extra font bytes.
+///
+/// Returns `None` on pre-Windows-8.1 hosts where `IDWriteFactory2`
+/// isn't available — the caller keeps using the bundled-only format
+/// and the fallback boxes stay visible. `log::warn` surfaces that so
+/// the regression is obvious in logs.
+///
+/// Nerd-Font-specific glyphs (private-use-area icons used by oh-my-
+/// posh / Starship themes) are **not** covered — Windows ships no
+/// Nerd Font by default. A follow-up can add a custom fallback builder
+/// that prepends a user-installed NF when present.
+pub fn system_font_fallback(
+    dwrite: &IDWriteFactory,
+) -> Option<IDWriteFontFallback> {
+    let factory2: IDWriteFactory2 = match dwrite.cast() {
+        Ok(f) => f,
+        Err(err) => {
+            log::warn!(
+                "system_font_fallback: IDWriteFactory2 not available \
+                 ({err:?}); missing glyphs will render as boxes"
+            );
+            return None;
+        }
+    };
+    // SAFETY: factory2 owned here; the returned fallback is a COM
+    // reference we own for the life of the GlyphCache.
+    match unsafe { factory2.GetSystemFontFallback() } {
+        Ok(fb) => {
+            log::info!("system_font_fallback: installed OS default cascade");
+            Some(fb)
+        }
+        Err(err) => {
+            log::warn!(
+                "GetSystemFontFallback failed ({err:?}); missing \
+                 glyphs will render as boxes"
+            );
+            None
+        }
+    }
 }
