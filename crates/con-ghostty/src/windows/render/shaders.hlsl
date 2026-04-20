@@ -95,7 +95,18 @@ VSOut vs_main(uint vid : SV_VertexID, VSInstance inst) {
     };
     uint2 corner = mapping[vid % 4];
 
-    float2 px = (float2(inst.cellPos) + float2(corner)) * cellSize;
+    // Wide-glyph handling: Nerd-Font PUA icons are authored with
+    // advance=1 cell but ink wider than that. The atlas allocates them
+    // in slots up to 2 cells wide; honoring `atlasSize.x` as the quad
+    // width lets those icons render at their natural size on screen.
+    // Empty cells (codepoint=0 or space) set atlasSize=(0,0), so the
+    // max keeps their quad exactly cellSize — no visual change for the
+    // common case.
+    float2 quadSize = float2(
+        max(cellSize.x, float(inst.atlasSize.x)),
+        cellSize.y
+    );
+    float2 px = float2(inst.cellPos) * cellSize + float2(corner) * quadSize;
 
     VSOut o;
     o.pos = float4(px * invViewport + float2(-1.0,  1.0), 0.0, 1.0);

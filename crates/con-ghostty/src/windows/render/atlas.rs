@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
+    D2D1CreateFactory, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_OPTIONS,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE,
@@ -41,7 +41,6 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
-use windows_numerics::Matrix3x2;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)] // offset_x/offset_y are wired in Phase 3b-2 (glyph bearing).
@@ -395,7 +394,26 @@ impl GlyphCache {
 
         let cell_w = self.metrics.cell_width_px as i32;
         let cell_h = self.metrics.cell_height_px as i32;
-        let alloc = self.allocator.allocate(size2(cell_w, cell_h))?;
+
+        // Nerd-Font PUA icons (and other oversize glyphs) are authored
+        // with an advance of 1 cell but an ink box that extends well past
+        // that — e.g. IoskeleyMono's U+F07B folder has a 924du ink box
+        // against a 600du advance. Rather than scale the glyph down (the
+        // prior approach, which made icons visibly tiny inside oh-my-posh
+        // prompts), allocate a wider atlas slot so the glyph renders at
+        // its natural width. The shader uses `atlasSize.x` as the quad
+        // width, so the glyph draws across two grid cells on screen; the
+        // renderer skips the cell immediately to the right when a space
+        // or empty cell sits there (which is the common case in prompts
+        // and `ls`-style output). Cap at 2× cell to bound atlas pressure.
+        let ink_px = self.primary_ink_px(key.codepoint).unwrap_or(0.0);
+        let glyph_w = if ink_px > cell_w as f32 {
+            (cell_w * 2).min(ink_px.ceil() as i32)
+        } else {
+            cell_w
+        };
+
+        let alloc = self.allocator.allocate(size2(glyph_w, cell_h))?;
         let rect = alloc.rectangle;
 
         let ch = char::from_u32(key.codepoint).unwrap_or('\u{FFFD}');
@@ -416,54 +434,26 @@ impl GlyphCache {
             bottom: rect.max.y as f32,
         };
 
-        // Nerd-Font PUA icons (and other oversize glyphs) are authored
-        // with an advance of 1 cell but an ink-box that extends well
-        // past that — e.g. IoskeleyMono's U+F07B folder has a bbox
-        // width of ~924du against a 600du advance. `DrawText` honors
-        // the natural advance and paints outside the cell rect, which
-        // shows up as icons visibly truncated at their right edge in
-        // the atlas blit (user-reported: "folder/github/branch icons
-        // look abnormally rendered"). Query the primary face's design
-        // metrics for this codepoint and, if the ink box exceeds the
-        // cell, apply a uniform scale centered on the cell so the
-        // whole glyph lands inside its allocated rect. Matches Windows
-        // Terminal's behaviour for the same fonts.
-        let scale = self.compute_fit_scale(
-            key.codepoint,
-            cell_w as f32,
-            cell_h as f32,
-        );
-
         // SAFETY: d2d_rt, format, brush owned by self. BeginDraw / EndDraw
         // bracket a valid D2D scene; DrawText writes into the atlas via the
         // DXGI-backed RT.
         unsafe {
             self.d2d_rt.BeginDraw();
-            if scale < 1.0 {
-                let cx = (rect.min.x as f32 + rect.max.x as f32) * 0.5;
-                let cy = (rect.min.y as f32 + rect.max.y as f32) * 0.5;
-                let m = scale_matrix(scale, cx, cy);
-                self.d2d_rt.SetTransform(&m);
-            }
             self.d2d_rt.DrawText(
                 utf16_slice,
                 format,
                 &draw_rect,
                 &self.white_brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
-            if scale < 1.0 {
-                let identity = scale_matrix(1.0, 0.0, 0.0);
-                self.d2d_rt.SetTransform(&identity);
-            }
             let _ = self.d2d_rt.EndDraw(None, None);
         }
 
         let glyph_rect = GlyphRect {
             x: rect.min.x as u16,
             y: rect.min.y as u16,
-            w: cell_w as u16,
+            w: glyph_w as u16,
             h: cell_h as u16,
             offset_x: 0,
             offset_y: 0,
@@ -472,41 +462,21 @@ impl GlyphCache {
         Some(glyph_rect)
     }
 
-    /// Return a uniform scale factor (≤ 1.0) that keeps the glyph for
-    /// `codepoint` inside a `(cell_w, cell_h)` pixel box. Returns 1.0
-    /// when the glyph either fits already, isn't present in the primary
-    /// face (the fallback cascade will pick it up), or when we have no
-    /// face to query (non-bundled hosts). The y-axis currently doesn't
-    /// drive scaling in practice — IoskeleyMono icons are taller than
-    /// the cell when measured from `yMin`/`yMax`, but real rendering
-    /// snaps them to the baseline box — we'd rather slightly clip the
-    /// vertical tails than shrink every icon. If that becomes an issue
-    /// we can re-enable the vertical term.
-    fn compute_fit_scale(
-        &self,
-        codepoint: u32,
-        cell_w: f32,
-        cell_h: f32,
-    ) -> f32 {
-        let _ = cell_h;
-        let Some(face) = self.primary_face.as_ref() else {
-            return 1.0;
-        };
+    /// Natural ink-box width in physical pixels for `codepoint` in the
+    /// primary face, or `None` when we can't measure (face absent, glyph
+    /// not in the primary face so DWrite fallback will handle it, or
+    /// metrics call failed). Used at rasterize time to widen the atlas
+    /// slot for overflow glyphs like Nerd-Font PUA icons.
+    fn primary_ink_px(&self, codepoint: u32) -> Option<f32> {
+        let face = self.primary_face.as_ref()?;
         let mut indices = [0u16; 1];
         let cps = [codepoint];
         // SAFETY: inputs sized 1; writes through out-pointer.
         let hr = unsafe {
             face.GetGlyphIndices(cps.as_ptr(), 1, indices.as_mut_ptr())
         };
-        if hr.is_err() {
-            return 1.0;
-        }
-        let gid = indices[0];
-        // glyph_index 0 means "not in this face" — defer to DWrite's
-        // fallback cascade and don't try to scale something we can't
-        // measure.
-        if gid == 0 {
-            return 1.0;
+        if hr.is_err() || indices[0] == 0 {
+            return None;
         }
         let mut gm = [DWRITE_GLYPH_METRICS::default(); 1];
         // SAFETY: gid + gm both length 1; horizontal mode.
@@ -514,23 +484,14 @@ impl GlyphCache {
             face.GetDesignGlyphMetrics(indices.as_ptr(), 1, gm.as_mut_ptr(), false)
         };
         if hr.is_err() {
-            return 1.0;
+            return None;
         }
         let m = gm[0];
-        // Ink-box width in design units. rsb/lsb may be negative when
-        // the glyph overhangs its advance on either side; an ink width
-        // greater than the advance is the whole reason we're here.
         let ink_du = (m.advanceWidth as i32 - m.leftSideBearing - m.rightSideBearing) as f32;
         if ink_du <= 0.0 || self.primary_upm <= 0.0 {
-            return 1.0;
+            return None;
         }
-        let ink_px = ink_du * self.font_size_px / self.primary_upm;
-        if ink_px <= cell_w {
-            return 1.0;
-        }
-        // Leave a sliver of padding (2%) so anti-aliased edges don't
-        // clip right at the cell boundary.
-        (cell_w / ink_px) * 0.98
+        Some(ink_du * self.font_size_px / self.primary_upm)
     }
 
     /// Evict every cached glyph and reset the skyline allocator without
@@ -908,23 +869,6 @@ fn resolve_bundled_family(bundled: Option<&IDWriteFontCollection>, family: &str)
          fall back to the system cascade"
     );
     family.to_string()
-}
-
-/// Construct a uniform scale-about-center matrix. `scale = 1.0, cx = 0,
-/// cy = 0` gives the identity transform (used to reset the D2D RT
-/// after we finish the scaled draw).
-fn scale_matrix(scale: f32, cx: f32, cy: f32) -> Matrix3x2 {
-    // T(cx, cy) · S(scale) · T(-cx, -cy)
-    //   = [scale  0    (1-scale)*cx]
-    //     [0    scale  (1-scale)*cy]
-    Matrix3x2 {
-        M11: scale,
-        M12: 0.0,
-        M21: 0.0,
-        M22: scale,
-        M31: (1.0 - scale) * cx,
-        M32: (1.0 - scale) * cy,
-    }
 }
 
 fn family_exists_in(collection: &IDWriteFontCollection, family: &str) -> bool {
