@@ -233,6 +233,17 @@ impl HostView {
         self.hwnd
     }
 
+    /// `true` while the underlying ConPTY session is still live. Flips
+    /// to `false` after the exit-watcher closes the pseudo-console
+    /// (user typed `exit`, shell crashed, etc.) — consumed by the
+    /// GPUI-side `GhosttyView` to emit `GhosttyProcessExited` and let
+    /// the workspace auto-close the pane.
+    pub fn is_alive(&self) -> bool {
+        // SAFETY: state is valid until WM_DESTROY.
+        let state = unsafe { &*self.state };
+        state.conpty.is_alive()
+    }
+
     /// Send a UTF-8 string to the child shell.
     pub fn write_input(&self, text: &str) {
         // SAFETY: state is valid until WM_DESTROY.

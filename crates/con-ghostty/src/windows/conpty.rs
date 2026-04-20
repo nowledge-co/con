@@ -299,6 +299,14 @@ impl ConPty {
     pub fn process_handle(&self) -> HANDLE {
         self.process.as_handle()
     }
+
+    /// `true` while the pseudo-console is still open. Flips to `false`
+    /// atomically when either `Drop` or the exit-watcher thread takes
+    /// the HPCON out of the slot — i.e. when the child shell has
+    /// exited and `ClosePseudoConsole` has been (or is being) called.
+    pub fn is_alive(&self) -> bool {
+        self.pcon.lock().is_some()
+    }
 }
 
 impl Drop for ConPty {

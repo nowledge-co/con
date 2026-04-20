@@ -51,6 +51,10 @@ pub struct GhosttyView {
     /// clear this; richer recovery (delayed retry, rebuild on resize)
     /// can come later.
     init_failed: bool,
+    /// Guard: emit `GhosttyProcessExited` exactly once, not every frame
+    /// after the shell dies. Mirrors `GhosttyView::process_exit_emitted`
+    /// on macOS (see ghostty_view.rs).
+    process_exit_emitted: bool,
 }
 
 pub fn init(_cx: &mut App) {
@@ -80,6 +84,7 @@ impl GhosttyView {
             initial_font_size: font_size,
             initialized: false,
             init_failed: false,
+            process_exit_emitted: false,
         }
     }
 
@@ -152,7 +157,24 @@ impl GhosttyView {
         false
     }
 
-    pub fn pump_deferred_work(&mut self, _cx: &mut Context<Self>) -> bool {
+    pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
+        // The Windows backend has no action-callback channel (no
+        // equivalent to macOS's `wake_generation` tick), so we poll
+        // `is_alive` every frame and emit `GhosttyProcessExited` on
+        // the transition to dead. Workspace's
+        // `on_terminal_process_exited` then closes the pane. The
+        // latch stops us from firing on every subsequent frame.
+        if self.initialized
+            && !self.process_exit_emitted
+            && self
+                .terminal
+                .as_ref()
+                .is_some_and(|t| !t.is_alive())
+        {
+            self.process_exit_emitted = true;
+            cx.emit(GhosttyProcessExited);
+            return true;
+        }
         false
     }
 

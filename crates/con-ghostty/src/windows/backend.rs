@@ -224,7 +224,15 @@ impl WindowsGhosttyTerminal {
         None
     }
     pub fn is_alive(&self) -> bool {
-        self.is_attached()
+        // A terminal without a HostView yet (pre-layout) counts as
+        // alive — we don't want the workspace to tear it down before
+        // the user has even seen a shell prompt. Once attached, defer
+        // to the HostView's ConPTY-alive flag so `exit` / shell crash
+        // flips the pane to dead and the workspace can auto-close it.
+        match self.inner.lock().as_ref() {
+            Some(host) => host.is_alive(),
+            None => true,
+        }
     }
     pub fn is_busy(&self) -> bool {
         false
