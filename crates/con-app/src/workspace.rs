@@ -6137,10 +6137,6 @@ impl Render for ConWorkspace {
                                 cx.notify();
                                 return;
                             }
-                            // Notify all terminals so they detect new available space
-                            for terminal in this.tabs[this.active_tab].pane_tree.all_terminals() {
-                                terminal.notify(cx);
-                            }
                             cx.notify();
                         }
                         return;
@@ -6194,11 +6190,6 @@ impl Render for ConWorkspace {
                         };
 
                     if pane_tree.update_drag(current_pos, total_size) {
-                        // Notify all terminals in the active tab so they
-                        // re-render and detect new bounds during canvas prepaint
-                        for terminal in pane_tree.all_terminals() {
-                            terminal.notify(cx);
-                        }
                         cx.notify();
                     }
                 })
@@ -6218,6 +6209,9 @@ impl Render for ConWorkspace {
                     let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
                     if pane_tree.is_dragging() {
                         pane_tree.end_drag();
+                        for terminal in pane_tree.all_terminals() {
+                            terminal.notify(cx);
+                        }
                         cx.notify();
                     }
                 }),
