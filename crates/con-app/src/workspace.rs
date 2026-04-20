@@ -4710,6 +4710,10 @@ impl ConWorkspace {
     fn sync_pane_visibility_for_modals(&self, cx: &App) {
         let modal_open = self.is_modal_open(cx);
         let want_visible = !modal_open;
+        log::info!(
+            "sync_pane_visibility_for_modals: modal_open={modal_open} \
+             → panes want_visible={want_visible}"
+        );
         for tab in &self.tabs {
             for t in tab.pane_tree.all_terminals() {
                 t.set_native_view_visible(want_visible, cx);
