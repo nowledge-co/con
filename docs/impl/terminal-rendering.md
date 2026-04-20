@@ -128,6 +128,8 @@ One important integration detail: `GhosttyView` should not own its own perpetual
 
 Another important macOS alignment point is window step-resize. Standalone Ghostty updates `contentResizeIncrements` from the focused surface's cell size so AppKit drags the window in terminal-cell steps instead of continuous sub-cell pixel states. Con now mirrors that behavior from the active terminal surface, which cuts a large amount of otherwise pointless intermediate resize work before it reaches either GPUI layout or `ghostty_surface_set_size`.
 
+One more host-side rule matters for TUI performance: normal UI renders must not force fresh terminal observations. Con previously used runtime observation in the workspace render path just to derive pane labels and remote-host hints for the input bar. That path could pull visible/recent terminal text while a dense TUI was active. The UI now reads only cached runtime state during render; explicit terminal observation stays on agent/control paths where that cost is intentional.
+
 ## Agent execution
 
 The `terminal_exec` tool writes the command into the visible Ghostty pane.

@@ -182,6 +182,7 @@ struct Tab {
     session: AgentSession,
     panel_state: PanelState,
     runtime_trackers: RefCell<HashMap<usize, con_agent::context::PaneRuntimeTracker>>,
+    runtime_cache: RefCell<HashMap<usize, con_agent::context::PaneRuntimeState>>,
     shell_history: HashMap<usize, VecDeque<CommandSuggestionEntry>>,
 }
 
@@ -612,6 +613,7 @@ impl ConWorkspace {
                     session: agent_session,
                     panel_state,
                     runtime_trackers: RefCell::new(HashMap::new()),
+                    runtime_cache: RefCell::new(HashMap::new()),
                     shell_history: Self::restore_shell_history(tab_state),
                 }
             })
@@ -625,6 +627,7 @@ impl ConWorkspace {
                 session: AgentSession::new(),
                 panel_state: PanelState::new(),
                 runtime_trackers: RefCell::new(HashMap::new()),
+                runtime_cache: RefCell::new(HashMap::new()),
                 shell_history: HashMap::new(),
             });
         }
@@ -1227,6 +1230,10 @@ impl ConWorkspace {
             .runtime_trackers
             .borrow_mut()
             .retain(|pane_id, _| pane_ids.contains(pane_id));
+        self.tabs[tab_idx]
+            .runtime_cache
+            .borrow_mut()
+            .retain(|pane_id, _| pane_ids.contains(pane_id));
     }
 
     fn observe_terminal_runtime_for_tab(
@@ -1249,7 +1256,26 @@ impl ConWorkspace {
             let tracker = trackers.entry(pane_id).or_default();
             tracker.observe(observation.clone())
         };
+        self.tabs[tab_idx]
+            .runtime_cache
+            .borrow_mut()
+            .insert(pane_id, runtime.clone());
         (observation, runtime)
+    }
+
+    fn cached_runtime_for_tab(
+        &self,
+        tab_idx: usize,
+        terminal: &TerminalPane,
+    ) -> Option<con_agent::context::PaneRuntimeState> {
+        let pane_id = self.tabs[tab_idx]
+            .pane_tree
+            .pane_id_for_terminal(terminal)?;
+        self.tabs[tab_idx]
+            .runtime_cache
+            .borrow()
+            .get(&pane_id)
+            .cloned()
     }
 
     fn record_runtime_event_for_terminal(
@@ -1477,9 +1503,13 @@ impl ConWorkspace {
         terminal: &TerminalPane,
         cx: &App,
     ) -> Option<String> {
-        self.observe_terminal_runtime_for_tab(tab_idx, terminal, 12, cx)
-            .1
-            .remote_host
+        self.cached_runtime_for_tab(tab_idx, terminal)
+            .map(|runtime| runtime.remote_host)
+            .unwrap_or_else(|| {
+                self.observe_terminal_runtime_for_tab(tab_idx, terminal, 12, cx)
+                    .1
+                    .remote_host
+            })
     }
 
     /// Build agent context from a tab's focused pane, including summaries of peer panes.
@@ -4623,6 +4653,7 @@ impl ConWorkspace {
             session: AgentSession::new(),
             panel_state: PanelState::new(),
             runtime_trackers: RefCell::new(HashMap::new()),
+            runtime_cache: RefCell::new(HashMap::new()),
             shell_history: HashMap::new(),
         });
         self.sync_tab_strip_motion();
@@ -5830,9 +5861,9 @@ impl Render for ConWorkspace {
             .pane_terminals()
             .into_iter()
             .map(|(id, terminal)| {
-                let (_, runtime) =
-                    self.observe_terminal_runtime_for_tab(self.active_tab, &terminal, 12, cx);
-                let hostname = runtime.remote_host.clone();
+                let hostname = self
+                    .cached_runtime_for_tab(self.active_tab, &terminal)
+                    .and_then(|runtime| runtime.remote_host);
                 let title = terminal.title(cx);
                 let current_dir = terminal.current_dir(cx);
                 let name = pane_display_name(&hostname, &title, &current_dir, id);
