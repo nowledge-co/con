@@ -142,10 +142,17 @@ impl GhosttyView {
         // would lie about the HostView's existence.
     }
 
-    pub fn set_visible(&self, _visible: bool) {
-        // The WS_CHILD HWND inherits visibility from its parent; an
-        // explicit ShowWindow(SW_HIDE) is a future optimization for
-        // occluded panes.
+    pub fn set_visible(&self, visible: bool) {
+        // Modals (settings, command palette, ...) are GPUI-drawn into the
+        // parent HWND's D3D swapchain. A WS_CHILD HWND with WS_VISIBLE
+        // always paints on top of the parent, and — critically — also
+        // receives mouse clicks that fall inside its rect before the
+        // modal's element-tree hit-test runs. Hiding the HWND when a
+        // modal is up removes the pane from the Win32 z-stack so the
+        // modal becomes both visible and clickable.
+        if let Some(terminal) = &self.terminal {
+            terminal.set_hwnd_visible(visible);
+        }
     }
 
     pub fn sync_window_background_blur(&self) {

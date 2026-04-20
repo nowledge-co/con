@@ -38,10 +38,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetParent,
-    GetWindowLongPtrW, HCURSOR, HICON, MA_NOACTIVATE, MoveWindow, RegisterClassExW, SW_SHOW,
-    SetParent, SetWindowLongPtrW, ShowWindow, WINDOW_EX_STYLE, WM_CHAR, WM_DESTROY, WM_DPICHANGED,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_PAINT, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
+    GetWindowLongPtrW, HCURSOR, HICON, MA_NOACTIVATE, MoveWindow, RegisterClassExW, SW_HIDE,
+    SW_SHOW, SetParent, SetWindowLongPtrW, ShowWindow, WINDOW_EX_STYLE, WM_CHAR, WM_DESTROY,
+    WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
 };
 
 use super::clipboard;
@@ -226,6 +226,25 @@ impl HostView {
             if let Err(err) = renderer.render(&snapshot, &state.config) {
                 log::warn!("renderer.render failed: {err:#}");
             }
+        }
+    }
+
+    /// Show or hide the child HWND. Used to get the pane out of the
+    /// way of modal overlays (settings, command palette, ...). GPUI's
+    /// modals are drawn into the parent HWND's D3D swapchain, but a
+    /// WS_CHILD HWND with WS_VISIBLE always paints on top of the
+    /// parent — and, worse, receives mouse clicks that land inside its
+    /// rect, swallowing them before the modal's hit-test can run.
+    /// Hiding the HWND takes it out of the Win32 z-stack entirely so
+    /// the modal's D3D-drawn elements become both visible and
+    /// clickable.
+    pub fn set_visible(&self, visible: bool) {
+        // SAFETY: hwnd is valid for the lifetime of HostView (until Drop).
+        unsafe {
+            let _ = ShowWindow(
+                self.hwnd,
+                if visible { SW_SHOW } else { SW_HIDE },
+            );
         }
     }
 

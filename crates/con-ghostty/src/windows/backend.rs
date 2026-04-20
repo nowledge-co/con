@@ -150,6 +150,15 @@ impl WindowsGhosttyTerminal {
         }
     }
 
+    /// Show or hide the underlying child HWND. Called by the GPUI view
+    /// when a modal overlay opens / closes, so the terminal surface
+    /// doesn't sit on top of modal content and swallow its clicks.
+    pub fn set_hwnd_visible(&self, visible: bool) {
+        if let Some(host) = self.inner.lock().as_ref() {
+            host.set_visible(visible);
+        }
+    }
+
     pub fn draw(&self) {}
     pub fn refresh(&self) {}
     pub fn set_size(&self, _w: u32, _h: u32) {}

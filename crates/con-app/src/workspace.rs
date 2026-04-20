@@ -4661,6 +4661,7 @@ impl ConWorkspace {
         if !self.is_modal_open(cx) {
             self.focus_terminal(window, cx);
         }
+        self.sync_pane_visibility_for_modals(cx);
         cx.notify();
     }
 
@@ -4683,11 +4684,28 @@ impl ConWorkspace {
         if !self.is_modal_open(cx) {
             self.focus_terminal(window, cx);
         }
+        self.sync_pane_visibility_for_modals(cx);
         cx.notify();
     }
 
     fn is_modal_open(&self, cx: &App) -> bool {
         self.settings_panel.read(cx).is_visible() || self.command_palette.read(cx).is_visible()
+    }
+
+    /// Hide every pane's native surface while a modal is visible, and
+    /// restore it once all modals have closed. On Windows this matters
+    /// because each pane is a WS_CHILD HWND that always paints on top
+    /// of the GPUI-drawn modal and also steals mouse clicks before the
+    /// modal can see them. On macOS `set_visible` on NSView is
+    /// cheap / idempotent, so this is a no-op in practice.
+    fn sync_pane_visibility_for_modals(&self, cx: &App) {
+        let modal_open = self.is_modal_open(cx);
+        let want_visible = !modal_open;
+        for tab in &self.tabs {
+            for t in tab.pane_tree.all_terminals() {
+                t.set_native_view_visible(want_visible, cx);
+            }
+        }
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
