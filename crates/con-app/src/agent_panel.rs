@@ -4126,16 +4126,48 @@ impl Render for AgentPanel {
                             px(14.0)
                         })
                         .child(
-                            Button::new("agent-jump-latest")
-                                .ghost()
-                                .xsmall()
-                                .icon(Icon::default().path("phosphor/arrow-line-down.svg"))
-                                .label("Latest")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.follow_output = FollowOutputState::PendingJump;
-                                    this.scroll_to_bottom();
-                                    cx.notify();
-                                })),
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .px(px(10.0))
+                                .py(px(5.0))
+                                .rounded_full()
+                                .cursor_pointer()
+                                .bg(theme.title_bar.opacity(0.84))
+                                .hover(|s| {
+                                    s.bg(theme.title_bar.opacity(0.94))
+                                        .text_color(theme.foreground.opacity(0.96))
+                                })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.follow_output = FollowOutputState::PendingJump;
+                                        this.scroll_to_bottom();
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(10.0))
+                                        .h(px(10.0))
+                                        .flex_shrink_0(),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .line_height(px(11.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.foreground.opacity(0.86))
+                                        .child("Latest"),
+                                )
+                                .child(
+                                    svg()
+                                        .path("phosphor/arrow-line-down.svg")
+                                        .size(px(10.0))
+                                        .flex_shrink_0()
+                                        .text_color(theme.muted_foreground.opacity(0.8)),
+                                ),
                         ),
                 );
             }
