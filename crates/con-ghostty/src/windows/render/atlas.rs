@@ -19,9 +19,9 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_OPTIONS,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
+    D2D1CreateFactory, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_CLIP,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE,
     D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Factory, ID2D1RenderTarget,
     ID2D1SolidColorBrush,
@@ -41,7 +41,6 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
-use windows_numerics::Matrix3x2;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)] // offset_x/offset_y are wired in Phase 3b-2 (glyph bearing).
@@ -428,30 +427,76 @@ impl GlyphCache {
         // visible as "disconnected" spacing between letters.
         //
         // Even within PUA the sidebearings vary. Powerline separators
-        // (U+E0B0..U+E0B3) and most arrows land at a 1-cell advance
+        // (U+E0A0..U+E0D4) and most arrows land at a 1-cell advance
         // with near-zero sidebearings — they must render flush with the
-        // cell edge. Icon-style PUA glyphs (U+F07B folder, U+F09B
-        // github, ...) carry *negative* sidebearings so their ink box
-        // balloons past the advance on both sides. With LEADING
-        // alignment the pen origin sits at `draw_rect.left` and ink
-        // extends `lsb..advance-rsb` around it — for negative lsb the
-        // ink starts `|lsb|` pixels left of the draw rect. We allocate
-        // a slot that fits the natural ink width, size `draw_rect` to
-        // the slot (so `D2D1_DRAW_TEXT_OPTIONS_CLIP` clamps to slot
-        // bounds), and apply a `SetTransform(translation = |lsb|)` so
-        // the pen lands `|lsb|` pixels inside the slot. Net effect: the
-        // glyph's leftmost ink column renders flush with `slot.x`, the
-        // whole ink box stays within the clip rect, and Powerline
-        // arrows (non-negative lsb → translate 0) render unchanged.
-        let is_wide_candidate = matches!(key.codepoint, 0xE000..=0xF8FF);
+        // cell edge. Widening them by even 1 pixel produces a visible
+        // "edge" artifact where the sprite overlaps the next cell's
+        // background, so we explicitly exclude the entire Powerline /
+        // extra-symbols block from the wide path.
+        //
+        // Icon-style PUA glyphs (U+F07B folder, U+F09B github, ...)
+        // carry *negative* sidebearings so their ink box balloons past
+        // the advance on both sides. With LEADING alignment the pen
+        // origin sits at `draw_rect.left` and ink extends
+        // `lsb..advance-rsb` around it — for negative lsb the ink
+        // starts `|lsb|` pixels left of the draw rect.
+        //
+        // Strategy: allocate a wider slot sized to the natural ink
+        // width, then PushAxisAlignedClip to the slot bounds (so ink
+        // can't leak into neighbour atlas cells) and offset the
+        // layoutRect right by `|lsb|` so the pen origin lands `|lsb|`
+        // inside the slot. DirectWrite's ink then spans pen+lsb..pen+adv-rsb
+        // = slot.left..slot.left+ink_width — flush with the slot's
+        // left edge, and the whole ink box stays within the clip rect.
+        // The shader uses `atlasSize.x` as the quad width, so the
+        // glyph draws across two grid cells on screen.
+        //
+        // Threshold: require ≥1.5 px of natural overhang before
+        // widening. Monospace fonts often carry sub-pixel negative
+        // sidebearings on normal letters too; without the guard those
+        // glyphs would each allocate a +1px slot and the 1-cell-wide
+        // instance of the next cell would partially overdraw the
+        // ClearType edge coverage — visible as "disconnected" spacing
+        // between letters.
+        let codepoint = key.codepoint;
+        let is_wide_candidate = matches!(codepoint, 0xE000..=0xF8FF)
+            && !matches!(codepoint, 0xE0A0..=0xE0D4);
         let (glyph_w, lsb_shift_px) = if is_wide_candidate {
-            match self.primary_glyph_metrics_px(key.codepoint) {
-                Some(m) if m.ink_px > cell_w as f32 => {
+            match self.primary_glyph_metrics_px(codepoint) {
+                Some(m) if m.ink_px > cell_w as f32 + 1.5 => {
                     let lsb_shift = (-m.lsb_px).max(0.0);
-                    let w = (cell_w * 2).min(m.ink_px.ceil() as i32);
+                    let natural = (m.ink_px + lsb_shift).ceil() as i32;
+                    let w = (cell_w * 2).min(natural.max(cell_w));
+                    log::debug!(
+                        "atlas: wide PUA glyph U+{:04X} ink={:.1}px lsb={:.1}px \
+                         → slot={}px (cell={})",
+                        codepoint,
+                        m.ink_px,
+                        m.lsb_px,
+                        w,
+                        cell_w,
+                    );
                     (w, lsb_shift)
                 }
-                _ => (cell_w, 0.0),
+                Some(m) => {
+                    log::trace!(
+                        "atlas: PUA glyph U+{:04X} fits cell (ink={:.1}px lsb={:.1}px \
+                         cell={}px)",
+                        codepoint,
+                        m.ink_px,
+                        m.lsb_px,
+                        cell_w,
+                    );
+                    (cell_w, 0.0)
+                }
+                None => {
+                    log::trace!(
+                        "atlas: PUA glyph U+{:04X} not in primary face; \
+                         using fallback via DirectWrite",
+                        codepoint,
+                    );
+                    (cell_w, 0.0)
+                }
             }
         } else {
             (cell_w, 0.0)
@@ -471,7 +516,7 @@ impl GlyphCache {
             (false, false) => &self.text_format_regular,
         };
 
-        let draw_rect = D2D_RECT_F {
+        let slot_rect = D2D_RECT_F {
             left: rect.min.x as f32,
             top: rect.min.y as f32,
             right: rect.max.x as f32,
@@ -484,32 +529,44 @@ impl GlyphCache {
         unsafe {
             self.d2d_rt.BeginDraw();
             if lsb_shift_px > 0.0 {
-                // Translation-only transform. Shifts the pen origin
-                // right by |lsb| so negative-lsb overhang lands inside
-                // the slot. CLIP still uses `draw_rect` (the slot), so
-                // ink can't leak into neighbouring atlas cells.
-                let m = Matrix3x2 {
-                    M11: 1.0, M12: 0.0,
-                    M21: 0.0, M22: 1.0,
-                    M31: lsb_shift_px, M32: 0.0,
+                // PushAxisAlignedClip pins ink to the allocated slot so
+                // overflow can't bleed into neighbour atlas cells.
+                // Then we pass DrawText a layoutRect whose LEFT is
+                // shifted right by `|lsb|` — with LEADING alignment
+                // that puts the pen origin at `slot.left + |lsb|`,
+                // making the glyph's negative-lsb ink land exactly at
+                // `slot.left`. We skip D2D1_DRAW_TEXT_OPTIONS_CLIP
+                // here because the layoutRect and the clip region are
+                // intentionally different: CLIP would re-clip to the
+                // shifted layoutRect and chop off the `|lsb|` pixels
+                // we just translated into the slot.
+                let _ = self
+                    .d2d_rt
+                    .PushAxisAlignedClip(&slot_rect, D2D1_ANTIALIAS_MODE_ALIASED);
+                let shifted = D2D_RECT_F {
+                    left: slot_rect.left + lsb_shift_px,
+                    top: slot_rect.top,
+                    right: slot_rect.right + lsb_shift_px,
+                    bottom: slot_rect.bottom,
                 };
-                self.d2d_rt.SetTransform(&m);
-            }
-            self.d2d_rt.DrawText(
-                utf16_slice,
-                format,
-                &draw_rect,
-                &self.white_brush,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                DWRITE_MEASURING_MODE_NATURAL,
-            );
-            if lsb_shift_px > 0.0 {
-                let identity = Matrix3x2 {
-                    M11: 1.0, M12: 0.0,
-                    M21: 0.0, M22: 1.0,
-                    M31: 0.0, M32: 0.0,
-                };
-                self.d2d_rt.SetTransform(&identity);
+                self.d2d_rt.DrawText(
+                    utf16_slice,
+                    format,
+                    &shifted,
+                    &self.white_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+                self.d2d_rt.PopAxisAlignedClip();
+            } else {
+                self.d2d_rt.DrawText(
+                    utf16_slice,
+                    format,
+                    &slot_rect,
+                    &self.white_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
             }
             let _ = self.d2d_rt.EndDraw(None, None);
         }

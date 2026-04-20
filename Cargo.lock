@@ -1174,7 +1174,6 @@ dependencies = [
  "parking_lot",
  "raw-window-handle",
  "windows 0.61.3",
- "windows-numerics 0.2.0",
 ]
 
 [[package]]

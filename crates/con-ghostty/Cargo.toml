@@ -47,10 +47,6 @@ windows = { version = "0.61", features = [
     "Win32_System_Memory",              # GlobalAlloc / GlobalLock for CF_UNICODETEXT
     "Win32_System_Ole",                 # CF_UNICODETEXT constant
 ] }
-# Matrix3x2 for D2D::SetTransform — the `windows` crate re-uses the
-# type from `windows-numerics` without re-exporting it, so pull the
-# same version (0.2.0) that `windows = 0.61` depends on.
-windows-numerics = "0.2"
 raw-window-handle = "0.6"
 # Skyline/shelf glyph-atlas packer. Same crate WebRender uses in
 # production; adopted by glyphon and several wgpu text renderers.
