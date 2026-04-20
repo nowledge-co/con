@@ -8,6 +8,14 @@
 //! `CreateTextFormat` calls so we get the designed terminal font
 //! regardless of install state.
 //!
+//! The bundled TTFs are Nerd-Font-patched (ahatem/IoskeleyMono
+//! release 2026.03.19-7), adding ~10,400 PUA glyphs — Powerline
+//! separators, devicons, Font Awesome, Octicons, Codicons, Material
+//! Design. The patched files advertise family name "IoskeleyMono" (we
+//! rewrote the `name` table from "IoskeleyMono Nerd Font" at bundle
+//! time) so everything that already asks for "IoskeleyMono" resolves
+//! unchanged but now renders prompt-theme glyphs natively.
+//!
 //! Returns `None` if the host runtime lacks `IDWriteFactory5` (pre-
 //! Windows 10 1607). The caller falls back to the system collection,
 //! which on unbundled machines resolves "IoskeleyMono" to a default

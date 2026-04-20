@@ -94,7 +94,7 @@ Windows-named binary requires.
 
 ## Design Language
 
-- **Font**: IoskeleyMono (embedded, all weights) for terminal chrome — tabs, sidebar, input bar. System font (.SystemUIFont / SF Pro) for AI panel prose text, settings panel, and any non-terminal UI. Code blocks and terminal previews use IoskeleyMono via `mono_font.family` in theme JSON.
+- **Font**: IoskeleyMono (embedded, all weights, Nerd-Font patched) for terminal chrome — tabs, sidebar, input bar. Patched TTFs carry ~10,400 PUA glyphs (Powerline, devicons, Font Awesome, Octicons, Codicons, Material Design) so oh-my-posh / Starship / Powerlevel10k prompts render out of the box. System font (.SystemUIFont / SF Pro) for AI panel prose text, settings panel, and any non-terminal UI. Code blocks and terminal previews use IoskeleyMono via `mono_font.family` in theme JSON.
 - **Default theme**: Flexoki Light. Dark available as Flexoki Dark.
 - **Icons**: Phosphor Icons only (phosphoricons.com). Copy SVGs from `3pp/phosphor-icons/SVGs/regular/` into `assets/icons/phosphor/`. Never draw icons manually — always use the Phosphor library. Reference as `"phosphor/icon-name.svg"` in code. **Critical**: always set `.text_color()` directly on every `svg()` element — parent container color does NOT propagate to SVG stroke colors in GPUI.
 - **Borderless**: No `border_1()`, `border_r_1()`, etc. Use opacity-based fills for surface separation.
