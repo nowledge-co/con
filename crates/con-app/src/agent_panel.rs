@@ -4127,7 +4127,6 @@ impl Render for AgentPanel {
                             Button::new("agent-jump-latest")
                                 .ghost()
                                 .xsmall()
-                                .tooltip("Jump to latest")
                                 .icon(Icon::default().path("phosphor/arrow-line-down.svg"))
                                 .label("Latest")
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -4266,14 +4265,15 @@ impl Render for AgentPanel {
                             .child(
                                 div()
                                     .flex_1()
-                                    .min_w_0()
+                                    .w_full()
+                                    .min_w(px(120.0))
                                     .font_family(theme.font_family.clone())
                                     .text_size(px(13.0))
-                                    .child(
+                                    .child(div().w_full().child(
                                         Input::new(&inline_input)
                                             .appearance(false)
                                             .cleanable(false),
-                                    ),
+                                    )),
                             )
                             .child(send_button),
                     ),

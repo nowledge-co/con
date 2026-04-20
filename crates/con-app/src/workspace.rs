@@ -6327,7 +6327,6 @@ impl Render for ConWorkspace {
                 } else {
                     tab_el = tab_el
                         .rounded_t(px(6.0))
-                        .mb(px(1.0))
                         .bg(theme.background.opacity(0.14))
                         .text_color(theme.muted_foreground.opacity(0.72))
                         .hover(|s| {
