@@ -104,6 +104,33 @@ fn set_dock_icon() {
 #[cfg(not(target_os = "macos"))]
 fn set_dock_icon() {}
 
+#[cfg(target_os = "macos")]
+fn supports_transparent_main_window() -> bool {
+    use cocoa::base::nil;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    #[repr(C)]
+    struct NSOperatingSystemVersion {
+        major_version: isize,
+        minor_version: isize,
+        patch_version: isize,
+    }
+
+    unsafe {
+        let process_info: cocoa::base::id = msg_send![class!(NSProcessInfo), processInfo];
+        if process_info == nil {
+            return true;
+        }
+        let version: NSOperatingSystemVersion = msg_send![process_info, operatingSystemVersion];
+        version.major_version >= 13
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn supports_transparent_main_window() -> bool {
+    true
+}
+
 // On non-macOS targets, the terminal backend is a placeholder (see
 // `stub_view.rs`). The binary builds and runs — agent panel, settings,
 // command palette, the control socket — but the terminal surface paints a
@@ -111,14 +138,19 @@ fn set_dock_icon() {}
 // forkpty implementation lands. See `docs/impl/windows-port.md`.
 
 fn default_window_options(cx: &mut App) -> WindowOptions {
+    let transparent = supports_transparent_main_window();
     WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(1200.0), px(800.0)), cx)),
         titlebar: Some(TitlebarOptions {
             title: Some("con".into()),
-            appears_transparent: true,
+            appears_transparent: transparent,
             ..Default::default()
         }),
-        window_background: WindowBackgroundAppearance::Transparent,
+        window_background: if transparent {
+            WindowBackgroundAppearance::Transparent
+        } else {
+            WindowBackgroundAppearance::Opaque
+        },
         ..Default::default()
     }
 }
@@ -130,7 +162,14 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
             let restored_session = session.clone();
             let view = cx
                 .new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
-            cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
+            cx.new(|cx| {
+                let background = if supports_transparent_main_window() {
+                    cx.theme().transparent
+                } else {
+                    cx.theme().background
+                };
+                gpui_component::Root::new(view, window, cx).bg(background)
+            })
         }) {
             if exit_on_error {
                 eprintln!("Fatal: failed to open window: {err}");

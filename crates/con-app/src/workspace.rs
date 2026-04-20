@@ -483,6 +483,9 @@ impl ConWorkspace {
     }
 
     fn effective_ui_opacity(value: f32) -> f32 {
+        if !Self::supports_terminal_glass() {
+            return 1.0;
+        }
         let clamped = Self::clamp_ui_opacity(value);
         Self::remap_opacity(clamped, 0.35, 0.84, 1.9)
     }

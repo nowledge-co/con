@@ -219,6 +219,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Reduced tab transition flashing by removing the full-terminal matte from tab creation/switching and deferring closed-tab surface teardown until the replacement tab is visible.
 - Fixed Appearance slider layout so Terminal Glass and Window Chrome use the same fixed-width control lane.
 - Added a macOS 12 compatibility guard for terminal glass. On Monterey and older, Con now forces the embedded terminal to solid/no-blur to avoid transparent blank windows caused by old WindowServer + embedded Metal composition behavior.
+- Extended the macOS 12 compatibility guard to the whole main window. On Monterey and older, Con now opens an opaque main window with opaque UI chrome instead of relying on transparent GPUI window composition, which avoids the “input bar visible but terminal area transparent” failure still reported on Intel Monterey.
 - Fixed bottom input history navigation across Smart, Shell, and Agent modes. Up/Down now recall submitted input directly, while completion popups still keep their own selection behavior.
 - Fixed terminal IME/cursor polish: printable keys now follow the terminal-safe IME path, IME candidate placement uses Ghostty's real cursor anchor, and Con's cursor style setting now applies to embedded Ghostty panes.
 - Fixed duplicate ASCII input from the terminal IME bridge and added a Cursor Style selector in Appearance settings.
