@@ -3011,6 +3011,9 @@ impl ConWorkspace {
                 });
                 self.sync_active_terminal_focus_states(cx);
             }
+            "check-for-updates" => {
+                cx.dispatch_action(&crate::CheckForUpdates);
+            }
             "quit" => {
                 self.cancel_all_sessions();
                 cx.quit();

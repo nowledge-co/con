@@ -99,6 +99,12 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Settings",
     },
     PaletteAction {
+        id: "check-for-updates",
+        label: "Check for Updates",
+        shortcut: "",
+        category: "App",
+    },
+    PaletteAction {
         id: "quit",
         label: "Quit",
         shortcut: "secondary-q",
