@@ -24,8 +24,8 @@ On Windows (from a Developer Command Prompt for VS 2022):
 
 ```powershell
 rustup default stable
-git clone https://github.com/nowledge-co/con.git
-cd con
+git clone https://github.com/nowledge-co/con-terminal.git
+cd con-terminal
 cargo wbuild -p con --release          # → target\release\con-app.exe
 cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal
 ```
@@ -346,8 +346,8 @@ is independent upstream work.
 ### What you can do *today* on Windows after Phase 3b
 
 ```powershell
-git clone https://github.com/nowledge-co/con.git
-cd con
+git clone https://github.com/nowledge-co/con-terminal.git
+cd con-terminal
 cargo wbuild -p con --release
 target\release\con-app.exe
 ```

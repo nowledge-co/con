@@ -375,17 +375,17 @@ jobs:
 
             on_arm do
               sha256 "${arm64_sha}"
-              url "https://github.com/nowledge-co/con/releases/download/v#{version}/${dmg_prefix}-#{version}-macos-arm64.dmg"
+              url "https://github.com/nowledge-co/con-terminal/releases/download/v#{version}/${dmg_prefix}-#{version}-macos-arm64.dmg"
             end
 
             on_intel do
               sha256 "${x86_64_sha}"
-              url "https://github.com/nowledge-co/con/releases/download/v#{version}/${dmg_prefix}-#{version}-macos-x86_64.dmg"
+              url "https://github.com/nowledge-co/con-terminal/releases/download/v#{version}/${dmg_prefix}-#{version}-macos-x86_64.dmg"
             end
 
             name "${app_name}"
             desc "GPU-accelerated terminal emulator with built-in AI agent"
-            homepage "https://github.com/nowledge-co/con"
+            homepage "https://github.com/nowledge-co/con-terminal"
 
             livecheck do
               url :url
