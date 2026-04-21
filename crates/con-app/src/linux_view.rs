@@ -396,6 +396,7 @@ impl Render for GhosttyView {
             .child(
                 div()
                     .size_full()
+                    .overflow_hidden()
                     .on_children_prepainted(move |bounds_list: Vec<Bounds<Pixels>>, window, cx| {
                         let Some(bounds) = bounds_list.first().copied() else {
                             return;
@@ -439,8 +440,7 @@ impl Render for GhosttyView {
                                     .whitespace_nowrap()
                                     .child(render_terminal_line(&line))
                             })),
-                    )
-                    .child(div().size_full()),
+                    ),
             )
     }
 }
