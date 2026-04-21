@@ -5,7 +5,12 @@
 $ErrorActionPreference = 'Stop'
 
 $Repo        = 'nowledge-co/con-terminal'
-$InstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\con'
+# Install under Programs\con-terminal, not Programs\con. CON is a
+# reserved DOS device name: New-Item reports success on such a path,
+# but the Win32 namespace redirects CON to the console device so
+# Test-Path and Expand-Archive can never see the directory. Using
+# con-terminal as the folder segment sidesteps the entire trap.
+$InstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\con-terminal'
 
 # ── Terminal setup ──────────────────────────────────────────────────────────
 # UTF-8 output is required for the block-drawing glyphs in the banner
@@ -217,7 +222,10 @@ if ($pathSegments -notcontains $InstallRoot) {
 # ── Start Menu shortcut ─────────────────────────────────────────────────────
 
 $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-$lnk       = Join-Path $startMenu 'con.lnk'
+# con.lnk would trip the reserved-name rule the same way. The Start
+# Menu shows the filename without the .lnk suffix, so "Con Terminal"
+# is what the user sees.
+$lnk       = Join-Path $startMenu 'Con Terminal.lnk'
 try {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($lnk)
