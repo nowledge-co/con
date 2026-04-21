@@ -146,7 +146,7 @@ impl GhosttyView {
     pub fn drain_surface_state(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = self.ensure_session(cx);
 
-        let Some(terminal) = self.terminal.as_ref() else {
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
             return changed;
         };
 
