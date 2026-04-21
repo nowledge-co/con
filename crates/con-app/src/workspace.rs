@@ -6264,6 +6264,9 @@ impl Render for ConWorkspace {
         let top_bar_height = self.current_top_bar_height();
         let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
+        #[cfg(target_os = "linux")]
+        window.set_client_inset(px(top_bar_height));
+
         // macOS: leave 78px for the system traffic-light cluster that
         // the OS paints over our content. Windows / Linux: start flush
         // at the left; the Min/Max/Close cluster gets appended at the

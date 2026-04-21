@@ -135,6 +135,9 @@ impl LinuxPtySession {
             .openpty(pty_size)
             .context("failed to open linux pty")?;
 
+        let shell_program = options.program.clone();
+        let spawn_cwd = options.cwd.clone();
+
         let mut command = match options.program.as_ref() {
             Some(program) => {
                 let mut command = CommandBuilder::new(program);
@@ -149,6 +152,14 @@ impl LinuxPtySession {
         if let Some(cwd) = options.cwd.as_ref() {
             command.cwd(cwd);
         }
+
+        log::info!(
+            "linux pty spawning shell program={:?} cwd={:?} cols={} rows={}",
+            shell_program.as_deref().unwrap_or("<default>"),
+            spawn_cwd.as_ref().map(|path| path.display().to_string()),
+            options.size.columns,
+            options.size.rows
+        );
 
         let reader = pair
             .master
@@ -296,11 +307,22 @@ fn spawn_reader_thread(mut reader: Box<dyn Read + Send>, shared: Arc<SessionShar
         .name("con-linux-pty-reader".into())
         .spawn(move || {
             let mut buffer = [0_u8; 8192];
+            let mut logged_first_chunk = false;
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(read) => {
                         let chunk = String::from_utf8_lossy(&buffer[..read]);
+                        if !logged_first_chunk {
+                            logged_first_chunk = true;
+                            let preview = sanitize_terminal_output(chunk.as_ref());
+                            let preview = preview.chars().take(160).collect::<String>();
+                            log::info!(
+                                "linux pty received first output chunk bytes={} preview={:?}",
+                                read,
+                                preview
+                            );
+                        }
                         shared.push_output(chunk.as_ref());
                     }
                     Err(err) if err.kind() == ErrorKind::Interrupted => continue,
