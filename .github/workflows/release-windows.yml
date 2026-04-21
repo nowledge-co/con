@@ -143,3 +143,147 @@ jobs:
           done < <(find release-artifacts -type f \
             \( -name '*.zip' -o -name 'SHA256SUMS-windows.txt' \) \
             -print0)
+
+  update-appcast:
+    name: Update Sparkle appcast (windows-x86_64)
+    # Run on macOS because Sparkle's `sign_update` tool ships only in
+    # the macOS Sparkle distribution. The signing key is the same
+    # Ed25519 keypair used for macOS artifacts — the Windows client
+    # verifies it server-side via GitHub Pages publishing; in-app
+    # signature verification comes in a follow-up PR.
+    runs-on: macos-15
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Derive release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          channel="stable"
+          if [[ "$version" == *"-beta."* ]]; then
+            channel="beta"
+          fi
+          marketing="${version%%[-+]*}"
+          echo "version=$version"     >>"$GITHUB_OUTPUT"
+          echo "channel=$channel"     >>"$GITHUB_OUTPUT"
+          echo "marketing=$marketing" >>"$GITHUB_OUTPUT"
+
+      - name: Check Sparkle signing key
+        id: sparkle
+        shell: bash
+        env:
+          SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
+        run: |
+          if [[ -z "${SPARKLE_SIGNING_KEY:-}" ]]; then
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::warning::SPARKLE_SIGNING_KEY not set — skipping appcast update"
+          else
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Sparkle tools
+        if: steps.sparkle.outputs.available == 'true'
+        shell: bash
+        run: ./scripts/sparkle/download.sh
+
+      - name: Download Windows release artifact
+        if: steps.sparkle.outputs.available == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          name: windows-x86_64
+          path: release-artifacts
+
+      - name: Checkout gh-pages
+        if: steps.sparkle.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --single-branch --branch gh-pages \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            gh-pages 2>/dev/null || {
+            mkdir -p gh-pages/appcast
+            cd gh-pages
+            git init
+            git checkout -b gh-pages
+            git remote add origin \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+            echo "con-releases.nowledge.co" > CNAME
+            touch .nojekyll
+            git add CNAME .nojekyll
+            git commit -m "Initialize gh-pages"
+          }
+
+      - name: Sign ZIP and update Windows appcast
+        if: steps.sparkle.outputs.available == 'true'
+        shell: bash
+        env:
+          SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
+          SPARKLE_DIR: ${{ github.workspace }}/.sparkle
+        run: |
+          set -euo pipefail
+
+          repo="${{ github.repository }}"
+          tag="$GITHUB_REF_NAME"
+          version="${{ steps.meta.outputs.version }}"
+          channel="${{ steps.meta.outputs.channel }}"
+          marketing="${{ steps.meta.outputs.marketing }}"
+          build_number="${{ github.run_number }}"
+
+          mkdir -p gh-pages/appcast
+
+          zip=$(find release-artifacts -name "*-windows-x86_64.zip" -type f | head -1)
+          if [[ -z "$zip" ]]; then
+            echo "::warning::No Windows ZIP found — skipping"
+            exit 0
+          fi
+
+          sig_output=$(./scripts/sparkle/sign-artifact.sh "$zip")
+          signature=$(echo "$sig_output" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
+          if [[ -z "$signature" ]]; then
+            echo "::error::Failed to extract Ed25519 signature"
+            echo "sign_update output: $sig_output" >&2
+            exit 1
+          fi
+          length=$(stat -f%z "$zip")
+          zip_name=$(basename "$zip")
+          download_url="https://github.com/${repo}/releases/download/${tag}/${zip_name}"
+
+          appcast_file="gh-pages/appcast/${channel}-windows-x86_64.xml"
+
+          # Re-use the same appcast generator the macOS pipeline uses.
+          # Windows has no OS minimum so we feed a harmless sentinel;
+          # the Windows client ignores the field.
+          APPCAST_FILE="$appcast_file" \
+          APPCAST_TITLE="con" \
+          APPCAST_LINK="https://con-releases.nowledge.co" \
+          ITEM_TITLE="Version ${marketing}" \
+          ITEM_VERSION="$build_number" \
+          ITEM_SHORT_VERSION="$marketing" \
+          ITEM_URL="$download_url" \
+          ITEM_LENGTH="$length" \
+          ITEM_SIGNATURE="$signature" \
+          ITEM_MIN_OS="10.0.0" \
+          ./scripts/sparkle/update-appcast.sh
+
+          echo "Updated appcast: ${channel}-windows-x86_64.xml (build $build_number)"
+
+      - name: Push appcast to gh-pages
+        if: steps.sparkle.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add appcast/
+          if git diff --cached --quiet; then
+            echo "No appcast changes to commit"
+            exit 0
+          fi
+          git commit -m "Update Windows appcast for $GITHUB_REF_NAME"
+          git pull --rebase origin gh-pages 2>/dev/null || true
+          git push origin gh-pages
