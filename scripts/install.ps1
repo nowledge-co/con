@@ -1,4 +1,4 @@
-# con — Windows terminal emulator installer
+﻿# con — Windows terminal emulator installer
 # Usage:  irm https://con-releases.nowledge.co/install.ps1 | iex
 
 #Requires -Version 5.1
