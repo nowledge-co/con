@@ -64,8 +64,14 @@ $G5 = "$ESC[38;2;197;79;207m"
 $G6 = "$ESC[38;2;217;76;180m"
 $G7 = "$ESC[38;2;236;72;153m"
 
-function Pass($msg) { Write-Host "   $OK`u{2713}$RESET  $msg" }
-function Fail($msg) { Write-Host "   $ERR`u{2717}$RESET  $msg" -ForegroundColor Red; exit 1 }
+# `u{XXXX} escape syntax is PS 6+ only — stock Windows 11 ships PS 5.1
+# where those show up as literal text. Cast via [char] instead.
+$CHK   = [char]0x2713  # ✓
+$CROSS = [char]0x2717  # ✗
+$MID   = [char]0x00B7  # ·
+
+function Pass($msg) { Write-Host "   $OK$CHK$RESET  $msg" }
+function Fail($msg) { Write-Host "   $ERR$CROSS$RESET  $msg" -ForegroundColor Red; exit 1 }
 
 # ── Banner ──────────────────────────────────────────────────────────────────
 # Exact output from: npx oh-my-logo "con" --palette-colors
@@ -123,9 +129,9 @@ $sumAsset = $release.assets |
     Select-Object -First 1
 
 if ($channel) {
-    Pass "$BOLD`con $channel$RESET  $DIM$version `u{00b7} $arch$RESET"
+    Pass "$BOLD`con $channel$RESET  $DIM$version $MID $arch$RESET"
 } else {
-    Pass "$BOLD`con$RESET  $DIM$version `u{00b7} $arch$RESET"
+    Pass "$BOLD`con$RESET  $DIM$version $MID $arch$RESET"
 }
 
 # ── Download ────────────────────────────────────────────────────────────────
@@ -134,7 +140,7 @@ $tmp = New-Item -ItemType Directory -Force `
     -Path (Join-Path $env:TEMP "con-install-$([System.IO.Path]::GetRandomFileName())")
 $zipPath = Join-Path $tmp $zipAsset.name
 
-Write-Host -NoNewline "   $DIM`u{00b7}$RESET  downloading"
+Write-Host -NoNewline "   $DIM$MID$RESET  downloading"
 try {
     # Invoke-WebRequest is ~10x slower than raw WebClient on large files
     # because it streams through PowerShell's progress pipeline; use
@@ -165,13 +171,13 @@ if ($sumAsset) {
         }
         Pass "verified  $DIM`sha256$RESET"
     } catch {
-        Write-Host "   $DIM`u{00b7}$RESET  checksum unavailable — skipping verify" -ForegroundColor Yellow
+        Write-Host "   $DIM$MID$RESET  checksum unavailable, skipping verify" -ForegroundColor Yellow
     }
 }
 
 # ── Install ─────────────────────────────────────────────────────────────────
 
-Write-Host -NoNewline "   $DIM`u{00b7}$RESET  installing"
+Write-Host -NoNewline "   $DIM$MID$RESET  installing"
 
 # Kill any running instance so we can overwrite the exe. `Stop-Process`
 # is idempotent when the process isn't running.
