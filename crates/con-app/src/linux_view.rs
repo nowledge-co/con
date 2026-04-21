@@ -1,15 +1,10 @@
-//! Non-macOS placeholder for `ghostty_view`.
+//! Linux placeholder for `ghostty_view`.
 //!
-//! Mirrors the public surface of `crate::ghostty_view` exactly — same
-//! types, same event names, same method signatures — so callers in
-//! `terminal_pane.rs` and `workspace.rs` compile unchanged. The view
-//! paints a centered "Terminal backend under construction" card that
-//! links to the porting plan, and all terminal operations are no-ops.
-//!
-//! This file is selected automatically on non-macOS targets that do not
-//! yet have a real terminal backend. When the real Linux backend lands,
-//! it will provide a `LinuxTerminalView` and the module swap will point
-//! at that instead — the rest of the UI stays the same.
+//! Mirrors the public surface of `crate::ghostty_view` exactly so the
+//! rest of `con-app` compiles unchanged while the Linux renderer is
+//! still pending. Unlike the generic stub, this file is Linux-specific
+//! and now targets the chosen long-term lane: a local Unix PTY backend
+//! plus GPUI-owned rendering.
 
 use std::sync::Arc;
 
@@ -30,8 +25,6 @@ impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 
-/// Placeholder terminal view. Holds the shared `GhosttyApp` handle so the
-/// field shape matches the macOS view, but never creates a real surface.
 pub struct GhosttyView {
     #[allow(dead_code)]
     app: Arc<GhosttyApp>,
@@ -43,10 +36,6 @@ pub struct GhosttyView {
     initial_font_size: f32,
 }
 
-/// Register stub key bindings. On macOS the real view binds Tab/Shift-Tab
-/// so the terminal captures focus-cycling keys; on the stub there is no
-/// terminal to forward them to, but we keep the action names so
-/// `workspace.rs` can reference them without cfg branches.
 pub fn init(_cx: &mut App) {}
 
 impl GhosttyView {
@@ -58,7 +47,7 @@ impl GhosttyView {
     ) -> Self {
         Self {
             app,
-            terminal: None,
+            terminal: Some(Arc::new(GhosttyTerminal::new())),
             focus_handle: cx.focus_handle(),
             initial_cwd: cwd,
             initial_font_size: font_size,
@@ -96,7 +85,12 @@ impl GhosttyView {
 
     pub fn set_surface_focus_state(&mut self, _focused: bool) {}
 
-    pub fn ensure_initialized_for_control(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+    pub fn ensure_initialized_for_control(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
 
     pub fn set_visible(&self, _visible: bool) {}
 
@@ -129,25 +123,21 @@ impl Render for GhosttyView {
             .gap(px(10.0))
             .bg(theme.background.opacity(0.9))
             .text_color(theme.foreground.opacity(0.8))
-            .child(
-                div()
-                    .text_lg()
-                    .child("Terminal backend under construction"),
-            )
+            .child(div().text_lg().child("Linux terminal renderer under construction"))
             .child(
                 div()
                     .text_sm()
                     .text_color(theme.foreground.opacity(0.5))
-                    .child("Linux port — see docs/impl/linux-port.md"),
+                    .child("Plan: docs/impl/linux-port.md"),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(theme.foreground.opacity(0.4))
                     .child(
-                        "Agent panel, settings, command palette, and the control \
-                         socket all work. The terminal surface will render here \
-                         when the Linux backend lands.",
+                        "Lane selected: local Linux backend. Unix PTY \
+                         lifecycle now lives in con; GPUI-owned rendering \
+                         is the next milestone before this pane becomes live.",
                     ),
             )
     }

@@ -6,7 +6,8 @@
 //! |---|---|---|
 //! | macOS | full libghostty (Metal + AppKit NSView) | `terminal.rs` + `ffi.rs` |
 //! | Windows | libghostty-vt + ConPTY + D3D11 + DirectWrite, hosted in a `WS_CHILD` HWND | `windows/` |
-//! | Linux / other | no-op stub (UI compiles, terminal pane shows placeholder) | `stub.rs` |
+//! | Linux | local backend scaffold (Unix PTY + future GPUI-owned renderer) | `linux/` |
+//! | other | no-op stub (UI compiles, terminal pane shows placeholder) | `stub.rs` |
 //!
 //! All backends expose the same public type names — `GhosttyApp`,
 //! `GhosttyTerminal`, `TerminalColors`, etc. — so cross-platform UI
@@ -26,6 +27,9 @@ pub mod terminal;
 // compiled because all types come from `terminal.rs`.
 #[cfg(not(target_os = "macos"))]
 pub mod stub;
+
+#[cfg(target_os = "linux")]
+pub mod linux;
 
 #[cfg(target_os = "windows")]
 pub mod windows;
@@ -47,7 +51,19 @@ pub use stub::{
 #[cfg(target_os = "windows")]
 pub use windows::{WindowsGhosttyApp as GhosttyApp, WindowsGhosttyTerminal as GhosttyTerminal};
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+#[cfg(target_os = "linux")]
+pub use linux::{LinuxGhosttyApp as GhosttyApp, LinuxGhosttyTerminal as GhosttyTerminal};
+#[cfg(target_os = "linux")]
+pub use stub::{
+    CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
+    GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
+};
+
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_os = "linux")
+))]
 pub use stub::{
     CommandFinishedSignal, CommandRecord, GhosttyApp, GhosttyConfigPatch, GhosttySplitDirection,
     GhosttySurfaceEvent, GhosttyTerminal, MouseButton, SurfaceSize, TerminalColors,

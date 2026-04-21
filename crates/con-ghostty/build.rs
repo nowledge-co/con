@@ -41,12 +41,12 @@ fn main() {
         "macos" => build_macos(),
         "windows" => build_windows(),
         other => {
-            // Linux + everything else: terminal pane is a placeholder
-            // until that platform's backend lands. The crate compiles
-            // to a no-op stub via `src/stub.rs`.
+            // Linux does have its own local backend scaffold now, but it
+            // doesn't require any external native build step yet.
+            // Unsupported targets still compile through `src/stub.rs`.
             println!(
                 "cargo:warning=con-ghostty: skipping native build on target_os={other} \
-                 (using stub backend — see docs/impl/windows-port.md)"
+                 (no external native build required — see docs/impl/linux-port.md)"
             );
         }
     }

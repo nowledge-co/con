@@ -21,19 +21,28 @@ mod global_hotkey;
 // The terminal-view module is selected per platform:
 //   macOS   -> ghostty_view.rs (libghostty + child NSView)
 //   Windows -> windows_view.rs (libghostty-vt + ConPTY + D3D11 child HWND)
-//   Linux / other -> stub_view.rs (placeholder until Linux backend lands)
+//   Linux   -> linux_view.rs (Linux-specific placeholder until backend lands)
+//   other   -> stub_view.rs
 //
 // All three expose the same public type names (`GhosttyView`,
 // `GhosttyTitleChanged`, `GhosttyProcessExited`, `GhosttyFocusChanged`,
 // `GhosttySplitRequested`, `init`) so downstream modules
 // (`terminal_pane`, `workspace`) compile on every target without
-// per-callsite cfg gates. See `docs/impl/windows-port.md`.
+// per-callsite cfg gates. See `docs/impl/windows-port.md` and
+// `docs/impl/linux-port.md`.
 #[cfg(target_os = "macos")]
 mod ghostty_view;
 #[cfg(target_os = "windows")]
 #[path = "windows_view.rs"]
 mod ghostty_view;
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+#[cfg(target_os = "linux")]
+#[path = "linux_view.rs"]
+mod ghostty_view;
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_os = "linux")
+))]
 #[path = "stub_view.rs"]
 mod ghostty_view;
 
@@ -231,8 +240,8 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
 // On non-macOS targets, the terminal backend is a placeholder (see
 // `stub_view.rs`). The binary builds and runs — agent panel, settings,
 // command palette, the control socket — but the terminal surface paints a
-// "backend under construction" card until the libghostty-vt + ConPTY /
-// forkpty implementation lands. See `docs/impl/windows-port.md`.
+// "backend under construction" card until the Linux backend lands. See
+// `docs/impl/linux-port.md`.
 
 fn default_window_options(cx: &mut App) -> WindowOptions {
     let transparent = supports_transparent_main_window();

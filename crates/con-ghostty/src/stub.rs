@@ -8,10 +8,9 @@
 //! per-call-site `cfg` gates.
 //!
 //! Every method here is a placeholder that returns an empty/None/false
-//! result. A real Windows/Linux backend — libghostty-vt + ConPTY on
-//! Windows, libghostty-vt + forkpty on Linux — will replace this module
-//! with working implementations. See `docs/impl/windows-port.md` for the
-//! staged plan.
+//! result. A real Windows/Linux backend will replace this module with
+//! working implementations. See `docs/impl/windows-port.md` and
+//! `docs/impl/linux-port.md` for the staged plans.
 //!
 //! Keeping the stubs in `con-ghostty` (rather than per-platform crates)
 //! preserves a single "terminal backend" contract that the UI layer

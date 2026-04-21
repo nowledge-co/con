@@ -53,3 +53,6 @@ raw-window-handle = "0.6"
 # Skyline/shelf glyph-atlas packer. Same crate WebRender uses in
 # production; adopted by glyphon and several wgpu text renderers.
 etagere = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+portable-pty = "0.9"
