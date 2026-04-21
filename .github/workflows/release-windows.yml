@@ -1,0 +1,145 @@
+name: Release Windows
+
+# v0 release pipeline for the Windows port. Unsigned for now — the
+# user downloads a ZIP, unpacks it anywhere, and runs `con-app.exe`.
+# No installer, no code signature, no auto-update. Those come later.
+#
+# macOS releases live in release-macos.yml and run on the same `v*`
+# tag; this workflow piggybacks onto the same release the macOS job
+# creates so a single `git tag v0.X.Y && git push --tags` ships both
+# platforms.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build windows-x86_64
+    runs-on: windows-latest
+
+    # Same CON-reserved-name workaround as ci-portable.yml — git.exe
+    # refuses to operate inside any directory named CON. We clone into
+    # C:\src\repo and cd there for every subsequent step.
+    env:
+      CON_CHECKOUT_DIR: C:\src\repo
+
+    defaults:
+      run:
+        working-directory: C:\src\repo
+
+    steps:
+      - name: Clone repo outside the reserved-name path
+        working-directory: C:\
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CON_CHECKOUT_DIR | Out-Null
+          git -c core.longpaths=true clone `
+            "https://x-access-token:$env:GH_TOKEN@github.com/${{ github.repository }}.git" `
+            $env:CON_CHECKOUT_DIR
+          Set-Location $env:CON_CHECKOUT_DIR
+          git fetch origin "${{ github.ref }}"
+          git checkout "${{ github.ref_name }}"
+          git log -1 --oneline
+
+      - name: Derive release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: C:\src\repo
+
+      - name: Install Zig 0.15.2
+        shell: pwsh
+        run: |
+          $ZigVersion = "0.15.2"
+          $ZigDir    = "zig-x86_64-windows-$ZigVersion"
+          $ZigZip    = "$ZigDir.zip"
+          $Url       = "https://ziglang.org/download/$ZigVersion/$ZigZip"
+          $Dest      = "$env:USERPROFILE\.local"
+          New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+          Invoke-WebRequest -Uri $Url -OutFile "$env:TEMP\$ZigZip"
+          Expand-Archive -Path "$env:TEMP\$ZigZip" -DestinationPath $Dest -Force
+          Add-Content -Path $env:GITHUB_PATH -Value "$Dest\$ZigDir"
+          & "$Dest\$ZigDir\zig.exe" version
+
+      - name: Build release binary
+        shell: pwsh
+        # `cargo wbuild` is the workspace alias for
+        # `cargo build --no-default-features --features con/bin-con-app`
+        # — required because CON is a reserved DOS name and plain
+        # `con.exe` cannot be created.
+        run: cargo wbuild -p con --release
+
+      - name: Package ZIP
+        id: package
+        shell: pwsh
+        run: |
+          $Version = "${{ steps.meta.outputs.version }}"
+          $StagingDir = "dist\con-$Version-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
+          Copy-Item "target\release\con-app.exe" "$StagingDir\con-app.exe"
+          if (Test-Path "README.md")  { Copy-Item "README.md"  $StagingDir }
+          if (Test-Path "LICENSE")    { Copy-Item "LICENSE"    $StagingDir }
+          if (Test-Path "LICENSE.md") { Copy-Item "LICENSE.md" $StagingDir }
+          $Zip = "dist\con-$Version-windows-x86_64.zip"
+          Compress-Archive -Path "$StagingDir\*" -DestinationPath $Zip -Force
+          $Sha = (Get-FileHash -Algorithm SHA256 $Zip).Hash.ToLower()
+          "$Sha  $(Split-Path -Leaf $Zip)" | Out-File "dist\SHA256SUMS-windows.txt" -Encoding ascii
+          "zip=$Zip"                          | Out-File $env:GITHUB_OUTPUT -Append
+          "sha256=dist\SHA256SUMS-windows.txt" | Out-File $env:GITHUB_OUTPUT -Append
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-x86_64
+          path: |
+            C:\src\repo\dist\con-*-windows-x86_64.zip
+            C:\src\repo\dist\SHA256SUMS-windows.txt
+          if-no-files-found: error
+
+  publish:
+    name: Attach to GitHub release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: windows-x86_64
+          path: release-artifacts
+
+      - name: Create or update release & upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+
+          # The macOS job may have already created the release. If not,
+          # create it now so a Windows-only tag still publishes.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+
+          while IFS= read -r -d '' file; do
+            echo "Uploading: $file"
+            gh release upload "$tag" "$file" --clobber
+          done < <(find release-artifacts -type f \
+            \( -name '*.zip' -o -name 'SHA256SUMS-windows.txt' \) \
+            -print0)
