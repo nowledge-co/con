@@ -421,7 +421,19 @@ impl Renderer {
                 effective_attrs,
             ));
         }
+        let cell_w_px = atlas.metrics().cell_width_px;
         drop(atlas);
+
+        // Sort so oversized PUA icons render LAST within the grid
+        // pass. Their atlas slots are wider than a cell, so their
+        // quad overflows into the neighbour column. DX11 guarantees
+        // in-order per-pixel writes within a single draw call, so
+        // placing wide instances at the end of the buffer makes
+        // their pixels win over the narrow bg-only instance that
+        // would otherwise paint on top. Stable partition keeps the
+        // grid's row-major order within the narrow and wide groups
+        // independently — bad ordering would show up as flicker.
+        instances.sort_by_key(|inst| (inst.atlas_size[0] > cell_w_px) as u8);
 
         if snapshot.cursor.visible {
             let col = snapshot.cursor.col as usize;

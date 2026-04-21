@@ -65,7 +65,12 @@ pub struct GlyphKey {
 struct GlyphMetricsPx {
     /// Natural ink-box width (advance − |lsb| − |rsb| in design units
     /// → pixels). Used to decide whether to widen the atlas slot.
-    ink_px: f32,
+    ink_w_px: f32,
+    /// Natural ink-box height (advanceHeight − topSB − bottomSB in
+    /// design units → pixels). Used together with `ink_w_px` to scale
+    /// square-authored Nerd-Font icons so they fill the cell's longer
+    /// dimension instead of collapsing to the shorter one.
+    ink_h_px: f32,
     /// Left-side bearing in physical pixels. Negative values mean the
     /// ink box extends leftward past the advance origin — we shift the
     /// draw rect right by `-lsb_px` so that overhang fits in the slot.
@@ -425,27 +430,29 @@ impl GlyphCache {
         let cell_w = self.metrics.cell_width_px as i32;
         let cell_h = self.metrics.cell_height_px as i32;
 
-        // Nerd-Font PUA icons (U+E000..U+F8FF) are authored with an
-        // advance of one grid cell but an ink box that routinely
-        // extends well past the cell on both sides (folder U+F07B,
-        // github U+F09B, branch U+E0A0, …). Rendering them at 1:1 in
-        // a cell_w × cell_h slot clips whichever side spills.
-        //
-        // Previous attempts — widen the atlas slot to 2 cells + shift
-        // the pen — still failed on screen: the next column's
-        // instance paints its own `bg` rect of cell_w and overdraws
-        // the widened glyph's right half. Users saw "half icons".
-        //
-        // Scale-to-fit: always allocate a 1-cell slot, then apply a
-        // uniform D2D transform that shrinks the glyph so its natural
-        // ink bounding box fits inside the cell with 1 px breathing
-        // room. No cross-cell overdraw, no clipping.
+        // Nerd-Font PUA icons (U+E000..U+F8FF) are authored as roughly
+        // square glyphs (~1000du × ~1000du) with an advance of one
+        // monospace cell (~600du). In a tall-narrow cell (e.g. 17×35
+        // px at font 28) fitting them by WIDTH collapses to a ~15×15
+        // icon adrift in ~20px of vertical air. That's "icons look
+        // tiny". Fit by the LONGER cell dimension (height) so the
+        // icon renders at full natural size; let it overflow
+        // horizontally into the (virtually always blank) next cell.
         //
         // NB: Powerline "extra symbols" (U+E0A0..U+E0D4) — arrows,
-        // separators — are authored flush-to-advance with ink that
-        // already fits the cell. Scaling them would leave tell-tale
-        // gaps between consecutive separator glyphs. Exempt the block
-        // and draw at 1:1 with CLIP.
+        // separators, branch — are authored flush-to-advance with ink
+        // that already fits a 1-cell slot. Stretching them leaves
+        // gaps between consecutive separators. Exempt the block and
+        // draw at 1:1 with CLIP.
+        //
+        // Overflow z-order: when an icon's slot is wider than 1 cell,
+        // the neighbour's bg-only instance would otherwise overdraw
+        // the icon's right half. `Renderer::draw_cells` sorts
+        // instances so wide ones trail — DX11 orders per-pixel writes
+        // by instance ID within a draw call, so the wide icon wins.
+        // Here we just widen the slot and let the VS use
+        // `atlasSize.x` as the quad width (via the `max(cellSize.x,
+        // atlasSize.x)` branch in `shaders.hlsl::vs_main`).
         let codepoint = key.codepoint;
         let is_scalable_pua = matches!(codepoint, 0xE000..=0xF8FF)
             && !matches!(codepoint, 0xE0A0..=0xE0D4);
@@ -455,7 +462,32 @@ impl GlyphCache {
             None
         };
 
-        let glyph_w = cell_w;
+        // Decide final slot width. For normal glyphs and powerline
+        // exempts it's cell_w; for oversized PUA icons it's the
+        // scaled natural ink width (capped at 2 cells).
+        let (glyph_w, icon_scale) = match metrics {
+            Some(m) => {
+                let lsb_overhang = (-m.lsb_px).max(0.0);
+                let natural_w = m.ink_w_px + lsb_overhang;
+                let natural_h = m.ink_h_px.max(1.0);
+                let fits_1_cell =
+                    natural_w <= (cell_w as f32) + 1.0 && natural_h <= (cell_h as f32) + 1.0;
+                if fits_1_cell {
+                    (cell_w, None)
+                } else {
+                    // Scale to fit the longer cell dim (height) but
+                    // never upscale past natural size, and clamp width
+                    // to 2 cells so a single pathological glyph can't
+                    // blow out two neighbours.
+                    let by_h = (cell_h as f32) / natural_h;
+                    let by_w_cap = (2.0 * cell_w as f32) / natural_w;
+                    let scale = by_h.min(by_w_cap).min(1.0).max(0.5);
+                    let w = ((natural_w * scale).ceil() as i32).clamp(cell_w, 2 * cell_w);
+                    (w, Some(scale))
+                }
+            }
+            None => (cell_w, None),
+        };
         let alloc = self.allocator.allocate(size2(glyph_w, cell_h))?;
         let rect = alloc.rectangle;
 
@@ -477,58 +509,36 @@ impl GlyphCache {
             bottom: rect.max.y as f32,
         };
 
-        // Compute a scale-to-fit transform for wide PUA glyphs. For
-        // glyphs that already fit inside the cell we skip the
-        // transform entirely — normal letters take the fast path.
-        let transform = metrics.and_then(|m| {
-            let lsb_overhang = (-m.lsb_px).max(0.0);
-            let natural_w = m.ink_px + lsb_overhang;
-            if natural_w <= (cell_w as f32) + 1.0 {
-                return None;
-            }
-            // Uniform scale: shrink just enough to fit natural_w into
-            // (cell_w - 2) so there is 1 px of breathing room each
-            // side. Floor at 0.5 so outrageously oversized glyphs
-            // don't collapse to specks.
-            let target_w = (cell_w as f32 - 2.0).max(1.0);
-            let scale = (target_w / natural_w).clamp(0.5, 1.0);
-
-            // Compose: scale around slot centre, then shift so the
-            // ink's LEFT edge lands at `slot.left + left_pad`. Pen
-            // origin (LEADING) sits at slot.left; ink's pre-scale
-            // left edge is at slot.left - lsb_overhang. After
-            // scale-around-centre `cx`, that point maps to
-            //   cx + (slot.left - lsb_overhang - cx) * scale
-            // We add an `dx` translation that puts the ink left edge
-            // at `slot.left + left_pad`.
+        // Scale transform for pathological PUA glyphs whose natural
+        // ink height exceeds the cell (we already widened the slot to
+        // accommodate the width). Scale uniformly around the slot's
+        // geometric center so DrawText's natural glyph placement
+        // stays roughly centered in the slot. Standard-sized icons
+        // (IoskeleyMono's full NF set at the default font size) all
+        // satisfy `fits_1_cell_h = true` and take the None/fast path.
+        let transform = icon_scale.map(|scale| {
             let cx = (slot_rect.left + slot_rect.right) * 0.5;
             let cy = (slot_rect.top + slot_rect.bottom) * 0.5;
-            let left_pad = ((cell_w as f32) - natural_w * scale) * 0.5;
-            let scaled_ink_left = cx + (slot_rect.left - lsb_overhang - cx) * scale;
-            let want_ink_left = slot_rect.left + left_pad;
-            let dx = want_ink_left - scaled_ink_left;
-
-            // x' = scale*x + (1-scale)*cx + dx
-            // y' = scale*y + (1-scale)*cy
+            // Scale-around-(cx,cy):
+            //   x' = scale*x + (1-scale)*cx
+            //   y' = scale*y + (1-scale)*cy
             let tf = Matrix3x2 {
                 M11: scale,
                 M12: 0.0,
                 M21: 0.0,
                 M22: scale,
-                M31: (1.0 - scale) * cx + dx,
+                M31: (1.0 - scale) * cx,
                 M32: (1.0 - scale) * cy,
             };
             log::info!(
-                "atlas: PUA U+{:04X} ink={:.1}px lsb={:.1}px \
-                 natural_w={:.1}px cell={} → scale={:.3}",
+                "atlas: PUA U+{:04X} cell={}x{} slot_w={} scale={:.3}",
                 codepoint,
-                m.ink_px,
-                m.lsb_px,
-                natural_w,
                 cell_w,
+                cell_h,
+                (slot_rect.right - slot_rect.left) as i32,
                 scale,
             );
-            Some(tf)
+            tf
         });
 
         let identity = Matrix3x2 {
@@ -634,12 +644,16 @@ impl GlyphCache {
             return None;
         }
         let du_to_px = self.font_size_px / self.primary_upm;
-        let ink_du = (m.advanceWidth as i32 - m.leftSideBearing - m.rightSideBearing) as f32;
-        if ink_du <= 0.0 {
+        let ink_w_du =
+            (m.advanceWidth as i32 - m.leftSideBearing - m.rightSideBearing) as f32;
+        let ink_h_du =
+            (m.advanceHeight as i32 - m.topSideBearing - m.bottomSideBearing) as f32;
+        if ink_w_du <= 0.0 || ink_h_du <= 0.0 {
             return None;
         }
         Some(GlyphMetricsPx {
-            ink_px: ink_du * du_to_px,
+            ink_w_px: ink_w_du * du_to_px,
+            ink_h_px: ink_h_du * du_to_px,
             lsb_px: (m.leftSideBearing as f32) * du_to_px,
         })
     }
