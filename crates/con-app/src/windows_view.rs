@@ -462,27 +462,13 @@ impl GhosttyView {
             inner.lock().as_ref().is_some_and(|s| s.is_decckm())
         };
 
-        // Named keys first. Arrow sequences honour DECCKM: shells flip
-        // into it for programs like less / vim / fzf, and those programs
-        // expect `ESC O x` instead of `ESC [ x`.
-        let named: Option<&str> = match keystroke.key.as_str() {
-            "enter" | "return" => Some("\r"),
-            "backspace" => Some("\x7f"),
-            "tab" => Some("\t"),
-            "escape" => Some("\x1b"),
-            "up" => Some(if decckm { "\x1bOA" } else { "\x1b[A" }),
-            "down" => Some(if decckm { "\x1bOB" } else { "\x1b[B" }),
-            "right" => Some(if decckm { "\x1bOC" } else { "\x1b[C" }),
-            "left" => Some(if decckm { "\x1bOD" } else { "\x1b[D" }),
-            "home" => Some("\x1b[H"),
-            "end" => Some("\x1b[F"),
-            "pageup" => Some("\x1b[5~"),
-            "pagedown" => Some("\x1b[6~"),
-            "delete" => Some("\x1b[3~"),
-            _ => None,
-        };
-        if let Some(s) = named {
-            terminal.send_text(s);
+        // Named / special keys — arrows, home/end, page nav, insert,
+        // delete, F1-F12, tab/shift-tab, enter, backspace, escape. Each
+        // honours DECCKM (arrows) and xterm modifier-parameter encoding
+        // for Ctrl/Shift/Alt (CSI 1;m<X> for arrows + F1-F4, CSI n;m~
+        // for tilde-terminated keys).
+        if let Some(bytes) = encode_special_key(&keystroke.key, &keystroke.modifiers, decckm) {
+            terminal.send_text(&bytes);
             return true;
         }
 
@@ -502,6 +488,27 @@ impl GhosttyView {
                         return true;
                     }
                 }
+            }
+        }
+
+        // Alt + printable ASCII → ESC + char (meta-prefix convention
+        // readline / vim / tmux / fzf all recognise: Alt+B word-back,
+        // Alt+F word-forward, Alt+D word-delete, Alt+. last-arg, …).
+        // Only when Alt is the only app-consumable modifier — AltGr-
+        // produced characters already arrive decoded via `key_char`
+        // without the `alt` flag on most layouts, and Ctrl+Alt is left
+        // for the terminal's own modifyOtherKeys semantics if added
+        // later.
+        if keystroke.modifiers.alt
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.platform
+        {
+            if let Some(ch) = keystroke.key_char.as_deref().filter(|s| !s.is_empty()) {
+                let mut out = String::with_capacity(1 + ch.len());
+                out.push('\x1b');
+                out.push_str(ch);
+                terminal.send_text(&out);
+                return true;
             }
         }
 
@@ -540,6 +547,85 @@ fn bgra_frame_to_image(bytes: Vec<u8>, width: u32, height: u32) -> Option<Arc<Re
     let frame = Frame::new(buffer);
     let data: SmallVec<[Frame; 1]> = SmallVec::from_buf([frame]);
     Some(Arc::new(RenderImage::new(data)))
+}
+
+/// xterm modifier parameter (`m`) — `1 + (shift | alt<<1 | ctrl<<2)`,
+/// where `1` itself means "no modifier" (so the encoder omits it).
+///
+/// Used in CSI `1;m{A|B|C|D|H|F|P|Q|R|S}` and CSI `{n};m~` sequences.
+/// Source: xterm's "PC-Style Function Keys" encoding.
+fn xterm_modifier_param(modifiers: &Modifiers) -> Option<u8> {
+    let mask = u8::from(modifiers.shift)
+        | (u8::from(modifiers.alt) << 1)
+        | (u8::from(modifiers.control) << 2);
+    if mask == 0 { None } else { Some(1 + mask) }
+}
+
+/// Translate a GPUI key name + modifiers into the byte sequence the
+/// shell / TUI expects. Returns `None` for keys that should flow
+/// through the printable-character path (letters, digits, symbols).
+///
+/// Covers arrows (DECCKM-aware and modifier-aware), home/end, pageup/
+/// pagedown, insert/delete, F1-F12, enter, backspace, tab/shift-tab,
+/// escape. xterm modifier encoding is applied uniformly: any combination
+/// of Shift/Alt/Ctrl shifts the sequence into its CSI `1;m<final>`
+/// (arrows, home/end, F1-F4) or CSI `n;m~` (tilde-terminated) form.
+fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<String> {
+    let m = xterm_modifier_param(modifiers);
+
+    let tilde = |code: u8| match m {
+        Some(m) => format!("\x1b[{};{}~", code, m),
+        None => format!("\x1b[{}~", code),
+    };
+
+    // CSI-1-final covers arrows + home/end + F1-F4. For the no-modifier
+    // case: arrows honour DECCKM, F1-F4 use SS3 (ESC O x), home/end use
+    // plain CSI.
+    let csi1 = |final_byte: char, ss3_when_plain: bool, decckm_arrow: bool| match m {
+        Some(m) => format!("\x1b[1;{}{}", m, final_byte),
+        None if decckm_arrow && decckm => format!("\x1bO{}", final_byte),
+        None if ss3_when_plain => format!("\x1bO{}", final_byte),
+        None => format!("\x1b[{}", final_byte),
+    };
+
+    Some(match key {
+        "up" => csi1('A', false, true),
+        "down" => csi1('B', false, true),
+        "right" => csi1('C', false, true),
+        "left" => csi1('D', false, true),
+        "home" => csi1('H', false, false),
+        "end" => csi1('F', false, false),
+        "pageup" => tilde(5),
+        "pagedown" => tilde(6),
+        "insert" => tilde(2),
+        "delete" => tilde(3),
+        "f1" => csi1('P', true, false),
+        "f2" => csi1('Q', true, false),
+        "f3" => csi1('R', true, false),
+        "f4" => csi1('S', true, false),
+        "f5" => tilde(15),
+        "f6" => tilde(17),
+        "f7" => tilde(18),
+        "f8" => tilde(19),
+        "f9" => tilde(20),
+        "f10" => tilde(21),
+        "f11" => tilde(23),
+        "f12" => tilde(24),
+        "enter" | "return" => "\r".into(),
+        "escape" => "\x1b".into(),
+        // Alt+Backspace is readline's word-delete (ESC + DEL).
+        "backspace" if modifiers.alt && !modifiers.control && !modifiers.platform => {
+            "\x1b\x7f".into()
+        }
+        "backspace" => "\x7f".into(),
+        // Shift+Tab is the xterm "back-tab" CSI Z — bash/zsh completion
+        // menus and fzf use it to cycle backwards.
+        "tab" if modifiers.shift && !modifiers.control && !modifiers.platform => {
+            "\x1b[Z".into()
+        }
+        "tab" => "\t".into(),
+        _ => return None,
+    })
 }
 
 fn send_paste(terminal: &GhosttyTerminal, text: &str) {
