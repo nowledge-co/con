@@ -2,7 +2,7 @@
 
 ## Vision
 
-An open-source, macOS-native, GPU-accelerated terminal emulator that treats AI agents as first-class citizens. It aims for high terminal correctness, native performance, and a deeply integrated agent harness — all in Rust.
+An open-source, GPU-accelerated terminal emulator that treats AI agents as first-class citizens. It aims for high terminal correctness, native performance, and a deeply integrated agent harness — all in Rust.
 
 **Why con exists:**
 
@@ -38,8 +38,9 @@ An open-source, macOS-native, GPU-accelerated terminal emulator that treats AI a
 │           │              │                               │
 │  ┌────────┴────────┐  ┌──┴──────────────┐               │
 │  │ con-ghostty     │  │ con-agent       │               │
-│  │ (libghostty FFI │  │ (rig 0.34,      │               │
-│  │  Metal, macOS)  │  │  multi-provider)│               │
+│  │ (platform       │  │ (rig 0.34,      │               │
+│  │  terminal       │  │  multi-provider)│               │
+│  │  backend)       │  │                 │               │
 │  ├─────────────────┤  └─────────────────┘               │
 │  │ con-terminal    │                                    │
 │  │ (themes +       │                                    │
@@ -251,13 +252,33 @@ See `docs/study/terminal-control-plane.md`.
 
 ### 5. Platform Strategy
 
-con currently targets macOS.
+con now has three platform states:
 
-- GPUI provides the native window shell
-- Ghostty provides the terminal runtime
-- AppKit provides the native view embedding boundary
+- macOS: shipped, using the embedded libghostty + AppKit path
+- Windows: beta, using `libghostty-vt` + ConPTY + a local D3D11/DirectWrite renderer
+- Linux: planned, currently building with a placeholder terminal pane
 
-We can revisit broader platform support later, but the current product boundary is a macOS-native terminal with one runtime and one behavior model.
+The platform architecture is no longer "macOS only," but it is still not
+"one backend everywhere."
+
+- GPUI provides the host app shell on all supported platforms
+- Ghostty remains the preferred terminal truth source whenever its
+  embedding surface is available
+- platform-specific backend glue still matters:
+  - AppKit on macOS
+  - D3D11/ConPTY on Windows today
+  - Unix PTY + GPUI-owned renderer on Linux; see `docs/impl/linux-port.md`
+
+Important consequence:
+
+- Windows proved that con can ship a local backend when upstream
+  embedding is unavailable.
+- Linux feasibility work showed that upstream Ghostty and GPUI both have
+  real Linux stacks, but their embedding boundaries do not line up for
+  con today.
+- con therefore takes the same delivery stance on Linux that it used on
+  Windows: ship a local backend instead of waiting on upstream embed
+  hooks.
 
 ---
 
@@ -523,7 +544,8 @@ GPUI implements the full `InputHandler` trait (modeled after `NSTextInputClient`
 
 - `marked_text_range()` / `replace_and_mark_text_in_range()` for IME composition
 - `bounds_for_range()` for candidate window positioning
-- GPUI has broader platform support, but con currently ships the macOS AppKit path.
+- GPUI has broader platform support, and con now ships macOS plus a
+  Windows beta. Linux remains planned; see `docs/impl/linux-port.md`.
 - CJK input works. No blocker.
 
 ### 3. GPU Fallback: Not Needed

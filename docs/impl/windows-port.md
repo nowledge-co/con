@@ -1,13 +1,14 @@
 # Windows Port — Plan and Status
 
-Con is macOS-only today. This document captures what we learned while
-preparing the codebase for a Windows port and lays out the staged path to
-get there. It is the single source of truth for that work; cross-platform
-preparation PRs should link back here.
+con ships on macOS and has a working Windows beta. This document captures
+what we learned while preparing the codebase for the Windows port and lays
+out the staged path that got it there. It is the single source of truth
+for Windows-specific work.
 
 This is a planning document, not an implementation log. The corresponding
 postmortem (`postmortem/2026-04-16-prepare-windows-port.md`) records the
-decisions made when this plan was first written.
+decisions made when this plan was first written. Linux now has its own
+companion plan in `docs/impl/linux-port.md`.
 
 ## Building today
 
