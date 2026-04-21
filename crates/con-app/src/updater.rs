@@ -12,6 +12,15 @@
 //! exe replacement. Users grab the new ZIP and unpack it themselves.
 //! Full auto-update is a follow-up.
 
+// On Linux nothing consumes most of this module — the Updates card in
+// settings_panel is cfg-gated to macOS/Windows. Keeping the surface
+// compiled (rather than cfg-ing out every item) means main.rs can call
+// `init()` unconditionally without #[cfg] noise.
+#![cfg_attr(
+    all(not(target_os = "macos"), not(target_os = "windows")),
+    allow(dead_code)
+)]
+
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(target_os = "macos")]
