@@ -109,20 +109,23 @@ fn default_linux_shell_program() -> Option<String> {
         return Some(shell);
     }
 
-    // The Linux transcript backend is not a full VT emulator yet.
-    // Prefer a plain POSIX shell for predictable prompt bring-up.
-    for candidate in ["/bin/sh", "/usr/bin/sh", "/bin/bash", "/usr/bin/bash"] {
+    if let Some(shell) = std::env::var("SHELL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(shell);
+    }
+
+    for candidate in ["/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh"] {
         if PathBuf::from(candidate).exists() {
             return Some(candidate.to_string());
         }
     }
-
-    std::env::var("SHELL").ok().filter(|s| !s.trim().is_empty())
+    None
 }
 
-/// One per pane. The PTY session is not auto-started yet because Linux
-/// still lacks a real render path; the GPUI view will attach a live
-/// session once Phase 4 begins.
+/// One per pane. The GPUI view attaches the PTY + VT session lazily
+/// once the pane has real bounds.
 pub struct LinuxGhosttyTerminal {
     inner: Arc<Mutex<Option<LinuxPtySession>>>,
 }
@@ -234,6 +237,20 @@ impl LinuxGhosttyTerminal {
 
     pub fn send_text(&self, text: &str) {
         self.write_to_pty(text.as_bytes());
+    }
+
+    pub fn is_bracketed_paste(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(LinuxPtySession::is_bracketed_paste)
+    }
+
+    pub fn is_decckm(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(LinuxPtySession::is_decckm)
     }
 
     pub fn send_mouse_button(&self, _pressed: bool, _button: MouseButton, _mods: i32) -> bool {

@@ -6264,9 +6264,6 @@ impl Render for ConWorkspace {
         let top_bar_height = self.current_top_bar_height();
         let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
-        #[cfg(target_os = "linux")]
-        window.set_client_inset(px(top_bar_height));
-
         // macOS: leave 78px for the system traffic-light cluster that
         // the OS paints over our content. Windows / Linux: start flush
         // at the left; the Min/Max/Close cluster gets appended at the
@@ -6289,10 +6286,6 @@ impl Render for ConWorkspace {
             .pr(px(6.0))
             .bg(theme.title_bar.opacity(ui_surface_opacity))
             .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, |_, _window, _cx| {
-                #[cfg(target_os = "linux")]
-                _window.start_window_move();
-            })
             .on_click(|event, window, _cx| {
                 if event.click_count() == 2 {
                     window.titlebar_double_click();

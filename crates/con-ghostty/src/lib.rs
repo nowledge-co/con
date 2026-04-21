@@ -31,6 +31,9 @@ pub mod stub;
 #[cfg(target_os = "linux")]
 pub mod linux;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub mod vt;
+
 #[cfg(target_os = "windows")]
 pub mod windows;
 
@@ -38,8 +41,8 @@ pub mod windows;
 
 #[cfg(target_os = "macos")]
 pub use terminal::{
-    CommandFinishedSignal, CommandRecord, GhosttyApp, GhosttyConfigPatch, GhosttySplitDirection,
-    GhosttyScrollbar, GhosttySurfaceEvent, GhosttyTerminal, MouseButton, SurfaceSize,
+    CommandFinishedSignal, CommandRecord, GhosttyApp, GhosttyConfigPatch, GhosttyScrollbar,
+    GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton, SurfaceSize,
     TerminalColors, TerminalState,
 };
 

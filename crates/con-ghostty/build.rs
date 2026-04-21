@@ -39,14 +39,11 @@ fn main() {
 
     match target_os.as_str() {
         "macos" => build_macos(),
-        "windows" => build_windows(),
+        "windows" | "linux" => build_vt_backend(target_os.as_str()),
         other => {
-            // Linux does have its own local backend scaffold now, but it
-            // doesn't require any external native build step yet.
-            // Unsupported targets still compile through `src/stub.rs`.
             println!(
                 "cargo:warning=con-ghostty: skipping native build on target_os={other} \
-                 (no external native build required — see docs/impl/linux-port.md)"
+                 (unsupported target; terminal falls back to stub backend)"
             );
         }
     }
@@ -98,7 +95,10 @@ fn build_macos() {
     println!("cargo:rustc-link-lib=c++");
 
     if env::var_os(GHOSTTY_ENV).is_some() {
-        println!("cargo:rerun-if-changed={}", ghostty_dir.join("src").display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            ghostty_dir.join("src").display()
+        );
         println!(
             "cargo:rerun-if-changed={}",
             ghostty_dir.join("include/ghostty.h").display()
@@ -119,16 +119,13 @@ fn ghostty_optimize() -> String {
 
 // ── Windows ───────────────────────────────────────────────────────────
 
-fn build_windows() {
+fn build_vt_backend(target_os: &str) {
     // libghostty-vt is the cross-platform VT parser carved out of
-    // Ghostty (PR ghostty-org/ghostty#8840). It builds via `zig build`
-    // and produces a static library `libghostty-vt.a` we link into
-    // `con-ghostty`. ConPTY + the D3D11 renderer + the WS_CHILD host
-    // live in `src/windows/` and don't need this library directly,
-    // but `src/windows/vt.rs` does — its FFI declarations resolve to
-    // the symbols `libghostty-vt.a` exports.
+    // Ghostty (PR ghostty-org/ghostty#8840). Both the Windows backend
+    // and the Linux backend consume it now: Windows feeds it from
+    // ConPTY and Linux feeds it from a local Unix PTY.
 
-    if env::var_os("CON_STUB_GHOSTTY_VT").is_some() {
+    if target_os == "windows" && env::var_os("CON_STUB_GHOSTTY_VT").is_some() {
         // Fallback path: compile the C stub in `src/windows/ghostty_vt_stub.c`
         // and link it instead of libghostty-vt. The resulting binary
         // launches fully — GPUI window, HWND host view, D3D11 swapchain,
@@ -136,8 +133,10 @@ fn build_windows() {
         // because the stub returns no rows. Useful for iterating the
         // non-VT parts of the backend while Zig / Ghostty build issues
         // are resolved separately. See docs/impl/windows-port.md.
-        println!("cargo:warning=CON_STUB_GHOSTTY_VT set — linking stub C implementations \
-                  instead of libghostty-vt. Terminal output will be empty.");
+        println!(
+            "cargo:warning=CON_STUB_GHOSTTY_VT set — linking stub C implementations \
+                  instead of libghostty-vt. Terminal output will be empty."
+        );
         cc::Build::new()
             .file("src/windows/ghostty_vt_stub.c")
             .compile("ghostty_vt_stub");
@@ -156,8 +155,12 @@ fn build_windows() {
         println!(
             "cargo:warning=CON_SKIP_GHOSTTY_VT set — skipping libghostty-vt build. \
              A subsequent `cargo build` will fail to link unless a static \
-             library is provided manually. Consider CON_STUB_GHOSTTY_VT=1 \
-             if you want a linkable placeholder."
+             library is provided manually.{}",
+            if target_os == "windows" {
+                " Consider CON_STUB_GHOSTTY_VT=1 if you want a linkable placeholder."
+            } else {
+                ""
+            }
         );
         return;
     }
@@ -165,13 +168,16 @@ fn build_windows() {
     // Detect Zig. Surface the actual error (not-found, permission-denied,
     // etc.) and the PATH we searched so the user can diagnose — previous
     // silent warnings led to confusing link-time failures.
-    let zig_bin =
-        env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
+    let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
     let zig_probe = Command::new(&zig_bin).arg("version").output();
     match zig_probe {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            println!("cargo:warning=using zig {} (from `{}`)", version, zig_bin.to_string_lossy());
+            println!(
+                "cargo:warning=using zig {} (from `{}`)",
+                version,
+                zig_bin.to_string_lossy()
+            );
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -190,7 +196,7 @@ fn build_windows() {
             panic!(
                 "\n\n========================================================\n\
                  con-ghostty: could not spawn `{bin} version`: {err}\n\n\
-                 Zig 0.13+ is required to build libghostty-vt on Windows.\n\
+                 Zig 0.13+ is required to build libghostty-vt for {target_os}.\n\
                  Install it from https://ziglang.org/download/ and ensure\n\
                  the `zig` executable is on PATH, or set CON_ZIG_BIN to\n\
                  the absolute path of the zig executable.\n\n\
@@ -200,6 +206,7 @@ fn build_windows() {
                  ========================================================\n",
                 bin = zig_bin.to_string_lossy(),
                 err = err,
+                target_os = target_os,
                 path = path,
             );
         }
@@ -227,19 +234,12 @@ fn build_windows() {
     // `CON_GHOSTTY_OPTIMIZE=Debug` opt back in for VT-debugging.
     //
     // `-Dsimd`: Ghostty vendors `simdutf` (a C++ SIMD UTF-8 library)
-    // when SIMD is on. Zig's `-Demit-lib-vt=true` produces
-    // `ghostty-vt-static.lib` that *references* simdutf symbols but
-    // doesn't bundle the simdutf C++ objects into the archive — link
-    // fails with unresolved `simdutf::convert_utf8_to_utf32` etc.
-    // Default off on Windows so the static lib is self-contained; the
-    // user can flip via `CON_GHOSTTY_VT_SIMD=1` once we figure out how
-    // to link simdutf separately (it's produced somewhere in zig-cache
-    // but surfacing it cleanly across revisions is its own project).
-    // macOS/Linux: the full libghostty build bundles everything, so
-    // `-Dsimd=true` is safe and default there.
+    // when SIMD is on. On Windows, the static archive can reference
+    // simdutf without bundling it, so we default SIMD off there. On
+    // Linux the archive links cleanly, so we default SIMD on.
     let simd_on = env::var("CON_GHOSTTY_VT_SIMD")
         .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
+        .unwrap_or(target_os != "windows");
     let simd_flag = if simd_on {
         "-Dsimd=true"
     } else {
@@ -318,12 +318,15 @@ fn build_windows() {
     );
     println!("cargo:rustc-link-lib=static={link_name}");
 
-    // libghostty-vt has zero Win32 dependencies of its own (only libc).
-    // The MSVC default runtime + the windows-rs crate's transitive
-    // imports cover everything else.
+    // libghostty-vt itself doesn't pull in a platform windowing stack.
+    // Windows still relies on the MSVC runtime and the `windows` crate;
+    // Linux relies on the regular libc toolchain.
 
     if env::var_os(GHOSTTY_ENV).is_some() {
-        println!("cargo:rerun-if-changed={}", ghostty_dir.join("src").display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            ghostty_dir.join("src").display()
+        );
         println!(
             "cargo:rerun-if-changed={}",
             ghostty_dir.join("include/ghostty/vt.h").display()
@@ -526,7 +529,9 @@ fn current_git_rev(repo_dir: &PathBuf) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string())
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 fn run(command: &mut Command, context: &str) {

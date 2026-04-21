@@ -256,7 +256,7 @@ con now has three platform states:
 
 - macOS: shipped, using the embedded libghostty + AppKit path
 - Windows: beta, using `libghostty-vt` + ConPTY + a local D3D11/DirectWrite renderer
-- Linux: planned, currently building with a placeholder terminal pane
+- Linux: in progress, using Unix PTY + shared `libghostty-vt` + a GPUI-owned renderer path
 
 The platform architecture is no longer "macOS only," but it is still not
 "one backend everywhere."

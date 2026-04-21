@@ -248,11 +248,10 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
     }
 }
 
-// On non-macOS targets, the terminal backend is a placeholder (see
-// `stub_view.rs`). The binary builds and runs — agent panel, settings,
-// command palette, the control socket — but the terminal surface paints a
-// "backend under construction" card until the Linux backend lands. See
-// `docs/impl/linux-port.md`.
+// On non-macOS targets, con now branches by platform: Windows has the
+// shipped local backend, Linux has an in-progress local PTY + VT path,
+// and any remaining targets still fall back to `stub_view.rs`. See the
+// platform docs under `docs/impl/`.
 
 fn default_window_options(cx: &mut App) -> WindowOptions {
     let transparent = supports_transparent_main_window();
@@ -264,18 +263,9 @@ fn default_window_options(cx: &mut App) -> WindowOptions {
         } else {
             WindowBackgroundAppearance::Opaque
         },
-        #[cfg(target_os = "linux")]
-        window_decorations: Some(WindowDecorations::Client),
         ..Default::default()
     }
 }
-
-#[cfg(target_os = "linux")]
-fn default_titlebar_options(_transparent: bool) -> Option<TitlebarOptions> {
-    None
-}
-
-#[cfg(not(target_os = "linux"))]
 fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
     Some(TitlebarOptions {
         title: Some("con".into()),

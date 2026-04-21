@@ -1,10 +1,12 @@
 # Linux Port — Plan and Status
 
-con ships on macOS, has a working Windows beta, and currently builds on
-Linux with a placeholder terminal pane. This document is the Linux
+con ships on macOS, has a working Windows beta, and now has an
+in-progress local Linux terminal backend built around Unix PTY +
+`libghostty-vt`. This document is the Linux
 single-source-of-truth equivalent of `docs/impl/windows-port.md`: it
 captures the upstream constraints, the recommended architecture, and the
-staged path from today's stub to a real Linux terminal backend.
+staged path from today's first VT-backed pane to a fully shippable Linux
+terminal backend.
 
 This is a planning document, not an implementation log. The live issue
 tracker is GitHub issue #18. The deeper architecture notes live in
@@ -20,7 +22,7 @@ Current platform state:
 |:-------|:---------:|:-------------:|:--------------:|:----------------------:|
 | macOS  | ✅ real   | ✅ libghostty + Metal | `/tmp/con.sock` | ✅ |
 | Windows | ✅ real  | ✅ libghostty-vt + ConPTY + D3D11/DirectWrite | `\\.\pipe\con` | ✅ |
-| Linux  | ✅ builds | Placeholder card | `/tmp/con.sock` | ✅ |
+| Linux  | ✅ builds | Unix PTY + `libghostty-vt` + GPUI text pane (in progress) | `/tmp/con.sock` | ✅ |
 
 On Linux today:
 
@@ -34,12 +36,20 @@ What that gives you:
 - tabs, sidebar, agent panel, settings, command palette
 - Unix-domain control socket at `/tmp/con.sock`
 - `con-cli` and all portable crates working
-- a placeholder terminal card instead of a live terminal surface
+- a first Linux terminal pane backed by Unix PTY + `libghostty-vt`
+
+What it still does **not** give you:
+
+- final styled cell rendering
+- validated mouse selection / reporting
+- polished Linux window chrome / focus behavior across environments
 
 The Linux CI job already installs the GPUI runtime dependencies on
 `ubuntu-latest` (`libxcb-*`, `libxkbcommon-x11-dev`, `libwayland-dev`,
 `libvulkan-dev`, `libfreetype-dev`, `libfontconfig1-dev`) and verifies
-that the workspace still compiles there.
+that the workspace still compiles there. The local Linux backend now
+also requires Zig so `con-ghostty` can build `libghostty-vt`, just like
+the Windows backend does.
 
 ## Upstream status
 
@@ -195,7 +205,7 @@ can ship.
 | 2b | GPUI feasibility spike | confirm whether con needs foreign-surface embedding, texture interop, or neither | bounded GPUI worklist exists, or path is ruled out | ✅ landed |
 | 2c | Architecture decision | pick Linux backend lane | one recommended implementation path, no split-brain plan | ✅ landed |
 | 3 | Linux backend scaffold | `con-ghostty/src/linux/` plus `con-app/src/linux_view.rs` (or equivalent) with real lifecycle types | Linux no longer routes through the generic stub path conceptually | ✅ landed |
-| 4 | First real terminal surface | PTY spawn, resize, exit, screen paint | shell prompt appears in a Linux pane | ⏳ pending |
+| 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint | VT-backed Linux pane compiles and displays live shell state | 🚧 in progress |
 | 5 | Input + selection | keyboard, mouse, clipboard, bracketed paste, DECCKM, selection | vim/tmux/fzf/less usable on Linux | ⏳ pending |
 | 6 | Packaging | desktop entry, icon integration, artifact strategy (`.deb`, AppImage, Flatpak, etc.) | installable Linux artifact exists | ⏳ pending |
 
@@ -203,12 +213,14 @@ can ship.
 
 The next concrete Linux tasks should be:
 
-1. Extend the local Unix PTY scaffold into the first live pane path.
-2. Add the first GPUI-owned Linux terminal renderer, even if initially
-   minimal.
-3. Wire resize, exit, and transcript updates through the Linux view.
-4. Put a real shell prompt in a Linux pane, then iterate on input and
-   terminal correctness.
+1. Replace the interim text-pane rendering with a real GPUI-owned styled
+   cell renderer fed from `libghostty-vt` snapshots.
+2. Finish Linux input correctness: bracketed paste, DECCKM, mouse
+   reporting, selection, and scrollback behavior.
+3. Validate shell bring-up and app focus/chrome on real Linux desktops
+   (Wayland, X11, and ChromeOS/Crostini).
+4. Once the shell path is stable, iterate on packaging and Linux-native
+   polish.
 
 ## Tracker shape for issue #18
 

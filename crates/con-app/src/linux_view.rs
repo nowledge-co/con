@@ -1,9 +1,9 @@
-//! Linux terminal view backed by con's local Unix PTY scaffold.
+//! Linux terminal view backed by con's local Unix PTY + VT scaffold.
 //!
-//! This is the first live Linux pane milestone: spawn a shell, forward
-//! keyboard input, and paint a sanitized transcript in GPUI. It is not
-//! yet a full terminal grid renderer, so selection, mouse reporting,
-//! scrollback navigation, and ANSI styling remain for later phases.
+//! This still is not the final Linux grid renderer, but it now renders
+//! from parsed VT screen state instead of a lossy transcript. That keeps
+//! shell bring-up and prompt rendering aligned with the real terminal
+//! semantics while the full styled cell renderer is still pending.
 
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     last_title: Option<String>,
     pending_write: Option<Vec<u8>>,
-    transcript_lines: Vec<String>,
+    screen_lines: Vec<String>,
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
     last_surface_size: Option<(u32, u32, u16, u16)>,
@@ -64,7 +64,7 @@ impl GhosttyView {
             process_exit_emitted: false,
             last_title: None,
             pending_write: None,
-            transcript_lines: Vec::new(),
+            screen_lines: Vec::new(),
             pane_bounds: None,
             scale_factor: 1.0,
             last_surface_size: None,
@@ -122,7 +122,7 @@ impl GhosttyView {
         self.process_exit_emitted = false;
         self.last_title = None;
         self.pending_write = None;
-        self.transcript_lines.clear();
+        self.screen_lines.clear();
         self.last_surface_size = None;
     }
 
@@ -151,7 +151,7 @@ impl GhosttyView {
         };
 
         if terminal.take_needs_render() {
-            changed |= self.refresh_transcript_cache();
+            changed |= self.refresh_screen_cache();
         }
 
         let title = terminal.title();
@@ -197,7 +197,7 @@ impl GhosttyView {
                     terminal.write_to_pty(&pending);
                 }
                 self.last_title = terminal.title();
-                let _ = self.refresh_transcript_cache();
+                let _ = self.refresh_screen_cache();
                 cx.notify();
                 true
             }
@@ -208,15 +208,15 @@ impl GhosttyView {
         }
     }
 
-    fn refresh_transcript_cache(&mut self) -> bool {
+    fn refresh_screen_cache(&mut self) -> bool {
         let Some(terminal) = self.terminal.as_ref() else {
             return false;
         };
-        let lines = terminal.read_recent_lines(MAX_RENDER_LINES);
-        if lines == self.transcript_lines {
+        let lines = terminal.read_screen_text(MAX_RENDER_LINES);
+        if lines == self.screen_lines {
             return false;
         }
-        self.transcript_lines = lines;
+        self.screen_lines = lines;
         true
     }
 
@@ -291,12 +291,21 @@ impl GhosttyView {
                 .and_then(|item| item.text().map(|s| s.to_string()))
                 .filter(|text| !text.is_empty())
             {
-                terminal.send_text(&text);
+                if terminal.is_bracketed_paste() {
+                    let mut wrapped = String::with_capacity(text.len() + 12);
+                    wrapped.push_str("\x1b[200~");
+                    wrapped.push_str(&text);
+                    wrapped.push_str("\x1b[201~");
+                    terminal.send_text(&wrapped);
+                } else {
+                    terminal.send_text(&text);
+                }
                 return true;
             }
         }
 
-        if let Some(bytes) = encode_special_key(&keystroke.key, &keystroke.modifiers, false) {
+        let decckm = terminal.is_decckm();
+        if let Some(bytes) = encode_special_key(&keystroke.key, &keystroke.modifiers, decckm) {
             terminal.send_text(&bytes);
             return true;
         }
@@ -357,13 +366,13 @@ impl Render for GhosttyView {
         let focus = self.focus_handle.clone();
         let entity = cx.entity().downgrade();
         let line_height = px((self.initial_font_size.max(12.0) * 1.45).round());
-        let transcript_lines = self.transcript_lines.clone();
+        let screen_lines = self.screen_lines.clone();
 
         let status_line = if !self.initialized {
             Some(("Launching Linux shell…", theme.foreground.opacity(0.55)))
         } else if !self.is_alive() {
             Some(("Linux shell exited", theme.foreground.opacity(0.55)))
-        } else if transcript_lines.is_empty() {
+        } else if screen_lines.is_empty() {
             Some(("Waiting for shell prompt…", theme.foreground.opacity(0.45)))
         } else {
             None
@@ -431,7 +440,7 @@ impl Render for GhosttyView {
                                     .whitespace_nowrap()
                                     .child(render_terminal_line(text))
                             }))
-                            .children(transcript_lines.into_iter().map(|line| {
+                            .children(screen_lines.into_iter().map(|line| {
                                 div()
                                     .font_family(theme.mono_font_family.clone())
                                     .text_size(theme.mono_font_size)

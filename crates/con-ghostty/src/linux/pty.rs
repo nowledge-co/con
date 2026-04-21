@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::stub::{CommandFinishedSignal, SurfaceSize};
+use crate::vt::{ScreenSnapshot, VtScreen};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -51,6 +52,7 @@ pub struct LinuxPtySession {
 }
 
 struct SessionShared {
+    screen: Arc<VtScreen>,
     transcript: Mutex<TranscriptBuffer>,
     alive: AtomicBool,
     needs_render: AtomicBool,
@@ -60,8 +62,9 @@ struct SessionShared {
 }
 
 impl SessionShared {
-    fn new() -> Self {
+    fn new(screen: Arc<VtScreen>) -> Self {
         Self {
+            screen,
             transcript: Mutex::new(TranscriptBuffer::default()),
             alive: AtomicBool::new(true),
             needs_render: AtomicBool::new(false),
@@ -134,6 +137,10 @@ impl LinuxPtySession {
         let pair = pty_system
             .openpty(pty_size)
             .context("failed to open linux pty")?;
+        let screen = Arc::new(
+            VtScreen::new(options.size.columns.max(1), options.size.rows.max(1), None)
+                .context("failed to create linux vt screen")?,
+        );
 
         let shell_program = options.program.clone();
         let spawn_cwd = options.cwd.clone();
@@ -172,7 +179,7 @@ impl LinuxPtySession {
             .spawn_command(command)
             .context("failed to spawn shell in linux pty")?;
 
-        let shared = Arc::new(SessionShared::new());
+        let shared = Arc::new(SessionShared::new(screen));
         spawn_reader_thread(reader, shared.clone());
 
         Ok(Self {
@@ -199,6 +206,15 @@ impl LinuxPtySession {
         let mut size = self.size.lock();
         size.width_px = width_px;
         size.height_px = height_px;
+        self.shared
+            .screen
+            .resize(
+                size.columns.max(1),
+                size.rows.max(1),
+                size.cell_width_px.max(1),
+                size.cell_height_px.max(1),
+            )
+            .context("failed to resize linux vt screen")?;
         self.master
             .lock()
             .resize(pty_size_from_surface(&size))
@@ -207,6 +223,15 @@ impl LinuxPtySession {
 
     pub fn resize(&self, size: SurfaceSize) -> Result<()> {
         *self.size.lock() = size;
+        self.shared
+            .screen
+            .resize(
+                size.columns.max(1),
+                size.rows.max(1),
+                size.cell_width_px.max(1),
+                size.cell_height_px.max(1),
+            )
+            .context("failed to resize linux vt screen")?;
         self.master
             .lock()
             .resize(pty_size_from_surface(&size))
@@ -259,7 +284,7 @@ impl LinuxPtySession {
     }
 
     pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
-        self.read_recent_lines(max_lines)
+        snapshot_to_lines(&self.shared.screen.snapshot(), max_lines)
     }
 
     pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {
@@ -268,6 +293,14 @@ impl LinuxPtySession {
 
     pub fn search_text(&self, pattern: &str, limit: usize) -> Vec<(usize, String)> {
         self.shared.transcript.lock().search(pattern, limit)
+    }
+
+    pub fn is_bracketed_paste(&self) -> bool {
+        self.shared.screen.is_bracketed_paste()
+    }
+
+    pub fn is_decckm(&self) -> bool {
+        self.shared.screen.is_decckm()
     }
 
     fn poll_child_status(&self) {
@@ -310,6 +343,7 @@ fn spawn_reader_thread(mut reader: Box<dyn Read + Send>, shared: Arc<SessionShar
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(read) => {
+                        shared.screen.feed(&buffer[..read]);
                         let chunk = String::from_utf8_lossy(&buffer[..read]);
                         if !logged_first_chunk {
                             logged_first_chunk = true;
@@ -355,32 +389,19 @@ fn default_title(cwd: Option<&Path>, program: Option<&str>) -> String {
 }
 
 fn configure_shell_startup(program: &str, command: &mut CommandBuilder) {
-    if std::env::var_os("CON_LINUX_SHELL_FULL_INIT").is_some() {
-        if let Some(flag) = interactive_shell_flag(program) {
-            command.arg(flag);
-        }
-        return;
-    }
-
-    let Some(shell) = Path::new(program).file_name().and_then(|name| name.to_str()) else {
+    let Some(shell) = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
         return;
     };
 
     match shell {
-        // Transcript bring-up is not a full VT emulator yet. Skipping
-        // user rc files avoids prompt frameworks that block on terminal
-        // feature probes we do not answer yet.
-        "zsh" => {
-            command.args(["-f", "-i"]);
-        }
-        "bash" => {
-            command.args(["--noprofile", "--norc", "-i"]);
-        }
         "fish" => {
-            command.args(["--no-config", "--interactive"]);
+            command.arg("--interactive");
         }
         "pwsh" => {
-            command.args(["-NoLogo", "-NoProfile"]);
+            command.arg("-NoLogo");
         }
         "sh" | "dash" | "ksh" | "mksh" | "xonsh" | "nu" => {
             if let Some(flag) = interactive_shell_flag(program) {
@@ -410,6 +431,45 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
         pixel_width: size.width_px.min(u32::from(u16::MAX)) as u16,
         pixel_height: size.height_px.min(u32::from(u16::MAX)) as u16,
     }
+}
+
+fn snapshot_to_lines(snapshot: &ScreenSnapshot, max_lines: usize) -> Vec<String> {
+    if max_lines == 0 || snapshot.cols == 0 || snapshot.rows == 0 {
+        return Vec::new();
+    }
+
+    let cols = usize::from(snapshot.cols);
+    let mut lines = Vec::with_capacity(usize::from(snapshot.rows));
+
+    for row in 0..usize::from(snapshot.rows) {
+        let row_start = row * cols;
+        let row_end = row_start + cols;
+        let Some(cells) = snapshot.cells.get(row_start..row_end) else {
+            break;
+        };
+
+        let mut line = String::with_capacity(cols);
+        for cell in cells {
+            let ch = match cell.codepoint {
+                0 => ' ',
+                codepoint => char::from_u32(codepoint).unwrap_or('\u{FFFD}'),
+            };
+            line.push(ch);
+        }
+
+        let trimmed = line.trim_end_matches(' ');
+        lines.push(trimmed.to_string());
+    }
+
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+
+    if lines.len() > max_lines {
+        lines.drain(..lines.len() - max_lines);
+    }
+
+    lines
 }
 
 fn sanitize_terminal_output(raw: &str) -> String {
@@ -544,7 +604,9 @@ fn clear_current_line(output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{TranscriptBuffer, sanitize_terminal_output};
+    use crate::vt::{Cell, Cursor, ScreenSnapshot};
+
+    use super::{TranscriptBuffer, sanitize_terminal_output, snapshot_to_lines};
 
     #[test]
     fn transcript_buffer_returns_recent_lines_in_order() {
@@ -579,5 +641,25 @@ mod tests {
     #[test]
     fn sanitize_terminal_output_honors_carriage_return_rewrites() {
         assert_eq!(sanitize_terminal_output("loading\rready"), "ready");
+    }
+
+    #[test]
+    fn snapshot_to_lines_trims_trailing_blank_rows() {
+        let mut cells = vec![Cell::default(); 6];
+        cells[0].codepoint = 'p' as u32;
+        cells[1].codepoint = 's' as u32;
+        cells[2].codepoint = '1' as u32;
+
+        let snapshot = ScreenSnapshot {
+            cols: 3,
+            rows: 2,
+            cells,
+            dirty_rows: vec![0, 1],
+            cursor: Cursor::default(),
+            title: None,
+            generation: 1,
+        };
+
+        assert_eq!(snapshot_to_lines(&snapshot, 10), vec!["ps1".to_string()]);
     }
 }
