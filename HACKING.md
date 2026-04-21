@@ -36,18 +36,31 @@ For the full breakdown, see `docs/impl/agent-harness.md`.
 
 - Rust (stable, edition 2024)
 - `cmake`
+- **macOS**: Zig 0.13+ (for `libghostty`)
+- **Windows**: Zig 0.13+ (for `libghostty-vt`), Visual Studio 2022 Build Tools with the Windows 10/11 SDK. Run the build from a _Developer Command Prompt for VS 2022_ so `rc.exe` is on `PATH`.
 
 ## Build
 
 ```bash
+# macOS / Linux
 cargo build
+
+# Windows — must use the `w*` aliases. The default `con` binary cannot
+# exist on Windows because `CON` is a reserved DOS device name, so the
+# Windows build ships as `con-app.exe` via a feature-gated alias bin
+# target. `cargo wbuild` is `cargo build --no-default-features
+# --features con/bin-con-app`; `wrun`, `wcheck`, `wtest` mirror it.
+cargo wbuild -p con --release          # → target\release\con-app.exe
 ```
 
 ## Run
 
 ```bash
+# macOS / Linux
 cargo run -p con
-```
+
+# Windows
+cargo wrun -p con
 
 > With optional arguments:
 
@@ -58,13 +71,15 @@ RUST_LOG=con_agent::flow=info,con_agent=warn,con_core=warn,con::suggestions=debu
 ## Test
 
 ```bash
-cargo test --workspace
+cargo test --workspace            # macOS / Linux
+cargo wtest -p con-core -p con-cli -p con-agent -p con-terminal   # Windows (portable crates only)
 ```
 
 ## Release Build
 
 ```bash
-cargo build --release -p con
+cargo build --release -p con                  # macOS / Linux
+cargo wbuild -p con --release                 # Windows → target\release\con-app.exe
 ```
 
 For signed macOS release artifacts, use:

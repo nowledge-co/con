@@ -2,10 +2,11 @@
 
 ## What is con?
 
-con is an open-source, macOS-native, GPU-accelerated terminal emulator with a built-in AI agent harness. Built in Rust.
+con is an open-source, GPU-accelerated terminal emulator with a built-in AI agent harness. Built in Rust.
 
-A Windows port is in preparation — the non-UI crates already build on `x86_64-pc-windows-*` targets. The staged plan lives in
-`docs/impl/windows-port.md` and the first preparation PR is summarized in `postmortem/2026-04-16-prepare-windows-port.md`.
+- **macOS** — primary target, shipped. Metal-backed libghostty, signed DMG, Sparkle auto-update.
+- **Windows** — first beta shipped as `v0.1.0-beta.25`. D3D11/DirectWrite renderer over ConPTY + libghostty-vt, unsigned ZIP distribution, notify-only update checker. Plan + open work: `docs/impl/windows-port.md`; status tracker: issue #34.
+- **Linux** — planned; tracker: issue #18.
 
 ## Stack
 
