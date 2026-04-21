@@ -28,6 +28,14 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - The normal workspace render path no longer forces fresh terminal observations just to populate pane metadata. Runtime facts are now cached from explicit observation paths and reused by the UI, which avoids reading terminal text during ordinary renders while a heavy TUI is active.
 - The embedded macOS Ghostty host no longer synthesizes a fake scrollbar-at-top state before Ghostty emits real viewport data. The native scroll container now stays inert until Ghostty provides actual scrollbar state, which avoids forcing heavy TUIs through upper scrollback on startup or during reflow.
 
+**Terminal — Windows Backend (preview)**
+- Con now has a real, GPU-accelerated terminal pane on Windows. The `con-app.exe` binary drives a `libghostty-vt` parser over a ConPTY-hosted `pwsh.exe`/`cmd.exe`, and the grid is rendered through a D3D11 + DirectWrite atlas pipeline that matches Windows Terminal AtlasEngine's architecture (skyline-packed BGRA8 atlas, single `DrawIndexedInstanced` per frame, grayscale/ClearType AA).
+- IoskeleyMono's full Nerd-Font set (Powerline separators, devicons, Font Awesome, Octicons, Codicons, Material Design icons) now rasterizes correctly inside monospace cells via a three-case atlas strategy — normal glyphs stay in their cell, negative-`leftSideBearing` icons get a widened slot with a pen shift so the ink lands flush at the slot edge, and oversized glyphs scale around the cell centre. oh-my-posh, Starship, and Powerlevel10k prompts render out of the box.
+- Atlas packing is bleed-proof: every glyph rasterization is bracketed by a `PushAxisAlignedClip` + opaque black pre-fill, so ClearType fringe from one atlas neighbour can't contaminate the next. Thin glyphs like `-`, `_`, and `=` render cleanly against any prior atlas state.
+- Wide PUA icons that overflow their cell and the cell cursor now interact correctly — wide instances are stable-sorted after narrow ones so DX11's in-order per-pixel writes let them win against neighbour backgrounds, and the cursor's inverse-colour instance is captured pre-sort and drawn last so it always lands on the intended cell.
+- The local control plane uses Windows Named Pipes (`\\.\pipe\con`) as its transport, so `con-cli` and external automation work the same way they do on macOS.
+- Phase 3c (input/selection polish) and Phase 3d (DirectComposition sibling visual upstream in GPUI) remain the outstanding Windows work; see `docs/impl/windows-port.md` for the full phased plan.
+
 **AI Agent**
 - Per-tab agent sessions — each tab has its own conversation, context, and approval state. Switch tabs freely while the agent works; background tabs keep running and accumulate responses. Your conversation stays with the tab it belongs to, and commands the agent runs always target the correct terminal.
 - Agent conversations persist per-tab across restarts
