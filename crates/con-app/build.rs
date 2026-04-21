@@ -8,6 +8,12 @@ fn main() {
     //
     // Default macOS/Linux path: no feature gating — `bin-con` is the
     // default; the `con` bin target builds normally.
+    // `app_display_version()` captures `CON_RELEASE_VERSION` via
+    // `option_env!` on non-macOS builds. Cargo does not track env reads
+    // inside macros, so a cached build would pin a stale version string
+    // across a tag change — declare the dep to force invalidation.
+    println!("cargo:rerun-if-env-changed=CON_RELEASE_VERSION");
+
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let bin_con = std::env::var_os("CARGO_FEATURE_BIN_CON").is_some();
     let bin_con_app = std::env::var_os("CARGO_FEATURE_BIN_CON_APP").is_some();

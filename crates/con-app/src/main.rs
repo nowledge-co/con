@@ -365,8 +365,14 @@ pub(crate) fn app_display_version() -> String {
     #[cfg(target_os = "macos")]
     let version = bundle_info_value(b"CFBundleShortVersionString\0")
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    // Non-macOS builds pick up the full tag-derived version (e.g.
+    // `0.1.0-beta.31`) from `CON_RELEASE_VERSION`, which the release
+    // pipeline exports before `cargo build`. Cargo.toml is frozen at
+    // `0.1.0` so `CARGO_PKG_VERSION` alone loses the prerelease suffix.
     #[cfg(not(target_os = "macos"))]
-    let version = env!("CARGO_PKG_VERSION").to_string();
+    let version = option_env!("CON_RELEASE_VERSION")
+        .map(str::to_owned)
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
 
     version
 }
@@ -377,7 +383,9 @@ pub(crate) fn app_build_number() -> String {
     let build =
         bundle_info_value(b"CFBundleVersion\0").unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
     #[cfg(not(target_os = "macos"))]
-    let build = env!("CARGO_PKG_VERSION").to_string();
+    let build = option_env!("CON_RELEASE_VERSION")
+        .map(str::to_owned)
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
 
     build
 }
