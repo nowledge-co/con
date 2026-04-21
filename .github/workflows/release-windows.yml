@@ -20,7 +20,15 @@ permissions:
 jobs:
   build:
     name: Build windows-x86_64
-    runs-on: windows-latest
+    # `windows-latest` currently aliases to `windows-2025` (Server 2025),
+    # on which Zig 0.15.2 building libghostty-vt fails deterministically
+    # with `FileNotFound` when spawning `uucode_build_tables.exe`. The
+    # retry loop below confirmed it's not a visibility race — all three
+    # attempts hit the same cached exe hash and fail identically. Pin
+    # to `windows-2022` (Server 2022) which upstream ghostty also
+    # avoids via Namespace.so custom runners; we want the oldest still-
+    # supported GHA image until we understand the root cause.
+    runs-on: windows-2022
 
     # Same CON-reserved-name workaround as ci-portable.yml — git.exe
     # refuses to operate inside any directory named CON. We clone into
@@ -90,21 +98,18 @@ jobs:
           & "$Dest\$ZigDir\zig.exe" version
 
       - name: Build release binary
+        id: build
         shell: pwsh
         # `cargo wbuild` is the workspace alias for
         # `cargo build --no-default-features --features con/bin-con-app`
         # — required because CON is a reserved DOS name and plain
         # `con.exe` cannot be created.
         #
-        # Retry rationale: Zig 0.15.2 building libghostty-vt on
-        # windows-latest intermittently fails with `FileNotFound` when
-        # spawning a just-compiled build-tool exe (seen repeatedly with
-        # `uucode_build_tables.exe`). The exe is on disk moments later —
-        # it's a transient visibility race between `WriteFile` /
-        # `CreateProcess` on freshly-linked PE files. Zig's .zig-cache
-        # persists across invocations inside OUT_DIR, so a second run
-        # skips the steps that already succeeded and typically completes.
-        # We retry up to twice (3 total attempts) before giving up.
+        # Retry loop kept as cheap insurance against true visibility
+        # races. On windows-2022 we have not yet reproduced the
+        # deterministic `uucode_build_tables.exe: FileNotFound` seen on
+        # windows-latest; if it returns, the diagnostic step below will
+        # capture the real Windows spawn error for follow-up.
         run: |
           $maxAttempts = 3
           for ($i = 1; $i -le $maxAttempts; $i++) {
@@ -116,6 +121,104 @@ jobs:
           }
           Write-Error "cargo wbuild failed after $maxAttempts attempts"
           exit 1
+
+      - name: Diagnose build failure
+        if: failure() && steps.build.conclusion == 'failure'
+        shell: pwsh
+        # Zig reports `FileNotFound` for any CreateProcess failure,
+        # including `STATUS_DLL_NOT_FOUND` and other loader errors. That
+        # message is useless on its own. This step re-runs the failed
+        # build-tool exes directly through `cmd /c` and `Start-Process`
+        # so Windows surfaces the real NTSTATUS, and dumps enough
+        # environmental context (Defender, VS install, PATH, exe stream
+        # metadata) to narrow down whether this is AV, a missing DLL,
+        # or something else — without burning another CI cycle.
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          Write-Host "::group::Failed exe discovery"
+          $exes = Get-ChildItem -Recurse -ErrorAction SilentlyContinue `
+            -Path "C:\src\repo\target" -Filter "uucode_build_tables.exe"
+          foreach ($exe in $exes) {
+            Write-Host "---"
+            Write-Host "Path: $($exe.FullName)"
+            Write-Host "Size: $($exe.Length) bytes"
+            Write-Host "LastWrite: $($exe.LastWriteTime)"
+            $streams = Get-Item -Path $exe.FullName -Stream * -ErrorAction SilentlyContinue
+            if ($streams) {
+              Write-Host "ADS streams:"
+              $streams | Format-Table Stream, Length -AutoSize | Out-String | Write-Host
+            }
+          }
+          Write-Host "::endgroup::"
+
+          if ($exes.Count -gt 0) {
+            $exe = $exes[0].FullName
+            Write-Host "::group::cmd /c spawn — real Windows error"
+            cmd /c "`"$exe`" 2>&1"
+            Write-Host "(exit $LASTEXITCODE)"
+            Write-Host "::endgroup::"
+
+            Write-Host "::group::Start-Process — structured failure info"
+            try {
+              $p = Start-Process -FilePath $exe -PassThru -Wait -NoNewWindow `
+                -RedirectStandardOutput "$env:TEMP\ucc-out.txt" `
+                -RedirectStandardError  "$env:TEMP\ucc-err.txt"
+              Write-Host "Exit code: $($p.ExitCode)"
+              Get-Content "$env:TEMP\ucc-out.txt" -ErrorAction SilentlyContinue | Write-Host
+              Get-Content "$env:TEMP\ucc-err.txt" -ErrorAction SilentlyContinue | Write-Host
+            } catch {
+              Write-Host "EXCEPTION: $($_.Exception.GetType().FullName)"
+              Write-Host "Message:  $($_.Exception.Message)"
+              Write-Host "HResult:  0x$('{0:X8}' -f $_.Exception.HResult)"
+              if ($_.Exception.InnerException) {
+                Write-Host "Inner:    $($_.Exception.InnerException.Message)"
+              }
+            }
+            Write-Host "::endgroup::"
+          } else {
+            Write-Host "::warning::uucode_build_tables.exe not found under target\ — can't probe"
+          }
+
+          Write-Host "::group::Defender state"
+          try {
+            Get-MpPreference | Select-Object `
+              DisableRealtimeMonitoring, `
+              ExclusionPath, `
+              ExclusionExtension, `
+              MAPSReporting | Format-List | Out-String | Write-Host
+            Get-MpComputerStatus | Select-Object `
+              RealTimeProtectionEnabled, `
+              AMServiceEnabled, `
+              IsTamperProtected | Format-List | Out-String | Write-Host
+          } catch { Write-Host "Defender cmdlet unavailable: $($_.Exception.Message)" }
+          Write-Host "::endgroup::"
+
+          Write-Host "::group::VS / MSVC detection"
+          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            & $vswhere -latest -format value -property installationPath
+            & $vswhere -latest -format value -property installationVersion
+          } else {
+            Write-Host "vswhere.exe not found"
+          }
+          Write-Host "---"
+          Write-Host "System32 MSVC runtime presence:"
+          Get-Item "$env:WINDIR\System32\vcruntime140*.dll" -ErrorAction SilentlyContinue |
+            Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+          Get-Item "$env:WINDIR\System32\msvcp140*.dll" -ErrorAction SilentlyContinue |
+            Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+          Get-Item "$env:WINDIR\System32\ucrtbase.dll" -ErrorAction SilentlyContinue |
+            Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+          Write-Host "::endgroup::"
+
+          Write-Host "::group::OS image"
+          (Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List | Out-String).Trim() | Write-Host
+          Write-Host "::endgroup::"
+
+          Write-Host "::group::PATH"
+          $env:PATH -split ';' | ForEach-Object { Write-Host "  $_" }
+          Write-Host "::endgroup::"
 
       - name: Package ZIP
         id: package
