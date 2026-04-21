@@ -19,12 +19,12 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_NONE,
-    D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
-    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE,
-    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Factory, ID2D1RenderTarget,
-    ID2D1SolidColorBrush,
+    D2D1CreateFactory, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_CLIP,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Factory,
+    ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
 use windows_numerics::Matrix3x2;
 use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D;
@@ -100,6 +100,12 @@ pub struct GlyphCache {
     atlas_srv: ID3D11ShaderResourceView,
     d2d_rt: ID2D1RenderTarget,
     white_brush: ID2D1SolidColorBrush,
+    /// Opaque-black brush. Used to clear each slot before `DrawText` so
+    /// any stale pixels — from a neighbouring scaled-PUA glyph that bled
+    /// past its own slot via ClearType AA fringe or wide layoutRect —
+    /// don't show through as speckles on thin glyphs (hyphens,
+    /// box-drawing).
+    black_brush: ID2D1SolidColorBrush,
 
     allocator: AtlasAllocator,
     entries: HashMap<GlyphKey, (AllocId, GlyphRect)>,
@@ -339,6 +345,17 @@ impl GlyphCache {
             unsafe { d2d_rt.CreateSolidColorBrush(&color, None) }
                 .context("CreateSolidColorBrush failed")?;
 
+        let black = D2D1_COLOR_F {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        // SAFETY: color is stack-local; brush owned by us.
+        let black_brush: ID2D1SolidColorBrush =
+            unsafe { d2d_rt.CreateSolidColorBrush(&black, None) }
+                .context("CreateSolidColorBrush(black) failed")?;
+
         // Seed the atlas with black so ClearType has a defined blend
         // target for the first DrawText. D3D11 zero-inits the texture
         // but the 0-alpha of (0,0,0,0) can confuse D2D's internal state
@@ -369,6 +386,7 @@ impl GlyphCache {
             atlas_srv,
             d2d_rt,
             white_brush,
+            black_brush,
             allocator,
             entries: HashMap::with_capacity(1024),
             text_format_regular,
@@ -522,16 +540,28 @@ impl GlyphCache {
             M32: 0.0,
         };
 
-        // SAFETY: d2d_rt, format, brush owned by self. BeginDraw /
+        // SAFETY: d2d_rt, format, brushes owned by self. BeginDraw /
         // EndDraw bracket a valid D2D scene; DrawText writes into the
-        // atlas via the DXGI-backed RT.
+        // atlas via the DXGI-backed RT. PushAxisAlignedClip pins all
+        // writes to `slot_rect` so (a) ClearType AA fringe at the slot
+        // edges can't leak into adjacent atlas entries, and (b) the
+        // scaled-PUA path — which uses an oversized layoutRect so
+        // DirectWrite doesn't prematurely clip the natural ink — can't
+        // overshoot into a neighbour's slot either. FillRectangle with
+        // opaque black pre-clears any stale pixels (either zero-init
+        // or left over from a previous glyph that bled in before we
+        // added this clip).
         unsafe {
             self.d2d_rt.BeginDraw();
+            self.d2d_rt
+                .PushAxisAlignedClip(&slot_rect, D2D1_ANTIALIAS_MODE_ALIASED);
+            self.d2d_rt.FillRectangle(&slot_rect, &self.black_brush);
             if let Some(tf) = transform {
                 // Over-sized layout rect so DirectWrite's internal
                 // text-layout clip (built from the layoutRect) doesn't
                 // cut off the natural ink before our scale transform
-                // maps it back into the cell.
+                // maps it back into the cell. The outer PushAxisAlignedClip
+                // keeps any overshoot contained to this slot.
                 let layout = D2D_RECT_F {
                     left: slot_rect.left - (cell_w as f32),
                     top: slot_rect.top - (cell_h as f32),
@@ -558,6 +588,7 @@ impl GlyphCache {
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
             }
+            self.d2d_rt.PopAxisAlignedClip();
             let _ = self.d2d_rt.EndDraw(None, None);
         }
 
