@@ -784,6 +784,17 @@ impl ConWorkspace {
                 // small timer instead so every in-flight window task
                 // has time to drain before we tear the HWND down.
                 //
+                // The 120ms timer is a probability reduction, not a
+                // guarantee: Windows can still deliver `WM_ACTIVATE` /
+                // `WM_PAINT` to a closing HWND and surface the same log
+                // error via GPUI's `async_context::update_window`. That
+                // residual noise is benign — `prepare_window_close`
+                // runs, sessions save, surfaces shut down, and the
+                // process exits cleanly. See
+                // `postmortem/2026-04-21-windows-x-close-log-noise.md`
+                // for the full analysis and the upstream GPUI fix that
+                // would eliminate the noise.
+                //
                 // `cx` inside this callback is `&mut App`, which has
                 // `spawn` (not `spawn_in`), so reach the window via its
                 // handle inside the spawned task.
