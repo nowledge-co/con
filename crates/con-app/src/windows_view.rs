@@ -37,8 +37,16 @@ use gpui_component::ActiveTheme;
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
-use con_ghostty::windows::host_view::RenderSession;
+use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
 use con_ghostty::windows::render::RenderOutcome;
+
+fn mouse_mods_from(modifiers: &Modifiers) -> MouseEventMods {
+    MouseEventMods {
+        shift: modifiers.shift,
+        alt: modifiers.alt,
+        control: modifiers.control,
+    }
+}
 
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
@@ -344,40 +352,40 @@ impl GhosttyView {
         Some((col, row))
     }
 
-    fn forward_mouse_down(&self, pos: Point<Pixels>) {
+    fn forward_mouse_down(&self, pos: Point<Pixels>, mods: MouseEventMods) {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_down(col, row);
+                    session.mouse_down(col, row, mods);
                 }
             }
         }
     }
 
-    fn forward_mouse_drag(&self, pos: Point<Pixels>) {
+    fn forward_mouse_drag(&self, pos: Point<Pixels>, mods: MouseEventMods) {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_drag(col, row);
+                    session.mouse_drag(col, row, mods);
                 }
             }
         }
     }
 
-    fn forward_mouse_up(&self, pos: Point<Pixels>) {
+    fn forward_mouse_up(&self, pos: Point<Pixels>, mods: MouseEventMods) {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_up(col, row);
+                    session.mouse_up(col, row, mods);
                 }
             }
         }
     }
 
-    fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta) {
+    fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta, mods: MouseEventMods) {
         let Some(terminal) = &self.terminal else {
             return;
         };
@@ -389,8 +397,10 @@ impl GhosttyView {
         // Only report wheel to the shell when it has explicitly enabled
         // mouse tracking (SGR). Otherwise modern TUIs expect the scroll
         // to move their own scrollback buffer via shell keybinds, not
-        // arrive as mouse events.
-        if !session.mouse_tracking_active() {
+        // arrive as mouse events. Shift bypasses reporting per xterm
+        // convention so the user can scroll Con's scrollback even when
+        // a TUI has `set mouse=a`.
+        if !session.mouse_tracking_active() || mods.shift {
             return;
         }
         let Some((col0, row0)) = self.cell_from_event_position(pos) else {
@@ -407,7 +417,7 @@ impl GhosttyView {
             return;
         }
         // `forward_wheel` expects 1-based SGR coordinates.
-        session.forward_wheel(col0 + 1, row0 + 1, delta_y_px);
+        session.forward_wheel(col0 + 1, row0 + 1, delta_y_px, mods);
     }
 
     /// Translate a GPUI `KeyDownEvent` into bytes and forward to the
@@ -462,27 +472,13 @@ impl GhosttyView {
             inner.lock().as_ref().is_some_and(|s| s.is_decckm())
         };
 
-        // Named keys first. Arrow sequences honour DECCKM: shells flip
-        // into it for programs like less / vim / fzf, and those programs
-        // expect `ESC O x` instead of `ESC [ x`.
-        let named: Option<&str> = match keystroke.key.as_str() {
-            "enter" | "return" => Some("\r"),
-            "backspace" => Some("\x7f"),
-            "tab" => Some("\t"),
-            "escape" => Some("\x1b"),
-            "up" => Some(if decckm { "\x1bOA" } else { "\x1b[A" }),
-            "down" => Some(if decckm { "\x1bOB" } else { "\x1b[B" }),
-            "right" => Some(if decckm { "\x1bOC" } else { "\x1b[C" }),
-            "left" => Some(if decckm { "\x1bOD" } else { "\x1b[D" }),
-            "home" => Some("\x1b[H"),
-            "end" => Some("\x1b[F"),
-            "pageup" => Some("\x1b[5~"),
-            "pagedown" => Some("\x1b[6~"),
-            "delete" => Some("\x1b[3~"),
-            _ => None,
-        };
-        if let Some(s) = named {
-            terminal.send_text(s);
+        // Named / special keys — arrows, home/end, page nav, insert,
+        // delete, F1-F12, tab/shift-tab, enter, backspace, escape. Each
+        // honours DECCKM (arrows) and xterm modifier-parameter encoding
+        // for Ctrl/Shift/Alt (CSI 1;m<X> for arrows + F1-F4, CSI n;m~
+        // for tilde-terminated keys).
+        if let Some(bytes) = encode_special_key(&keystroke.key, &keystroke.modifiers, decckm) {
+            terminal.send_text(&bytes);
             return true;
         }
 
@@ -502,6 +498,27 @@ impl GhosttyView {
                         return true;
                     }
                 }
+            }
+        }
+
+        // Alt + printable ASCII → ESC + char (meta-prefix convention
+        // readline / vim / tmux / fzf all recognise: Alt+B word-back,
+        // Alt+F word-forward, Alt+D word-delete, Alt+. last-arg, …).
+        // Only when Alt is the only app-consumable modifier — AltGr-
+        // produced characters already arrive decoded via `key_char`
+        // without the `alt` flag on most layouts, and Ctrl+Alt is left
+        // for the terminal's own modifyOtherKeys semantics if added
+        // later.
+        if keystroke.modifiers.alt
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.platform
+        {
+            if let Some(ch) = keystroke.key_char.as_deref().filter(|s| !s.is_empty()) {
+                let mut out = String::with_capacity(1 + ch.len());
+                out.push('\x1b');
+                out.push_str(ch);
+                terminal.send_text(&out);
+                return true;
             }
         }
 
@@ -540,6 +557,85 @@ fn bgra_frame_to_image(bytes: Vec<u8>, width: u32, height: u32) -> Option<Arc<Re
     let frame = Frame::new(buffer);
     let data: SmallVec<[Frame; 1]> = SmallVec::from_buf([frame]);
     Some(Arc::new(RenderImage::new(data)))
+}
+
+/// xterm modifier parameter (`m`) — `1 + (shift | alt<<1 | ctrl<<2)`,
+/// where `1` itself means "no modifier" (so the encoder omits it).
+///
+/// Used in CSI `1;m{A|B|C|D|H|F|P|Q|R|S}` and CSI `{n};m~` sequences.
+/// Source: xterm's "PC-Style Function Keys" encoding.
+fn xterm_modifier_param(modifiers: &Modifiers) -> Option<u8> {
+    let mask = u8::from(modifiers.shift)
+        | (u8::from(modifiers.alt) << 1)
+        | (u8::from(modifiers.control) << 2);
+    if mask == 0 { None } else { Some(1 + mask) }
+}
+
+/// Translate a GPUI key name + modifiers into the byte sequence the
+/// shell / TUI expects. Returns `None` for keys that should flow
+/// through the printable-character path (letters, digits, symbols).
+///
+/// Covers arrows (DECCKM-aware and modifier-aware), home/end, pageup/
+/// pagedown, insert/delete, F1-F12, enter, backspace, tab/shift-tab,
+/// escape. xterm modifier encoding is applied uniformly: any combination
+/// of Shift/Alt/Ctrl shifts the sequence into its CSI `1;m<final>`
+/// (arrows, home/end, F1-F4) or CSI `n;m~` (tilde-terminated) form.
+fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<String> {
+    let m = xterm_modifier_param(modifiers);
+
+    let tilde = |code: u8| match m {
+        Some(m) => format!("\x1b[{};{}~", code, m),
+        None => format!("\x1b[{}~", code),
+    };
+
+    // CSI-1-final covers arrows + home/end + F1-F4. For the no-modifier
+    // case: arrows honour DECCKM, F1-F4 use SS3 (ESC O x), home/end use
+    // plain CSI.
+    let csi1 = |final_byte: char, ss3_when_plain: bool, decckm_arrow: bool| match m {
+        Some(m) => format!("\x1b[1;{}{}", m, final_byte),
+        None if decckm_arrow && decckm => format!("\x1bO{}", final_byte),
+        None if ss3_when_plain => format!("\x1bO{}", final_byte),
+        None => format!("\x1b[{}", final_byte),
+    };
+
+    Some(match key {
+        "up" => csi1('A', false, true),
+        "down" => csi1('B', false, true),
+        "right" => csi1('C', false, true),
+        "left" => csi1('D', false, true),
+        "home" => csi1('H', false, false),
+        "end" => csi1('F', false, false),
+        "pageup" => tilde(5),
+        "pagedown" => tilde(6),
+        "insert" => tilde(2),
+        "delete" => tilde(3),
+        "f1" => csi1('P', true, false),
+        "f2" => csi1('Q', true, false),
+        "f3" => csi1('R', true, false),
+        "f4" => csi1('S', true, false),
+        "f5" => tilde(15),
+        "f6" => tilde(17),
+        "f7" => tilde(18),
+        "f8" => tilde(19),
+        "f9" => tilde(20),
+        "f10" => tilde(21),
+        "f11" => tilde(23),
+        "f12" => tilde(24),
+        "enter" | "return" => "\r".into(),
+        "escape" => "\x1b".into(),
+        // Alt+Backspace is readline's word-delete (ESC + DEL).
+        "backspace" if modifiers.alt && !modifiers.control && !modifiers.platform => {
+            "\x1b\x7f".into()
+        }
+        "backspace" => "\x7f".into(),
+        // Shift+Tab is the xterm "back-tab" CSI Z — bash/zsh completion
+        // menus and fzf use it to cycle backwards.
+        "tab" if modifiers.shift && !modifiers.control && !modifiers.platform => {
+            "\x1b[Z".into()
+        }
+        "tab" => "\t".into(),
+        _ => return None,
+    })
 }
 
 fn send_paste(terminal: &GhosttyTerminal, text: &str) {
@@ -605,26 +701,30 @@ impl Render for GhosttyView {
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
-                    this.forward_mouse_down(event.position);
+                    this.forward_mouse_down(event.position, mouse_mods_from(&event.modifiers));
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 if event.pressed_button == Some(MouseButton::Left) {
-                    this.forward_mouse_drag(event.position);
+                    this.forward_mouse_drag(event.position, mouse_mods_from(&event.modifiers));
                     cx.notify();
                 }
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                    this.forward_mouse_up(event.position);
+                    this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers));
                     cx.notify();
                 }),
             )
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
-                this.forward_scroll(event.position, event.delta);
+                this.forward_scroll(
+                    event.position,
+                    event.delta,
+                    mouse_mods_from(&event.modifiers),
+                );
                 cx.notify();
             }))
             .child(

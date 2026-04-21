@@ -52,17 +52,19 @@ impl ReleaseChannel {
         }
     }
 
-    /// Sparkle appcast feed URL for this channel and architecture.
+    /// Sparkle-shaped appcast feed URL for this channel, platform,
+    /// and architecture.
     ///
     /// URL scheme:
     ///   `https://con-releases.nowledge.co/appcast/{channel}-{platform}-{arch}.xml`
     ///
-    /// This is stable across releases.  The CI pipeline publishes
+    /// This is stable across releases. The CI pipeline publishes
     /// updated appcasts to the corresponding GitHub Pages path.
-    pub fn feed_url(self, arch: &str) -> String {
+    pub fn feed_url(self, platform: &str, arch: &str) -> String {
         format!(
-            "https://con-releases.nowledge.co/appcast/{channel}-macos-{arch}.xml",
+            "https://con-releases.nowledge.co/appcast/{channel}-{platform}-{arch}.xml",
             channel = self.name(),
+            platform = platform,
             arch = arch,
         )
     }
@@ -133,8 +135,9 @@ fn detect_channel() -> ReleaseChannel {
     }
 }
 
-/// Detect the host architecture at runtime.
-#[cfg(target_os = "macos")]
+/// Detect the host architecture at runtime. Naming mirrors the
+/// macOS release pipeline (`arm64` / `x86_64`) so Sparkle feed URLs
+/// are consistent across platforms.
 pub fn host_arch() -> &'static str {
     #[cfg(target_arch = "aarch64")]
     {
@@ -146,17 +149,19 @@ pub fn host_arch() -> &'static str {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn host_arch() -> &'static str {
-    // Use the same names as the macOS convention so feed URLs are
-    // consistent across platforms.
-    #[cfg(target_arch = "x86_64")]
+/// Platform component for the appcast feed URL.
+pub fn host_platform() -> &'static str {
+    #[cfg(target_os = "macos")]
     {
-        "x86_64"
+        "macos"
     }
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(target_os = "windows")]
     {
-        "arm64"
+        "windows"
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        "linux"
     }
 }
 

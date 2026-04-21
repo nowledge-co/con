@@ -91,7 +91,7 @@ fn caption_buttons(
         a: 1.0,
     }
     .into();
-    let fg = theme.muted_foreground.opacity(0.7);
+    let fg = theme.muted_foreground.opacity(0.9);
     let hover_bg = theme.muted.opacity(0.12);
 
     let button = |id: &'static str,
@@ -99,9 +99,16 @@ fn caption_buttons(
                   area: WindowControlArea,
                   close: bool| {
         let hover = if close { close_red } else { hover_bg };
-        let text = if close { gpui::white() } else { fg };
+        // All three glyphs rest at the same theme-muted foreground so
+        // min/max/close read as one visual row. Only on hover does the
+        // close glyph switch to white, paired with the red chip bg —
+        // matches Windows 11 convention. Parent div declares itself as
+        // a `group(id)` so the svg's `.group_hover(id, ...)` fires when
+        // the 36px hit-target is hovered, not just the 10px icon ink.
+        let hover_fg = if close { gpui::white() } else { fg };
         div()
             .id(id)
+            .group(id)
             .flex()
             .items_center()
             .justify_center()
@@ -116,7 +123,13 @@ fn caption_buttons(
             .flex_shrink_0()
             .window_control_area(area)
             .hover(move |s| s.bg(hover))
-            .child(svg().path(icon).size(px(10.0)).text_color(text))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(10.0))
+                    .text_color(fg)
+                    .group_hover(id, move |s| s.text_color(hover_fg)),
+            )
     };
 
     let (max_icon, max_area) = if window.is_maximized() {
@@ -783,6 +796,17 @@ impl ConWorkspace {
                 // and log `window not found` with a backtrace. Spawn a
                 // small timer instead so every in-flight window task
                 // has time to drain before we tear the HWND down.
+                //
+                // The 120ms timer is a probability reduction, not a
+                // guarantee: Windows can still deliver `WM_ACTIVATE` /
+                // `WM_PAINT` to a closing HWND and surface the same log
+                // error via GPUI's `async_context::update_window`. That
+                // residual noise is benign — `prepare_window_close`
+                // runs, sessions save, surfaces shut down, and the
+                // process exits cleanly. See
+                // `postmortem/2026-04-21-windows-x-close-log-noise.md`
+                // for the full analysis and the upstream GPUI fix that
+                // would eliminate the noise.
                 //
                 // `cx` inside this callback is `&mut App`, which has
                 // `spawn` (not `spawn_in`), so reach the window via its

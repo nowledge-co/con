@@ -40,4 +40,30 @@ fn main() {
         println!("cargo:rerun-if-changed=src/objc/global_hotkey_trampoline.m");
         println!("cargo:rustc-link-lib=framework=Carbon");
     }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Ship as `con-app.ico` because `CON` is a reserved DOS
+        // device name. git.exe on Windows refuses to clone / pull any
+        // repo whose tree contains a file literally named `con.*`,
+        // even inside a subdirectory — same trap that forces the
+        // binary to ship as `con-app.exe`.
+        let icon = "../../assets/windows/con-app.ico";
+        println!("cargo:rerun-if-changed={}", icon);
+
+        let mut res = winresource::WindowsResource::new();
+        // Some locked-down hosts (and the GitHub Actions windows-2022
+        // image on occasion) can't auto-discover rc.exe; let CI point
+        // us at the toolkit explicitly.
+        if let Ok(toolkit) = std::env::var("CON_RC_TOOLKIT_PATH") {
+            res.set_toolkit_path(&toolkit);
+        }
+        res.set_icon(icon);
+        res.set("FileDescription", "con");
+        res.set("ProductName", "con");
+        if let Err(e) = res.compile() {
+            eprintln!("winresource failed to embed icon: {e}");
+            std::process::exit(1);
+        }
+    }
 }
