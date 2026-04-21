@@ -62,6 +62,23 @@ jobs:
         with:
           workspaces: C:\src\repo
 
+      - name: Disable Windows Defender real-time scanning
+        # Zig 0.15.2 builds on windows-latest intermittently fail with
+        # `FileNotFound` when spawning a just-compiled build-tool exe
+        # (e.g. `uucode_build_tables.exe`). Root cause: Defender's
+        # real-time protection briefly locks fresh PE files before the
+        # MpEngine scan completes, racing zig's exec. Runners are
+        # Administrator so we can turn real-time off for the session
+        # plus exclude the build dirs.
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          Add-MpPreference -ExclusionPath $env:CON_CHECKOUT_DIR
+          Add-MpPreference -ExclusionPath $env:TEMP
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.local"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\AppData\Local\zig"
+          Get-MpPreference | Select-Object -Property DisableRealtimeMonitoring, ExclusionPath
+
       - name: Install Zig 0.15.2
         shell: pwsh
         run: |
