@@ -16,7 +16,19 @@ name: ci-portable
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "postmortem/**"
+      - "LICENSE"
+      - ".gitignore"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "postmortem/**"
+      - "LICENSE"
+      - ".gitignore"
 
 env:
   CARGO_TERM_COLOR: always

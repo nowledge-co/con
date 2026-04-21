@@ -15,8 +15,8 @@
   <a href="https://opensource.org/licenses/MIT"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue?style=flat"></a>
   <a href="https://github.com/nowledge-co/con/releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/nowledge-co/con?sort=semver&logo=github&style=flat"></a>
   <a href="https://developer.apple.com/macos/"><img alt="Native on macOS (Metal)" src="https://img.shields.io/badge/native-Metal-3D3D3D?logo=apple&logoColor=white&style=flat"></a>
+  <a href="https://github.com/nowledge-co/con/issues/34"><img alt="Windows beta (tracker)" src="https://img.shields.io/badge/Windows-beta-0078D4?logo=windows&logoColor=white&style=flat"></a>
   <a href="https://github.com/nowledge-co/con/issues/18"><img alt="Linux support planned (tracker)" src="https://img.shields.io/badge/Linux-planned-1D4ED8?logo=linux&logoColor=white&style=flat"></a>
-  <a href="https://github.com/nowledge-co/con/issues/34"><img alt="Windows support planned (tracker)" src="https://img.shields.io/badge/Windows-planned-0078D4?logo=windows&logoColor=white&style=flat"></a>
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-CE422B?logo=rust&logoColor=white&style=flat"></a>
 </p>
 
@@ -38,7 +38,9 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 `con` is in active beta development.
 
-Best-supported target today: **macOS**.
+- **macOS** — fully supported. Metal-backed libghostty terminal, Sparkle auto-update, signed DMG.
+- **Windows** — first beta ships as of `v0.1.0-beta.25`. D3D11/DirectWrite renderer over ConPTY + libghostty-vt. Unsigned ZIP (expect a SmartScreen prompt on first launch); notify-only update checker surfaces newer releases in Settings → Updates. Tracker: [#34](https://github.com/nowledge-co/con/issues/34).
+- **Linux** — planned. Tracker: [#18](https://github.com/nowledge-co/con/issues/18).
 
 ## Screenshot
 
@@ -56,19 +58,23 @@ Best-supported target today: **macOS**.
 
 ## Install
 
-**Homebrew**
+**macOS — Homebrew**
 
 ```sh
 brew install --cask nowledge-co/tap/con-beta
 ```
 
-**Shell**
+**macOS — shell**
 
 ```sh
 curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 ```
 
 Or download the DMG directly from [Releases](https://github.com/nowledge-co/con/releases).
+
+**Windows**
+
+Download `con-windows-x86_64.zip` from the latest [Release](https://github.com/nowledge-co/con/releases), unpack anywhere, and run `con-app.exe`. The ZIP is unsigned today, so Windows SmartScreen will prompt on first launch — click _More info → Run anyway_. Con ships as `con-app.exe` (not `con.exe`) because `CON` is a reserved DOS device name.
 
 To build from source, see `HACKING.md`.
 
