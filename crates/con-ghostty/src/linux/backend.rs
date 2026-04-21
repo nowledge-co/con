@@ -145,6 +145,14 @@ impl LinuxGhosttyTerminal {
         }
     }
 
+    pub fn resize_surface(&self, size: SurfaceSize) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            if let Err(err) = session.resize(size) {
+                log::debug!("linux pty resize failed: {err:#}");
+            }
+        }
+    }
+
     pub fn size(&self) -> SurfaceSize {
         self.inner
             .lock()

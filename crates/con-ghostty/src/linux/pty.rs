@@ -102,8 +102,8 @@ impl TranscriptBuffer {
         if max_lines == 0 {
             return Vec::new();
         }
-        let mut lines: Vec<String> = self
-            .text
+        let sanitized = sanitize_terminal_output(&self.text);
+        let mut lines: Vec<String> = sanitized
             .lines()
             .rev()
             .take(max_lines)
@@ -117,7 +117,7 @@ impl TranscriptBuffer {
         if pattern.is_empty() || limit == 0 {
             return Vec::new();
         }
-        self.text
+        sanitize_terminal_output(&self.text)
             .lines()
             .enumerate()
             .filter(|(_, line)| line.contains(pattern))
@@ -166,7 +166,10 @@ impl LinuxPtySession {
             child: Mutex::new(child),
             shared,
             size: Mutex::new(options.size),
-            title: Some(default_title(options.cwd.as_deref(), options.program.as_deref())),
+            title: Some(default_title(
+                options.cwd.as_deref(),
+                options.program.as_deref(),
+            )),
             current_dir: options.cwd.map(|cwd| cwd.to_string_lossy().to_string()),
             input_generation: AtomicU64::new(0),
             started_at: Instant::now(),
@@ -181,6 +184,14 @@ impl LinuxPtySession {
         let mut size = self.size.lock();
         size.width_px = width_px;
         size.height_px = height_px;
+        self.master
+            .lock()
+            .resize(pty_size_from_surface(&size))
+            .context("failed to resize linux pty")
+    }
+
+    pub fn resize(&self, size: SurfaceSize) -> Result<()> {
+        *self.size.lock() = size;
         self.master
             .lock()
             .resize(pty_size_from_surface(&size))
@@ -326,9 +337,139 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
     }
 }
 
+fn sanitize_terminal_output(raw: &str) -> String {
+    #[derive(Clone, Copy)]
+    enum EscapeState {
+        None,
+        Esc,
+        Csi,
+        Osc,
+        OscEsc,
+        Ss3,
+        Charset,
+        Dcs,
+        DcsEsc,
+    }
+
+    let mut output = String::with_capacity(raw.len());
+    let bytes = raw.as_bytes();
+    let mut index = 0;
+    let mut state = EscapeState::None;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        match state {
+            EscapeState::None => match byte {
+                b'\x1b' => {
+                    state = EscapeState::Esc;
+                    index += 1;
+                }
+                b'\r' => {
+                    if bytes.get(index + 1) != Some(&b'\n') {
+                        clear_current_line(&mut output);
+                    }
+                    index += 1;
+                }
+                b'\x08' => {
+                    if !output.ends_with('\n') {
+                        output.pop();
+                    }
+                    index += 1;
+                }
+                b'\t' => {
+                    output.push_str("    ");
+                    index += 1;
+                }
+                b'\n' => {
+                    output.push('\n');
+                    index += 1;
+                }
+                0x00..=0x1f | 0x7f => {
+                    index += 1;
+                }
+                _ => {
+                    let ch = raw[index..]
+                        .chars()
+                        .next()
+                        .expect("valid utf-8 chunk while sanitizing pty output");
+                    output.push(ch);
+                    index += ch.len_utf8();
+                }
+            },
+            EscapeState::Esc => {
+                state = match byte {
+                    b'[' => EscapeState::Csi,
+                    b']' => EscapeState::Osc,
+                    b'O' => EscapeState::Ss3,
+                    b'(' | b')' | b'*' | b'+' => EscapeState::Charset,
+                    b'P' | b'X' | b'^' | b'_' => EscapeState::Dcs,
+                    _ => EscapeState::None,
+                };
+                index += 1;
+            }
+            EscapeState::Csi => {
+                if (0x40..=0x7e).contains(&byte) {
+                    state = EscapeState::None;
+                }
+                index += 1;
+            }
+            EscapeState::Osc => {
+                match byte {
+                    b'\x07' => state = EscapeState::None,
+                    b'\x1b' => state = EscapeState::OscEsc,
+                    _ => {}
+                }
+                index += 1;
+            }
+            EscapeState::OscEsc => {
+                state = if byte == b'\\' {
+                    EscapeState::None
+                } else {
+                    EscapeState::Osc
+                };
+                index += 1;
+            }
+            EscapeState::Ss3 => {
+                if (0x40..=0x7e).contains(&byte) {
+                    state = EscapeState::None;
+                }
+                index += 1;
+            }
+            EscapeState::Charset => {
+                state = EscapeState::None;
+                index += 1;
+            }
+            EscapeState::Dcs => {
+                match byte {
+                    b'\x07' => state = EscapeState::None,
+                    b'\x1b' => state = EscapeState::DcsEsc,
+                    _ => {}
+                }
+                index += 1;
+            }
+            EscapeState::DcsEsc => {
+                state = if byte == b'\\' {
+                    EscapeState::None
+                } else {
+                    EscapeState::Dcs
+                };
+                index += 1;
+            }
+        }
+    }
+
+    output
+}
+
+fn clear_current_line(output: &mut String) {
+    while output.chars().last().is_some_and(|ch| ch != '\n') {
+        output.pop();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::TranscriptBuffer;
+    use super::{TranscriptBuffer, sanitize_terminal_output};
 
     #[test]
     fn transcript_buffer_returns_recent_lines_in_order() {
@@ -350,5 +491,18 @@ mod tests {
             transcript.search("alpha", 1),
             vec![(0, "alpha".to_string())]
         );
+    }
+
+    #[test]
+    fn sanitize_terminal_output_strips_ansi_sequences() {
+        assert_eq!(
+            sanitize_terminal_output("\x1b]0;title\x07\x1b[31mhello\x1b[0m"),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn sanitize_terminal_output_honors_carriage_return_rewrites() {
+        assert_eq!(sanitize_terminal_output("loading\rready"), "ready");
     }
 }
