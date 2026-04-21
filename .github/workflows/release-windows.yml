@@ -62,22 +62,18 @@ jobs:
         with:
           workspaces: C:\src\repo
 
-      - name: Disable Windows Defender real-time scanning
-        # Zig 0.15.2 builds on windows-latest intermittently fail with
-        # `FileNotFound` when spawning a just-compiled build-tool exe
-        # (e.g. `uucode_build_tables.exe`). Root cause: Defender's
-        # real-time protection briefly locks fresh PE files before the
-        # MpEngine scan completes, racing zig's exec. Runners are
-        # Administrator so we can turn real-time off for the session
-        # plus exclude the build dirs.
+      - name: Defense-in-depth — exclude build dirs from Defender
+        # Probably not the dominant failure mode (see retry logic in the
+        # build step) but Defender real-time scanning can still briefly
+        # lock a just-written PE file. Admin-exclude the hot paths so
+        # MpEngine at least doesn't contribute to the race.
         shell: pwsh
         run: |
-          Set-MpPreference -DisableRealtimeMonitoring $true
-          Add-MpPreference -ExclusionPath $env:CON_CHECKOUT_DIR
-          Add-MpPreference -ExclusionPath $env:TEMP
-          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.local"
-          Add-MpPreference -ExclusionPath "$env:USERPROFILE\AppData\Local\zig"
-          Get-MpPreference | Select-Object -Property DisableRealtimeMonitoring, ExclusionPath
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath $env:CON_CHECKOUT_DIR -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath $env:TEMP -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.local" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\AppData\Local\zig" -ErrorAction SilentlyContinue
 
       - name: Install Zig 0.15.2
         shell: pwsh
@@ -99,7 +95,27 @@ jobs:
         # `cargo build --no-default-features --features con/bin-con-app`
         # — required because CON is a reserved DOS name and plain
         # `con.exe` cannot be created.
-        run: cargo wbuild -p con --release
+        #
+        # Retry rationale: Zig 0.15.2 building libghostty-vt on
+        # windows-latest intermittently fails with `FileNotFound` when
+        # spawning a just-compiled build-tool exe (seen repeatedly with
+        # `uucode_build_tables.exe`). The exe is on disk moments later —
+        # it's a transient visibility race between `WriteFile` /
+        # `CreateProcess` on freshly-linked PE files. Zig's .zig-cache
+        # persists across invocations inside OUT_DIR, so a second run
+        # skips the steps that already succeeded and typically completes.
+        # We retry up to twice (3 total attempts) before giving up.
+        run: |
+          $maxAttempts = 3
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+            Write-Host "=== cargo wbuild attempt $i/$maxAttempts ==="
+            cargo wbuild -p con --release
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Warning "Build failed on attempt $i (exit $LASTEXITCODE) — retrying..."
+            Start-Sleep -Seconds 5
+          }
+          Write-Error "cargo wbuild failed after $maxAttempts attempts"
+          exit 1
 
       - name: Package ZIP
         id: package
