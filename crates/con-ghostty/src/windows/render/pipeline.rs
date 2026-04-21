@@ -29,9 +29,7 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11DeviceContext, ID3D11InputLayout, ID3D11PixelShader, ID3D11RasterizerState,
     ID3D11SamplerState, ID3D11VertexShader,
 };
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_R32G32_UINT, DXGI_FORMAT_R32G32B32A32_UINT, DXGI_FORMAT_R32_UINT,
-};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32G32_UINT, DXGI_FORMAT_R32_UINT};
 
 use super::atlas::GlyphRect;
 

@@ -17,7 +17,7 @@ you get per platform:
 | Target | UI binary | Terminal pane | Control socket | Agent / settings / CLI |
 |:-------|:---------:|:-------------:|:--------------:|:----------------------:|
 | macOS  | ✅ real   | ✅ libghostty + Metal | `/tmp/con.sock` | ✅ |
-| Windows | ✅ builds | Placeholder card | `\\.\pipe\con` | ✅ |
+| Windows | ✅ real  | ✅ libghostty-vt + ConPTY + D3D11/DirectWrite | `\\.\pipe\con` | ✅ |
 | Linux  | ✅ builds | Placeholder card | `/tmp/con.sock` | ✅ |
 
 On Windows (from a Developer Command Prompt for VS 2022):
@@ -73,9 +73,11 @@ aliases in `.cargo/config.toml` wrap the `--no-default-features
 --features con/bin-con-app` incantation that selects the renamed bin.
 macOS and Linux keep the plain `con` binary unchanged.
 
-The produced `con-app.exe` launches into the full UI. The terminal
-pane shows a solid clear color until Phase 3b lands (real glyph
-rendering).
+The produced `con-app.exe` launches into the full UI with a real,
+GPU-rendered terminal pane — libghostty-vt parses the VT stream from a
+ConPTY child, the D3D11/DirectWrite atlas renderer rasterizes glyphs
+(including IoskeleyMono's Nerd-Font icon set), and the grid is drawn
+in a single `DrawIndexedInstanced` per frame.
 
 ## What works today (macOS)
 
@@ -329,32 +331,35 @@ phase keeps the macOS build green.
 | 1 | Windows + Linux CI smoke test | `.github/workflows/ci-portable.yml` runs `cargo check` + `cargo test` for the portable crates and the UI binary on `windows-latest` and `ubuntu-latest` | CI green on both targets | ✅ landed |
 | 2 | Stub terminal backend | `con-ghostty` exposes stub types on non-macOS; `stub_view.rs` is a GPUI placeholder view selected via `#[path]`; the `compile_error!` is gone | **`cargo build -p con` works on Windows and Linux** — terminal pane paints a "backend under construction" card; agent panel, settings, command palette, control socket all functional | ✅ landed |
 | 3a | Windows backend scaffold | `con-ghostty/src/windows/` modules: ConPTY wrapper, libghostty-vt FFI, D3D11 + DirectWrite renderer skeleton (clear-to-color), WS_CHILD HWND host with WM_SIZE/WM_DPICHANGED/WM_CHAR/WM_KEYDOWN/WM_PAINT plumbing, `WindowsGhosttyApp`/`WindowsGhosttyTerminal` facade. `con-app/src/windows_view.rs` instantiates a `HostView` lazily once GPUI's parent HWND is available. `build.rs` builds `libghostty-vt` via `zig build` on Windows host targets (probes available step names; `CON_GHOSTTY_VT_STEP` override). Binary renamed to `con-app.exe` on Windows via feature-gated twin `[[bin]]` (CON is reserved DOS device name). | `cargo wbuild -p con --release` on Windows produces a `con-app.exe` that launches; terminal pane creates a real WS_CHILD HWND, spawns a real ConPTY shell, drives libghostty-vt. Compiles clean on Linux + Windows cross-target. | ✅ landed |
-| 3b | Glyph atlas + grid render | HLSL shaders embedded and runtime-compiled via `D3DCompile`. Skyline-packed (`etagere`) BGRA8 glyph atlas (`con-ghostty/src/windows/render/atlas.rs`), glyphs rasterized via Direct2D `DrawText` with grayscale AA. D3D11 pipeline (`pipeline.rs`): per-instance IA layout, dynamic instance buffer with `Map(WRITE_DISCARD)`, single `DrawIndexedInstanced(6, cell_count)` per frame — matches Windows Terminal AtlasEngine's architecture. `vt.rs` uses the `ghostty_render_state` API (row iterator + `row_cells_get_multi` + DIRTY row skip) — not the `grid_ref` path that the upstream header explicitly warns against for render loops. | Real glyph rendering on Windows. Compiles clean on Linux + Windows cross-target. **Runtime-unvalidated** (no Windows hardware on the build sandbox) — tuning likely needed for real fonts, DPI, cursor, and underline rendering. | ✅ landed (cross-compile green) |
+| 3b | Glyph atlas + grid render | HLSL shaders embedded and runtime-compiled via `D3DCompile`. Skyline-packed (`etagere`) BGRA8 glyph atlas (`con-ghostty/src/windows/render/atlas.rs`), glyphs rasterized via Direct2D `DrawText` with grayscale AA. Three-case PUA rasterization (fits-cell / width-overflow with lsb shift / height-overflow with scale-around-centre) for Nerd-Font icons, plus per-slot `PushAxisAlignedClip` + black pre-fill to prevent ClearType fringe bleeding between atlas neighbours. D3D11 pipeline (`pipeline.rs`): per-instance IA layout, dynamic instance buffer with `Map(WRITE_DISCARD)`, single `DrawIndexedInstanced(6, cell_count)` per frame — matches Windows Terminal AtlasEngine's architecture. Wide PUA instances are stable-sorted after narrow ones so DX11's in-order per-pixel writes let them win overlap with neighbour backgrounds; the cursor inverse-colour instance is captured pre-sort and pushed post-sort so it always draws last. `vt.rs` uses the `ghostty_render_state` API (row iterator + `row_cells_get_multi` + DIRTY row skip) — not the `grid_ref` path that the upstream header explicitly warns against for render loops. | Real glyph rendering on Windows, runtime-validated on real hardware against oh-my-posh prompt stacks and dense hyphen rules. Postmortem: `postmortem/2026-04-21-windows-atlas-pua-rasterization.md`. | ✅ landed (runtime-validated) |
 | 3c | Input + selection | VK_* → xterm escape sequence translation in `host_view::WM_KEYDOWN`; mouse selection / scroll forwarding; clipboard via OSC 52 + Win32 clipboard. | Real terminal interactivity. | — |
 | 3d | (Parallel, upstream) | `WindowsWindow::attach_external_swap_chain_handle(bounds, HANDLE)` PR to `zed-industries/zed`. ~50 LOC. When merged, swap our backend from `CreateSwapChainForHwnd(WS_CHILD HWND)` to `CreateSwapChainForCompositionSurfaceHandle` so DWM composites our visual cleanly with GPUI's. Zero user-visible change except popup Z-order becomes pixel-perfect. | (No con change required pre-merge.) | — |
 | 4 | Hardening | Multi-pane, splits, IME, focus, resize, copy/paste, drag/drop, OSC 133 shell integration, ligatures | Beta-quality | — |
 | 5 | Distribution | MSI installer, code signing, auto-update (WiX or `cargo dist`), `con-app.exe` rename via feature-gated twin `[[bin]]` | Release-ready | — |
 
-Phases 0-3a are **complete**. Phases 3b-3c are the real-glyphs work
-(non-trivial GPU programming) and need iteration on actual Windows
-hardware. Phase 3d is independent upstream work.
+Phases 0-3b are **complete**. Phase 3b shipped the full glyph atlas,
+the three-case PUA rasterization that lets IoskeleyMono's Nerd-Font
+icons and ASCII punctuation coexist, and the cursor z-order fix. Phase
+3c (input + selection) is the remaining interactivity work. Phase 3d
+is independent upstream work.
 
-### What you can do *today* on Windows after Phase 3a
+### What you can do *today* on Windows after Phase 3b
 
 ```powershell
 git clone https://github.com/nowledge-co/con.git
 cd con
-cargo build -p con --release
-target\release\con.exe
+cargo wbuild -p con --release
+target\release\con-app.exe
 ```
 
-The window comes up with the full chrome. Click the terminal pane —
-GPUI hands us its parent HWND, we create a `WS_CHILD` HWND in the pane
-rect, spawn a `pwsh.exe`/`cmd.exe` ConPTY child, pipe its output bytes
-into libghostty-vt. The terminal area paints a solid clear color (the
-glyph renderer is staged for 3b). Typing into the terminal pane
-forwards to the shell via `WM_CHAR`. Resize works. Window close kills
-the shell.
+The window comes up with the full chrome and a live terminal pane.
+ConPTY spawns `pwsh.exe`/`cmd.exe`, libghostty-vt parses the VT
+stream, and the D3D11/DirectWrite atlas renderer draws the grid at
+native refresh rate — IoskeleyMono ASCII, box-drawing, Powerline
+separators, and the Nerd-Font icon set (folder, git, status, …) all
+render correctly, cursor lands on the right column, and typing flows
+through `WM_CHAR` to the shell. Resize works. Window close kills
+the shell. Phase 3c tracks the remaining input/selection polish.
 
 Caveats:
 - You must have **Zig 0.13+** on `PATH` (one-time install from

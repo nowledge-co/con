@@ -775,13 +775,33 @@ impl ConWorkspace {
             // pane-exit path.
             #[cfg(target_os = "windows")]
             {
-                let _ = workspace_handle.update(cx, |_workspace, cx| {
-                    cx.defer_in(window, |workspace, window, cx| {
-                        workspace.prepare_window_close(cx);
+                // `cx.defer_in` delays by a single event-loop tick, which
+                // isn't enough: GPUI's `handle_activate_msg` spawns an
+                // async task on the same executor when WM_ACTIVATE fires
+                // during close, and those tasks outlive one tick — they
+                // then run `window.update()` on a freshly-destroyed HWND
+                // and log `window not found` with a backtrace. Spawn a
+                // small timer instead so every in-flight window task
+                // has time to drain before we tear the HWND down.
+                //
+                // `cx` inside this callback is `&mut App`, which has
+                // `spawn` (not `spawn_in`), so reach the window via its
+                // handle inside the spawned task.
+                let handle = workspace_handle.clone();
+                let window_handle = window.window_handle();
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(120))
+                        .await;
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = handle.update(cx, |workspace, cx| {
+                            workspace.prepare_window_close(cx);
+                        });
                         window.remove_window();
                         cx.quit();
                     });
-                });
+                })
+                .detach();
                 return false;
             }
             #[cfg(not(target_os = "windows"))]
@@ -2923,12 +2943,6 @@ impl ConWorkspace {
                 self.toggle_agent_panel(&ToggleAgentPanel, window, cx);
             }
             "settings" => {
-                // Route through the full toggle_settings action so
-                // `sync_pane_visibility_for_modals` fires. Opening the
-                // panel directly (via settings_panel.update.toggle)
-                // leaves pane WS_CHILD HWNDs visible on Windows, and
-                // they sit above the GPUI-drawn modal and swallow its
-                // clicks.
                 self.toggle_settings(&settings_panel::ToggleSettings, window, cx);
             }
             "new-tab" => {
@@ -4781,7 +4795,6 @@ impl ConWorkspace {
         if !self.is_modal_open(cx) {
             self.focus_terminal(window, cx);
         }
-        self.sync_pane_visibility_for_modals(cx);
         cx.notify();
     }
 
@@ -4804,48 +4817,11 @@ impl ConWorkspace {
         if !self.is_modal_open(cx) {
             self.focus_terminal(window, cx);
         }
-        self.sync_pane_visibility_for_modals(cx);
         cx.notify();
     }
 
     fn is_modal_open(&self, cx: &App) -> bool {
         self.settings_panel.read(cx).is_visible() || self.command_palette.read(cx).is_visible()
-    }
-
-    /// Hide every pane's native surface while a modal is visible, and
-    /// restore it once all modals have closed. On Windows this matters
-    /// because each pane is a WS_CHILD HWND that always paints on top
-    /// of the GPUI-drawn modal and also steals mouse clicks before the
-    /// modal can see them. On macOS `set_visible` on NSView is
-    /// cheap / idempotent, so this is a no-op in practice.
-    fn sync_pane_visibility_for_modals(&self, cx: &App) {
-        // Windows-only workaround: a WS_CHILD HWND with WS_VISIBLE always
-        // paints over the parent D3D swapchain and also eats every mouse
-        // click that lands on its rect, so a GPUI-rendered modal
-        // (settings, command palette) has to explicitly hide the pane
-        // HWND to receive input. macOS NSView overlays honour Z-order
-        // natively — if we run this path on macOS the ghostty NSView
-        // becomes hidden and, because the main window is transparent on
-        // macOS 13+, the user sees the desktop through the settings
-        // modal's dim overlay instead of the terminal behind it.
-        #[cfg(target_os = "windows")]
-        {
-            let modal_open = self.is_modal_open(cx);
-            let want_visible = !modal_open;
-            log::info!(
-                "sync_pane_visibility_for_modals: modal_open={modal_open} \
-                 → panes want_visible={want_visible}"
-            );
-            for tab in &self.tabs {
-                for t in tab.pane_tree.all_terminals() {
-                    t.set_native_view_visible(want_visible, cx);
-                }
-            }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = cx;
-        }
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {

@@ -1,29 +1,44 @@
 //! Windows terminal view — drives the `con-ghostty` Windows backend
-//! (`WindowsGhosttyApp` + `WindowsGhosttyTerminal` + the `HostView`
-//! that owns a child `WS_CHILD` HWND parented to GPUI's main window).
+//! (`WindowsGhosttyApp` + `WindowsGhosttyTerminal` + a `RenderSession`
+//! that owns the renderer, VT parser, and ConPTY for one pane).
 //!
 //! Same public type names as the macOS `ghostty_view` so the rest of
 //! `con-app` (terminal_pane.rs, workspace.rs) compiles unchanged. The
 //! `#[path]` selector in `main.rs` picks this file on Windows.
 //!
+//! Paint model:
+//! - No child HWND. The renderer draws into an offscreen D3D11 texture
+//!   and hands back BGRA bytes each dirty frame.
+//! - We wrap those bytes into an `Arc<RenderImage>` and paint them via a
+//!   GPUI `img(ImageSource::Render(...))` element. The terminal pane
+//!   lives inside GPUI's DirectComposition tree so modals (settings,
+//!   command palette) and newly-opened panes compose correctly — no
+//!   z-order flashes, no "modal is 100% transparent over the pane".
+//!
 //! Lifecycle:
 //!
-//! 1. `GhosttyView::new(app, cwd, font_size, cx)` — pre-allocates a
+//! 1. `GhosttyView::new(app, cwd, font_size, cx)` pre-allocates a
 //!    `WindowsGhosttyTerminal` so `terminal_pane` can hold an Arc to
-//!    it. The `HostView` (the actual HWND + renderer + ConPTY +
-//!    parser) is constructed lazily in [`GhosttyView::ensure_host`]
-//!    once we have the parent HWND from GPUI.
-//! 2. The geometry of the WS_CHILD HWND is positioned by
-//!    [`GhosttyView::reposition_host`], called from
-//!    `on_children_prepainted` so the host follows GPUI's layout.
-//! 3. Drop releases the `HostView`, destroying the HWND and ending
-//!    the child shell.
+//!    it. No renderer/ConPTY yet — those are built lazily.
+//! 2. `on_children_prepainted` captures the pane's bounds the first
+//!    time they're known. At that point we spin up a `RenderSession`
+//!    (Renderer + VT + ConPTY) sized to those physical pixels.
+//! 3. Each subsequent prepaint: resize on geometry change, update DPI
+//!    on scale-factor change, pump one `render_frame()`. When the
+//!    frame is fresh we rebuild `cached_image` and `cx.notify()` so
+//!    the next `render()` picks it up.
+//! 4. Drop releases the `RenderSession` and ends the child shell.
 
 use std::sync::Arc;
 
 use con_ghostty::{GhosttyApp, GhosttySplitDirection, GhosttyTerminal};
 use gpui::*;
 use gpui_component::ActiveTheme;
+use image::{Frame, RgbaImage};
+use smallvec::SmallVec;
+
+use con_ghostty::windows::host_view::RenderSession;
+use con_ghostty::windows::render::RenderOutcome;
 
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
@@ -45,23 +60,37 @@ pub struct GhosttyView {
     initial_cwd: Option<String>,
     initial_font_size: f32,
     initialized: bool,
-    /// Set true after a HostView::new failure to suppress retry on
-    /// every layout pass — the same DXGI / D3D errors fire ~60×/s
-    /// otherwise. The user has to explicitly recreate the pane to
-    /// clear this; richer recovery (delayed retry, rebuild on resize)
-    /// can come later.
+    /// Latched after a `RenderSession::new` failure so we don't re-try
+    /// on every layout pass (the same DXGI / D3D errors would fire ~60×/s
+    /// otherwise). User has to recreate the pane to clear it.
     init_failed: bool,
-    /// Guard: emit `GhosttyProcessExited` exactly once, not every frame
-    /// after the shell dies. Mirrors `GhosttyView::process_exit_emitted`
-    /// on macOS (see ghostty_view.rs).
+    /// Emit `GhosttyProcessExited` exactly once on shell death.
     process_exit_emitted: bool,
+    /// Pane bounds in logical window pixels, captured during prepaint.
+    pane_bounds: Option<Bounds<Pixels>>,
+    scale_factor: f32,
+    /// Last physical-pixel size we sent to `session.resize`. Avoids
+    /// resize churn when the logical bounds round to the same physical
+    /// size frame-to-frame.
+    last_physical_size: Option<(u32, u32)>,
+    /// Last scale factor handed to `session.set_dpi`.
+    last_scale_factor: f32,
+    /// The most recently rendered frame, wrapped as a GPUI image. Each
+    /// `RenderImage` has a unique `ImageId`, so a new Arc replaces the
+    /// prior GPU-side upload; the `RenderOutcome::Unchanged` gate keeps
+    /// us from allocating one per idle frame.
+    cached_image: Option<Arc<RenderImage>>,
+    /// The prior `cached_image`, kept live until the next prepaint so
+    /// the paint that referenced it has finished. Dropped the frame
+    /// after via `Window::drop_image` to evict its sprite-atlas tile.
+    /// Without this, every frame would leak ~width×height×4 bytes of
+    /// GPU memory.
+    image_to_drop: Option<Arc<RenderImage>>,
 }
 
 pub fn init(_cx: &mut App) {
-    // Tab/Shift-Tab interception is handled by the host_view's
-    // WM_KEYDOWN handler; no GPUI key bindings needed for the terminal
-    // itself (all keys flow into the WS_CHILD HWND directly while the
-    // child is focused).
+    // Keyboard input on Windows flows through GPUI focus → `on_key_down`
+    // below (no HWND-level WM_CHAR routing), so no bindings are needed.
 }
 
 impl GhosttyView {
@@ -71,11 +100,7 @@ impl GhosttyView {
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Pre-allocate the GhosttyTerminal so terminal_pane can hold an
-        // Arc to it before the HostView is wired up. On macOS the
-        // Terminal is created at the same point — see ghostty_view.rs.
         let terminal = Arc::new(GhosttyTerminal::new());
-
         Self {
             app,
             terminal: Some(terminal),
@@ -85,6 +110,12 @@ impl GhosttyView {
             initialized: false,
             init_failed: false,
             process_exit_emitted: false,
+            pane_bounds: None,
+            scale_factor: 1.0,
+            last_physical_size: None,
+            last_scale_factor: 0.0,
+            cached_image: None,
+            image_to_drop: None,
         }
     }
 
@@ -124,6 +155,12 @@ impl GhosttyView {
             terminal.request_close();
         }
         self.initialized = false;
+        // Release our own Arcs. The sprite-atlas tiles will stay until
+        // the window closes; no way to reach `Window::drop_image` from
+        // here. A per-pane ~2×framebytes residue is acceptable.
+        self.cached_image = None;
+        self.image_to_drop = None;
+        self.last_physical_size = None;
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
@@ -137,27 +174,21 @@ impl GhosttyView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
-        // Initialization happens lazily inside `Render::render` once we
-        // have both a parent HWND and bounds. Marking initialized here
-        // would lie about the HostView's existence.
+        // Initialization is lazy inside `ensure_session` once a real
+        // layout pass hands us bounds and DPI. Claiming initialized here
+        // would lie about the RenderSession's existence.
     }
 
-    pub fn set_visible(&self, visible: bool) {
-        // Modals (settings, command palette, ...) are GPUI-drawn into the
-        // parent HWND's D3D swapchain. A WS_CHILD HWND with WS_VISIBLE
-        // always paints on top of the parent, and — critically — also
-        // receives mouse clicks that fall inside its rect before the
-        // modal's element-tree hit-test runs. Hiding the HWND when a
-        // modal is up removes the pane from the Win32 z-stack so the
-        // modal becomes both visible and clickable.
-        if let Some(terminal) = &self.terminal {
-            terminal.set_hwnd_visible(visible);
-        }
-    }
+    /// Cross-platform hide hook used on macOS when switching tabs (each
+    /// tab's child NSView is toggled so only the active tab's terminal
+    /// paints). On Windows the renderer composites through GPUI's image
+    /// path, and inactive tabs simply aren't in the element tree, so
+    /// there's nothing to toggle — no-op.
+    pub fn set_visible(&self, _visible: bool) {}
 
     pub fn sync_window_background_blur(&self) {
-        // No-op on Windows; the HWND's swapchain composes against
-        // whatever DWM puts behind us.
+        // Windows uses DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)
+        // at window-creation time; there's nothing per-pane to refresh.
     }
 
     pub fn drain_surface_state(&mut self, _cx: &mut Context<Self>) -> bool {
@@ -165,12 +196,9 @@ impl GhosttyView {
     }
 
     pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
-        // The Windows backend has no action-callback channel (no
-        // equivalent to macOS's `wake_generation` tick), so we poll
-        // `is_alive` every frame and emit `GhosttyProcessExited` on
-        // the transition to dead. Workspace's
-        // `on_terminal_process_exited` then closes the pane. The
-        // latch stops us from firing on every subsequent frame.
+        // No action-callback channel on Windows (cf. macOS's
+        // `wake_generation`). Poll `is_alive` so workspace's
+        // `on_terminal_process_exited` runs when the child shell exits.
         if self.initialized
             && !self.process_exit_emitted
             && self
@@ -185,105 +213,267 @@ impl GhosttyView {
         false
     }
 
-    /// Bring up the HostView (HWND + renderer + ConPTY) at the given
-    /// physical-pixel rectangle inside the parent HWND. Idempotent.
-    fn ensure_host(&mut self, parent_hwnd: isize, rect_px: (i32, i32, i32, i32)) {
-        use windows::Win32::Foundation::{HWND, RECT};
-
+    fn ensure_session(&mut self, width_px: u32, height_px: u32, dpi: u32) {
         if self.initialized || self.init_failed {
             return;
         }
+        if width_px == 0 || height_px == 0 {
+            return;
+        }
 
-        let parent = HWND(parent_hwnd as *mut _);
-        let rect = RECT {
-            left: rect_px.0,
-            top: rect_px.1,
-            right: rect_px.2,
-            bottom: rect_px.3,
-        };
+        let mut config = self.app.renderer_config();
+        if self.initial_font_size > 0.0 {
+            config.font_size_px = self.initial_font_size;
+        }
+        config.initial_width = width_px;
+        config.initial_height = height_px;
 
-        let renderer_config = self.app.renderer_config();
-
-        match con_ghostty::windows::host_view::HostView::new(parent, rect, renderer_config) {
-            Ok(host) => {
+        match RenderSession::new(width_px, height_px, dpi, config) {
+            Ok(session) => {
                 if let Some(terminal) = &self.terminal {
-                    terminal.attach(host);
+                    terminal.attach(session);
                 }
                 self.initialized = true;
-                let _ = (&self.initial_cwd, self.initial_font_size); // TODO(cwd, font_size)
+                self.last_physical_size = Some((width_px, height_px));
+                self.last_scale_factor = dpi as f32 / 96.0;
+                let _ = &self.initial_cwd; // TODO: honour cwd in ConPTY spawn.
             }
             Err(err) => {
-                log::error!("HostView::new failed: {:#}", err);
-                // Latch so we don't re-attempt on every layout. Trade-
-                // off: the user has to recreate the pane to retry.
+                log::error!("RenderSession::new failed: {:#}", err);
                 self.init_failed = true;
             }
         }
     }
 
-    fn reposition_host(&self, rect_px: (i32, i32, i32, i32)) {
-        use windows::Win32::Foundation::RECT;
+    /// Called from the children-prepainted listener. Drives session
+    /// lifecycle (init/resize/DPI) and pumps one render. Returns `true`
+    /// when a fresh image was produced — the caller uses that to decide
+    /// whether to `cx.notify()`.
+    fn sync_render(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        scale_factor: f32,
+        window: &mut Window,
+    ) -> bool {
+        // Drop the tile that the PRIOR frame painted. Paint has already
+        // flushed for that frame (we're in prepaint for the next one),
+        // so its sprite-atlas entry is no longer referenced and we can
+        // evict it without corrupting what we're about to paint.
+        if let Some(old) = self.image_to_drop.take() {
+            let _ = window.drop_image(old);
+        }
 
-        let rect = RECT {
-            left: rect_px.0,
-            top: rect_px.1,
-            right: rect_px.2,
-            bottom: rect_px.3,
+        self.pane_bounds = Some(bounds);
+        self.scale_factor = scale_factor;
+
+        // `.ceil()` matches `Window::paint_image`, which does
+        // `map_size(|size| size.ceil())` on the scaled physical quad. If
+        // we render at `.round()` our texture ends up 1px smaller than
+        // the quad on half-pixel bounds and LINEAR sampling blurs every
+        // pixel by a tiny fraction.
+        let width_px = ((f32::from(bounds.size.width) * scale_factor).ceil() as u32).max(1);
+        let height_px = ((f32::from(bounds.size.height) * scale_factor).ceil() as u32).max(1);
+        let dpi = (scale_factor * 96.0).round().max(1.0) as u32;
+
+        self.ensure_session(width_px, height_px, dpi);
+        if !self.initialized {
+            return false;
+        }
+
+        let Some(session_arc) = self.terminal.as_ref().map(|t| t.inner()) else {
+            return false;
         };
-        if let Some(terminal) = &self.terminal {
-            let inner = terminal.inner();
-            if let Some(host) = inner.lock().as_ref() {
-                host.reposition(rect);
+        let guard = session_arc.lock();
+        let Some(session) = guard.as_ref() else {
+            return false;
+        };
+
+        if (scale_factor - self.last_scale_factor).abs() > f32::EPSILON {
+            if let Err(err) = session.set_dpi(dpi) {
+                log::warn!("RenderSession::set_dpi failed: {err:#}");
+            }
+            self.last_scale_factor = scale_factor;
+        }
+
+        if self.last_physical_size != Some((width_px, height_px)) {
+            if let Err(err) = session.resize(width_px, height_px) {
+                log::warn!("RenderSession::resize failed: {err:#}");
+            }
+            self.last_physical_size = Some((width_px, height_px));
+        }
+
+        match session.render_frame() {
+            Ok(RenderOutcome::Unchanged) => false,
+            Ok(RenderOutcome::Rendered(frame)) => {
+                if let Some(image) = bgra_frame_to_image(frame.bytes, frame.width, frame.height) {
+                    // Stash the prior image so next prepaint can drop
+                    // its atlas tile. `Option::replace` returns the old
+                    // inner value, matching our `Option<Arc<_>>` slot.
+                    self.image_to_drop = self.cached_image.replace(image);
+                    true
+                } else {
+                    false
+                }
+            }
+            Err(err) => {
+                log::warn!("RenderSession::render_frame failed: {err:#}");
+                false
             }
         }
     }
 
-    /// Trigger one render pass now. GPUI's paint pipeline drives this
-    /// rather than waiting for Windows-side `WM_PAINT`, which never
-    /// fires on demand for a child HWND whose class has no auto-paint
-    /// behavior.
-    fn paint_host(&self) {
-        if let Some(terminal) = &self.terminal {
-            let inner = terminal.inner();
-            if let Some(host) = inner.lock().as_ref() {
-                host.paint_frame();
+    /// Convert a window-coordinate mouse position into a 0-based
+    /// (col, row) cell address. Returns `None` when we don't yet have a
+    /// session / bounds to project into.
+    fn cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
+        let bounds = self.pane_bounds?;
+        let terminal = self.terminal.as_ref()?;
+        let inner = terminal.inner();
+        let guard = inner.lock();
+        let session = guard.as_ref()?;
+        let metrics = session.metrics();
+        if metrics.cell_width_px == 0 || metrics.cell_height_px == 0 {
+            return None;
+        }
+        let local_x = (f32::from(pos.x) - f32::from(bounds.origin.x)).max(0.0);
+        let local_y = (f32::from(pos.y) - f32::from(bounds.origin.y)).max(0.0);
+        let phys_x = (local_x * self.scale_factor) as u32;
+        let phys_y = (local_y * self.scale_factor) as u32;
+        let col = (phys_x / metrics.cell_width_px.max(1)) as u16;
+        let row = (phys_y / metrics.cell_height_px.max(1)) as u16;
+        Some((col, row))
+    }
+
+    fn forward_mouse_down(&self, pos: Point<Pixels>) {
+        if let Some((col, row)) = self.cell_from_event_position(pos) {
+            if let Some(terminal) = &self.terminal {
+                let inner = terminal.inner();
+                if let Some(session) = inner.lock().as_ref() {
+                    session.mouse_down(col, row);
+                }
             }
         }
+    }
+
+    fn forward_mouse_drag(&self, pos: Point<Pixels>) {
+        if let Some((col, row)) = self.cell_from_event_position(pos) {
+            if let Some(terminal) = &self.terminal {
+                let inner = terminal.inner();
+                if let Some(session) = inner.lock().as_ref() {
+                    session.mouse_drag(col, row);
+                }
+            }
+        }
+    }
+
+    fn forward_mouse_up(&self, pos: Point<Pixels>) {
+        if let Some((col, row)) = self.cell_from_event_position(pos) {
+            if let Some(terminal) = &self.terminal {
+                let inner = terminal.inner();
+                if let Some(session) = inner.lock().as_ref() {
+                    session.mouse_up(col, row);
+                }
+            }
+        }
+    }
+
+    fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta) {
+        let Some(terminal) = &self.terminal else {
+            return;
+        };
+        let inner = terminal.inner();
+        let guard = inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return;
+        };
+        // Only report wheel to the shell when it has explicitly enabled
+        // mouse tracking (SGR). Otherwise modern TUIs expect the scroll
+        // to move their own scrollback buffer via shell keybinds, not
+        // arrive as mouse events.
+        if !session.mouse_tracking_active() {
+            return;
+        }
+        let Some((col0, row0)) = self.cell_from_event_position(pos) else {
+            return;
+        };
+        let delta_y_px = match delta {
+            ScrollDelta::Pixels(p) => f32::from(p.y),
+            ScrollDelta::Lines(p) => {
+                let metrics = session.metrics();
+                p.y * metrics.cell_height_px.max(1) as f32
+            }
+        };
+        if delta_y_px.abs() < f32::EPSILON {
+            return;
+        }
+        // `forward_wheel` expects 1-based SGR coordinates.
+        session.forward_wheel(col0 + 1, row0 + 1, delta_y_px);
     }
 
     /// Translate a GPUI `KeyDownEvent` into bytes and forward to the
-    /// ConPTY via `terminal.send_text`. Returns `true` if the key was
-    /// handled (so GPUI can stop propagation).
+    /// ConPTY. Returns `true` if the key was handled (so GPUI can stop
+    /// propagation).
     ///
-    /// GPUI owns keyboard focus on Windows — our `WS_CHILD` HWND never
-    /// receives `WM_CHAR` because it isn't in the focus chain. So we
-    /// translate at this layer into the byte sequences a terminal
-    /// emulator expects. Mapping matches Windows Terminal / Ghostty:
-    ///   - printable → key_char bytes
-    ///   - Enter → `\r` (ConPTY's line-editor expects CR)
-    ///   - Backspace → `\x7f` (DEL — the xterm / VT220 convention modern shells want)
-    ///   - Tab → `\t`
-    ///   - Esc → `\x1b`
-    ///   - Arrows / Home / End / Page / Delete → xterm CSI sequences
-    ///   - Ctrl-<letter> → control character (Ctrl-C → 0x03, etc.)
-    fn handle_key_down(&self, event: &KeyDownEvent) -> bool {
+    /// GPUI owns keyboard focus on Windows — there's no child HWND in
+    /// the focus chain — so we translate at this layer into byte
+    /// sequences a terminal emulator expects. DECCKM-aware arrows live
+    /// alongside the printable / Ctrl-letter paths.
+    fn handle_key_down(&self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let Some(terminal) = self.terminal.as_ref() else {
             return false;
         };
         let keystroke = &event.keystroke;
 
-        // Named keys first. Arrow / nav sequences are the "application
-        // cursor keys off" variants (ESC [ letter) — most modern shells
-        // don't enable DECCKM so this is the safe default.
+        // Ctrl+Shift+C / Ctrl+Shift+V → clipboard. These must run ahead
+        // of the generic Ctrl-letter path below, which would otherwise
+        // emit ^C / ^V to the shell.
+        if keystroke.modifiers.control
+            && keystroke.modifiers.shift
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+        {
+            match keystroke.key.as_str() {
+                "c" => {
+                    if terminal.has_selection() {
+                        if let Some(selection) = terminal.selection_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(selection));
+                        }
+                    }
+                    return true;
+                }
+                "v" => {
+                    if let Some(text) = cx
+                        .read_from_clipboard()
+                        .and_then(|item| item.text().map(|s| s.to_string()))
+                    {
+                        if !text.is_empty() {
+                            send_paste(terminal, &text);
+                            cx.notify();
+                        }
+                    }
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        let decckm = {
+            let inner = terminal.inner();
+            inner.lock().as_ref().is_some_and(|s| s.is_decckm())
+        };
+
+        // Named keys first. Arrow sequences honour DECCKM: shells flip
+        // into it for programs like less / vim / fzf, and those programs
+        // expect `ESC O x` instead of `ESC [ x`.
         let named: Option<&str> = match keystroke.key.as_str() {
             "enter" | "return" => Some("\r"),
             "backspace" => Some("\x7f"),
             "tab" => Some("\t"),
             "escape" => Some("\x1b"),
-            "up" => Some("\x1b[A"),
-            "down" => Some("\x1b[B"),
-            "right" => Some("\x1b[C"),
-            "left" => Some("\x1b[D"),
+            "up" => Some(if decckm { "\x1bOA" } else { "\x1b[A" }),
+            "down" => Some(if decckm { "\x1bOB" } else { "\x1b[B" }),
+            "right" => Some(if decckm { "\x1bOC" } else { "\x1b[C" }),
+            "left" => Some(if decckm { "\x1bOD" } else { "\x1b[D" }),
             "home" => Some("\x1b[H"),
             "end" => Some("\x1b[F"),
             "pageup" => Some("\x1b[5~"),
@@ -300,6 +490,7 @@ impl GhosttyView {
         if keystroke.modifiers.control
             && !keystroke.modifiers.alt
             && !keystroke.modifiers.platform
+            && !keystroke.modifiers.shift
             && keystroke.key.len() == 1
         {
             if let Some(ch) = keystroke.key.chars().next() {
@@ -314,9 +505,6 @@ impl GhosttyView {
             }
         }
 
-        // Plain printable: GPUI fills `key_char` with the rendered
-        // character (respects shift / layout). Falls back to `key` for
-        // single-char key names when `key_char` is absent.
         if let Some(ch) = keystroke.key_char.as_deref() {
             if !ch.is_empty() {
                 terminal.send_text(ch);
@@ -332,6 +520,46 @@ impl GhosttyView {
     }
 }
 
+/// Wrap a BGRA readback buffer as a `RenderImage`. `RenderImage`
+/// internally stores BGRA already (see `3pp/zed/crates/gpui/src/elements/img.rs`,
+/// where the loader swaps RGBA→BGRA on decode), so we feed the D3D11
+/// `DXGI_FORMAT_B8G8R8A8_UNORM` readback directly without a swap.
+fn bgra_frame_to_image(bytes: Vec<u8>, width: u32, height: u32) -> Option<Arc<RenderImage>> {
+    let expected = (width as usize) * (height as usize) * 4;
+    if bytes.len() != expected {
+        log::warn!(
+            "bgra_frame_to_image: byte len {} != expected {} ({}x{})",
+            bytes.len(),
+            expected,
+            width,
+            height
+        );
+        return None;
+    }
+    let buffer = RgbaImage::from_raw(width, height, bytes)?;
+    let frame = Frame::new(buffer);
+    let data: SmallVec<[Frame; 1]> = SmallVec::from_buf([frame]);
+    Some(Arc::new(RenderImage::new(data)))
+}
+
+fn send_paste(terminal: &GhosttyTerminal, text: &str) {
+    // Bracketed paste lets the shell tell pasted text apart from real
+    // typing, so vim / readline can disable auto-indent. Hold the lock
+    // across both wrapper writes so the session can't be swapped out
+    // mid-paste (which would strip the trailing `ESC[201~`).
+    let inner = terminal.inner();
+    let guard = inner.lock();
+    if let Some(session) = guard.as_ref() {
+        if session.is_bracketed_paste() {
+            session.write_pty_raw(b"\x1b[200~");
+            session.write_input(text);
+            session.write_pty_raw(b"\x1b[201~");
+        } else {
+            session.write_input(text);
+        }
+    }
+}
+
 impl Focusable for GhosttyView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -342,84 +570,86 @@ impl Render for GhosttyView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let entity = cx.entity().downgrade();
+        // `ObjectFit::Fill` keeps the image quad exactly equal to the
+        // element's bounds. The default `Contain` applies aspect-ratio
+        // letterboxing using float math, which produces a quad a fraction
+        // of a pixel smaller than our source texture — the LINEAR sprite
+        // sampler then blends neighbouring texels and every terminal cell
+        // shows faint speckles below the glyph baseline.
+        let image_child = self
+            .cached_image
+            .clone()
+            .map(|img_arc| {
+                img(ImageSource::Render(img_arc))
+                    .size_full()
+                    .object_fit(ObjectFit::Fill)
+            });
 
-        // The HostView geometry follows our placement in GPUI's layout.
-        // We capture our paint bounds via on_children_prepainted on a
-        // single full-size child and translate them to the parent
-        // HWND's coordinate space.
+        let focus = self.focus_handle.clone();
+
         div()
             .size_full()
             .track_focus(&self.focus_handle)
+            .bg(theme.background.opacity(0.0))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                if this.handle_key_down(event) {
+                if this.handle_key_down(event, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
+                    cx.notify();
                 }
             }))
-            // Transparent so the HWND swapchain (sibling-composed by DWM)
-            // shows through wherever this element paints.
-            .bg(theme.background.opacity(0.0))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&focus, cx);
+                    this.forward_mouse_down(event.position);
+                    cx.emit(GhosttyFocusChanged);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    this.forward_mouse_drag(event.position);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.forward_mouse_up(event.position);
+                    cx.notify();
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
+                this.forward_scroll(event.position, event.delta);
+                cx.notify();
+            }))
             .child(
                 div()
                     .size_full()
-                    .on_children_prepainted(move |bounds_list: Vec<Bounds<Pixels>>, window, cx| {
-                        let Some(bounds) = bounds_list.first().copied() else {
-                            return;
-                        };
-                        let scale = window.scale_factor();
-                        let left = (f32::from(bounds.origin.x) * scale) as i32;
-                        let top = (f32::from(bounds.origin.y) * scale) as i32;
-                        let right =
-                            ((f32::from(bounds.origin.x) + f32::from(bounds.size.width)) * scale) as i32;
-                        let bottom = ((f32::from(bounds.origin.y) + f32::from(bounds.size.height))
-                            * scale) as i32;
-
-                        log::trace!(
-                            "pane bounds: logical ({:.1},{:.1}) {:.1}x{:.1} scale={} → physical ({},{})-({},{})",
-                            f32::from(bounds.origin.x),
-                            f32::from(bounds.origin.y),
-                            f32::from(bounds.size.width),
-                            f32::from(bounds.size.height),
-                            scale,
-                            left, top, right, bottom,
-                        );
-
-                        let parent_hwnd = parent_hwnd_from_window(window);
-
-                        if let Some(view) = entity.upgrade() {
-                            view.update(cx, |view, cx| {
-                                if let Some(parent) = parent_hwnd {
-                                    view.ensure_host(parent, (left, top, right, bottom));
-                                }
-                                view.reposition_host((left, top, right, bottom));
-                                view.paint_host();
-                                // Click-to-focus: WM_MOUSEACTIVATE in
-                                // host_view returns MA_NOACTIVATE so
-                                // Windows keeps focus on GPUI's parent
-                                // HWND when the user clicks inside the
-                                // terminal — that keeps Ctrl+L /
-                                // Ctrl+T / etc. reaching GPUI. But
-                                // GPUI's *logical* focus still needs
-                                // to move to the clicked pane, which
-                                // the WM_LBUTTONDOWN handler signals
-                                // via `take_click_pending`. Poll +
-                                // focus here on the next paint.
-                                if view
-                                    .terminal
-                                    .as_ref()
-                                    .is_some_and(|t| t.take_click_pending())
-                                {
-                                    view.focus_handle.focus(window, cx);
-                                    cx.emit(GhosttyFocusChanged);
-                                }
-                            });
-                        }
-                    })
-                    // A 1x1 placeholder child so on_children_prepainted
-                    // actually fires; layout flex makes it expand.
+                    .on_children_prepainted(
+                        move |bounds_list: Vec<Bounds<Pixels>>, window, cx| {
+                            let Some(bounds) = bounds_list.first().copied() else {
+                                return;
+                            };
+                            let scale = window.scale_factor();
+                            if let Some(view) = entity.upgrade() {
+                                view.update(cx, |view, cx| {
+                                    let changed = view.sync_render(bounds, scale, window);
+                                    if changed {
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        },
+                    )
+                    .children(image_child)
+                    // A 1×1 placeholder so `on_children_prepainted` always
+                    // fires with at least one bounds entry; flex growth
+                    // makes it expand to the full pane.
                     .child(div().size_full()),
             )
     }
@@ -433,15 +663,3 @@ impl Drop for GhosttyView {
     }
 }
 
-/// Look up the parent HWND from GPUI's window via `raw_window_handle`.
-/// Returns the HWND as `isize` (raw pointer cast) so the caller doesn't
-/// need to import the `windows` crate.
-fn parent_hwnd_from_window(window: &mut Window) -> Option<isize> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-    let handle = HasWindowHandle::window_handle(window).ok()?;
-    match handle.as_raw() {
-        RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
-        _ => None,
-    }
-}

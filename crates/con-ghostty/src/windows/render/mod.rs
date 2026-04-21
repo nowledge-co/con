@@ -5,16 +5,23 @@
 //! ```text
 //! Renderer
 //!   ├── device (ID3D11Device) + context
-//!   ├── swapchain (IDXGISwapChain1 against the WS_CHILD HWND)
-//!   ├── rtv (ID3D11RenderTargetView onto the backbuffer)
+//!   ├── rt_texture (ID3D11Texture2D, offscreen B8G8R8A8_UNORM)
+//!   ├── rtv (ID3D11RenderTargetView onto rt_texture)
+//!   ├── staging (ID3D11Texture2D, USAGE_STAGING | CPU_ACCESS_READ)
 //!   ├── dwrite (IDWriteFactory)
 //!   ├── atlas (GlyphCache — etagere skyline + Direct2D DrawGlyphRun)
 //!   └── pipeline (VS/PS, IA layout, instance + index + cbuffer)
 //! ```
 //!
-//! One `DrawIndexedInstanced(6, cell_count)` per frame. Grayscale
+//! We render into an offscreen texture instead of an HWND swapchain so
+//! the caller can CPU-read the BGRA bytes and hand them to GPUI as an
+//! `ImageSource::Render(Arc<RenderImage>)`. GPUI then composes the pane
+//! into its own DirectComposition tree — no child HWND on top of the
+//! app's modals, no z-order glitches on tab switch.
+//!
+//! One `DrawIndexedInstanced(6, cell_count)` per dirty frame. Grayscale
 //! coverage; bg/fg lerp in the pixel shader. See `shaders.hlsl` for the
-//! actual shader code and `pipeline.rs` for the D3D11 plumbing.
+//! shader code and `pipeline.rs` for the D3D11 plumbing.
 
 mod atlas;
 mod font_loader;
@@ -23,31 +30,29 @@ mod pipeline;
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_RENDER_TARGET_VIEW_DESC,
-    D3D11_RTV_DIMENSION_TEXTURE2D, D3D11_SDK_VERSION, D3D11_TEX2D_RTV, D3D11_VIEWPORT,
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
-    ID3D11Texture2D,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_RENDER_TARGET_VIEW_DESC, D3D11_RTV_DIMENSION_TEXTURE2D, D3D11_SDK_VERSION,
+    D3D11_TEX2D_RTV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+    D3D11_VIEWPORT, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
+    ID3D11RenderTargetView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
-};
-use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory6, IDXGISwapChain1,
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 
 use super::vt::ScreenSnapshot;
-use atlas::{CellMetrics, GlyphCache, GlyphKey};
-use pipeline::{instance_for_cell, Globals, Instance, Pipeline};
+use atlas::{GlyphCache, GlyphKey};
+use pipeline::{Globals, Instance, Pipeline, instance_for_cell};
+
+pub use atlas::CellMetrics;
 
 const ATLAS_SIZE_PX: u32 = 2048;
 /// Initial instance-buffer capacity. 16 384 covers a 200×80 grid
@@ -55,9 +60,6 @@ const ATLAS_SIZE_PX: u32 = 2048;
 /// `Pipeline::ensure_instance_capacity` in the hot path.
 const INITIAL_INSTANCE_CAPACITY: u32 = 16 * 1024;
 
-/// Rendering config that tracks the user's font + theme choice. The
-/// backend-facade (`WindowsGhosttyApp::update_appearance`) writes this
-/// when the user changes theme / font.
 #[derive(Debug, Clone)]
 pub struct RendererConfig {
     pub font_family: String,
@@ -70,11 +72,6 @@ pub struct RendererConfig {
 impl Default for RendererConfig {
     fn default() -> Self {
         Self {
-            // IoskeleyMono is embedded in the binary and registered
-            // with DirectWrite at atlas-init time (font_loader.rs). If
-            // bundling fails on older Windows (<10 1607), CreateTextFormat
-            // gracefully resolves the name through the system collection,
-            // producing a sensible monospace fallback (usually Consolas).
             font_family: font_loader::BUNDLED_FONT_FAMILY.to_string(),
             font_size_px: 14.0,
             initial_width: 800,
@@ -87,30 +84,42 @@ impl Default for RendererConfig {
 pub struct Renderer {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
-    swapchain: IDXGISwapChain1,
-    rtv: Option<ID3D11RenderTargetView>,
+    rt_texture: ID3D11Texture2D,
+    rtv: ID3D11RenderTargetView,
+    staging: ID3D11Texture2D,
     _dwrite: IDWriteFactory,
 
     pipeline: std::sync::Mutex<Pipeline>,
     atlas: Mutex<GlyphCache>,
 
-    /// CPU-side reusable scratch for the per-frame instance buffer.
     instances: Mutex<Vec<Instance>>,
+    /// Generation fingerprint of the last frame we actually rendered
+    /// (snapshot.generation ⨁ selection). Seeded with `u64::MAX` so the
+    /// very first call — which sees `generation = 0` on a quiet VT —
+    /// still produces a frame (the cleared background), giving the pane
+    /// something to show before the shell has printed anything.
     last_generation: Mutex<u64>,
-    /// Current selection, if any. The host-view sets this during drag
-    /// and the per-cell loop XORs `ATTR_INVERSE` on cells inside the
-    /// range so the composite shader flips fg↔bg without a second pass.
     selection: Mutex<Option<Selection>>,
 
     width_px: u32,
     height_px: u32,
 }
 
-/// Rectangular-linear selection range: a pair of `(col, row)` endpoints
-/// interpreted as positions on the flattened `row * cols + col` axis so
-/// multi-line selections wrap at row boundaries the way xterm / Windows
-/// Terminal expose them (drag from A to B selects every cell visited
-/// when scanning left-to-right, top-to-bottom).
+/// Freshly rendered BGRA frame. Width/height are in physical pixels.
+pub struct FrameBgra {
+    pub bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Result of [`Renderer::render`].
+pub enum RenderOutcome {
+    /// No change since the previous call — reuse the prior image.
+    Unchanged,
+    /// Fresh BGRA bytes, ready to hand to GPUI as an `ImageSource`.
+    Rendered(FrameBgra),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Selection {
     pub anchor: (u16, u16),
@@ -118,10 +127,6 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// Returns `true` when `(col, row)` falls inside the selection on
-    /// the linear order. Uses the grid's `cols` to project to a flat
-    /// index — the caller passes whichever `cols` matches the snapshot
-    /// we're painting so resize-during-drag doesn't glitch the flip.
     pub fn contains(&self, col: u16, row: u16, cols: u16) -> bool {
         let to_lin = |p: (u16, u16)| (p.1 as u32) * (cols as u32) + (p.0 as u32);
         let a = to_lin(self.anchor);
@@ -131,9 +136,6 @@ impl Selection {
         here >= lo && here <= hi
     }
 
-    /// Stable hash for gating render (combining selection with the
-    /// snapshot's generation). Not cryptographic — just distinguishes
-    /// "selection changed" from "same selection".
     pub fn hash_u64(&self) -> u64 {
         let a = ((self.anchor.0 as u64) << 16) | (self.anchor.1 as u64);
         let b = ((self.extent.0 as u64) << 16) | (self.extent.1 as u64);
@@ -145,64 +147,36 @@ unsafe impl Send for Renderer {}
 unsafe impl Sync for Renderer {}
 
 impl Renderer {
-    pub fn new(hwnd: HWND, config: &RendererConfig) -> Result<Self> {
+    pub fn new(config: &RendererConfig) -> Result<Self> {
         log::info!("Renderer: creating D3D11 device");
         let (device, context) = create_device()?;
         log::info!("Renderer: D3D11 device created");
-        let dxgi_factory: IDXGIFactory6 =
-            unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
-                .context("CreateDXGIFactory2 failed")?;
 
-        let desc = DXGI_SWAP_CHAIN_DESC1 {
-            Width: config.initial_width,
-            Height: config.initial_height,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            Stereo: false.into(),
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            BufferCount: 2,
-            Scaling: DXGI_SCALING_STRETCH,
-            SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-            // CreateSwapChainForHwnd rejects PREMULTIPLIED with
-            // DXGI_ERROR_INVALID_CALL (0x887A0001). PREMULTIPLIED is
-            // only valid with CreateSwapChainForComposition (DComp).
-            // IGNORE is fine for an opaque WS_CHILD rect — the
-            // terminal pane doesn't need per-pixel alpha against the
-            // GPUI compositor; the HWND already clips the region.
-            AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-            Flags: 0,
-        };
+        let width = config.initial_width.max(1);
+        let height = config.initial_height.max(1);
 
-        // SAFETY: hwnd owned by caller (host_view); device + desc valid.
-        log::info!("Renderer: creating swapchain");
-        let swapchain: IDXGISwapChain1 = unsafe {
-            dxgi_factory.CreateSwapChainForHwnd(&device, hwnd, &desc, None, None)
-        }
-        .context("CreateSwapChainForHwnd failed")?;
-        log::info!("Renderer: swapchain created");
+        log::info!("Renderer: creating offscreen render-target texture {width}x{height}");
+        let (rt_texture, rtv) = create_rt_texture(&device, width, height)?;
+        log::info!("Renderer: RT texture + RTV created");
 
-        let rtv = Some(create_rtv(&device, &swapchain)?);
-        log::info!("Renderer: RTV created");
+        let staging = create_staging_texture(&device, width, height)?;
+        log::info!("Renderer: staging texture created");
 
         let dwrite: IDWriteFactory =
             unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
                 .context("DWriteCreateFactory failed")?;
         log::info!("Renderer: DWrite factory created");
 
-        // Bundled font collection (IoskeleyMono). `None` on pre-Win10-
-        // 1607 — GlyphCache falls back to the system collection.
-        let bundled_collection = font_loader::build_bundled_collection(&dwrite)
-            .unwrap_or_else(|err| {
-                log::warn!(
-                    "font bundling failed; using system fallback: {err:#}"
-                );
+        let bundled_collection =
+            font_loader::build_bundled_collection(&dwrite).unwrap_or_else(|err| {
+                log::warn!("font bundling failed; using system fallback: {err:#}");
                 None
             });
 
-        log::info!("Renderer: creating GlyphCache (font={})", config.font_family);
+        log::info!(
+            "Renderer: creating GlyphCache (font={})",
+            config.font_family
+        );
         let atlas = GlyphCache::new(
             &device,
             &context,
@@ -223,16 +197,17 @@ impl Renderer {
         Ok(Self {
             device,
             context,
-            swapchain,
+            rt_texture,
             rtv,
+            staging,
             _dwrite: dwrite,
             pipeline: std::sync::Mutex::new(pipeline),
             atlas: Mutex::new(atlas),
             instances: Mutex::new(Vec::with_capacity(INITIAL_INSTANCE_CAPACITY as usize)),
-            last_generation: Mutex::new(0),
+            last_generation: Mutex::new(u64::MAX),
             selection: Mutex::new(None),
-            width_px: config.initial_width,
-            height_px: config.initial_height,
+            width_px: width,
+            height_px: height,
         })
     }
 
@@ -240,28 +215,24 @@ impl Renderer {
         if width_px == 0 || height_px == 0 {
             return Ok(());
         }
-        self.rtv = None;
-
-        // SAFETY: RTV dropped; ResizeBuffers contract satisfied.
-        unsafe {
-            self.swapchain.ResizeBuffers(
-                0,
-                width_px,
-                height_px,
-                DXGI_FORMAT_B8G8R8A8_UNORM,
-                DXGI_SWAP_CHAIN_FLAG(0),
-            )
+        if width_px == self.width_px && height_px == self.height_px {
+            return Ok(());
         }
-        .context("ResizeBuffers failed")?;
 
-        self.rtv = Some(create_rtv(&self.device, &self.swapchain)?);
+        let (rt_texture, rtv) = create_rt_texture(&self.device, width_px, height_px)?;
+        let staging = create_staging_texture(&self.device, width_px, height_px)?;
+        self.rt_texture = rt_texture;
+        self.rtv = rtv;
+        self.staging = staging;
         self.width_px = width_px;
         self.height_px = height_px;
+        *self
+            .last_generation
+            .lock()
+            .expect("last_generation mutex poisoned in resize()") = u64::MAX;
         Ok(())
     }
 
-    /// Cell metrics the host_view uses to decide `ResizePseudoConsole`
-    /// / `ghostty_terminal_resize` arguments.
     pub fn metrics(&self) -> CellMetrics {
         self.atlas
             .lock()
@@ -293,22 +264,30 @@ impl Renderer {
         (cols, rows)
     }
 
-    /// Render one frame from `snapshot`. Skips when generation hasn't
-    /// advanced. Layout (top-down):
-    ///
-    /// 1. Gate on generation.
-    /// 2. Build the per-instance buffer on the CPU from the snapshot:
-    ///    per cell, look up its glyph in the atlas (rasterize on miss),
-    ///    pack into an [`Instance`] struct.
-    /// 3. Upload instances via `Map(WRITE_DISCARD)`.
-    /// 4. Upload `Globals` cbuffer.
-    /// 5. Bind + `DrawIndexedInstanced(6, cell_count)`.
-    /// 6. `Present(1, 0)`.
-    pub fn render(&self, snapshot: &ScreenSnapshot, config: &RendererConfig) -> Result<()> {
-        // Combine the snapshot generation with the selection fingerprint
-        // so selection-only changes (drag motion when cell contents are
-        // stable) force a repaint. `wrapping_mul` keeps the math
-        // non-wrapping-panic under debug overflow checks.
+    pub fn dimensions_px(&self) -> (u32, u32) {
+        (self.width_px, self.height_px)
+    }
+
+    pub fn rebuild_atlas(&self, font_size_px: f32) -> Result<()> {
+        self.atlas
+            .lock()
+            .expect("atlas mutex poisoned in rebuild_atlas()")
+            .rebuild(font_size_px)?;
+        *self
+            .last_generation
+            .lock()
+            .expect("last_generation mutex poisoned in rebuild_atlas()") = u64::MAX;
+        Ok(())
+    }
+
+    /// Render one frame and return a BGRA byte buffer sized to the
+    /// current render target. Returns `Unchanged` when nothing has moved
+    /// since the last call (caller reuses its cached image).
+    pub fn render(
+        &self,
+        snapshot: &ScreenSnapshot,
+        config: &RendererConfig,
+    ) -> Result<RenderOutcome> {
         let selection = *self
             .selection
             .lock()
@@ -324,16 +303,11 @@ impl Renderer {
                 .lock()
                 .expect("last_generation mutex poisoned in render()");
             if *last == combined {
-                return Ok(());
+                return Ok(RenderOutcome::Unchanged);
             }
             *last = combined;
         }
 
-        let Some(rtv) = self.rtv.as_ref() else {
-            return Ok(());
-        };
-
-        // Clear + set viewport/render targets.
         let vp = D3D11_VIEWPORT {
             TopLeftX: 0.0,
             TopLeftY: 0.0,
@@ -342,45 +316,47 @@ impl Renderer {
             MinDepth: 0.0,
             MaxDepth: 1.0,
         };
-        // SAFETY: context + rtv owned by self; single-threaded.
         unsafe {
             self.context.RSSetViewports(Some(&[vp]));
             self.context
-                .OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
-            self.context.ClearRenderTargetView(rtv, &config.clear_color);
+                .OMSetRenderTargets(Some(&[Some(self.rtv.clone())]), None);
+            self.context
+                .ClearRenderTargetView(&self.rtv, &config.clear_color);
         }
 
-        if snapshot.cells.is_empty() {
-            // Still present the clear so the pane isn't stale garbage.
-            unsafe { self.swapchain.Present(1, DXGI_PRESENT(0)) }
-                .ok()
-                .context("swapchain Present failed")?;
-            return Ok(());
+        if !snapshot.cells.is_empty() {
+            self.draw_cells(snapshot)?;
         }
 
-        // Build per-instance array.
+        let bytes = self.readback_rt()?;
+        Ok(RenderOutcome::Rendered(FrameBgra {
+            bytes,
+            width: self.width_px,
+            height: self.height_px,
+        }))
+    }
+
+    fn draw_cells(&self, snapshot: &ScreenSnapshot) -> Result<()> {
+        let selection = *self
+            .selection
+            .lock()
+            .expect("selection mutex poisoned in draw_cells()");
+
         let mut atlas = self
             .atlas
             .lock()
-            .expect("atlas mutex poisoned in render() glyph pass");
+            .expect("atlas mutex poisoned in draw_cells() glyph pass");
         let mut instances = self
             .instances
             .lock()
-            .expect("instances mutex poisoned in render()");
+            .expect("instances mutex poisoned in draw_cells()");
         instances.clear();
         instances.reserve(snapshot.cells.len());
-        let mut logged_non_empty: u32 = 0;
 
         for (i, cell) in snapshot.cells.iter().enumerate() {
             let col = (i % snapshot.cols as usize) as u16;
             let row = (i / snapshot.cols as usize) as u16;
 
-            // XOR-toggle ATTR_INVERSE (bit 4 / 0x10) on cells that fall
-            // inside the current selection. The pixel shader already
-            // handles inverse; doing the flip on the attr byte means
-            // selection highlight composes correctly with fg/bg attrs
-            // the VT already set (e.g. selecting an already-inverse cell
-            // turns it back to normal, matching Windows Terminal).
             let in_sel = selection
                 .map(|s| s.contains(col, row, snapshot.cols))
                 .unwrap_or(false);
@@ -391,8 +367,6 @@ impl Renderer {
             };
 
             if cell.codepoint == 0 || cell.codepoint == 0x20 {
-                // Empty / space: emit a bg-only quad by using a 0x0
-                // glyph rect (sampler returns zero coverage → all bg).
                 instances.push(Instance {
                     cell_pos: [col as u32, row as u32],
                     atlas_pos: [0, 0],
@@ -412,12 +386,6 @@ impl Renderer {
             let glyph = match atlas.get_or_rasterize(key) {
                 Some(g) => g,
                 None => {
-                    // Skyline packer ran out of space. Evict and retry
-                    // once — typical cause is a heavy emoji/CJK burst on
-                    // a long-running session, where the atlas has been
-                    // filled with one-shot glyphs. Previously cached
-                    // glyphs for the current frame will re-rasterize on
-                    // demand as the loop continues.
                     log::debug!(
                         "atlas overflow at cell ({col},{row}) U+{:04X}; purging and retrying",
                         cell.codepoint
@@ -426,10 +394,6 @@ impl Renderer {
                     match atlas.get_or_rasterize(key) {
                         Some(g) => g,
                         None => {
-                            // Glyph bigger than the atlas, or the D2D
-                            // DrawText failed mid-frame. Emit a
-                            // background-only quad so the cell renders
-                            // as whitespace rather than garbage.
                             log::warn!(
                                 "glyph larger than atlas capacity at U+{:04X}; skipping",
                                 cell.codepoint
@@ -448,75 +412,66 @@ impl Renderer {
                 }
             };
 
-            let inst = instance_for_cell(col, row, glyph, cell.fg, cell.bg, effective_attrs);
-            if logged_non_empty < 6 {
-                log::trace!(
-                    "instance[{i}]: cell_pos=({},{}) atlas_pos=({},{}) atlas_size=({},{}) fg={:#010x} bg={:#010x} codepoint=U+{:04X}",
-                    inst.cell_pos[0], inst.cell_pos[1],
-                    inst.atlas_pos[0], inst.atlas_pos[1],
-                    inst.atlas_size[0], inst.atlas_size[1],
-                    inst.fg, inst.bg, cell.codepoint,
-                );
-                logged_non_empty += 1;
-            }
-            // Wide Nerd-Font glyphs (ink wider than one cell) are
-            // emitted with `atlas_size.x > cell_w`, so the shader stretches
-            // the quad across the overflow. The next cell still emits its
-            // own bg+glyph instance — on powerline prompts its bg matches
-            // and the icon extension is preserved; on non-powerline output
-            // the adjacent cell overdraws the overflow, which matches how
-            // Ghostty / Windows Terminal render single-cell PUA glyphs.
-            // Keeping 1:1 cell↔instance mapping is required by the cursor
-            // re-emit (below), which indexes by `row*cols+col`.
-            instances.push(inst);
+            instances.push(instance_for_cell(
+                col,
+                row,
+                glyph,
+                cell.fg,
+                cell.bg,
+                effective_attrs,
+            ));
         }
+        let cell_w_px = atlas.metrics().cell_width_px;
+        drop(atlas);
 
-        drop(atlas); // release atlas lock before GPU upload
-
-        // Cursor overlay: inverse-video block cursor. Re-emit the
-        // cell-at-cursor with fg/bg swapped so the underlying glyph
-        // stays legible inside the cursor block.
-        //
-        // Drawn AFTER the main glyph pass (we push to the end of
-        // `instances`), so in the single DrawIndexedInstanced call this
-        // instance writes last and visually overlays the cell beneath.
-        // The pixel shader already lerps bg→fg by coverage, so swapping
-        // gives us the classic "glyph in bg color on fg-color block"
-        // look without any shader changes.
-        if snapshot.cursor.visible {
+        // Capture the cursor cell's source instance BEFORE sorting —
+        // the row-major `idx = row * cols + col` mapping is only
+        // valid while `instances` is still in grid order.
+        let cursor_source: Option<Instance> = if snapshot.cursor.visible {
             let col = snapshot.cursor.col as usize;
             let row = snapshot.cursor.row as usize;
             let cols_u = snapshot.cols as usize;
             let rows_u = snapshot.rows as usize;
             if col < cols_u && row < rows_u {
-                let idx = row * cols_u + col;
-                if let Some(src) = instances.get(idx).copied() {
-                    // Strip the inverse attr bit (0x10) on the cursor
-                    // re-emit: we've already swapped fg/bg here, and
-                    // leaving the bit set would trigger the PS's own
-                    // inverse swap — double-inverting a cell that
-                    // started with `inverse` would cancel the cursor.
-                    instances.push(Instance {
-                        cell_pos: src.cell_pos,
-                        atlas_pos: src.atlas_pos,
-                        atlas_size: src.atlas_size,
-                        fg: src.bg,
-                        bg: src.fg,
-                        attrs: src.attrs & !0x10,
-                    });
-                }
+                instances.get(row * cols_u + col).copied()
+            } else {
+                None
             }
+        } else {
+            None
+        };
+
+        // Sort so oversized PUA icons render LAST within the grid
+        // pass. Their atlas slots are wider than a cell, so their
+        // quad overflows into the neighbour column. DX11 guarantees
+        // in-order per-pixel writes within a single draw call, so
+        // placing wide instances at the end of the buffer makes
+        // their pixels win over the narrow bg-only instance that
+        // would otherwise paint on top. Stable partition keeps the
+        // grid's row-major order within the narrow and wide groups
+        // independently — bad ordering would show up as flicker.
+        instances.sort_by_key(|inst| (inst.atlas_size[0] > cell_w_px) as u8);
+
+        // Push the cursor instance AFTER the sort so it always renders
+        // last — on top of any wide PUA glyph that might otherwise
+        // overdraw the cursor cell.
+        if let Some(src) = cursor_source {
+            instances.push(Instance {
+                cell_pos: src.cell_pos,
+                atlas_pos: src.atlas_pos,
+                atlas_size: src.atlas_size,
+                fg: src.bg,
+                bg: src.fg,
+                attrs: src.attrs & !0x10,
+            });
         }
 
-        // Grow instance buffer if the grid exceeded what we allocated.
         let mut pipeline = self
             .pipeline
             .lock()
             .expect("pipeline mutex poisoned");
         let needed = instances.len() as u32;
         if needed > pipeline.instance_capacity {
-            // Allocate with 50% headroom so we don't thrash on
-            // every-frame minor growth during resize.
             let new_capacity = (needed + needed / 2).max(INITIAL_INSTANCE_CAPACITY);
             log::debug!(
                 "growing instance buffer: {} -> {} (need {})",
@@ -533,7 +488,6 @@ impl Renderer {
             .upload_instances(&self.context, &instances)
             .context("upload_instances failed")?;
 
-        // Globals.
         let metrics = self.metrics();
         let atlas_size = self
             .atlas
@@ -546,10 +500,7 @@ impl Renderer {
         ];
         let globals = Globals {
             inv_viewport,
-            cell_size: [
-                metrics.cell_width_px as f32,
-                metrics.cell_height_px as f32,
-            ],
+            cell_size: [metrics.cell_width_px as f32, metrics.cell_height_px as f32],
             grid_cols: snapshot.cols as u32,
             grid_rows: snapshot.rows as u32,
             inv_atlas_size: [1.0 / atlas_size, 1.0 / atlas_size],
@@ -558,11 +509,9 @@ impl Renderer {
             .upload_globals(&self.context, &globals)
             .context("upload_globals failed")?;
 
-        // Draw.
         let instance_count = instances.len() as u32;
         drop(instances);
 
-        // Atlas SRV: re-lock to hand a reference to the pipeline.
         let atlas = self
             .atlas
             .lock()
@@ -570,24 +519,41 @@ impl Renderer {
         pipeline.bind_and_draw(&self.context, atlas.atlas_srv(), instance_count);
         drop(atlas);
         drop(pipeline);
-
-        // SAFETY: swapchain owned; Present(1, 0) waits for vsync.
-        unsafe { self.swapchain.Present(1, DXGI_PRESENT(0)) }
-            .ok()
-            .context("swapchain Present failed")?;
         Ok(())
     }
 
-    pub fn dimensions_px(&self) -> (u32, u32) {
-        (self.width_px, self.height_px)
-    }
+    fn readback_rt(&self) -> Result<Vec<u8>> {
+        let width = self.width_px as usize;
+        let height = self.height_px as usize;
+        let row_bytes = width * 4;
+        let mut out = vec![0u8; row_bytes * height];
 
-    /// Rebuild atlas at a new font size (WM_DPICHANGED / theme change).
-    pub fn rebuild_atlas(&self, font_size_px: f32) -> Result<()> {
-        self.atlas
-            .lock()
-            .expect("atlas mutex poisoned in rebuild_atlas()")
-            .rebuild(font_size_px)
+        unsafe {
+            self.context.CopyResource(&self.staging, &self.rt_texture);
+        }
+
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            self.context
+                .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+        }
+        .context("Map(staging) failed")?;
+
+        let src_pitch = mapped.RowPitch as usize;
+        for y in 0..height {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (mapped.pData as *const u8).add(src_pitch * y),
+                    out.as_mut_ptr().add(row_bytes * y),
+                    row_bytes,
+                );
+            }
+        }
+
+        unsafe {
+            self.context.Unmap(&self.staging, 0);
+        }
+        Ok(out)
     }
 }
 
@@ -596,7 +562,6 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut context = None;
     let mut feature_level = D3D_FEATURE_LEVEL_11_0;
 
-    // SAFETY: out params; BGRA flag needed for D2D interop on the atlas.
     let result = unsafe {
         D3D11CreateDevice(
             None,
@@ -612,7 +577,6 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     };
 
     if result.is_err() {
-        // Fall back to WARP on RDP / VMs without a GPU driver.
         unsafe {
             D3D11CreateDevice(
                 None,
@@ -634,26 +598,67 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     Ok((device, context))
 }
 
-fn create_rtv(
+fn create_rt_texture(
     device: &ID3D11Device,
-    swapchain: &IDXGISwapChain1,
-) -> Result<ID3D11RenderTargetView> {
-    // SAFETY: GetBuffer(0) is the swapchain's backbuffer.
-    let back_buffer: ID3D11Texture2D =
-        unsafe { swapchain.GetBuffer(0) }.context("swapchain GetBuffer(0) failed")?;
+    width: u32,
+    height: u32,
+) -> Result<(ID3D11Texture2D, ID3D11RenderTargetView)> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let mut texture = None;
+    unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)) }
+        .context("CreateTexture2D(rt) failed")?;
+    let texture = texture.context("rt CreateTexture2D produced no texture")?;
 
-    let mut rtv = None;
-    let desc = D3D11_RENDER_TARGET_VIEW_DESC {
+    let rtv_desc = D3D11_RENDER_TARGET_VIEW_DESC {
         Format: DXGI_FORMAT_B8G8R8A8_UNORM,
         ViewDimension: D3D11_RTV_DIMENSION_TEXTURE2D,
         Anonymous: windows::Win32::Graphics::Direct3D11::D3D11_RENDER_TARGET_VIEW_DESC_0 {
             Texture2D: D3D11_TEX2D_RTV { MipSlice: 0 },
         },
     };
-    // SAFETY: back_buffer + desc valid for the call.
-    unsafe {
-        device.CreateRenderTargetView(&back_buffer, Some(&desc), Some(&mut rtv))
-    }
-    .context("CreateRenderTargetView failed")?;
-    rtv.context("CreateRenderTargetView produced no view")
+    let mut rtv = None;
+    unsafe { device.CreateRenderTargetView(&texture, Some(&rtv_desc), Some(&mut rtv)) }
+        .context("CreateRenderTargetView(rt) failed")?;
+    let rtv = rtv.context("CreateRenderTargetView produced no view")?;
+    Ok((texture, rtv))
+}
+
+fn create_staging_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+) -> Result<ID3D11Texture2D> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_STAGING,
+        BindFlags: 0,
+        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+        MiscFlags: 0,
+    };
+    let mut texture = None;
+    unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)) }
+        .context("CreateTexture2D(staging) failed")?;
+    texture.context("staging CreateTexture2D produced no texture")
 }

@@ -180,9 +180,16 @@ fn default_split_right() -> String {
 }
 #[cfg(not(target_os = "macos"))]
 fn default_split_right() -> String {
-    // Windows Terminal's "split pane right" is Alt+Shift+=. Ctrl+D is
-    // EOF in every shell so it must keep reaching the terminal.
-    "alt-shift-=".into()
+    // Windows Terminal's "split pane right" is the user-visible
+    // `Alt+Shift+=`. GPUI's Windows key mapper resolves `VK_OEM_PLUS`
+    // with shift held to the *shifted* character `+` and zeroes the
+    // shift modifier, so the binding string must describe what the OS
+    // actually delivers: `alt-+`. Authoring it as `alt-shift-=` stores
+    // the binding as `key="=" modifiers=alt+shift`, which will never
+    // match the inbound `key="+" modifiers=alt` and the keystroke
+    // falls through to the terminal. Ctrl+D is EOF so we can't use
+    // secondary-d here.
+    "alt-+".into()
 }
 
 #[cfg(target_os = "macos")]
@@ -191,8 +198,12 @@ fn default_split_down() -> String {
 }
 #[cfg(not(target_os = "macos"))]
 fn default_split_down() -> String {
-    // Mirrors Windows Terminal's "split pane down" (Alt+Shift+-).
-    "alt-shift--".into()
+    // Mirrors Windows Terminal's user-visible `Alt+Shift+-`. GPUI's
+    // Windows key mapper resolves `VK_OEM_MINUS` with shift held to
+    // `_` and zeroes shift, so we author the binding as `alt-_` to
+    // match what the OS actually delivers. See `default_split_right`
+    // for the same reasoning applied to `+`.
+    "alt-_".into()
 }
 
 #[cfg(target_os = "macos")]
