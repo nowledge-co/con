@@ -6563,6 +6563,51 @@ impl Render for ConWorkspace {
                 ),
         );
 
+        // Settings button — only on platforms without a native menu
+        // bar. macOS exposes Settings through `App → Settings…` (and
+        // ⌘,) so a gear in the chrome would be redundant there. On
+        // Windows and Linux it's the primary discovery surface for
+        // Settings alongside the command palette.
+        #[cfg(not(target_os = "macos"))]
+        {
+            tab_controls = tab_controls.child(
+                div()
+                    .id("toggle-settings")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(22.0))
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .occlude()
+                    .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                    .tooltip(|window, cx| {
+                        chrome_tooltip(
+                            "Settings",
+                            crate::keycaps::first_action_keystroke(
+                                &settings_panel::ToggleSettings,
+                                window,
+                            ),
+                            window,
+                            cx,
+                        )
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_settings(&settings_panel::ToggleSettings, window, cx);
+                    }))
+                    .child(
+                        svg()
+                            .path("phosphor/gear.svg")
+                            .size(px(12.0))
+                            .text_color(
+                                theme
+                                    .muted_foreground
+                                    .opacity(0.45 + (0.08 * compact_titlebar_progress)),
+                            ),
+                    ),
+            );
+        }
+
         top_bar = top_bar.child(tab_controls);
 
         // Non-macOS caption buttons: Min / (Max|Restore) / Close.
