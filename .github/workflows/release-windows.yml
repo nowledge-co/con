@@ -411,12 +411,20 @@ jobs:
           # Re-use the same appcast generator the macOS pipeline uses.
           # Windows has no OS minimum so we feed a harmless sentinel;
           # the Windows client ignores the field.
+          # ITEM_SHORT_VERSION is the string the Windows client compares
+          # against its baked `CON_RELEASE_VERSION`. It must be the full
+          # tag-derived version (0.1.0-beta.31), not the stripped
+          # marketing version (0.1.0) - otherwise the client, which now
+          # runs a SemVer-aware `is_newer`, correctly reads GA `0.1.0`
+          # as newer than prerelease `0.1.0-beta.31` and spuriously
+          # reports "update available" on the very build it was just
+          # cut from.
           APPCAST_FILE="$appcast_file" \
           APPCAST_TITLE="con" \
           APPCAST_LINK="https://con-releases.nowledge.co" \
-          ITEM_TITLE="Version ${marketing}" \
+          ITEM_TITLE="Version ${version}" \
           ITEM_VERSION="$build_number" \
-          ITEM_SHORT_VERSION="$marketing" \
+          ITEM_SHORT_VERSION="$version" \
           ITEM_URL="$download_url" \
           ITEM_LENGTH="$length" \
           ITEM_SIGNATURE="$signature" \

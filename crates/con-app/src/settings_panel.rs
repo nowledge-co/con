@@ -2213,13 +2213,20 @@ impl SettingsPanel {
                                                 if let Some(url) =
                                                     update_download_url(&latest_state)
                                                 {
+                                                    let label = match &latest_state {
+                                                        crate::updater::CheckState::UpdateAvailable { version, .. } =>
+                                                            format!("Download v{version}"),
+                                                        _ => "Download release".to_string(),
+                                                    };
                                                     col = col.child(
-                                                        gpui_component::link::Link::new(
-                                                            "update-download-link",
-                                                        )
-                                                        .href(url.clone())
-                                                        .text_size(px(11.0))
-                                                        .child(url),
+                                                        div().pt(px(4.0)).child(
+                                                            gpui_component::link::Link::new(
+                                                                "update-download-link",
+                                                            )
+                                                            .href(url)
+                                                            .text_size(px(11.0))
+                                                            .child(label),
+                                                        ),
                                                     );
                                                 }
                                                 col
@@ -4328,7 +4335,7 @@ fn update_summary_and_detail(
         ),
         CheckState::UpdateAvailable { version, .. } => (
             format!("Update available: {version}"),
-            "Download the new release from the link below.".to_string(),
+            "A newer build has been published.".to_string(),
         ),
         CheckState::UpToDate => (
             "Up to date".to_string(),
