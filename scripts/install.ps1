@@ -7,10 +7,45 @@ $ErrorActionPreference = 'Stop'
 $Repo        = 'nowledge-co/con-terminal'
 $InstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\con'
 
+# ── Terminal setup ──────────────────────────────────────────────────────────
+# UTF-8 output is required for the block-drawing glyphs in the banner
+# (U+2580/2584/2588). Modern Windows Terminal defaults to UTF-8, but
+# conhost under powershell.exe often still falls back to a legacy
+# codepage and renders "?" in place of `█`/`▀`/`▄`.
+#
+# VT processing (ENABLE_VIRTUAL_TERMINAL_PROCESSING) is the other half:
+# Win10 1809+ conhost supports it, but the flag isn't always set when
+# PowerShell is launched non-interactively (e.g. via `irm | iex` piped
+# from an elevated prompt). Force it on so our ANSI colors render.
+
+try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new() } catch {}
+try { $OutputEncoding             = [System.Text.UTF8Encoding]::new() } catch {}
+
+if (-not ('Native.ConsoleMode' -as [type])) {
+    try {
+        Add-Type -Namespace Native -Name ConsoleMode -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+public static extern System.IntPtr GetStdHandle(int nStdHandle);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+public static extern bool GetConsoleMode(System.IntPtr hConsoleHandle, out uint lpMode);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+public static extern bool SetConsoleMode(System.IntPtr hConsoleHandle, uint dwMode);
+'@ -ErrorAction SilentlyContinue
+    } catch {}
+}
+try {
+    $hOut = [Native.ConsoleMode]::GetStdHandle(-11)
+    $mode = 0
+    if ([Native.ConsoleMode]::GetConsoleMode($hOut, [ref]$mode)) {
+        [Native.ConsoleMode]::SetConsoleMode($hOut, $mode -bor 0x0004) | Out-Null
+    }
+} catch {}
+
 # ── Colors ──────────────────────────────────────────────────────────────────
-# Matches install.sh palette: success green, dim gray, error red,
-# gradient blue→purple→pink for the banner. True-color ANSI works on
-# PowerShell 5.1+ conhost (Win10 1809+) and on Windows Terminal.
+# Palette mirrors install.sh on macOS: success green, dim gray, error
+# red, and an 8-stop truecolor gradient blue → purple → pink for the
+# banner. Truecolor is preferred over 256-color fallback because every
+# terminal that can render the half-block glyphs also handles it.
 
 $ESC   = [char]27
 $RESET = "$ESC[0m"
@@ -19,14 +54,32 @@ $OK    = "$ESC[38;2;0;210;160m"
 $DIM   = "$ESC[38;2;140;150;175m"
 $ERR   = "$ESC[38;2;230;57;70m"
 
+# Gradient stops: #4ea8ff → #a855f7 → #ec4899, interpolated linearly.
+$G0 = "$ESC[38;2;78;168;255m"
+$G1 = "$ESC[38;2;104;144;253m"
+$G2 = "$ESC[38;2;129;121;250m"
+$G3 = "$ESC[38;2;155;97;248m"
+$G4 = "$ESC[38;2;178;83;234m"
+$G5 = "$ESC[38;2;197;79;207m"
+$G6 = "$ESC[38;2;217;76;180m"
+$G7 = "$ESC[38;2;236;72;153m"
+
 function Pass($msg) { Write-Host "   $OK`u{2713}$RESET  $msg" }
 function Fail($msg) { Write-Host "   $ERR`u{2717}$RESET  $msg" -ForegroundColor Red; exit 1 }
 
 # ── Banner ──────────────────────────────────────────────────────────────────
+# Exact output from: npx oh-my-logo "con" --palette-colors
+# "#4ea8ff,#a855f7,#ec4899" --filled --block-font tiny --color
+# Re-rendered through 8 truecolor stops for a smooth gradient.
+
+$FULL = [char]0x2588  # █
+$UP   = [char]0x2580  # ▀
+$DN   = [char]0x2584  # ▄
+$HL   = [char]0x2501  # ━
 
 Write-Host ''
-Write-Host "   $ESC[38;5;111m`u{2588}`u{2580}$ESC[38;5;105m`u{2580}$ESC[38;5;141m `u{2588}`u{2580}$ESC[38;5;177m`u{2588}$ESC[38;5;176m `u{2588}$ESC[38;5;170m`u{2584}$ESC[38;5;169m $ESC[38;5;205m`u{2588}$RESET"
-Write-Host "   $ESC[38;5;111m`u{2588}`u{2584}$ESC[38;5;105m`u{2584}$ESC[38;5;141m `u{2588}`u{2584}$ESC[38;5;177m`u{2588}$ESC[38;5;176m `u{2588}$ESC[38;5;170m $ESC[38;5;169m`u{2580}$ESC[38;5;205m`u{2588}$RESET"
+Write-Host "   $G0$FULL$UP$G1$UP$G2 $FULL$UP$G3$FULL$G4 $FULL$G5$DN$G6 $G7$FULL$RESET"
+Write-Host "   $G0$FULL$DN$G1$DN$G2 $FULL$DN$G3$FULL$G4 $FULL$G5 $G6$UP$G7$FULL$RESET"
 Write-Host ''
 
 # ── Preflight ───────────────────────────────────────────────────────────────
@@ -173,7 +226,7 @@ try {
 # ── Launch ──────────────────────────────────────────────────────────────────
 
 Write-Host ''
-Write-Host "   $ESC[38;5;111m`u{2501}`u{2501}$ESC[38;5;105m`u{2501}`u{2501}$ESC[38;5;141m`u{2501}`u{2501}$ESC[38;5;177m`u{2501}`u{2501}$ESC[38;5;176m`u{2501}`u{2501}$ESC[38;5;170m`u{2501}`u{2501}$ESC[38;5;169m`u{2501}`u{2501}$ESC[38;5;205m`u{2501}`u{2501}$RESET"
+Write-Host "   $G0$HL$HL$G1$HL$HL$G2$HL$HL$G3$HL$HL$G4$HL$HL$G5$HL$HL$G6$HL$HL$G7$HL$HL$RESET"
 Write-Host ''
 
 try {
