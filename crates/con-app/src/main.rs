@@ -418,7 +418,7 @@ struct AboutView {
 impl Render for AboutView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let repo_url = "https://github.com/nowledge-co/con";
+        let repo_url = "https://github.com/nowledge-co/con-terminal";
         let detail_surface = theme.secondary_active.opacity(0.34);
         let quiet_text = theme.foreground.opacity(0.64);
         let muted_text = theme.foreground.opacity(0.48);

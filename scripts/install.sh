@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 set -eu
 
-REPO="nowledge-co/con"
+REPO="nowledge-co/con-terminal"
 INSTALL_DIR="/Applications"
 
 # ── Colors ──────────────────────────────────────────────────────────────────
