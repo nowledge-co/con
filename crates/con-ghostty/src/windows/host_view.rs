@@ -44,6 +44,21 @@ pub struct RenderSession {
 unsafe impl Send for RenderSession {}
 unsafe impl Sync for RenderSession {}
 
+/// Keyboard modifiers held at the time of a mouse event.
+///
+/// We don't import GPUI's `Modifiers` here because `con-ghostty` must
+/// stay independent of the UI crate on Windows. The view layer copies
+/// the three bits we care about (shift/alt/control) into this struct.
+/// `platform` (the Win key / cmd key) is not reported in SGR and not
+/// meaningful for xterm shift-bypass semantics, so it's deliberately
+/// omitted.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MouseEventMods {
+    pub shift: bool,
+    pub alt: bool,
+    pub control: bool,
+}
+
 impl RenderSession {
     pub fn new(
         width_px: u32,
@@ -195,8 +210,30 @@ impl RenderSession {
         let _ = self.conpty.write(data);
     }
 
-    /// Mouse-left-down at the given cell. Starts a drag-selection.
-    pub fn mouse_down(&self, col: u16, row: u16) {
+    /// Mouse-left-down at the given cell.
+    ///
+    /// Xterm convention: Shift bypasses mouse tracking so the user can
+    /// always select text, even when a TUI has `set mouse=a` on. When
+    /// tracking is off or Shift is held, we drive local selection;
+    /// otherwise we emit an SGR button-press report and leave selection
+    /// alone. Shift+click with an existing selection extends from the
+    /// original anchor (matches every other terminal).
+    pub fn mouse_down(&self, col: u16, row: u16, mods: MouseEventMods) {
+        if self.vt.mouse_tracking_active() && !mods.shift {
+            self.report_sgr_button(0, col, row, mods, true);
+            return;
+        }
+        if mods.shift {
+            let renderer = self.renderer.lock();
+            let existing_anchor =
+                renderer.selection().map(|s| s.anchor).unwrap_or((col, row));
+            *self.drag_anchor.lock() = Some(existing_anchor);
+            renderer.set_selection(Some(Selection {
+                anchor: existing_anchor,
+                extent: (col, row),
+            }));
+            return;
+        }
         *self.drag_anchor.lock() = Some((col, row));
         self.renderer.lock().set_selection(Some(Selection {
             anchor: (col, row),
@@ -205,7 +242,16 @@ impl RenderSession {
     }
 
     /// Mouse-moved at the given cell while left button is held.
-    pub fn mouse_drag(&self, col: u16, row: u16) {
+    ///
+    /// When mouse tracking is active and the shell requested motion
+    /// (BUTTON / ANY mode), we emit an SGR motion report with the
+    /// motion bit (+32) set. Otherwise we extend the local drag.
+    pub fn mouse_drag(&self, col: u16, row: u16, mods: MouseEventMods) {
+        if self.vt.mouse_tracking_active() && !mods.shift {
+            // Button 0 (LMB) + 32 = motion-with-button bit per SGR spec.
+            self.report_sgr_button(32, col, row, mods, true);
+            return;
+        }
         let anchor = *self.drag_anchor.lock();
         if let Some(anchor) = anchor {
             self.renderer.lock().set_selection(Some(Selection {
@@ -215,16 +261,45 @@ impl RenderSession {
         }
     }
 
-    /// Mouse-left-up at the given cell. Clears transient 1-cell
-    /// selections (click without drag) so an isolated click doesn't
-    /// leave a single highlighted cell behind.
-    pub fn mouse_up(&self, col: u16, row: u16) {
+    /// Mouse-left-up at the given cell.
+    ///
+    /// Emits an SGR release when mouse tracking is active (unless Shift
+    /// is held to keep selection). Otherwise clears a transient 1-cell
+    /// selection — a click without drag shouldn't leave a lone cell
+    /// highlighted.
+    pub fn mouse_up(&self, col: u16, row: u16, mods: MouseEventMods) {
+        if self.vt.mouse_tracking_active() && !mods.shift {
+            self.report_sgr_button(0, col, row, mods, false);
+            return;
+        }
         let anchor = self.drag_anchor.lock().take();
         if let Some(anchor) = anchor
             && anchor == (col, row)
         {
             self.renderer.lock().set_selection(None);
         }
+    }
+
+    fn report_sgr_button(
+        &self,
+        base_button: u8,
+        col: u16,
+        row: u16,
+        mods: MouseEventMods,
+        pressed: bool,
+    ) {
+        let col = col.saturating_add(1);
+        let row = row.saturating_add(1);
+        let mut cb = base_button;
+        if mods.alt {
+            cb |= 0x08;
+        }
+        if mods.control {
+            cb |= 0x10;
+        }
+        let terminator = if pressed { 'M' } else { 'm' };
+        let seq = format!("\x1b[<{cb};{col};{row}{terminator}");
+        let _ = self.conpty.write(seq.as_bytes());
     }
 
     /// Cancel any in-flight drag (used on focus loss).
@@ -234,12 +309,21 @@ impl RenderSession {
 
     /// SGR mouse-wheel report. Only used when the shell has enabled
     /// mouse tracking — see `mouse_tracking_active`. `col`/`row` are
-    /// 1-based cell coordinates per the SGR spec.
-    pub fn forward_wheel(&self, col: u16, row: u16, delta_y: f32) {
+    /// 1-based cell coordinates per the SGR spec. Alt/Ctrl are encoded
+    /// into the button byte; Shift is handled upstream by the view,
+    /// which bypasses reporting entirely when Shift is held so the user
+    /// can scroll Con's own scrollback without the TUI seeing it.
+    pub fn forward_wheel(&self, col: u16, row: u16, delta_y: f32, mods: MouseEventMods) {
         if delta_y.abs() < f32::EPSILON {
             return;
         }
-        let button: u8 = if delta_y < 0.0 { 64 } else { 65 };
+        let mut button: u8 = if delta_y < 0.0 { 64 } else { 65 };
+        if mods.alt {
+            button |= 0x08;
+        }
+        if mods.control {
+            button |= 0x10;
+        }
         let col = col.max(1);
         let row = row.max(1);
         let seq = format!("\x1b[<{button};{col};{row}M");

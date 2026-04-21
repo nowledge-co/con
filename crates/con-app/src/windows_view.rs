@@ -37,8 +37,16 @@ use gpui_component::ActiveTheme;
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
-use con_ghostty::windows::host_view::RenderSession;
+use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
 use con_ghostty::windows::render::RenderOutcome;
+
+fn mouse_mods_from(modifiers: &Modifiers) -> MouseEventMods {
+    MouseEventMods {
+        shift: modifiers.shift,
+        alt: modifiers.alt,
+        control: modifiers.control,
+    }
+}
 
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
@@ -344,40 +352,40 @@ impl GhosttyView {
         Some((col, row))
     }
 
-    fn forward_mouse_down(&self, pos: Point<Pixels>) {
+    fn forward_mouse_down(&self, pos: Point<Pixels>, mods: MouseEventMods) {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_down(col, row);
+                    session.mouse_down(col, row, mods);
                 }
             }
         }
     }
 
-    fn forward_mouse_drag(&self, pos: Point<Pixels>) {
+    fn forward_mouse_drag(&self, pos: Point<Pixels>, mods: MouseEventMods) {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_drag(col, row);
+                    session.mouse_drag(col, row, mods);
                 }
             }
         }
     }
 
-    fn forward_mouse_up(&self, pos: Point<Pixels>) {
+    fn forward_mouse_up(&self, pos: Point<Pixels>, mods: MouseEventMods) {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_up(col, row);
+                    session.mouse_up(col, row, mods);
                 }
             }
         }
     }
 
-    fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta) {
+    fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta, mods: MouseEventMods) {
         let Some(terminal) = &self.terminal else {
             return;
         };
@@ -389,8 +397,10 @@ impl GhosttyView {
         // Only report wheel to the shell when it has explicitly enabled
         // mouse tracking (SGR). Otherwise modern TUIs expect the scroll
         // to move their own scrollback buffer via shell keybinds, not
-        // arrive as mouse events.
-        if !session.mouse_tracking_active() {
+        // arrive as mouse events. Shift bypasses reporting per xterm
+        // convention so the user can scroll Con's scrollback even when
+        // a TUI has `set mouse=a`.
+        if !session.mouse_tracking_active() || mods.shift {
             return;
         }
         let Some((col0, row0)) = self.cell_from_event_position(pos) else {
@@ -407,7 +417,7 @@ impl GhosttyView {
             return;
         }
         // `forward_wheel` expects 1-based SGR coordinates.
-        session.forward_wheel(col0 + 1, row0 + 1, delta_y_px);
+        session.forward_wheel(col0 + 1, row0 + 1, delta_y_px, mods);
     }
 
     /// Translate a GPUI `KeyDownEvent` into bytes and forward to the
@@ -691,26 +701,30 @@ impl Render for GhosttyView {
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
-                    this.forward_mouse_down(event.position);
+                    this.forward_mouse_down(event.position, mouse_mods_from(&event.modifiers));
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 if event.pressed_button == Some(MouseButton::Left) {
-                    this.forward_mouse_drag(event.position);
+                    this.forward_mouse_drag(event.position, mouse_mods_from(&event.modifiers));
                     cx.notify();
                 }
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                    this.forward_mouse_up(event.position);
+                    this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers));
                     cx.notify();
                 }),
             )
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
-                this.forward_scroll(event.position, event.delta);
+                this.forward_scroll(
+                    event.position,
+                    event.delta,
+                    mouse_mods_from(&event.modifiers),
+                );
                 cx.notify();
             }))
             .child(
