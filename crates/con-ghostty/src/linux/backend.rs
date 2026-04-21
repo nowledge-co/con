@@ -40,7 +40,7 @@ impl LinuxGhosttyApp {
     ) -> Result<Self, String> {
         Ok(Self {
             config: Mutex::new(LinuxBackendConfig {
-                shell_program: std::env::var("SHELL").ok().filter(|s| !s.trim().is_empty()),
+                shell_program: default_linux_shell_program(),
                 font_family: font_family.map(ToOwned::to_owned),
                 font_size,
             }),
@@ -100,6 +100,25 @@ impl LinuxGhosttyApp {
 
 unsafe impl Send for LinuxGhosttyApp {}
 unsafe impl Sync for LinuxGhosttyApp {}
+
+fn default_linux_shell_program() -> Option<String> {
+    if let Some(shell) = std::env::var("CON_LINUX_SHELL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(shell);
+    }
+
+    // The Linux transcript backend is not a full VT emulator yet.
+    // Prefer a plain POSIX shell for predictable prompt bring-up.
+    for candidate in ["/bin/sh", "/usr/bin/sh", "/bin/bash", "/usr/bin/bash"] {
+        if PathBuf::from(candidate).exists() {
+            return Some(candidate.to_string());
+        }
+    }
+
+    std::env::var("SHELL").ok().filter(|s| !s.trim().is_empty())
+}
 
 /// One per pane. The PTY session is not auto-started yet because Linux
 /// still lacks a real render path; the GPUI view will attach a live

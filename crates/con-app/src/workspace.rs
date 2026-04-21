@@ -6289,6 +6289,10 @@ impl Render for ConWorkspace {
             .pr(px(6.0))
             .bg(theme.title_bar.opacity(ui_surface_opacity))
             .window_control_area(WindowControlArea::Drag)
+            .on_mouse_down(MouseButton::Left, |_, _window, _cx| {
+                #[cfg(target_os = "linux")]
+                _window.start_window_move();
+            })
             .on_click(|event, window, _cx| {
                 if event.click_count() == 2 {
                     window.titlebar_double_click();
