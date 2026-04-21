@@ -36,8 +36,8 @@ For the full breakdown, see `docs/impl/agent-harness.md`.
 
 - Rust (stable, edition 2024)
 - `cmake`
-- **macOS**: Zig 0.13+ (for `libghostty`)
-- **Windows**: Zig 0.13+ (for `libghostty-vt`), Visual Studio 2022 Build Tools with the Windows 10/11 SDK. Run the build from a _Developer Command Prompt for VS 2022_ so `rc.exe` is on `PATH`.
+- **macOS**: Zig 0.15.2+ (ghostty's `build.zig.zon` pins `minimum_zig_version = "0.15.2"`)
+- **Windows**: Zig 0.15.2+ (same reason), Visual Studio 2022 Build Tools with the Windows 10/11 SDK. Run the build from a _Developer Command Prompt for VS 2022_ so `rc.exe` is on `PATH`. If Windows Defender is on, either add an exclusion for the repo dir or disable real-time scanning — zig's sub-build exes get briefly locked by MpEngine and spawn with `FileNotFound`.
 
 ## Build
 

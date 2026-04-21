@@ -66,7 +66,7 @@ See `docs/impl/windows-port.md` for the porting plan and the path to
 a working terminal on Windows.
 
 ```bash
-# Windows (from a Developer Command Prompt for VS 2022; needs Zig 0.13+ on PATH
+# Windows (from a Developer Command Prompt for VS 2022; needs Zig 0.15.2+ on PATH
 # for libghostty-vt; the binary ships as `con-app.exe` because `CON` is a
 # reserved DOS device name):
 cargo wbuild -p con --release          # produces target\release\con-app.exe
