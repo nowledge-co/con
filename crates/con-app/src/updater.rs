@@ -87,7 +87,12 @@ pub enum UpdaterStatus {
     Disabled(UpdaterDisabledReason),
 }
 
+/// Most variants are only constructed in the macOS Sparkle init
+/// path; Windows uses `ChannelDoesNotPoll` and `InitPanicked` only.
+/// Keep the surface platform-agnostic so `summary()`/`detail()` can
+/// match exhaustively without cfg noise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum UpdaterDisabledReason {
     ChannelDoesNotPoll,
     NotBundled,
