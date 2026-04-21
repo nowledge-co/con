@@ -81,6 +81,9 @@ smallvec = "1"
 [build-dependencies]
 cc = "1"
 
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1"
+
 [package.metadata.bundle]
 icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
 identifier = "co.nowledge.con"
