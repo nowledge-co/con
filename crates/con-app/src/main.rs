@@ -37,7 +37,6 @@ mod settings_panel;
 mod sidebar;
 mod terminal_pane;
 mod theme;
-#[cfg(target_os = "macos")]
 mod updater;
 mod workspace;
 
@@ -837,7 +836,6 @@ fn main() {
             show_about_window(cx);
         });
 
-        #[cfg(target_os = "macos")]
         cx.on_action(|_: &CheckForUpdates, _cx: &mut App| {
             updater::check_for_updates();
         });
@@ -916,8 +914,9 @@ fn main() {
             cx,
         );
 
-        // Initialize Sparkle auto-updater (loads framework from app bundle)
-        #[cfg(target_os = "macos")]
+        // Initialize the auto-updater. On macOS this loads Sparkle
+        // from the app bundle; on Windows it kicks off a notify-only
+        // background check against the release appcast.
         updater::init();
     });
 }

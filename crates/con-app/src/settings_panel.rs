@@ -2039,25 +2039,31 @@ impl SettingsPanel {
 
         let theme = cx.theme();
 
-        // Build the Updates card (only shown for channels that poll)
+        // Build the Updates card (only shown for channels that poll).
         let channel = con_core::release_channel::current();
-        // `show_updates` drives the Sparkle auto-update card, which is
-        // macOS-only; on other targets the whole block is cfg-ed out.
-        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+        // On Linux (and any other non-macOS-non-Windows target) we have no
+        // update backend, so skip the card even if the channel otherwise
+        // would poll.
+        #[cfg_attr(
+            all(not(target_os = "macos"), not(target_os = "windows")),
+            allow(unused_variables)
+        )]
         let show_updates = channel.polls_for_updates();
 
-        // The `mut` is only needed on macOS (the updates card re-binds
-        // `container`); on other targets the update block is cfg-ed out.
-        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+        #[cfg_attr(
+            all(not(target_os = "macos"), not(target_os = "windows")),
+            allow(unused_mut)
+        )]
         let mut container = section_content(
             "General",
             "Terminal defaults and shared app behavior.",
             theme,
         );
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if show_updates {
             let updater_status = crate::updater::status();
+            let latest_state = crate::updater::latest_check();
 
             container = container.child(
                 div()
@@ -2173,29 +2179,51 @@ impl SettingsPanel {
                                                     )
                                                     .child("Status"),
                                             )
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.5))
-                                                    .line_height(px(17.0))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(
-                                                        theme
-                                                            .foreground
-                                                            .opacity(0.88),
+                                            .child({
+                                                let (summary, detail) =
+                                                    update_summary_and_detail(
+                                                        &latest_state,
+                                                        updater_status,
+                                                    );
+                                                let mut col = div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(3.0))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.5))
+                                                            .line_height(px(17.0))
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(
+                                                                theme.foreground.opacity(0.88),
+                                                            )
+                                                            .child(summary),
                                                     )
-                                                    .child(updater_status.summary()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(10.5))
-                                                    .line_height(px(15.0))
-                                                    .text_color(
-                                                        theme
-                                                            .muted_foreground
-                                                            .opacity(0.62),
-                                                    )
-                                                    .child(updater_status.detail()),
-                                            ),
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(10.5))
+                                                            .line_height(px(15.0))
+                                                            .text_color(
+                                                                theme
+                                                                    .muted_foreground
+                                                                    .opacity(0.62),
+                                                            )
+                                                            .child(detail),
+                                                    );
+                                                if let Some(url) =
+                                                    update_download_url(&latest_state)
+                                                {
+                                                    col = col.child(
+                                                        gpui_component::link::Link::new(
+                                                            "update-download-link",
+                                                        )
+                                                        .href(url.clone())
+                                                        .text_size(px(11.0))
+                                                        .child(url),
+                                                    );
+                                                }
+                                                col
+                                            }),
                                     )
                                     .child(
                                         Button::new("check-updates")
@@ -2204,7 +2232,6 @@ impl SettingsPanel {
                                             .disabled(!updater_status.can_check_manually())
                                             .label("Check for Updates")
                                             .on_click(cx.listener(|_this, _, _window, _cx| {
-                                                #[cfg(target_os = "macos")]
                                                 crate::updater::check_for_updates();
                                             })),
                                     ),
@@ -4283,6 +4310,46 @@ impl Render for SettingsPanel {
             .font_family(theme.font_family.clone())
             .child(backdrop)
             .child(card)
+    }
+}
+
+// ── Update status helpers ─────────────────────────────────────────
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn update_summary_and_detail(
+    state: &crate::updater::CheckState,
+    status: crate::updater::UpdaterStatus,
+) -> (String, String) {
+    use crate::updater::CheckState;
+    match state {
+        CheckState::Checking => (
+            "Checking for updates…".to_string(),
+            "Fetching the release feed.".to_string(),
+        ),
+        CheckState::UpdateAvailable { version, .. } => (
+            format!("Update available: {version}"),
+            "Download the new release from the link below.".to_string(),
+        ),
+        CheckState::UpToDate => (
+            "Up to date".to_string(),
+            format!(
+                "Running {} — latest published build.",
+                crate::app_display_version()
+            ),
+        ),
+        CheckState::Error(e) => (
+            "Update check failed".to_string(),
+            e.clone(),
+        ),
+        CheckState::Idle => (status.summary().to_string(), status.detail().to_string()),
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn update_download_url(state: &crate::updater::CheckState) -> Option<String> {
+    match state {
+        crate::updater::CheckState::UpdateAvailable { url, .. } => Some(url.clone()),
+        _ => None,
     }
 }
 
