@@ -38,9 +38,9 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 `con` is in active beta development.
 
-- **macOS** — fully supported. Metal-backed libghostty terminal, Sparkle auto-update, signed DMG.
-- **Windows** — first beta ships as of `v0.1.0-beta.25`. D3D11/DirectWrite renderer over ConPTY + libghostty-vt. Unsigned ZIP (expect a SmartScreen prompt on first launch); notify-only update checker surfaces newer releases in Settings → Updates. Tracker: [#34](https://github.com/nowledge-co/con-terminal/issues/34).
-- **Linux** — planned. Tracker: [#18](https://github.com/nowledge-co/con-terminal/issues/18).
+- **macOS** fully supported, beta.
+- **Windows** early beta Tracker: [#34](https://github.com/nowledge-co/con-terminal/issues/34).
+- **Linux** planned. Tracker: [#18](https://github.com/nowledge-co/con-terminal/issues/18).
 
 ## Screenshot
 
@@ -58,13 +58,13 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 ## Install
 
-**macOS — Homebrew**
+**macOS, Homebrew**
 
 ```sh
 brew install --cask nowledge-co/tap/con-beta
 ```
 
-**macOS — shell**
+**macOS**
 
 ```sh
 curl -fsSL https://con-releases.nowledge.co/install.sh | sh
@@ -72,13 +72,13 @@ curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 
 Or download the DMG directly from [Releases](https://github.com/nowledge-co/con-terminal/releases).
 
-**Windows — PowerShell**
+**Windows**
 
 ```powershell
 irm https://con-releases.nowledge.co/install.ps1 | iex
 ```
 
-Or download `con-windows-x86_64.zip` from the latest [Release](https://github.com/nowledge-co/con-terminal/releases), unpack anywhere, and run `con-app.exe`. The ZIP is unsigned today, so Windows SmartScreen will prompt on first launch — click _More info → Run anyway_. Con ships as `con-app.exe` (not `con.exe`) because `CON` is a reserved DOS device name.
+Or download `con-windows-x86_64.zip` from the latest [Release](https://github.com/nowledge-co/con-terminal/releases).
 
 To build from source, see `HACKING.md`.
 
