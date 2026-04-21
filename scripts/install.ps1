@@ -1,4 +1,4 @@
-﻿# con — Windows terminal emulator installer
+# con - Windows terminal emulator installer
 # Usage:  irm https://con-releases.nowledge.co/install.ps1 | iex
 
 #Requires -Version 5.1
@@ -12,16 +12,22 @@ $Repo        = 'nowledge-co/con-terminal'
 # con-terminal as the folder segment sidesteps the entire trap.
 $InstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\con-terminal'
 
-# ── Terminal setup ──────────────────────────────────────────────────────────
+# --- Terminal setup ---------------------------------------------------------
 # UTF-8 output is required for the block-drawing glyphs in the banner
 # (U+2580/2584/2588). Modern Windows Terminal defaults to UTF-8, but
 # conhost under powershell.exe often still falls back to a legacy
-# codepage and renders "?" in place of `█`/`▀`/`▄`.
+# codepage and renders "?" in place of the banner glyphs.
 #
 # VT processing (ENABLE_VIRTUAL_TERMINAL_PROCESSING) is the other half:
 # Win10 1809+ conhost supports it, but the flag isn't always set when
 # PowerShell is launched non-interactively (e.g. via `irm | iex` piped
 # from an elevated prompt). Force it on so our ANSI colors render.
+#
+# NOTE: this file is intentionally ASCII-only. GitHub Pages serves .ps1
+# without a charset header, so `irm | iex` on PS 5.1 decodes the body
+# as the system ANSI codepage (CP1252) - a UTF-8 BOM or any multi-byte
+# character would parse as garbage (`i>>?#` instead of `#`, etc.). All
+# runtime Unicode goes through `[char]0xXXXX` casts, which are unambiguous.
 
 try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new() } catch {}
 try { $OutputEncoding             = [System.Text.UTF8Encoding]::new() } catch {}
@@ -46,9 +52,9 @@ try {
     }
 } catch {}
 
-# ── Colors ──────────────────────────────────────────────────────────────────
+# --- Colors -----------------------------------------------------------------
 # Palette mirrors install.sh on macOS: success green, dim gray, error
-# red, and an 8-stop truecolor gradient blue → purple → pink for the
+# red, and an 8-stop truecolor gradient blue -> purple -> pink for the
 # banner. Truecolor is preferred over 256-color fallback because every
 # terminal that can render the half-block glyphs also handles it.
 
@@ -59,7 +65,7 @@ $OK    = "$ESC[38;2;0;210;160m"
 $DIM   = "$ESC[38;2;140;150;175m"
 $ERR   = "$ESC[38;2;230;57;70m"
 
-# Gradient stops: #4ea8ff → #a855f7 → #ec4899, interpolated linearly.
+# Gradient stops: #4ea8ff -> #a855f7 -> #ec4899, interpolated linearly.
 $G0 = "$ESC[38;2;78;168;255m"
 $G1 = "$ESC[38;2;104;144;253m"
 $G2 = "$ESC[38;2;129;121;250m"
@@ -69,31 +75,31 @@ $G5 = "$ESC[38;2;197;79;207m"
 $G6 = "$ESC[38;2;217;76;180m"
 $G7 = "$ESC[38;2;236;72;153m"
 
-# `u{XXXX} escape syntax is PS 6+ only — stock Windows 11 ships PS 5.1
+# `u{XXXX}` escape syntax is PS 6+ only - stock Windows 11 ships PS 5.1
 # where those show up as literal text. Cast via [char] instead.
-$CHK   = [char]0x2713  # ✓
-$CROSS = [char]0x2717  # ✗
-$MID   = [char]0x00B7  # ·
+$CHK   = [char]0x2713  # U+2713 CHECK MARK
+$CROSS = [char]0x2717  # U+2717 BALLOT X
+$MID   = [char]0x00B7  # U+00B7 MIDDLE DOT
 
 function Pass($msg) { Write-Host "   $OK$CHK$RESET  $msg" }
 function Fail($msg) { Write-Host "   $ERR$CROSS$RESET  $msg" -ForegroundColor Red; exit 1 }
 
-# ── Banner ──────────────────────────────────────────────────────────────────
+# --- Banner -----------------------------------------------------------------
 # Exact output from: npx oh-my-logo "con" --palette-colors
 # "#4ea8ff,#a855f7,#ec4899" --filled --block-font tiny --color
 # Re-rendered through 8 truecolor stops for a smooth gradient.
 
-$FULL = [char]0x2588  # █
-$UP   = [char]0x2580  # ▀
-$DN   = [char]0x2584  # ▄
-$HL   = [char]0x2501  # ━
+$FULL = [char]0x2588  # U+2588 FULL BLOCK
+$UP   = [char]0x2580  # U+2580 UPPER HALF BLOCK
+$DN   = [char]0x2584  # U+2584 LOWER HALF BLOCK
+$HL   = [char]0x2501  # U+2501 BOX DRAWINGS HEAVY HORIZONTAL
 
 Write-Host ''
 Write-Host "   $G0$FULL$UP$G1$UP$G2 $FULL$UP$G3$FULL$G4 $FULL$G5$DN$G6 $G7$FULL$RESET"
 Write-Host "   $G0$FULL$DN$G1$DN$G2 $FULL$DN$G3$FULL$G4 $FULL$G5 $G6$UP$G7$FULL$RESET"
 Write-Host ''
 
-# ── Preflight ───────────────────────────────────────────────────────────────
+# --- Preflight --------------------------------------------------------------
 
 if ($env:OS -ne 'Windows_NT') { Fail 'con requires Windows' }
 
@@ -103,7 +109,7 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     default { Fail "unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
 }
 
-# ── Resolve ─────────────────────────────────────────────────────────────────
+# --- Resolve ----------------------------------------------------------------
 
 try {
     $release = Invoke-RestMethod `
@@ -139,7 +145,7 @@ if ($channel) {
     Pass "$BOLD`con$RESET  $DIM$version $MID $arch$RESET"
 }
 
-# ── Download ────────────────────────────────────────────────────────────────
+# --- Download ---------------------------------------------------------------
 
 $tmp = New-Item -ItemType Directory -Force `
     -Path (Join-Path $env:TEMP "con-install-$([System.IO.Path]::GetRandomFileName())")
@@ -159,7 +165,7 @@ $sizeMB = '{0:N1}M' -f ($zipAsset.size / 1MB)
 Write-Host "`r$(' ' * 40)`r" -NoNewline
 Pass "downloaded  $DIM$sizeMB$RESET"
 
-# ── Verify ──────────────────────────────────────────────────────────────────
+# --- Verify -----------------------------------------------------------------
 # Sparkle signs the ZIP for in-app update verification; the SHA256SUMS
 # file is the integrity guarantee for first-install. If it's missing
 # (older releases or manual upload), warn but don't abort.
@@ -180,7 +186,7 @@ if ($sumAsset) {
     }
 }
 
-# ── Install ─────────────────────────────────────────────────────────────────
+# --- Install ----------------------------------------------------------------
 
 Write-Host -NoNewline "   $DIM$MID$RESET  installing"
 
@@ -205,7 +211,7 @@ if (-not (Test-Path $exePath)) {
 Write-Host "`r$(' ' * 40)`r" -NoNewline
 Pass "installed  $DIM$InstallRoot$RESET"
 
-# ── PATH (HKCU) ─────────────────────────────────────────────────────────────
+# --- PATH (HKCU) ------------------------------------------------------------
 # Persist in the user Environment registry hive so new shells pick it
 # up. Current session gets the updated PATH too via `[Environment]::...`.
 
@@ -219,7 +225,7 @@ if ($pathSegments -notcontains $InstallRoot) {
     Pass "added to PATH  $DIM(new shells)$RESET"
 }
 
-# ── Start Menu shortcut ─────────────────────────────────────────────────────
+# --- Start Menu shortcut ----------------------------------------------------
 
 $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 # con.lnk would trip the reserved-name rule the same way. The Start
@@ -234,10 +240,10 @@ try {
     $shortcut.IconLocation = "$exePath,0"
     $shortcut.Save()
 } catch {
-    # Start Menu entry is nice-to-have, not critical — silent on failure.
+    # Start Menu entry is nice-to-have, not critical - silent on failure.
 }
 
-# ── Launch ──────────────────────────────────────────────────────────────────
+# --- Launch -----------------------------------------------------------------
 
 Write-Host ''
 Write-Host "   $G0$HL$HL$G1$HL$HL$G2$HL$HL$G3$HL$HL$G4$HL$HL$G5$HL$HL$G6$HL$HL$G7$HL$HL$RESET"
@@ -245,7 +251,7 @@ Write-Host ''
 
 try {
     Start-Process -FilePath $exePath
-    Pass 'launched — enjoy!'
+    Pass 'launched. enjoy!'
 } catch {
     # Non-fatal: user can launch from Start Menu or by typing `con-app`.
 }
