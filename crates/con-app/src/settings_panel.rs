@@ -2213,28 +2213,61 @@ impl SettingsPanel {
                                                 if let Some(url) =
                                                     update_download_url(&latest_state)
                                                 {
+                                                    let label = match &latest_state {
+                                                        crate::updater::CheckState::UpdateAvailable { version, .. } =>
+                                                            format!("Download v{version}"),
+                                                        _ => "Download release".to_string(),
+                                                    };
                                                     col = col.child(
-                                                        gpui_component::link::Link::new(
-                                                            "update-download-link",
-                                                        )
-                                                        .href(url.clone())
-                                                        .text_size(px(11.0))
-                                                        .child(url),
+                                                        div().pt(px(4.0)).child(
+                                                            gpui_component::link::Link::new(
+                                                                "update-download-link",
+                                                            )
+                                                            .href(url)
+                                                            .text_size(px(11.0))
+                                                            .child(label),
+                                                        ),
                                                     );
                                                 }
                                                 col
                                             }),
                                     )
-                                    .child(
-                                        Button::new("check-updates")
-                                            .small()
-                                            .ghost()
-                                            .disabled(!updater_status.can_check_manually())
-                                            .label("Check for Updates")
-                                            .on_click(cx.listener(|_this, _, _window, _cx| {
-                                                crate::updater::check_for_updates();
-                                            })),
-                                    ),
+                                    .child({
+                                        let actions = div().flex().items_center().gap(px(6.0));
+
+                                        #[cfg(target_os = "windows")]
+                                        let actions = if matches!(
+                                            &latest_state,
+                                            crate::updater::CheckState::UpdateAvailable { .. }
+                                        ) {
+                                            actions.child(
+                                                Button::new("apply-update")
+                                                    .small()
+                                                    .primary()
+                                                    .label("Update now")
+                                                    .on_click(cx.listener(
+                                                        |_this, _, _window, _cx| {
+                                                            crate::updater::apply_update_in_place();
+                                                        },
+                                                    )),
+                                            )
+                                        } else {
+                                            actions
+                                        };
+
+                                        actions.child(
+                                            Button::new("check-updates")
+                                                .small()
+                                                .ghost()
+                                                .disabled(!updater_status.can_check_manually())
+                                                .label("Check for Updates")
+                                                .on_click(cx.listener(
+                                                    |_this, _, _window, _cx| {
+                                                        crate::updater::check_for_updates();
+                                                    },
+                                                )),
+                                        )
+                                    }),
                             ),
                     ),
             );
@@ -4328,7 +4361,7 @@ fn update_summary_and_detail(
         ),
         CheckState::UpdateAvailable { version, .. } => (
             format!("Update available: {version}"),
-            "Download the new release from the link below.".to_string(),
+            "A newer build has been published.".to_string(),
         ),
         CheckState::UpToDate => (
             "Up to date".to_string(),
