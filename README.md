@@ -72,9 +72,13 @@ curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 
 Or download the DMG directly from [Releases](https://github.com/nowledge-co/con-terminal/releases).
 
-**Windows**
+**Windows — PowerShell**
 
-Download `con-windows-x86_64.zip` from the latest [Release](https://github.com/nowledge-co/con-terminal/releases), unpack anywhere, and run `con-app.exe`. The ZIP is unsigned today, so Windows SmartScreen will prompt on first launch — click _More info → Run anyway_. Con ships as `con-app.exe` (not `con.exe`) because `CON` is a reserved DOS device name.
+```powershell
+irm https://con-releases.nowledge.co/install.ps1 | iex
+```
+
+Or download `con-windows-x86_64.zip` from the latest [Release](https://github.com/nowledge-co/con-terminal/releases), unpack anywhere, and run `con-app.exe`. The ZIP is unsigned today, so Windows SmartScreen will prompt on first launch — click _More info → Run anyway_. Con ships as `con-app.exe` (not `con.exe`) because `CON` is a reserved DOS device name.
 
 To build from source, see `HACKING.md`.
 
