@@ -462,31 +462,39 @@ impl GlyphCache {
             None
         };
 
-        // Decide final slot width. For normal glyphs and powerline
-        // exempts it's cell_w; for oversized PUA icons it's the
-        // scaled natural ink width (capped at 2 cells).
-        let (glyph_w, icon_scale) = match metrics {
+        // Decide (slot width, lsb shift, scale). Three cases:
+        //   1. fits cell   → cell_w slot, no shift, no scale (fast path)
+        //   2. width-only  → widen slot, shift layoutRect right by
+        //                    |lsb_overhang| so negative-lsb ink lands
+        //                    flush at slot.left, no scale
+        //   3. height too  → scale-to-fit around slot centre + oversized
+        //                    layoutRect so DirectWrite doesn't pre-clip
+        //                    the natural ink before the transform shrinks
+        //                    it back into the slot
+        // Case 2 covers IoskeleyMono's full NF set at the default font
+        // size (natural_h ≈ cell_h); case 3 is only for pathological
+        // configurations where the cell is very short.
+        let (glyph_w, lsb_shift_px, icon_scale): (i32, f32, Option<f32>) = match metrics {
             Some(m) => {
                 let lsb_overhang = (-m.lsb_px).max(0.0);
                 let natural_w = m.ink_w_px + lsb_overhang;
                 let natural_h = m.ink_h_px.max(1.0);
-                let fits_1_cell =
-                    natural_w <= (cell_w as f32) + 1.0 && natural_h <= (cell_h as f32) + 1.0;
-                if fits_1_cell {
-                    (cell_w, None)
+                let fits_cell_w = natural_w <= (cell_w as f32) + 1.0;
+                let fits_cell_h = natural_h <= (cell_h as f32) + 1.0;
+                if fits_cell_w && fits_cell_h {
+                    (cell_w, 0.0, None)
+                } else if fits_cell_h {
+                    let w = (natural_w.ceil() as i32).clamp(cell_w, 2 * cell_w);
+                    (w, lsb_overhang, None)
                 } else {
-                    // Scale to fit the longer cell dim (height) but
-                    // never upscale past natural size, and clamp width
-                    // to 2 cells so a single pathological glyph can't
-                    // blow out two neighbours.
                     let by_h = (cell_h as f32) / natural_h;
                     let by_w_cap = (2.0 * cell_w as f32) / natural_w;
-                    let scale = by_h.min(by_w_cap).min(1.0).max(0.5);
+                    let scale = by_h.min(by_w_cap).clamp(0.5, 1.0);
                     let w = ((natural_w * scale).ceil() as i32).clamp(cell_w, 2 * cell_w);
-                    (w, Some(scale))
+                    (w, 0.0, Some(scale))
                 }
             }
-            None => (cell_w, None),
+            None => (cell_w, 0.0, None),
         };
         let alloc = self.allocator.allocate(size2(glyph_w, cell_h))?;
         let rect = alloc.rectangle;
@@ -510,36 +518,34 @@ impl GlyphCache {
         };
 
         // Scale transform for pathological PUA glyphs whose natural
-        // ink height exceeds the cell (we already widened the slot to
-        // accommodate the width). Scale uniformly around the slot's
-        // geometric center so DrawText's natural glyph placement
-        // stays roughly centered in the slot. Standard-sized icons
-        // (IoskeleyMono's full NF set at the default font size) all
-        // satisfy `fits_1_cell_h = true` and take the None/fast path.
+        // ink height exceeds the cell. Scale uniformly around the
+        // slot's geometric center so DrawText's natural glyph
+        // placement stays roughly centered in the slot. Standard-
+        // sized icons take the width-only path (below) instead.
         let transform = icon_scale.map(|scale| {
             let cx = (slot_rect.left + slot_rect.right) * 0.5;
             let cy = (slot_rect.top + slot_rect.bottom) * 0.5;
-            // Scale-around-(cx,cy):
-            //   x' = scale*x + (1-scale)*cx
-            //   y' = scale*y + (1-scale)*cy
-            let tf = Matrix3x2 {
+            Matrix3x2 {
                 M11: scale,
                 M12: 0.0,
                 M21: 0.0,
                 M22: scale,
                 M31: (1.0 - scale) * cx,
                 M32: (1.0 - scale) * cy,
-            };
+            }
+        });
+
+        if metrics.is_some() && (glyph_w != cell_w || icon_scale.is_some()) {
             log::info!(
-                "atlas: PUA U+{:04X} cell={}x{} slot_w={} scale={:.3}",
+                "atlas: PUA U+{:04X} cell={}x{} slot_w={} lsb_shift={:.1} scale={:.3}",
                 codepoint,
                 cell_w,
                 cell_h,
-                (slot_rect.right - slot_rect.left) as i32,
-                scale,
+                glyph_w,
+                lsb_shift_px,
+                icon_scale.unwrap_or(1.0),
             );
-            tf
-        });
+        }
 
         let identity = Matrix3x2 {
             M11: 1.0,
@@ -567,11 +573,10 @@ impl GlyphCache {
                 .PushAxisAlignedClip(&slot_rect, D2D1_ANTIALIAS_MODE_ALIASED);
             self.d2d_rt.FillRectangle(&slot_rect, &self.black_brush);
             if let Some(tf) = transform {
-                // Over-sized layout rect so DirectWrite's internal
-                // text-layout clip (built from the layoutRect) doesn't
-                // cut off the natural ink before our scale transform
-                // maps it back into the cell. The outer PushAxisAlignedClip
-                // keeps any overshoot contained to this slot.
+                // Oversized layoutRect so DirectWrite's internal text-
+                // layout clip doesn't cut off the natural ink before our
+                // scale transform maps it back into the slot. The outer
+                // PushAxisAlignedClip keeps any overshoot contained.
                 let layout = D2D_RECT_F {
                     left: slot_rect.left - (cell_w as f32),
                     top: slot_rect.top - (cell_h as f32),
@@ -588,6 +593,27 @@ impl GlyphCache {
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
                 self.d2d_rt.SetTransform(&identity);
+            } else if lsb_shift_px > 0.0 {
+                // Width-overflow PUA: widened slot, pen shifted right
+                // by |lsb_overhang| so the glyph's ink left edge lands
+                // at slot.left. Skip CLIP so DirectWrite doesn't re-
+                // clip to the shifted layoutRect — the outer
+                // PushAxisAlignedClip already bounds writes to the
+                // slot.
+                let shifted = D2D_RECT_F {
+                    left: slot_rect.left + lsb_shift_px,
+                    top: slot_rect.top,
+                    right: slot_rect.right + lsb_shift_px,
+                    bottom: slot_rect.bottom,
+                };
+                self.d2d_rt.DrawText(
+                    utf16_slice,
+                    format,
+                    &shifted,
+                    &self.white_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
             } else {
                 self.d2d_rt.DrawText(
                     utf16_slice,

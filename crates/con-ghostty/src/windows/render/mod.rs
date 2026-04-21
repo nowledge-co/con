@@ -424,6 +424,23 @@ impl Renderer {
         let cell_w_px = atlas.metrics().cell_width_px;
         drop(atlas);
 
+        // Capture the cursor cell's source instance BEFORE sorting —
+        // the row-major `idx = row * cols + col` mapping is only
+        // valid while `instances` is still in grid order.
+        let cursor_source: Option<Instance> = if snapshot.cursor.visible {
+            let col = snapshot.cursor.col as usize;
+            let row = snapshot.cursor.row as usize;
+            let cols_u = snapshot.cols as usize;
+            let rows_u = snapshot.rows as usize;
+            if col < cols_u && row < rows_u {
+                instances.get(row * cols_u + col).copied()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Sort so oversized PUA icons render LAST within the grid
         // pass. Their atlas slots are wider than a cell, so their
         // quad overflows into the neighbour column. DX11 guarantees
@@ -435,24 +452,18 @@ impl Renderer {
         // independently — bad ordering would show up as flicker.
         instances.sort_by_key(|inst| (inst.atlas_size[0] > cell_w_px) as u8);
 
-        if snapshot.cursor.visible {
-            let col = snapshot.cursor.col as usize;
-            let row = snapshot.cursor.row as usize;
-            let cols_u = snapshot.cols as usize;
-            let rows_u = snapshot.rows as usize;
-            if col < cols_u && row < rows_u {
-                let idx = row * cols_u + col;
-                if let Some(src) = instances.get(idx).copied() {
-                    instances.push(Instance {
-                        cell_pos: src.cell_pos,
-                        atlas_pos: src.atlas_pos,
-                        atlas_size: src.atlas_size,
-                        fg: src.bg,
-                        bg: src.fg,
-                        attrs: src.attrs & !0x10,
-                    });
-                }
-            }
+        // Push the cursor instance AFTER the sort so it always renders
+        // last — on top of any wide PUA glyph that might otherwise
+        // overdraw the cursor cell.
+        if let Some(src) = cursor_source {
+            instances.push(Instance {
+                cell_pos: src.cell_pos,
+                atlas_pos: src.atlas_pos,
+                atlas_size: src.atlas_size,
+                fg: src.bg,
+                bg: src.fg,
+                attrs: src.attrs & !0x10,
+            });
         }
 
         let mut pipeline = self
