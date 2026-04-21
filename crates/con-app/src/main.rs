@@ -1,3 +1,12 @@
+// Release builds on Windows use the GUI subsystem so double-clicking
+// the exe (or launching it from Explorer / a shortcut) doesn't spawn a
+// stray console window alongside the GPUI window. Debug builds keep
+// the console subsystem so `cargo wrun` in a terminal still prints
+// env_logger output and panic traces inline.
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 // Suppress warnings from objc 0.2's `sel_impl!` and `class!` macros
 // checking `cfg(feature = "cargo-clippy")`.
 #![allow(unexpected_cfgs)]
