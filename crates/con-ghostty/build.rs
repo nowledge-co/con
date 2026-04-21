@@ -234,12 +234,15 @@ fn build_vt_backend(target_os: &str) {
     // `CON_GHOSTTY_OPTIMIZE=Debug` opt back in for VT-debugging.
     //
     // `-Dsimd`: Ghostty vendors `simdutf` (a C++ SIMD UTF-8 library)
-    // when SIMD is on. On Windows, the static archive can reference
-    // simdutf without bundling it, so we default SIMD off there. On
-    // Linux the archive links cleanly, so we default SIMD on.
+    // when SIMD is on, but the produced static archive does not yet
+    // bundle the required `simdutf` objects reliably across our target
+    // environments. Default SIMD off for now so the resulting
+    // `libghostty-vt` archive is self-contained on both Windows and
+    // Linux. Keep the env override for experimentation once the native
+    // link surface is understood well enough to ship.
     let simd_on = env::var("CON_GHOSTTY_VT_SIMD")
         .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(target_os != "windows");
+        .unwrap_or(false);
     let simd_flag = if simd_on {
         "-Dsimd=true"
     } else {
