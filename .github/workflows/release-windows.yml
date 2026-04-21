@@ -127,8 +127,16 @@ jobs:
         # the non-macOS update-polling path and Settings → Updates card
         # know which appcast to query. Local dev builds leave it unset
         # and fall back to the Dev channel, which never polls.
+        #
+        # `CON_RELEASE_VERSION` is the full tag-derived version (e.g.
+        # `0.1.0-beta.31`). Cargo.toml is frozen at `0.1.0` so
+        # `CARGO_PKG_VERSION` loses the prerelease suffix; without this
+        # the Settings → Updates version display would read `0.1.0`
+        # for every beta build, and the appcast diff check would be
+        # useless.
         env:
           CON_RELEASE_CHANNEL: ${{ steps.meta.outputs.channel }}
+          CON_RELEASE_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           cargo wbuild -p con --release
 

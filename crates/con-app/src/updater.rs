@@ -417,8 +417,8 @@ mod windows_impl {
         let (version, url) = parse_latest(&body)
             .ok_or_else(|| "appcast missing shortVersionString or enclosure".to_string())?;
 
-        let running = env!("CARGO_PKG_VERSION");
-        if is_newer(&version, running) {
+        let running = crate::app_display_version();
+        if is_newer(&version, &running) {
             Ok(CheckState::UpdateAvailable { version, url })
         } else {
             Ok(CheckState::UpToDate)
@@ -456,26 +456,65 @@ mod windows_impl {
     /// Compare two dotted versions numerically, ignoring any
     /// pre-release suffix (`-beta.1` etc). Returns true iff
     /// `latest > running`.
+    /// SemVer-lite comparison with prerelease awareness.
+    ///
+    /// Splits `MAJOR.MINOR.PATCH` from any `-prerelease` suffix and
+    /// compares each half independently. Within the prerelease tail a
+    /// missing suffix outranks a present one (SemVer rule: `1.0.0`
+    /// beats `1.0.0-beta.1`), and otherwise numeric segments compare
+    /// numerically while string segments compare lexically. This is the
+    /// behavior we need for `0.1.0-beta.31` to read as newer than
+    /// `0.1.0-beta.30` — the previous implementation stripped the
+    /// suffix and treated every beta build as equivalent.
     fn is_newer(latest: &str, running: &str) -> bool {
-        let parse = |v: &str| -> Vec<u64> {
-            v.split(|c: char| c == '-' || c == '+')
-                .next()
-                .unwrap_or(v)
+        compare(latest, running) == std::cmp::Ordering::Greater
+    }
+
+    fn compare(a: &str, b: &str) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        let split = |v: &str| -> (Vec<u64>, Option<String>) {
+            let (core, pre) = match v.split_once('-') {
+                Some((c, p)) => (c, Some(p.split('+').next().unwrap_or(p).to_string())),
+                None => (v.split('+').next().unwrap_or(v), None),
+            };
+            let nums = core
                 .split('.')
                 .map(|s| s.parse::<u64>().unwrap_or(0))
-                .collect()
+                .collect();
+            (nums, pre)
         };
-        let l = parse(latest);
-        let r = parse(running);
-        let len = l.len().max(r.len());
+
+        let (an, ap) = split(a);
+        let (bn, bp) = split(b);
+
+        let len = an.len().max(bn.len());
         for i in 0..len {
-            let a = l.get(i).copied().unwrap_or(0);
-            let b = r.get(i).copied().unwrap_or(0);
-            if a != b {
-                return a > b;
+            let x = an.get(i).copied().unwrap_or(0);
+            let y = bn.get(i).copied().unwrap_or(0);
+            match x.cmp(&y) {
+                Ordering::Equal => continue,
+                ord => return ord,
             }
         }
-        false
+
+        match (ap, bp) {
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => Ordering::Less,
+            (Some(ap), Some(bp)) => {
+                for (x, y) in ap.split('.').zip(bp.split('.')) {
+                    let ord = match (x.parse::<u64>(), y.parse::<u64>()) {
+                        (Ok(xn), Ok(yn)) => xn.cmp(&yn),
+                        _ => x.cmp(y),
+                    };
+                    if ord != Ordering::Equal {
+                        return ord;
+                    }
+                }
+                ap.split('.').count().cmp(&bp.split('.').count())
+            }
+        }
     }
 
     #[cfg(test)]
@@ -505,7 +544,13 @@ mod windows_impl {
             assert!(!is_newer("0.7.9", "0.7.9"));
             assert!(!is_newer("0.7.9", "0.8.0"));
             assert!(is_newer("1.0.0", "0.9.99"));
-            // Pre-release suffixes are stripped; 0.8.0-beta.1 compares as 0.8.0.
+            // Pre-release bumps within the same core version.
+            assert!(is_newer("0.1.0-beta.31", "0.1.0-beta.30"));
+            assert!(!is_newer("0.1.0-beta.30", "0.1.0-beta.31"));
+            // GA outranks any prerelease of the same core version.
+            assert!(is_newer("0.1.0", "0.1.0-beta.30"));
+            assert!(!is_newer("0.1.0-beta.30", "0.1.0"));
+            // A newer core trumps prerelease ordering.
             assert!(is_newer("0.8.0-beta.1", "0.7.9"));
         }
     }
