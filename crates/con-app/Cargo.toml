@@ -72,6 +72,11 @@ windows = { version = "0.61", features = [
     "Win32_System_Kernel",             # EXCEPTION_POINTERS definition
     "Win32_Graphics_Dwm",              # DwmSetWindowAttribute — Mica backdrop
 ] }
+# Used only by the Windows `GhosttyView` to wrap D3D11-readback BGRA into
+# a GPUI `RenderImage` (GPUI's `RenderImage::new` takes a
+# `SmallVec<[image::Frame; 1]>` and it does not re-export either crate).
+image = { version = "0.25", default-features = false }
+smallvec = "1"
 
 [build-dependencies]
 cc = "1"
