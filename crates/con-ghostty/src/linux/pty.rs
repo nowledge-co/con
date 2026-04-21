@@ -136,7 +136,13 @@ impl LinuxPtySession {
             .context("failed to open linux pty")?;
 
         let mut command = match options.program.as_ref() {
-            Some(program) => CommandBuilder::new(program),
+            Some(program) => {
+                let mut command = CommandBuilder::new(program);
+                if let Some(flag) = interactive_shell_flag(program) {
+                    command.arg(flag);
+                }
+                command
+            }
             None => CommandBuilder::new_default_prog(),
         };
         command.env("TERM", "xterm-256color");
@@ -326,6 +332,15 @@ fn default_title(cwd: Option<&Path>, program: Option<&str>) -> String {
     }
 
     "shell".to_string()
+}
+
+fn interactive_shell_flag(program: &str) -> Option<&'static str> {
+    let shell = Path::new(program).file_name()?.to_str()?;
+    match shell {
+        "bash" | "sh" | "zsh" | "dash" | "ksh" | "mksh" | "fish" | "nu" | "pwsh"
+        | "xonsh" => Some("-i"),
+        _ => None,
+    }
 }
 
 fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {

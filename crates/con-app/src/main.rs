@@ -144,8 +144,19 @@ fn supports_transparent_main_window() -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 fn supports_transparent_main_window() -> bool {
     true
+}
+
+#[cfg(target_os = "linux")]
+fn supports_transparent_main_window() -> bool {
+    false
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn supports_transparent_main_window() -> bool {
+    false
 }
 
 /// Enable a Windows 11 DWM backdrop on the top-level window.
