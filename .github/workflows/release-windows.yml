@@ -20,21 +20,26 @@ permissions:
 jobs:
   build:
     name: Build windows-x86_64
-    # `windows-latest` currently aliases to `windows-2025` (Server 2025),
-    # on which Zig 0.15.2 building libghostty-vt fails deterministically
-    # with `FileNotFound` when spawning `uucode_build_tables.exe`. The
-    # retry loop below confirmed it's not a visibility race — all three
-    # attempts hit the same cached exe hash and fail identically. Pin
-    # to `windows-2022` (Server 2022) which upstream ghostty also
-    # avoids via Namespace.so custom runners; we want the oldest still-
-    # supported GHA image until we understand the root cause.
     runs-on: windows-2022
 
-    # Same CON-reserved-name workaround as ci-portable.yml — git.exe
-    # refuses to operate inside any directory named CON. We clone into
-    # C:\src\repo and cd there for every subsequent step.
+    # Two workarounds converge here:
+    #
+    # 1. CON_CHECKOUT_DIR sidesteps the CON reserved-name trap: runner
+    #    2.333.1+ rejects any workspace path whose components match a
+    #    DOS device name. Cloning to C:\src\repo keeps us out of that
+    #    namespace — same workaround ci-portable.yml uses.
+    #
+    # 2. ZIG_GLOBAL_CACHE_DIR shortens the uucode package cache path so
+    #    Zig's build system can spawn uucode_build_tables.exe. The
+    #    default cache lives at %LOCALAPPDATA%\zig (~60 chars deep),
+    #    and Zig invokes the exe via a relative path walking back up
+    #    to the project's .zig-cache — combined length lands just over
+    #    MAX_PATH (260) and CreateProcessW returns FILE_NOT_FOUND. A
+    #    short cache root (C:\zc) keeps the composed path comfortably
+    #    under the legacy limit.
     env:
       CON_CHECKOUT_DIR: C:\src\repo
+      ZIG_GLOBAL_CACHE_DIR: C:\zc
 
     defaults:
       run:
@@ -70,18 +75,23 @@ jobs:
         with:
           workspaces: C:\src\repo
 
+      - name: Prepare short-path Zig cache
+        working-directory: C:\
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:ZIG_GLOBAL_CACHE_DIR | Out-Null
+
       - name: Defense-in-depth — exclude build dirs from Defender
-        # Probably not the dominant failure mode (see retry logic in the
-        # build step) but Defender real-time scanning can still briefly
-        # lock a just-written PE file. Admin-exclude the hot paths so
-        # MpEngine at least doesn't contribute to the race.
+        # Defender real-time scanning can briefly lock a just-written
+        # PE file. Not the dominant failure mode (path-length was) but
+        # cheap to rule out.
         shell: pwsh
         run: |
           Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath $env:CON_CHECKOUT_DIR -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath $env:TEMP -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath "$env:USERPROFILE\.local" -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionPath "$env:USERPROFILE\AppData\Local\zig" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath $env:ZIG_GLOBAL_CACHE_DIR -ErrorAction SilentlyContinue
 
       - name: Install Zig 0.15.2
         shell: pwsh
@@ -104,23 +114,8 @@ jobs:
         # `cargo build --no-default-features --features con/bin-con-app`
         # — required because CON is a reserved DOS name and plain
         # `con.exe` cannot be created.
-        #
-        # Retry loop kept as cheap insurance against true visibility
-        # races. On windows-2022 we have not yet reproduced the
-        # deterministic `uucode_build_tables.exe: FileNotFound` seen on
-        # windows-latest; if it returns, the diagnostic step below will
-        # capture the real Windows spawn error for follow-up.
         run: |
-          $maxAttempts = 3
-          for ($i = 1; $i -le $maxAttempts; $i++) {
-            Write-Host "=== cargo wbuild attempt $i/$maxAttempts ==="
-            cargo wbuild -p con --release
-            if ($LASTEXITCODE -eq 0) { exit 0 }
-            Write-Warning "Build failed on attempt $i (exit $LASTEXITCODE) — retrying..."
-            Start-Sleep -Seconds 5
-          }
-          Write-Error "cargo wbuild failed after $maxAttempts attempts"
-          exit 1
+          cargo wbuild -p con --release
 
       - name: Diagnose build failure
         if: failure() && steps.build.conclusion == 'failure'
