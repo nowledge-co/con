@@ -2232,16 +2232,42 @@ impl SettingsPanel {
                                                 col
                                             }),
                                     )
-                                    .child(
-                                        Button::new("check-updates")
-                                            .small()
-                                            .ghost()
-                                            .disabled(!updater_status.can_check_manually())
-                                            .label("Check for Updates")
-                                            .on_click(cx.listener(|_this, _, _window, _cx| {
-                                                crate::updater::check_for_updates();
-                                            })),
-                                    ),
+                                    .child({
+                                        let actions = div().flex().items_center().gap(px(6.0));
+
+                                        #[cfg(target_os = "windows")]
+                                        let actions = if matches!(
+                                            &latest_state,
+                                            crate::updater::CheckState::UpdateAvailable { .. }
+                                        ) {
+                                            actions.child(
+                                                Button::new("apply-update")
+                                                    .small()
+                                                    .primary()
+                                                    .label("Update now")
+                                                    .on_click(cx.listener(
+                                                        |_this, _, _window, _cx| {
+                                                            crate::updater::apply_update_in_place();
+                                                        },
+                                                    )),
+                                            )
+                                        } else {
+                                            actions
+                                        };
+
+                                        actions.child(
+                                            Button::new("check-updates")
+                                                .small()
+                                                .ghost()
+                                                .disabled(!updater_status.can_check_manually())
+                                                .label("Check for Updates")
+                                                .on_click(cx.listener(
+                                                    |_this, _, _window, _cx| {
+                                                        crate::updater::check_for_updates();
+                                                    },
+                                                )),
+                                        )
+                                    }),
                             ),
                     ),
             );

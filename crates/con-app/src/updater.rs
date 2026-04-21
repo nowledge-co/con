@@ -352,6 +352,54 @@ pub fn check_for_updates() {
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 pub fn check_for_updates() {}
 
+/// Re-run `install.ps1` in a new console and exit this process so the
+/// installer can replace `con-app.exe`. Windows only.
+///
+/// The script already does the full lifecycle — stop running instance,
+/// download, verify SHA256, unpack, update PATH, relaunch — so we spawn
+/// it and get out of the way. `CREATE_NEW_CONSOLE` gives the user
+/// visible progress; without it a GUI-subsystem binary has no console
+/// to inherit and the script would run silently.
+#[cfg(target_os = "windows")]
+pub fn apply_update_in_place() {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    const INSTALL_URL: &str = "https://con-releases.nowledge.co/install.ps1";
+
+    let command = format!("irm {INSTALL_URL} | iex");
+    match std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &command,
+        ])
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+    {
+        Ok(_) => {
+            // Give the installer a beat to grab the ZIP before we drop
+            // our exe locks. `install.ps1` also does `Stop-Process -Name
+            // con-app` as a belt-and-braces step, but exiting cleanly
+            // lets pending writes (config, sessions) flush normally.
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            std::process::exit(0);
+        }
+        Err(e) => {
+            log::error!("updater: failed to spawn install.ps1: {e}");
+            set_latest(CheckState::Error(format!(
+                "could not launch installer: {e}"
+            )));
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn apply_update_in_place() {}
+
 pub fn status() -> UpdaterStatus {
     *STATUS.get_or_init(|| {
         #[cfg(target_os = "macos")]
