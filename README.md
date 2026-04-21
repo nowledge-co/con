@@ -100,7 +100,7 @@ To build from source, see `HACKING.md`.
 - [Ghostty](https://github.com/ghostty-org/ghostty) for the terminal runtime and rendering foundation that powers our embedded terminal surfaces.
 - [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) from the Zed team for the native GPU UI framework we build the shell on.
 - [gpui-component](https://github.com/longbridge/gpui-component) from the Longbridge team for the component library that accelerates much of the UI layer.
-- [Rig](https://github.com/0xPlaygrounds/rig) for the Rust agent framework behind `con`'s AI harness, including provider work we currently pin through a maintained fork revision while upstream changes settle.
+- [Rig](https://github.com/0xPlaygrounds/rig) for the lovely Rust agent framework behind `con`'s AI harness.
 - [Phosphor Icons](https://phosphoricons.com/) for the icon system used across the app.
 - [Flexoki](https://stephango.com/flexoki) for the default visual theme direction.
 - [Iosevka](https://typeof.net/Iosevka/) and [Ioskeley Mono](https://github.com/jewlexx/ioskeley) for the mono type foundation used in terminal chrome and code-heavy UI.
