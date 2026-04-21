@@ -67,7 +67,14 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          channel="stable"
+          if [[ "$version" == *"-beta."* ]]; then
+            channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
+          fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "channel=$channel" >>"$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -114,6 +121,14 @@ jobs:
         # `cargo build --no-default-features --features con/bin-con-app`
         # — required because CON is a reserved DOS name and plain
         # `con.exe` cannot be created.
+        #
+        # `CON_RELEASE_CHANNEL` is captured at compile time via
+        # `option_env!` (see crates/con-core/src/release_channel.rs) so
+        # the non-macOS update-polling path and Settings → Updates card
+        # know which appcast to query. Local dev builds leave it unset
+        # and fall back to the Dev channel, which never polls.
+        env:
+          CON_RELEASE_CHANNEL: ${{ steps.meta.outputs.channel }}
         run: |
           cargo wbuild -p con --release
 

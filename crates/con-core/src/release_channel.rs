@@ -125,12 +125,16 @@ fn detect_channel() -> ReleaseChannel {
 
 #[cfg(not(target_os = "macos"))]
 fn detect_channel() -> ReleaseChannel {
-    match std::env::var("CON_RELEASE_CHANNEL")
-        .as_deref()
-        .unwrap_or("dev")
-    {
-        "beta" => ReleaseChannel::Beta,
-        "stable" => ReleaseChannel::Stable,
+    // Prefer the channel baked in at build time — the release pipeline
+    // exports `CON_RELEASE_CHANNEL=beta|stable` before `cargo build` so
+    // `option_env!` captures it in the binary. Fall back to the runtime
+    // env var for local overrides, and finally to Dev.
+    if let Some(baked) = option_env!("CON_RELEASE_CHANNEL") {
+        return ReleaseChannel::from_str(baked);
+    }
+    match std::env::var("CON_RELEASE_CHANNEL").as_deref() {
+        Ok("beta") => ReleaseChannel::Beta,
+        Ok("stable") => ReleaseChannel::Stable,
         _ => ReleaseChannel::Dev,
     }
 }
