@@ -141,9 +141,7 @@ impl LinuxPtySession {
         let mut command = match options.program.as_ref() {
             Some(program) => {
                 let mut command = CommandBuilder::new(program);
-                if let Some(flag) = interactive_shell_flag(program) {
-                    command.arg(flag);
-                }
+                configure_shell_startup(program, &mut command);
                 command
             }
             None => CommandBuilder::new_default_prog(),
@@ -356,11 +354,51 @@ fn default_title(cwd: Option<&Path>, program: Option<&str>) -> String {
     "shell".to_string()
 }
 
+fn configure_shell_startup(program: &str, command: &mut CommandBuilder) {
+    if std::env::var_os("CON_LINUX_SHELL_FULL_INIT").is_some() {
+        if let Some(flag) = interactive_shell_flag(program) {
+            command.arg(flag);
+        }
+        return;
+    }
+
+    let Some(shell) = Path::new(program).file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+
+    match shell {
+        // Transcript bring-up is not a full VT emulator yet. Skipping
+        // user rc files avoids prompt frameworks that block on terminal
+        // feature probes we do not answer yet.
+        "zsh" => {
+            command.args(["-f", "-i"]);
+        }
+        "bash" => {
+            command.args(["--noprofile", "--norc", "-i"]);
+        }
+        "fish" => {
+            command.args(["--no-config", "--interactive"]);
+        }
+        "pwsh" => {
+            command.args(["-NoLogo", "-NoProfile"]);
+        }
+        "sh" | "dash" | "ksh" | "mksh" | "xonsh" | "nu" => {
+            if let Some(flag) = interactive_shell_flag(program) {
+                command.arg(flag);
+            }
+        }
+        _ => {
+            if let Some(flag) = interactive_shell_flag(program) {
+                command.arg(flag);
+            }
+        }
+    }
+}
+
 fn interactive_shell_flag(program: &str) -> Option<&'static str> {
     let shell = Path::new(program).file_name()?.to_str()?;
     match shell {
-        "bash" | "sh" | "zsh" | "dash" | "ksh" | "mksh" | "fish" | "nu" | "pwsh"
-        | "xonsh" => Some("-i"),
+        "bash" | "sh" | "zsh" | "dash" | "ksh" | "mksh" | "nu" | "xonsh" => Some("-i"),
         _ => None,
     }
 }
