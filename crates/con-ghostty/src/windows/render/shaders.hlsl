@@ -132,13 +132,23 @@ float4 ps_main(VSOut i) : SV_Target {
     // sample all three channels for subpixel antialiasing.
     float3 coverage = atlas.Sample(samp, i.atlasUV).rgb;
 
-    // Inverse handling: swap fg/bg when attr bit 4 is set.
+    // Inverse handling: swap fg/bg when attr bit 4 is set (SGR 7 or
+    // a selected cell via the CPU-side XOR). After the swap the new
+    // `fg.a` inherits the original bg's alpha — which the CPU rewrites
+    // to `background_opacity` for default-bg cells so Mica can show
+    // through. For an inverse cell we don't want Mica behind the
+    // glyph: the whole point of inverse is a solid highlight, and
+    // translucent glyph pixels against a solid block would render
+    // text visibly semi-transparent. Pin both channels to 1.0 after
+    // swap so inverse / selection cells paint opaque.
     float4 fg = i.fg;
     float4 bg = i.bg;
     if (i.attrs & 16u) {
         float4 tmp = fg;
         fg = bg;
         bg = tmp;
+        fg.a = 1.0;
+        bg.a = 1.0;
     }
 
     // Underline / strikethrough: draw a 1-pixel-tall fg band inside

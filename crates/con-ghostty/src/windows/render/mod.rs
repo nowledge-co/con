@@ -583,12 +583,21 @@ impl Renderer {
         // last — on top of any wide PUA glyph that might otherwise
         // overdraw the cursor cell.
         if let Some(src) = cursor_source {
+            // Force both alphas to 0xFF on the swapped cursor instance.
+            // `src.bg` may carry the opacity sentinel (see `apply_opacity`
+            // above — default-bg cells get alpha = opacity_byte so Mica
+            // shows through). Without this mask the cursor block itself
+            // would stay solid (it uses `src.fg`, which is always 0xFF)
+            // but the cursor's text glyph — which now draws with
+            // `fg = src.bg` — would render semi-transparent against
+            // the solid block. Cursor is meant to be a solid highlight,
+            // so both channels are pinned to opaque.
             instances.push(Instance {
                 cell_pos: src.cell_pos,
                 atlas_pos: src.atlas_pos,
                 atlas_size: src.atlas_size,
-                fg: src.bg,
-                bg: src.fg,
+                fg: (src.bg & 0xFFFFFF00) | 0xFF,
+                bg: (src.fg & 0xFFFFFF00) | 0xFF,
                 attrs: src.attrs & !0x10,
             });
         }
