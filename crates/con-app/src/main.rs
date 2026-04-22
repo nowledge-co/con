@@ -139,7 +139,13 @@ fn supports_transparent_main_window() -> bool {
     true
 }
 
-/// Enable Windows 11 Mica backdrop on the top-level window via DWM.
+/// Enable a Windows 11 DWM backdrop on the top-level window.
+///
+/// `blur=true` selects `DWMSBT_TRANSIENTWINDOW` (Acrylic, real Gaussian
+/// blur of what's behind the window). `blur=false` selects
+/// `DWMSBT_MAINWINDOW` (Mica, a static desktop-image-tinted fill — no
+/// blur, much cheaper). Both render only when the GPUI Root above is
+/// transparent.
 ///
 /// Returns `true` when the DWM attribute was accepted — we use that
 /// signal to keep the GPUI Root transparent so the backdrop shows
@@ -149,22 +155,38 @@ fn supports_transparent_main_window() -> bool {
 /// compositor shows the desktop through the window, which is what the
 /// user observed when a modal hid the pane HWND).
 #[cfg(target_os = "windows")]
-fn apply_windows_backdrop(window: &mut Window) -> bool {
+fn apply_windows_backdrop(window: &mut Window, blur: bool) -> bool {
+    set_windows_backdrop(window, blur).is_some()
+}
+
+/// Live re-apply of the DWM backdrop type. Called from the workspace
+/// theme-update path so toggling "background blur" in settings switches
+/// between Acrylic and Mica without restarting the window.
+#[cfg(target_os = "windows")]
+pub fn set_windows_backdrop_blur(window: &mut Window, blur: bool) {
+    let _ = set_windows_backdrop(window, blur);
+}
+
+#[cfg(target_os = "windows")]
+fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
+        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMSBT_TRANSIENTWINDOW,
+        DWMWA_SYSTEMBACKDROP_TYPE,
     };
 
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return false;
-    };
+    let handle = HasWindowHandle::window_handle(window).ok()?;
     let hwnd = match handle.as_raw() {
         RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
-        _ => return false,
+        _ => return None,
     };
 
-    let backdrop: i32 = DWMSBT_MAINWINDOW.0;
+    let (backdrop, label) = if blur {
+        (DWMSBT_TRANSIENTWINDOW.0, "Acrylic")
+    } else {
+        (DWMSBT_MAINWINDOW.0, "Mica")
+    };
     // SAFETY: hwnd is a live top-level window (we just received it
     // from GPUI's window-handle surface); DWMWA_SYSTEMBACKDROP_TYPE
     // takes a 4-byte integer by pointer.
@@ -178,15 +200,15 @@ fn apply_windows_backdrop(window: &mut Window) -> bool {
     };
     match hr {
         Ok(()) => {
-            log::info!("Windows: enabled DWM Mica backdrop on main window");
-            true
+            log::info!("Windows: applied DWM {label} backdrop on main window");
+            Some(())
         }
         Err(err) => {
             log::info!(
-                "Windows: Mica backdrop unavailable ({err:?}); \
+                "Windows: {label} backdrop unavailable ({err:?}); \
                  falling back to opaque theme fill"
             );
-            false
+            None
         }
     }
 }
@@ -223,7 +245,7 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
             let view = cx
                 .new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
             #[cfg(target_os = "windows")]
-            let mica_applied = apply_windows_backdrop(window);
+            let mica_applied = apply_windows_backdrop(window, config.appearance.terminal_blur);
             #[cfg(not(target_os = "windows"))]
             let mica_applied = false;
             cx.new(|cx| {

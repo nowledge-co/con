@@ -3182,6 +3182,8 @@ impl ConWorkspace {
                 terminal.sync_window_background_blur(cx);
             }
         }
+        #[cfg(target_os = "windows")]
+        crate::set_windows_backdrop_blur(window, self.terminal_blur);
         // Sync GPUI UI theme colors with terminal theme
         crate::theme::sync_gpui_theme(
             &theme,
