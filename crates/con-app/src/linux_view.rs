@@ -174,8 +174,8 @@ impl GhosttyView {
         changed
     }
 
-    pub fn pump_deferred_work(&mut self, _cx: &mut Context<Self>) -> bool {
-        false
+    pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
+        self.drain_surface_state(cx)
     }
 
     fn ensure_session(&mut self, cx: &mut Context<Self>) -> bool {

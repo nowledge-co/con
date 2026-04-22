@@ -15,11 +15,12 @@ const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const MAX_TRANSCRIPT_BYTES: usize = 256 * 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LinuxPtyOptions {
     pub cwd: Option<PathBuf>,
     pub program: Option<String>,
     pub size: SurfaceSize,
+    pub wake_generation: Option<Arc<AtomicU64>>,
 }
 
 impl Default for LinuxPtyOptions {
@@ -35,6 +36,7 @@ impl Default for LinuxPtyOptions {
                 cell_width_px: 0,
                 cell_height_px: 0,
             },
+            wake_generation: None,
         }
     }
 }
@@ -56,27 +58,36 @@ struct SessionShared {
     transcript: Mutex<TranscriptBuffer>,
     alive: AtomicBool,
     needs_render: AtomicBool,
+    wake_generation: Option<Arc<AtomicU64>>,
     finished_signal: Mutex<Option<CommandFinishedSignal>>,
     last_exit_code: Mutex<Option<i32>>,
     last_duration: Mutex<Option<Duration>>,
 }
 
 impl SessionShared {
-    fn new(screen: Arc<VtScreen>) -> Self {
+    fn new(screen: Arc<VtScreen>, wake_generation: Option<Arc<AtomicU64>>) -> Self {
         Self {
             screen,
             transcript: Mutex::new(TranscriptBuffer::default()),
             alive: AtomicBool::new(true),
             needs_render: AtomicBool::new(false),
+            wake_generation,
             finished_signal: Mutex::new(None),
             last_exit_code: Mutex::new(None),
             last_duration: Mutex::new(None),
         }
     }
 
+    fn wake(&self) {
+        if let Some(wake_generation) = self.wake_generation.as_ref() {
+            wake_generation.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
     fn push_output(&self, chunk: &str) {
         self.transcript.lock().push(chunk);
         self.needs_render.store(true, Ordering::Release);
+        self.wake();
     }
 }
 
@@ -192,7 +203,7 @@ impl LinuxPtySession {
             .spawn_command(command)
             .context("failed to spawn shell in linux pty")?;
 
-        let shared = Arc::new(SessionShared::new(screen));
+        let shared = Arc::new(SessionShared::new(screen, options.wake_generation));
         spawn_reader_thread(reader, shared.clone());
 
         Ok(Self {
@@ -316,6 +327,10 @@ impl LinuxPtySession {
         self.shared.screen.is_decckm()
     }
 
+    pub fn set_dark_mode(&self, dark: bool) {
+        self.shared.screen.set_dark_mode(dark);
+    }
+
     fn poll_child_status(&self) {
         if !self.shared.alive.load(Ordering::Acquire) {
             return;
@@ -334,6 +349,8 @@ impl LinuxPtySession {
             exit_code: Some(exit_code),
             duration,
         });
+        self.shared.needs_render.store(true, Ordering::Release);
+        self.shared.wake();
     }
 }
 
@@ -343,6 +360,8 @@ impl Drop for LinuxPtySession {
             log::debug!("failed to terminate linux pty child during drop: {err}");
         }
         self.shared.alive.store(false, Ordering::Release);
+        self.shared.needs_render.store(true, Ordering::Release);
+        self.shared.wake();
     }
 }
 

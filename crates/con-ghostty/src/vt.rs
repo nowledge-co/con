@@ -29,6 +29,7 @@
 #![allow(non_camel_case_types, dead_code)]
 
 use std::os::raw::{c_int, c_void};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -66,6 +67,13 @@ pub enum GhosttyTerminalData {
 pub enum GhosttyTerminalOption {
     Userdata = 0,
     WritePty = 1,
+    Bell = 2,
+    Enquiry = 3,
+    Xtversion = 4,
+    TitleChanged = 5,
+    Size = 6,
+    ColorScheme = 7,
+    DeviceAttributes = 8,
     ColorForeground = 11,
     ColorBackground = 12,
     ColorCursor = 13,
@@ -185,6 +193,14 @@ pub const MODE_BRACKETED_PASTE: GhosttyMode = ghostty_mode(2004, false);
 /// and vim set this to distinguish their keymap lookup.
 pub const MODE_DECCKM: GhosttyMode = ghostty_mode(1, false);
 
+const GHOSTTY_DA_CONFORMANCE_LEVEL_2: u16 = 62;
+const GHOSTTY_DA_FEATURE_SELECTIVE_ERASE: u16 = 6;
+const GHOSTTY_DA_FEATURE_WINDOWING: u16 = 18;
+const GHOSTTY_DA_FEATURE_ANSI_COLOR: u16 = 22;
+const GHOSTTY_DA_FEATURE_RECTANGULAR_EDITING: u16 = 28;
+const GHOSTTY_DA_FEATURE_CLIPBOARD: u16 = 52;
+const GHOSTTY_DA_DEVICE_TYPE_VT220: u16 = 1;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GhosttyTerminalOptions {
@@ -200,6 +216,69 @@ pub struct GhosttyColorRgb {
     pub r: u8,
     pub g: u8,
     pub b: u8,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GhosttyString {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyColorScheme {
+    Light = 0,
+    Dark = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GhosttySizeReportSize {
+    pub rows: u16,
+    pub columns: u16,
+    pub cell_width: u32,
+    pub cell_height: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyDeviceAttributesPrimary {
+    pub conformance_level: u16,
+    pub features: [u16; 64],
+    pub num_features: usize,
+}
+
+impl Default for GhosttyDeviceAttributesPrimary {
+    fn default() -> Self {
+        Self {
+            conformance_level: 0,
+            features: [0; 64],
+            num_features: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GhosttyDeviceAttributesSecondary {
+    pub device_type: u16,
+    pub firmware_version: u16,
+    pub rom_cartridge: u16,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GhosttyDeviceAttributesTertiary {
+    pub unit_id: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GhosttyDeviceAttributes {
+    pub primary: GhosttyDeviceAttributesPrimary,
+    pub secondary: GhosttyDeviceAttributesSecondary,
+    pub tertiary: GhosttyDeviceAttributesTertiary,
 }
 
 // ── Style (`style.h`) ──────────────────────────────────────────────────
@@ -502,6 +581,12 @@ pub type PtyWriteCallback = Arc<dyn Fn(&[u8]) + Send + Sync + 'static>;
 
 struct VtCallbackState {
     write_pty: PtyWriteCallback,
+    rows: AtomicU16,
+    cols: AtomicU16,
+    cell_width: AtomicU32,
+    cell_height: AtomicU32,
+    dark_mode: AtomicBool,
+    device_attributes: GhosttyDeviceAttributes,
 }
 
 struct VtInner {
@@ -517,6 +602,28 @@ struct VtInner {
 }
 
 unsafe impl Send for VtInner {}
+
+fn default_device_attributes() -> GhosttyDeviceAttributes {
+    let mut features = [0_u16; 64];
+    features[0] = GHOSTTY_DA_FEATURE_SELECTIVE_ERASE;
+    features[1] = GHOSTTY_DA_FEATURE_WINDOWING;
+    features[2] = GHOSTTY_DA_FEATURE_ANSI_COLOR;
+    features[3] = GHOSTTY_DA_FEATURE_RECTANGULAR_EDITING;
+    features[4] = GHOSTTY_DA_FEATURE_CLIPBOARD;
+    GhosttyDeviceAttributes {
+        primary: GhosttyDeviceAttributesPrimary {
+            conformance_level: GHOSTTY_DA_CONFORMANCE_LEVEL_2,
+            features,
+            num_features: 5,
+        },
+        secondary: GhosttyDeviceAttributesSecondary {
+            device_type: GHOSTTY_DA_DEVICE_TYPE_VT220,
+            firmware_version: 0,
+            rom_cartridge: 0,
+        },
+        tertiary: GhosttyDeviceAttributesTertiary { unit_id: 0 },
+    }
+}
 
 impl VtScreen {
     pub fn new(cols: u16, rows: u16, theme: Option<&ThemeColors>) -> anyhow::Result<Self> {
@@ -546,7 +653,17 @@ impl VtScreen {
         }
         log::info!("VtScreen::new: terminal={terminal:?}");
 
-        let mut callback_state = write_pty.map(|write_pty| Box::new(VtCallbackState { write_pty }));
+        let mut callback_state = write_pty.map(|write_pty| {
+            Box::new(VtCallbackState {
+                write_pty,
+                rows: AtomicU16::new(rows),
+                cols: AtomicU16::new(cols),
+                cell_width: AtomicU32::new(1),
+                cell_height: AtomicU32::new(1),
+                dark_mode: AtomicBool::new(false),
+                device_attributes: default_device_attributes(),
+            })
+        });
         if let Some(state) = callback_state.as_mut() {
             let userdata = state.as_mut() as *mut VtCallbackState as *mut c_void;
             let rc = unsafe {
@@ -567,6 +684,37 @@ impl VtScreen {
             if rc != 0 {
                 unsafe { ghostty_terminal_free(terminal) };
                 anyhow::bail!("ghostty_terminal_set(WRITE_PTY) failed: rc={rc}");
+            }
+
+            let callback_options = [
+                (
+                    GhosttyTerminalOption::Size,
+                    vt_size_callback as *const c_void,
+                    "SIZE",
+                ),
+                (
+                    GhosttyTerminalOption::ColorScheme,
+                    vt_color_scheme_callback as *const c_void,
+                    "COLOR_SCHEME",
+                ),
+                (
+                    GhosttyTerminalOption::DeviceAttributes,
+                    vt_device_attributes_callback as *const c_void,
+                    "DEVICE_ATTRIBUTES",
+                ),
+                (
+                    GhosttyTerminalOption::Xtversion,
+                    vt_xtversion_callback as *const c_void,
+                    "XTVERSION",
+                ),
+            ];
+
+            for (option, callback, label) in callback_options {
+                let rc = unsafe { ghostty_terminal_set(terminal, option, callback) };
+                if rc != 0 {
+                    unsafe { ghostty_terminal_free(terminal) };
+                    anyhow::bail!("ghostty_terminal_set({label}) failed: rc={rc}");
+                }
             }
         }
 
@@ -684,6 +832,12 @@ impl VtScreen {
         }
         inner.cols = cols;
         inner.rows = rows;
+        if let Some(state) = inner.callback_state.as_ref() {
+            state.cols.store(cols, Ordering::Release);
+            state.rows.store(rows, Ordering::Release);
+            state.cell_width.store(cell_width_px.max(1), Ordering::Release);
+            state.cell_height.store(cell_height_px.max(1), Ordering::Release);
+        }
         inner.scratch = Vec::with_capacity(cols as usize * rows as usize);
         inner.generation = inner.generation.wrapping_add(1);
         Ok(())
@@ -879,6 +1033,13 @@ impl VtScreen {
         (inner.cols, inner.rows)
     }
 
+    pub fn set_dark_mode(&self, dark: bool) {
+        let inner = self.inner.lock();
+        if let Some(state) = inner.callback_state.as_ref() {
+            state.dark_mode.store(dark, Ordering::Release);
+        }
+    }
+
     /// Returns `true` when at least one mouse-tracking mode is set
     /// (X10 / normal / button / any). Host-view mouse handlers gate
     /// mouse reporting on this so wheel / click / move don't leak
@@ -945,6 +1106,73 @@ unsafe extern "C" fn vt_write_pty_callback(
     let state = unsafe { &*(userdata as *const VtCallbackState) };
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
     (state.write_pty)(bytes);
+}
+
+unsafe extern "C" fn vt_size_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    out_size: *mut GhosttySizeReportSize,
+) -> bool {
+    if userdata.is_null() || out_size.is_null() {
+        return false;
+    }
+
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    unsafe {
+        *out_size = GhosttySizeReportSize {
+            rows: state.rows.load(Ordering::Acquire).max(1),
+            columns: state.cols.load(Ordering::Acquire).max(1),
+            cell_width: state.cell_width.load(Ordering::Acquire).max(1),
+            cell_height: state.cell_height.load(Ordering::Acquire).max(1),
+        };
+    }
+    true
+}
+
+unsafe extern "C" fn vt_color_scheme_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    out_scheme: *mut GhosttyColorScheme,
+) -> bool {
+    if userdata.is_null() || out_scheme.is_null() {
+        return false;
+    }
+
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    unsafe {
+        *out_scheme = if state.dark_mode.load(Ordering::Acquire) {
+            GhosttyColorScheme::Dark
+        } else {
+            GhosttyColorScheme::Light
+        };
+    }
+    true
+}
+
+unsafe extern "C" fn vt_device_attributes_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    out_attrs: *mut GhosttyDeviceAttributes,
+) -> bool {
+    if userdata.is_null() || out_attrs.is_null() {
+        return false;
+    }
+
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    unsafe {
+        *out_attrs = state.device_attributes;
+    }
+    true
+}
+
+unsafe extern "C" fn vt_xtversion_callback(
+    _terminal: GhosttyTerminal,
+    _userdata: *mut c_void,
+) -> GhosttyString {
+    GhosttyString {
+        ptr: std::ptr::null(),
+        len: 0,
+    }
 }
 
 fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {

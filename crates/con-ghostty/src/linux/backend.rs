@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -21,6 +22,7 @@ pub struct LinuxBackendConfig {
 /// PTY and renderer setup can consume.
 pub struct LinuxGhosttyApp {
     config: Mutex<LinuxBackendConfig>,
+    wake_generation: Arc<AtomicU64>,
 }
 
 impl LinuxGhosttyApp {
@@ -44,13 +46,14 @@ impl LinuxGhosttyApp {
                 font_family: font_family.map(ToOwned::to_owned),
                 font_size,
             }),
+            wake_generation: Arc::new(AtomicU64::new(1)),
         })
     }
 
     pub fn tick(&self) {}
 
     pub fn wake_generation(&self) -> u64 {
-        0
+        self.wake_generation.load(Ordering::Acquire)
     }
 
     pub fn update_colors(&self, _colors: &TerminalColors) -> Result<(), String> {
@@ -93,6 +96,7 @@ impl LinuxGhosttyApp {
         LinuxPtyOptions {
             cwd: cwd.map(PathBuf::from),
             program: config.shell_program,
+            wake_generation: Some(self.wake_generation.clone()),
             ..LinuxPtyOptions::default()
         }
     }
@@ -193,7 +197,11 @@ impl LinuxGhosttyTerminal {
     pub fn set_content_scale(&self, _scale: f64) {}
     pub fn set_focus(&self, _focused: bool) {}
     pub fn set_occlusion(&self, _occluded: bool) {}
-    pub fn set_color_scheme(&self, _dark: bool) {}
+    pub fn set_color_scheme(&self, dark: bool) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.set_dark_mode(dark);
+        }
+    }
 
     pub fn perform_binding_action(&self, _action: &str) -> Result<bool, String> {
         Ok(false)
