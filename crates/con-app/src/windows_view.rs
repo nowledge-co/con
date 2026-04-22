@@ -32,6 +32,8 @@
 use std::sync::Arc;
 
 use con_ghostty::{GhosttyApp, GhosttySplitDirection, GhosttyTerminal};
+use futures::StreamExt;
+use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui::*;
 use gpui_component::ActiveTheme;
 use image::{Frame, RgbaImage};
@@ -94,6 +96,13 @@ pub struct GhosttyView {
     /// Without this, every frame would leak ~width×height×4 bytes of
     /// GPU memory.
     image_to_drop: Option<Arc<RenderImage>>,
+    /// Cloned and handed to `RenderSession::new`; the ConPTY reader
+    /// thread sends `()` here after each chunk it feeds into the VT
+    /// parser. The coalescer task spawned in `new()` consumes those
+    /// signals on the GPUI thread and pokes `cx.notify()` so freshly
+    /// arrived shell output paints on the next prepaint instead of
+    /// waiting for the next user input event.
+    wake_tx: UnboundedSender<()>,
 }
 
 pub fn init(_cx: &mut App) {
@@ -109,6 +118,25 @@ impl GhosttyView {
         cx: &mut Context<Self>,
     ) -> Self {
         let terminal = Arc::new(GhosttyTerminal::new());
+        let (wake_tx, mut wake_rx) = unbounded::<()>();
+
+        // Coalescer: the reader thread can fire many wake signals per
+        // frame (one per ConPTY read). Drain whatever is queued before
+        // each `cx.notify()` so we do at most one notify per await
+        // cycle, regardless of how many bytes arrived. GPUI itself
+        // collapses repeat notifies into one prepaint, but draining
+        // here also keeps the channel from growing under sustained
+        // output bursts.
+        cx.spawn(async move |this, cx| {
+            while wake_rx.next().await.is_some() {
+                while let Ok(Some(_)) = wake_rx.try_next() {}
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
+
         Self {
             app,
             terminal: Some(terminal),
@@ -124,6 +152,7 @@ impl GhosttyView {
             last_scale_factor: 0.0,
             cached_image: None,
             image_to_drop: None,
+            wake_tx,
         }
     }
 
@@ -236,7 +265,15 @@ impl GhosttyView {
         config.initial_width = width_px;
         config.initial_height = height_px;
 
-        match RenderSession::new(width_px, height_px, dpi, config) {
+        let wake_tx = self.wake_tx.clone();
+        let wake = move || {
+            // `unbounded_send` only fails after the receiver is dropped,
+            // which happens when the view dies — at which point losing
+            // a wake is harmless.
+            let _ = wake_tx.unbounded_send(());
+        };
+
+        match RenderSession::new(width_px, height_px, dpi, config, wake) {
             Ok(session) => {
                 if let Some(terminal) = &self.terminal {
                     terminal.attach(session);

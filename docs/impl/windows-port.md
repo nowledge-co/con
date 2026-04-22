@@ -334,6 +334,7 @@ phase keeps the macOS build green.
 | 3b | Glyph atlas + grid render | HLSL shaders embedded and runtime-compiled via `D3DCompile`. Skyline-packed (`etagere`) BGRA8 glyph atlas (`con-ghostty/src/windows/render/atlas.rs`), glyphs rasterized via Direct2D `DrawText` with grayscale AA. Three-case PUA rasterization (fits-cell / width-overflow with lsb shift / height-overflow with scale-around-centre) for Nerd-Font icons, plus per-slot `PushAxisAlignedClip` + black pre-fill to prevent ClearType fringe bleeding between atlas neighbours. D3D11 pipeline (`pipeline.rs`): per-instance IA layout, dynamic instance buffer with `Map(WRITE_DISCARD)`, single `DrawIndexedInstanced(6, cell_count)` per frame — matches Windows Terminal AtlasEngine's architecture. Wide PUA instances are stable-sorted after narrow ones so DX11's in-order per-pixel writes let them win overlap with neighbour backgrounds; the cursor inverse-colour instance is captured pre-sort and pushed post-sort so it always draws last. `vt.rs` uses the `ghostty_render_state` API (row iterator + `row_cells_get_multi` + DIRTY row skip) — not the `grid_ref` path that the upstream header explicitly warns against for render loops. | Real glyph rendering on Windows, runtime-validated on real hardware against oh-my-posh prompt stacks and dense hyphen rules. Postmortem: `postmortem/2026-04-21-windows-atlas-pua-rasterization.md`. | ✅ landed (runtime-validated) |
 | 3c | Input + selection | VK_* → xterm escape sequence translation in `host_view::WM_KEYDOWN`; mouse selection / scroll forwarding; clipboard via OSC 52 + Win32 clipboard. | Real terminal interactivity. | — |
 | 3d | (Parallel, upstream) | `WindowsWindow::attach_external_swap_chain_handle(bounds, HANDLE)` PR to `zed-industries/zed`. ~50 LOC. When merged, swap our backend from `CreateSwapChainForHwnd(WS_CHILD HWND)` to `CreateSwapChainForCompositionSurfaceHandle` so DWM composites our visual cleanly with GPUI's. Zero user-visible change except popup Z-order becomes pixel-perfect. | (No con change required pre-merge.) | — |
+| 3e | **Renderer perf tuning** (in progress) | The current pipeline draws into an offscreen D3D11 texture, reads back BGRA bytes (`RenderSession::render_frame`), wraps them as `ImageSource::Render(Arc<RenderImage>)`, and lets GPUI re-upload them into its DComp tree. The GPU→CPU readback per dirty frame plus the CPU→GPU re-upload adds 5–15ms over Windows Terminal's direct-DComp present path. Plan: (1) ✅ wake GPUI from the ConPTY reader thread so freshly arrived shell output paints on the next prepaint instead of waiting for user input; (2) once Phase 3d lands, present the swap chain directly via `attach_external_swap_chain_handle` and drop the readback entirely; (3) profile with PIX / GPUView / ETW to verify Enter→glyph latency parity with WT. | First win in `crates/con-app/src/windows_view.rs` (`wake_tx` + coalescer task). | 🚧 in progress |
 | 4 | Hardening | Multi-pane, splits, IME, focus, resize, copy/paste, drag/drop, OSC 133 shell integration, ligatures | Beta-quality | — |
 | 5 | Distribution | MSI installer, code signing, auto-update (WiX or `cargo dist`), `con-app.exe` rename via feature-gated twin `[[bin]]` | Release-ready | — |
 
@@ -341,7 +342,43 @@ Phases 0-3b are **complete**. Phase 3b shipped the full glyph atlas,
 the three-case PUA rasterization that lets IoskeleyMono's Nerd-Font
 icons and ASCII punctuation coexist, and the cursor z-order fix. Phase
 3c (input + selection) is the remaining interactivity work. Phase 3d
-is independent upstream work.
+is independent upstream work. **Phase 3e (renderer perf tuning) is
+active** — see the row above and the `Renderer perf` section below.
+
+### Renderer perf — current cost and tuning track
+
+The macOS path uses libghostty's Metal pipeline, which presents directly
+to a `CAMetalLayer` and is profiled (`docs/impl/macos-terminal-profiling.md`).
+The Windows backend is a custom D3D11/DirectWrite stack that — to side-step
+the WS_CHILD HWND z-order pain modals had — currently composites through
+GPUI's image path:
+
+```
+ConPTY reader thread ─→ vt.feed(bytes) ─→ updates grid
+                                          (now: signals wake_tx)
+GPUI prepaint tick   ─→ render_frame()
+                       └→ D3D11 draw to OFFSCREEN texture     (GPU)
+                       └→ GPU→CPU readback of BGRA bytes      ← intrinsic cost
+                       └→ wrap as RenderImage(Arc)
+                       └→ GPUI uploads back to GPU            (CPU→GPU)
+                       └→ DComp composite                     (GPU)
+```
+
+Compared to Windows Terminal's AtlasEngine, two costs are structural:
+
+1. **GPU→CPU→GPU round-trip per dirty frame.** Synchronous readback alone
+   is typically 5–15ms; re-upload adds a few more. WT presents directly to
+   a DComp swap chain — no readback.
+2. **PTY arrival → repaint latency.** The reader thread used to update the
+   grid in place but never poke the view. The next prompt only painted on
+   the next user input event or animation tick (up to ~16ms slack).
+   Phase 3e step (1) closes this — `RenderSession::new` now takes a
+   `wake: Fn() + Send + Sync` callback that the view uses to push a
+   coalesced `cx.notify()` per PTY chunk (`crates/con-app/src/windows_view.rs`).
+
+The remaining structural cost (the readback) goes away once Phase 3d
+(`attach_external_swap_chain_handle`) lands and we can present the swap
+chain into GPUI's DComp tree directly.
 
 ### What you can do *today* on Windows after Phase 3b
 

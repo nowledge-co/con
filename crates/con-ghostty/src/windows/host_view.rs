@@ -60,12 +60,25 @@ pub struct MouseEventMods {
 }
 
 impl RenderSession {
-    pub fn new(
+    /// Build a renderer + VT parser + ConPTY child shell.
+    ///
+    /// `wake` is invoked from the ConPTY reader thread after every
+    /// chunk of bytes is fed into the VT parser. The view passes a
+    /// closure that pokes a GPUI prepaint via `cx.notify()`, so freshly
+    /// arrived shell output paints on the next frame instead of waiting
+    /// for the next user input event. Without this hook, the prompt
+    /// pwsh prints after `Enter` would sit in the grid until something
+    /// else woke the view (mouse move, key press, focus change).
+    pub fn new<W>(
         width_px: u32,
         height_px: u32,
         dpi: u32,
         config: RendererConfig,
-    ) -> Result<Self> {
+        wake: W,
+    ) -> Result<Self>
+    where
+        W: Fn() + Send + Sync + 'static,
+    {
         let base_font_size_px = config.font_size_px;
         let current_dpi = if dpi == 0 { 96 } else { dpi };
 
@@ -89,13 +102,13 @@ impl RenderSession {
         let vt = Arc::new(VtScreen::new(cols, rows).context("VtScreen::new failed")?);
 
         let vt_for_pty = vt.clone();
+        let wake_for_pty: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
         let shell = super::conpty::default_shell_command();
         log::info!("RenderSession: spawning ConPTY shell={shell}");
-        let conpty = ConPty::spawn(
-            &shell,
-            PtySize { cols, rows },
-            move |bytes| vt_for_pty.feed(bytes),
-        )
+        let conpty = ConPty::spawn(&shell, PtySize { cols, rows }, move |bytes| {
+            vt_for_pty.feed(bytes);
+            wake_for_pty();
+        })
         .context("ConPty::spawn failed")?;
         let conpty = Arc::new(conpty);
 
