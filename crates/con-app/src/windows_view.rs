@@ -360,6 +360,15 @@ impl GhosttyView {
                     false
                 }
             }
+            Ok(RenderOutcome::Pending) => {
+                // The renderer submitted a new draw into its staging
+                // ring but had nothing prior to drain non-blocking. The
+                // slot will be ready by the next prepaint — return
+                // `true` so the caller `cx.notify()`s and we come back
+                // to drain it. Cached image stays untouched so the
+                // user sees the previous frame in the meantime (~16ms).
+                true
+            }
             Err(err) => {
                 log::warn!("RenderSession::render_frame failed: {err:#}");
                 false
