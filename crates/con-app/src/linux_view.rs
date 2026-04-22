@@ -240,13 +240,6 @@ impl GhosttyView {
             return false;
         };
         let lines = terminal.read_screen_text(MAX_RENDER_LINES);
-        if !lines.is_empty() {
-            log::info!(
-                "linux view screen cache lines={} last={:?}",
-                lines.len(),
-                lines.last()
-            );
-        }
         if lines == self.screen_lines {
             return false;
         }

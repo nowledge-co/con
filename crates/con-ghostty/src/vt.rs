@@ -588,7 +588,6 @@ struct VtCallbackState {
     cell_height: AtomicU32,
     dark_mode: AtomicBool,
     device_attributes: GhosttyDeviceAttributes,
-    response_log_count: AtomicU32,
 }
 
 struct VtInner {
@@ -644,16 +643,11 @@ impl VtScreen {
             rows,
             max_scrollback: 10_000,
         };
-        log::info!(
-            "VtScreen::new: ghostty_terminal_new(cols={cols}, rows={rows}, scrollback={})",
-            options.max_scrollback
-        );
         // SAFETY: out param; allocator NULL = upstream default.
         let rc = unsafe { ghostty_terminal_new(std::ptr::null(), &mut terminal, options) };
         if rc != 0 || terminal.is_null() {
             anyhow::bail!("ghostty_terminal_new failed: rc={rc}");
         }
-        log::info!("VtScreen::new: terminal={terminal:?}");
 
         let mut callback_state = write_pty.map(|write_pty| {
             Box::new(VtCallbackState {
@@ -665,7 +659,6 @@ impl VtScreen {
                 cell_height: AtomicU32::new(1),
                 dark_mode: AtomicBool::new(false),
                 device_attributes: default_device_attributes(),
-                response_log_count: AtomicU32::new(0),
             })
         });
         if let Some(state) = callback_state.as_mut() {
@@ -737,7 +730,6 @@ impl VtScreen {
             .unwrap_or(true);
 
         if enable_render_state {
-            log::info!("VtScreen::new: ghostty_render_state_new(NULL_alloc)");
             // SAFETY: out param; allocator NULL = default.
             let rc = unsafe { ghostty_render_state_new(std::ptr::null(), &mut render_state) };
             if rc != 0 || render_state.is_null() {
@@ -745,9 +737,7 @@ impl VtScreen {
                 unsafe { ghostty_terminal_free(terminal) };
                 anyhow::bail!("ghostty_render_state_new failed: rc={rc}");
             }
-            log::info!("VtScreen::new: render_state={render_state:?}");
 
-            log::info!("VtScreen::new: ghostty_render_state_row_iterator_new(NULL_alloc)");
             // SAFETY: out param.
             let rc =
                 unsafe { ghostty_render_state_row_iterator_new(std::ptr::null(), &mut row_iter) };
@@ -756,9 +746,7 @@ impl VtScreen {
                 unsafe { ghostty_terminal_free(terminal) };
                 anyhow::bail!("ghostty_render_state_row_iterator_new failed: rc={rc}");
             }
-            log::info!("VtScreen::new: row_iter={row_iter:?}");
 
-            log::info!("VtScreen::new: ghostty_render_state_row_cells_new(NULL_alloc)");
             // SAFETY: out param.
             let rc =
                 unsafe { ghostty_render_state_row_cells_new(std::ptr::null(), &mut row_cells) };
@@ -768,7 +756,6 @@ impl VtScreen {
                 unsafe { ghostty_terminal_free(terminal) };
                 anyhow::bail!("ghostty_render_state_row_cells_new failed: rc={rc}");
             }
-            log::info!("VtScreen::new: row_cells={row_cells:?}");
         } else {
             log::warn!(
                 "VtScreen::new: render_state disabled via \
@@ -1006,24 +993,6 @@ impl VtScreen {
             );
         }
 
-        let non_empty = inner
-            .scratch
-            .iter()
-            .filter(|c| c.codepoint != 0 && c.codepoint != 0x20)
-            .count();
-        if inner.generation <= 8 || (non_empty > 0 && inner.generation <= 32) {
-            log::info!(
-                "linux vt snapshot gen={} dirty_rows={} non_empty_cells={}/{} cursor=({},{}) visible={}",
-                inner.generation,
-                dirty_rows.len(),
-                non_empty,
-                inner.scratch.len(),
-                col_u16,
-                row_u16,
-                visible,
-            );
-        }
-
         ScreenSnapshot {
             cols,
             rows,
@@ -1116,16 +1085,6 @@ unsafe extern "C" fn vt_write_pty_callback(
 
     let state = unsafe { &*(userdata as *const VtCallbackState) };
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
-    let response_ix = state.response_log_count.fetch_add(1, Ordering::AcqRel);
-    if response_ix < 8 {
-        log::info!(
-            "linux vt write_pty chunk={} bytes={} hex={} ascii={:?}",
-            response_ix + 1,
-            len,
-            format_hex_preview(bytes, 96),
-            format_ascii_preview(bytes, 96)
-        );
-    }
     (state.write_pty)(bytes);
 }
 
@@ -1224,39 +1183,6 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
         title: None,
         generation,
     }
-}
-
-fn format_hex_preview(bytes: &[u8], max_bytes: usize) -> String {
-    let mut out = String::new();
-    for byte in bytes.iter().take(max_bytes) {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    if bytes.len() > max_bytes {
-        out.push_str("...");
-    }
-    out
-}
-
-fn format_ascii_preview(bytes: &[u8], max_bytes: usize) -> String {
-    let mut out = String::new();
-    for &byte in bytes.iter().take(max_bytes) {
-        match byte {
-            b'\x1b' => out.push_str("<ESC>"),
-            b'\r' => out.push_str("<CR>"),
-            b'\n' => out.push_str("<LF>"),
-            b'\t' => out.push_str("<TAB>"),
-            0x20..=0x7e => out.push(byte as char),
-            _ => {
-                use std::fmt::Write as _;
-                let _ = write!(&mut out, "<{byte:02X}>");
-            }
-        }
-    }
-    if bytes.len() > max_bytes {
-        out.push_str("...");
-    }
-    out
 }
 
 fn read_cell(

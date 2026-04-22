@@ -37,12 +37,24 @@ What that gives you:
 - Unix-domain control socket at `/tmp/con.sock`
 - `con-cli` and all portable crates working
 - a first Linux terminal pane backed by Unix PTY + `libghostty-vt`
+  snapshots plus a temporary GPUI text renderer
 
 What it still does **not** give you:
 
 - final styled cell rendering
 - validated mouse selection / reporting
 - polished Linux window chrome / focus behavior across environments
+
+Current verification note:
+
+- ChromeOS/Crostini is acceptable for Linux build/startup smoke checks.
+- It is not a reliable primary environment for con's Linux UI
+  verification anymore.
+- The current Linux backend reaches a live PTY + `libghostty-vt` prompt
+  state under Crostini, but click/focus/paint behavior there remains
+  unreliable.
+- Further Linux UI verification should move to a native Linux desktop
+  before we draw stronger conclusions from runtime behavior.
 
 The Linux CI job already installs the GPUI runtime dependencies on
 `ubuntu-latest` (`libxcb-*`, `libxkbcommon-x11-dev`, `libwayland-dev`,
