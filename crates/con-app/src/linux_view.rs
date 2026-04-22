@@ -401,6 +401,17 @@ impl Render for GhosttyView {
         let entity = cx.entity().downgrade();
         let line_height = px((self.initial_font_size.max(12.0) * 1.45).round());
         let screen_lines = self.screen_lines.clone();
+        let screen_text = if screen_lines.is_empty() {
+            None
+        } else {
+            Some(
+                screen_lines
+                    .iter()
+                    .map(|line| render_terminal_line(line))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        };
 
         let status_line = if !self.initialized {
             Some(("Launching Linux shell…", theme.foreground.opacity(0.55)))
@@ -457,31 +468,28 @@ impl Render for GhosttyView {
                     })
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
                             .size_full()
                             .overflow_hidden()
                             .bg(theme.background)
                             .px(px(12.0))
                             .py(px(10.0))
-                            .child(div().flex_grow())
                             .children(status_line.map(|(text, color)| {
                                 div()
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_size(theme.mono_font_size)
+                                    .text_size(px(self.initial_font_size.max(12.0)))
                                     .line_height(line_height)
                                     .text_color(color)
-                                    .whitespace_nowrap()
+                                    .whitespace_pre()
                                     .child(render_terminal_line(text))
                             }))
-                            .children(screen_lines.into_iter().map(|line| {
+                            .children(screen_text.map(|text| {
                                 div()
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_size(theme.mono_font_size)
+                                    .text_size(px(self.initial_font_size.max(12.0)))
                                     .line_height(line_height)
                                     .text_color(theme.foreground)
-                                    .whitespace_nowrap()
-                                    .child(render_terminal_line(&line))
+                                    .whitespace_pre()
+                                    .child(text)
                             })),
                     ),
             )
