@@ -246,13 +246,18 @@ impl Renderer {
             return Ok(());
         }
 
+        // Build the new RT first, but defer the swap. If the staging
+        // ring recreate fails after we've already replaced rt_texture /
+        // rtv, render() would CopyResource between mismatched-size
+        // textures (UB in D3D11). Recreate the ring while the old RT
+        // is still active, then commit both in one go.
         let (rt_texture, rtv) = create_rt_texture(&self.device, width_px, height_px)?;
-        self.rt_texture = rt_texture;
-        self.rtv = rtv;
         self.staging_ring
             .lock()
             .expect("staging_ring mutex poisoned in resize()")
             .recreate(&self.device, width_px, height_px)?;
+        self.rt_texture = rt_texture;
+        self.rtv = rtv;
         self.width_px = width_px;
         self.height_px = height_px;
         *self
@@ -712,14 +717,18 @@ impl StagingRing {
     }
 
     fn recreate(&mut self, device: &ID3D11Device, width: u32, height: u32) -> Result<()> {
-        self.slots.clear();
+        // Allocate the new slots locally first; only swap into `self`
+        // after every fallible call has succeeded so a mid-loop failure
+        // leaves the ring usable at its old dimensions.
+        let mut new_slots = Vec::with_capacity(Self::DEPTH);
         for _ in 0..Self::DEPTH {
-            self.slots.push(StagingSlot {
+            new_slots.push(StagingSlot {
                 texture: create_staging_texture(device, width, height)?,
                 in_flight: false,
                 seq: 0,
             });
         }
+        self.slots = new_slots;
         self.next_idx = 0;
         self.next_seq = 0;
         self.width = width;
