@@ -592,6 +592,17 @@ impl VtScreen {
         inner.generation = inner.generation.wrapping_add(1);
     }
 
+    /// Force the next `snapshot()` to report a new generation so the
+    /// renderer's `needs_draw` gate treats the frame as dirty even
+    /// though no VT bytes or theme changes landed. Used by opacity-
+    /// only appearance updates, where `config.background_opacity`
+    /// changes on the renderer side but the VT screen itself is
+    /// untouched.
+    pub fn bump_generation(&self) {
+        let mut inner = self.inner.lock();
+        inner.generation = inner.generation.wrapping_add(1);
+    }
+
     /// Feed bytes from the PTY into the parser. Non-reentrant per
     /// upstream: do not call from inside a registered callback.
     pub fn feed(&self, bytes: &[u8]) {
@@ -936,14 +947,22 @@ fn read_cell(
         }
     }
 
-    // Substitute the palette's default fg/bg when the cell reports
-    // (0,0,0) — ghostty's convention for "unstyled, use default". A
-    // proper fix reads STYLE_ID and inspects the color mode, but this
-    // heuristic is good enough for first-pass rendering (we lose
-    // explicit-black on a non-black bg, which is rare).
-    let is_default = |c: GhosttyColorRgb| c.r == 0 && c.g == 0 && c.b == 0;
-    let fg = if is_default(fg) { default_fg } else { fg };
-    let bg_was_default = is_default(bg);
+    // Substitute the palette's default fg/bg when the cell's style
+    // reports no SGR override (tag == GHOSTTY_STYLE_COLOR_NONE). The
+    // row_cells FG_COLOR / BG_COLOR accessors return (0,0,0) for
+    // unstyled cells, so without this substitution default-bg cells
+    // would paint pure black. Keying off the style tag (not the RGB
+    // value) is the correct test: an explicit `SGR 40` or
+    // `48;2;0;0;0` sets tag = PALETTE(0) / RGB(0,0,0) while still
+    // requesting solid black — the old `rgb == (0,0,0)` heuristic
+    // misclassified those as "default" and, combined with the
+    // alpha-sentinel below, made them translucent under
+    // background_opacity < 1. See libghostty's
+    // `GHOSTTY_STYLE_COLOR_NONE = 0` in ghostty/vt/style.h.
+    const STYLE_COLOR_TAG_NONE: u32 = 0;
+    let fg_was_default = style.fg_color.tag == STYLE_COLOR_TAG_NONE;
+    let bg_was_default = style.bg_color.tag == STYLE_COLOR_TAG_NONE;
+    let fg = if fg_was_default { default_fg } else { fg };
     let bg = if bg_was_default { default_bg } else { bg };
 
     // Pack RGB into the 0xRRGGBBAA u32 our HLSL `unpackRGBA` expects

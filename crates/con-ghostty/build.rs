@@ -57,7 +57,6 @@ fn main() {
 fn build_macos() {
     let ghostty_dir = resolve_ghostty_source();
     let optimize = ghostty_optimize();
-    println!("cargo:warning=libghostty: -Doptimize={optimize}");
 
     let status = Command::new("zig")
         .args([
@@ -248,7 +247,6 @@ fn build_windows() {
     };
 
     let optimize = ghostty_optimize();
-    println!("cargo:warning=libghostty-vt: -Doptimize={optimize}");
 
     let mut cmd = Command::new(&zig_bin);
     cmd.current_dir(&ghostty_dir);
