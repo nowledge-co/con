@@ -581,12 +581,14 @@ pub type PtyWriteCallback = Arc<dyn Fn(&[u8]) + Send + Sync + 'static>;
 
 struct VtCallbackState {
     write_pty: PtyWriteCallback,
+    enquiry_response: Box<[u8]>,
     rows: AtomicU16,
     cols: AtomicU16,
     cell_width: AtomicU32,
     cell_height: AtomicU32,
     dark_mode: AtomicBool,
     device_attributes: GhosttyDeviceAttributes,
+    response_log_count: AtomicU32,
 }
 
 struct VtInner {
@@ -656,12 +658,14 @@ impl VtScreen {
         let mut callback_state = write_pty.map(|write_pty| {
             Box::new(VtCallbackState {
                 write_pty,
+                enquiry_response: b"con".to_vec().into_boxed_slice(),
                 rows: AtomicU16::new(rows),
                 cols: AtomicU16::new(cols),
                 cell_width: AtomicU32::new(1),
                 cell_height: AtomicU32::new(1),
                 dark_mode: AtomicBool::new(false),
                 device_attributes: default_device_attributes(),
+                response_log_count: AtomicU32::new(0),
             })
         });
         if let Some(state) = callback_state.as_mut() {
@@ -687,6 +691,11 @@ impl VtScreen {
             }
 
             let callback_options = [
+                (
+                    GhosttyTerminalOption::Enquiry,
+                    vt_enquiry_callback as *const c_void,
+                    "ENQUIRY",
+                ),
                 (
                     GhosttyTerminalOption::Size,
                     vt_size_callback as *const c_void,
@@ -1002,16 +1011,18 @@ impl VtScreen {
             .iter()
             .filter(|c| c.codepoint != 0 && c.codepoint != 0x20)
             .count();
-        log::trace!(
-            "snapshot: gen={} dirty_rows={} non_empty_cells={}/{} cursor=({},{})vis={}",
-            inner.generation,
-            dirty_rows.len(),
-            non_empty,
-            inner.scratch.len(),
-            col_u16,
-            row_u16,
-            visible,
-        );
+        if inner.generation <= 8 || (non_empty > 0 && inner.generation <= 32) {
+            log::info!(
+                "linux vt snapshot gen={} dirty_rows={} non_empty_cells={}/{} cursor=({},{}) visible={}",
+                inner.generation,
+                dirty_rows.len(),
+                non_empty,
+                inner.scratch.len(),
+                col_u16,
+                row_u16,
+                visible,
+            );
+        }
 
         ScreenSnapshot {
             cols,
@@ -1105,7 +1116,35 @@ unsafe extern "C" fn vt_write_pty_callback(
 
     let state = unsafe { &*(userdata as *const VtCallbackState) };
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    let response_ix = state.response_log_count.fetch_add(1, Ordering::AcqRel);
+    if response_ix < 8 {
+        log::info!(
+            "linux vt write_pty chunk={} bytes={} hex={} ascii={:?}",
+            response_ix + 1,
+            len,
+            format_hex_preview(bytes, 96),
+            format_ascii_preview(bytes, 96)
+        );
+    }
     (state.write_pty)(bytes);
+}
+
+unsafe extern "C" fn vt_enquiry_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+) -> GhosttyString {
+    if userdata.is_null() {
+        return GhosttyString {
+            ptr: std::ptr::null(),
+            len: 0,
+        };
+    }
+
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    GhosttyString {
+        ptr: state.enquiry_response.as_ptr(),
+        len: state.enquiry_response.len(),
+    }
 }
 
 unsafe extern "C" fn vt_size_callback(
@@ -1185,6 +1224,39 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
         title: None,
         generation,
     }
+}
+
+fn format_hex_preview(bytes: &[u8], max_bytes: usize) -> String {
+    let mut out = String::new();
+    for byte in bytes.iter().take(max_bytes) {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    if bytes.len() > max_bytes {
+        out.push_str("...");
+    }
+    out
+}
+
+fn format_ascii_preview(bytes: &[u8], max_bytes: usize) -> String {
+    let mut out = String::new();
+    for &byte in bytes.iter().take(max_bytes) {
+        match byte {
+            b'\x1b' => out.push_str("<ESC>"),
+            b'\r' => out.push_str("<CR>"),
+            b'\n' => out.push_str("<LF>"),
+            b'\t' => out.push_str("<TAB>"),
+            0x20..=0x7e => out.push(byte as char),
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(&mut out, "<{byte:02X}>");
+            }
+        }
+    }
+    if bytes.len() > max_bytes {
+        out.push_str("...");
+    }
+    out
 }
 
 fn read_cell(

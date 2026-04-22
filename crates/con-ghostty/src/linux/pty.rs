@@ -370,21 +370,25 @@ fn spawn_reader_thread(mut reader: Box<dyn Read + Send>, shared: Arc<SessionShar
         .name("con-linux-pty-reader".into())
         .spawn(move || {
             let mut buffer = [0_u8; 8192];
-            let mut logged_first_chunk = false;
+            let mut chunk_count = 0_u32;
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(read) => {
                         shared.screen.feed(&buffer[..read]);
                         let chunk = String::from_utf8_lossy(&buffer[..read]);
-                        if !logged_first_chunk {
-                            logged_first_chunk = true;
-                            let preview = sanitize_terminal_output(chunk.as_ref());
-                            let preview = preview.chars().take(160).collect::<String>();
+                        chunk_count += 1;
+                        if chunk_count <= 8 {
+                            let printable_preview = sanitize_terminal_output(chunk.as_ref());
+                            let printable_preview =
+                                printable_preview.chars().take(160).collect::<String>();
                             log::info!(
-                                "linux pty received first output chunk bytes={} preview={:?}",
+                                "linux pty output chunk={} bytes={} preview={:?} hex={} ascii={:?}",
+                                chunk_count,
                                 read,
-                                preview
+                                printable_preview,
+                                format_hex_preview(&buffer[..read], 96),
+                                format_ascii_preview(&buffer[..read], 96),
                             );
                         }
                         shared.push_output(chunk.as_ref());
@@ -632,6 +636,39 @@ fn clear_current_line(output: &mut String) {
     while output.chars().last().is_some_and(|ch| ch != '\n') {
         output.pop();
     }
+}
+
+fn format_hex_preview(bytes: &[u8], max_bytes: usize) -> String {
+    let mut out = String::new();
+    for byte in bytes.iter().take(max_bytes) {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    if bytes.len() > max_bytes {
+        out.push_str("...");
+    }
+    out
+}
+
+fn format_ascii_preview(bytes: &[u8], max_bytes: usize) -> String {
+    let mut out = String::new();
+    for &byte in bytes.iter().take(max_bytes) {
+        match byte {
+            b'\x1b' => out.push_str("<ESC>"),
+            b'\r' => out.push_str("<CR>"),
+            b'\n' => out.push_str("<LF>"),
+            b'\t' => out.push_str("<TAB>"),
+            0x20..=0x7e => out.push(byte as char),
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(&mut out, "<{byte:02X}>");
+            }
+        }
+    }
+    if bytes.len() > max_bytes {
+        out.push_str("...");
+    }
+    out
 }
 
 #[cfg(test)]
