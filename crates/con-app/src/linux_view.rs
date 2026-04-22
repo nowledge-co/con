@@ -175,7 +175,34 @@ impl GhosttyView {
     }
 
     pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
-        self.drain_surface_state(cx)
+        let mut changed = self.ensure_session(cx);
+
+        if let Some(terminal) = self.terminal.as_ref().cloned() {
+            if terminal.take_needs_render() {
+                changed |= self.refresh_screen_cache();
+            } else if self.initialized && terminal.is_alive() {
+                changed |= self.refresh_screen_cache();
+            }
+
+            let title = terminal.title();
+            if title != self.last_title {
+                self.last_title = title.clone();
+                changed = true;
+                cx.emit(GhosttyTitleChanged(title));
+            }
+
+            if !terminal.is_alive() && !self.process_exit_emitted {
+                self.process_exit_emitted = true;
+                changed = true;
+                cx.emit(GhosttyProcessExited);
+            }
+        }
+
+        if changed {
+            cx.notify();
+        }
+
+        changed
     }
 
     fn ensure_session(&mut self, cx: &mut Context<Self>) -> bool {
@@ -213,6 +240,13 @@ impl GhosttyView {
             return false;
         };
         let lines = terminal.read_screen_text(MAX_RENDER_LINES);
+        if !lines.is_empty() {
+            log::info!(
+                "linux view screen cache lines={} last={:?}",
+                lines.len(),
+                lines.last()
+            );
+        }
         if lines == self.screen_lines {
             return false;
         }
