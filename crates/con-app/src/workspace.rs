@@ -6291,9 +6291,9 @@ impl Render for ConWorkspace {
         {
             top_bar = top_bar
                 .window_control_area(WindowControlArea::Drag)
-                .on_mouse_down(MouseButton::Left, |_, window, _cx| {
+                .on_mouse_down(MouseButton::Left, |_, _window, _cx| {
                     #[cfg(target_os = "linux")]
-                    window.start_window_move();
+                    _window.start_window_move();
                 })
                 .on_click(|event, window, _cx| {
                     if event.click_count() == 2 {

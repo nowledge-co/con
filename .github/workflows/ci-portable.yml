@@ -94,6 +94,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION="0.15.2"
+          ZIG_ARCH="x86_64"
+          ZIG_DIR="zig-${ZIG_ARCH}-linux-${ZIG_VERSION}"
+          ZIG_TARBALL="${ZIG_DIR}.tar.xz"
+          curl -sSfL "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_TARBALL}" -o "/tmp/${ZIG_TARBALL}"
+          mkdir -p "$HOME/.local"
+          tar -xJf "/tmp/${ZIG_TARBALL}" -C "$HOME/.local"
+          echo "$HOME/.local/${ZIG_DIR}" >> "$GITHUB_PATH"
+          "$HOME/.local/${ZIG_DIR}/zig" version
       - name: apt deps for gpui_linux (wayland/x11 + font stack)
         run: |
           sudo apt-get update
