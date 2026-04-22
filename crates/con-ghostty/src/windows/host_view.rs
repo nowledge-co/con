@@ -23,7 +23,7 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
 use super::conpty::{ConPty, PtySize};
-use super::render::{RenderOutcome, Renderer, RendererConfig, Selection};
+use super::render::{RenderOutcome, Renderer, RendererConfig, Selection, ThemeColors};
 use super::vt::{ScreenSnapshot, VtScreen};
 
 use super::render::CellMetrics;
@@ -99,7 +99,10 @@ impl RenderSession {
         let (cols, rows) = renderer.grid_for_dimensions(&renderer_config);
         log::info!("RenderSession: grid {cols}x{rows}");
 
-        let vt = Arc::new(VtScreen::new(cols, rows).context("VtScreen::new failed")?);
+        let vt = Arc::new(
+            VtScreen::new(cols, rows, renderer_config.theme.as_ref())
+                .context("VtScreen::new failed")?,
+        );
 
         let vt_for_pty = vt.clone();
         let wake_for_pty: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
@@ -158,6 +161,27 @@ impl RenderSession {
             "RenderSession::resize -> {width_px}x{height_px} grid={cols}x{rows} cell={cell_w}x{cell_h}"
         );
         Ok(())
+    }
+
+    /// Live update of the user-visible theme + window opacity.
+    ///
+    /// `theme` (when present) replaces libghostty's default fg/bg/palette
+    /// so SGR colors resolve to the user's palette without restarting
+    /// the pane. `background_opacity` is stored on the renderer config
+    /// and read on every frame — the renderer rewrites the sentinel
+    /// alpha=0 default-bg cells to `opacity*255` and pre-multiplies the
+    /// clear color, so the cell grid composites over Mica / DComp at the
+    /// requested level. Bumping the VT generation forces the next
+    /// prepaint to repaint with the new colors / opacity.
+    pub fn set_appearance(&self, theme: Option<&ThemeColors>, background_opacity: f32) {
+        let mut config = self.config.lock();
+        config.background_opacity = background_opacity;
+        if let Some(theme) = theme {
+            config.theme = Some(theme.clone());
+            self.vt.set_theme(theme);
+        } else {
+            config.theme = None;
+        }
     }
 
     /// Notify of a DPI change. Rebuilds the glyph atlas at the new

@@ -172,5 +172,13 @@ float4 ps_main(VSOut i) : SV_Target {
     rgb.r = lerp(bg.r, fg.r, comp.r);
     rgb.g = lerp(bg.g, fg.g, comp.g);
     rgb.b = lerp(bg.b, fg.b, comp.b);
-    return float4(rgb, 1.0);
+    // Output alpha follows the maximum coverage so glyph pixels stay
+    // opaque while the cell's background takes the bg.a (which the
+    // renderer drops to `background_opacity` for default-bg cells so
+    // Mica / DComp visuals beneath show through). GPUI's compositor
+    // expects premultiplied alpha — multiply the lerped RGB by the
+    // output alpha so translucent pixels don't look washed out.
+    float a_cov = max(comp.r, max(comp.g, comp.b));
+    float alpha = lerp(bg.a, fg.a, a_cov);
+    return float4(rgb * alpha, alpha);
 }
