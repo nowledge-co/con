@@ -177,6 +177,17 @@ impl RenderSession {
         let mut config = self.config.lock();
         config.background_opacity = background_opacity;
         if let Some(theme) = theme {
+            // Margins (pixels outside the cell grid) paint from
+            // `clear_color`, so a theme switch that only rewrites the
+            // palette would leave the border showing the previous
+            // theme's background. Mirror what `WindowsGhosttyApp::
+            // update_appearance` does at session construction.
+            config.clear_color = [
+                theme.bg[0] as f32 / 255.0,
+                theme.bg[1] as f32 / 255.0,
+                theme.bg[2] as f32 / 255.0,
+                1.0,
+            ];
             config.theme = Some(theme.clone());
             self.vt.set_theme(theme);
         } else {
