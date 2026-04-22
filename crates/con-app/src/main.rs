@@ -192,30 +192,35 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
     // GPUI's tree; until that lands upstream, we keep the attribute
     // set so the non-client strip reflects the user's choice and the
     // terminal stays transparent.
-    let (backdrop, label) = if blur {
-        (DWMSBT_TRANSIENTWINDOW.0, "Acrylic")
-    } else {
-        (DWMSBT_MAINWINDOW.0, "Mica")
-    };
     // SAFETY: hwnd is a live top-level window (we just received it
     // from GPUI's window-handle surface); DWMWA_SYSTEMBACKDROP_TYPE
     // takes a 4-byte integer by pointer.
-    let hr = unsafe {
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_SYSTEMBACKDROP_TYPE,
-            &backdrop as *const i32 as *const std::ffi::c_void,
-            std::mem::size_of::<i32>() as u32,
-        )
-    };
-    match hr {
-        Ok(()) => {
-            log::info!("Windows: applied DWM {label} backdrop on main window");
-            Some(())
+    let try_apply = |value: i32, label: &'static str| -> windows::core::Result<()> {
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_SYSTEMBACKDROP_TYPE,
+                &value as *const i32 as *const std::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            )
         }
+        .map(|()| log::info!("Windows: applied DWM {label} backdrop on main window"))
+    };
+
+    if blur {
+        // Try Acrylic first; if the OS rejects it (older Win11 builds,
+        // disabled effects), fall back to Mica so the window stays
+        // transparent instead of going opaque.
+        if try_apply(DWMSBT_TRANSIENTWINDOW.0, "Acrylic").is_ok() {
+            return Some(());
+        }
+        log::info!("Windows: Acrylic backdrop unavailable; trying Mica fallback");
+    }
+    match try_apply(DWMSBT_MAINWINDOW.0, "Mica") {
+        Ok(()) => Some(()),
         Err(err) => {
             log::info!(
-                "Windows: {label} backdrop unavailable ({err:?}); \
+                "Windows: Mica backdrop unavailable ({err:?}); \
                  falling back to opaque theme fill"
             );
             None

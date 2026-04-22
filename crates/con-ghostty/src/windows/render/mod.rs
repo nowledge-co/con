@@ -465,6 +465,16 @@ impl Renderer {
         // so the shader composes the cell over Mica with the right
         // see-through level. Cells with explicit SGR backgrounds carry
         // alpha=0xFF and aren't touched.
+        //
+        // Invariant: any non-sentinel bg value MUST carry alpha=0xFF.
+        // Producers in `vt.rs::read_cell` enforce this — explicit RGB
+        // and palette colors hard-set the alpha byte. The benign edge
+        // case is `background_opacity == 0.0`: opacity_byte is also 0,
+        // so the rewrite is a no-op (still fully transparent default
+        // bg) and there is no observable ambiguity. If a future code
+        // path injects an `0x......00` value into cell.bg without
+        // meaning the sentinel, it would be silently rewritten — keep
+        // the producers honest.
         let opacity_byte: u8 = (config.background_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         let apply_opacity = |bg: u32| -> u32 {
             if (bg & 0xFF) == 0 {

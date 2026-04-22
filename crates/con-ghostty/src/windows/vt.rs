@@ -420,21 +420,39 @@ unsafe fn apply_theme_to_terminal(terminal: GhosttyTerminal, theme: &ThemeColors
         g: theme.palette[i][1],
         b: theme.palette[i][2],
     });
+    // GHOSTTY_SUCCESS = 0; non-zero return means the option was rejected
+    // (enum drift after a libghostty bump, invalid value, etc.). Log it
+    // so a silent palette regression is visible instead of debugging
+    // "why didn't my colors update".
+    let check = |rc: GhosttyResult, what: &'static str| {
+        if rc != 0 {
+            log::warn!("ghostty_terminal_set({what}) failed: rc={rc}");
+        }
+    };
     unsafe {
-        let _ = ghostty_terminal_set(
-            terminal,
-            GhosttyTerminalOption::ColorForeground,
-            &fg as *const _ as *const c_void,
+        check(
+            ghostty_terminal_set(
+                terminal,
+                GhosttyTerminalOption::ColorForeground,
+                &fg as *const _ as *const c_void,
+            ),
+            "ColorForeground",
         );
-        let _ = ghostty_terminal_set(
-            terminal,
-            GhosttyTerminalOption::ColorBackground,
-            &bg as *const _ as *const c_void,
+        check(
+            ghostty_terminal_set(
+                terminal,
+                GhosttyTerminalOption::ColorBackground,
+                &bg as *const _ as *const c_void,
+            ),
+            "ColorBackground",
         );
-        let _ = ghostty_terminal_set(
-            terminal,
-            GhosttyTerminalOption::ColorPalette,
-            palette.as_ptr() as *const c_void,
+        check(
+            ghostty_terminal_set(
+                terminal,
+                GhosttyTerminalOption::ColorPalette,
+                palette.as_ptr() as *const c_void,
+            ),
+            "ColorPalette",
         );
     }
 }
