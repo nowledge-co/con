@@ -41,7 +41,7 @@ impl Default for LinuxPtyOptions {
 
 pub struct LinuxPtySession {
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     shared: Arc<SessionShared>,
     size: Mutex<SurfaceSize>,
@@ -137,10 +137,6 @@ impl LinuxPtySession {
         let pair = pty_system
             .openpty(pty_size)
             .context("failed to open linux pty")?;
-        let screen = Arc::new(
-            VtScreen::new(options.size.columns.max(1), options.size.rows.max(1), None)
-                .context("failed to create linux vt screen")?,
-        );
 
         let shell_program = options.program.clone();
         let spawn_cwd = options.cwd.clone();
@@ -170,10 +166,27 @@ impl LinuxPtySession {
             .master
             .try_clone_reader()
             .context("failed to clone linux pty reader")?;
-        let writer = pair
-            .master
-            .take_writer()
-            .context("failed to take linux pty writer")?;
+        let writer = Arc::new(Mutex::new(
+            pair.master
+                .take_writer()
+                .context("failed to take linux pty writer")?,
+        ));
+        let screen = Arc::new(
+            VtScreen::new_with_write_pty(
+                options.size.columns.max(1),
+                options.size.rows.max(1),
+                None,
+                Some({
+                    let writer = writer.clone();
+                    Arc::new(move |data: &[u8]| {
+                        if let Err(err) = writer.lock().write_all(data) {
+                            log::debug!("linux vt write_pty failed: {err:#}");
+                        }
+                    })
+                }),
+            )
+            .context("failed to create linux vt screen")?,
+        );
         let child = pair
             .slave
             .spawn_command(command)
@@ -184,7 +197,7 @@ impl LinuxPtySession {
 
         Ok(Self {
             master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
+            writer,
             child: Mutex::new(child),
             shared,
             size: Mutex::new(options.size),

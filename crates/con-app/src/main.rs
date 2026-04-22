@@ -449,6 +449,48 @@ pub(crate) fn app_build_number() -> String {
     build
 }
 
+#[cfg(target_os = "linux")]
+fn apply_linux_platform_override() {
+    let Some(requested) = std::env::var("CON_LINUX_BACKEND")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    match requested.as_str() {
+        "x11" => {
+            if std::env::var_os("DISPLAY").is_some() {
+                unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+                log::info!("Linux compositor override: forcing X11 backend");
+            } else {
+                log::warn!(
+                    "CON_LINUX_BACKEND=x11 requested, but DISPLAY is not set; keeping default compositor detection"
+                );
+            }
+        }
+        "wayland" => {
+            if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                unsafe { std::env::remove_var("DISPLAY") };
+                log::info!("Linux compositor override: forcing Wayland backend");
+            } else {
+                log::warn!(
+                    "CON_LINUX_BACKEND=wayland requested, but WAYLAND_DISPLAY is not set; keeping default compositor detection"
+                );
+            }
+        }
+        other => {
+            log::warn!(
+                "Ignoring unsupported CON_LINUX_BACKEND={other:?}; expected \"x11\" or \"wayland\""
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_linux_platform_override() {}
+
 // About-panel helpers and window: only wired in to the menu on macOS
 // (Sparkle lives in the same menu, and the Cocoa "About con" gesture
 // hits this path). The functions stay platform-neutral so they're
@@ -840,6 +882,7 @@ fn main() {
     builder.init();
 
     log::info!("con starting (pid {})", std::process::id());
+    apply_linux_platform_override();
 
     let config = con_core::Config::load().unwrap_or_default();
     log::info!("config loaded");

@@ -60,12 +60,12 @@ pub enum GhosttyTerminalData {
     Title = 12,
 }
 
-/// `GHOSTTY_TERMINAL_OPT_*` keys for `ghostty_terminal_set`. Only the
-/// color knobs we use today; integer values mirror `terminal.h` at the
-/// pinned revision (re-confirm on GHOSTTY_REV bumps).
+/// `GHOSTTY_TERMINAL_OPT_*` keys for `ghostty_terminal_set`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub enum GhosttyTerminalOption {
+    Userdata = 0,
+    WritePty = 1,
     ColorForeground = 11,
     ColorBackground = 12,
     ColorCursor = 13,
@@ -289,21 +289,23 @@ unsafe extern "C" {
         cell_width_px: u32,
         cell_height_px: u32,
     ) -> GhosttyResult;
+    /// `value` semantics depend on `option`:
+    ///   - `Userdata`: opaque host pointer stored on the terminal
+    ///   - `WritePty`: host callback function pointer
+    ///   - color knobs (FG/BG/CURSOR): pointer to a single `GhosttyColorRgb`
+    ///   - palette: pointer to `GhosttyColorRgb[256]`
+    /// Passing `value = NULL` clears the override and restores the
+    /// built-in defaults where supported.
+    pub fn ghostty_terminal_set(
+        terminal: GhosttyTerminal,
+        option: GhosttyTerminalOption,
+        value: *const c_void,
+    ) -> GhosttyResult;
     pub fn ghostty_terminal_vt_write(terminal: GhosttyTerminal, data: *const u8, len: usize);
     pub fn ghostty_terminal_get(
         terminal: GhosttyTerminal,
         key: GhosttyTerminalData,
         out: *mut c_void,
-    ) -> GhosttyResult;
-    /// `value` semantics depend on `option`:
-    ///   - color knobs (FG/BG/CURSOR): pointer to a single `GhosttyColorRgb`
-    ///   - palette: pointer to `GhosttyColorRgb[256]`
-    /// Passing `value = NULL` clears the override and restores the
-    /// built-in defaults.
-    pub fn ghostty_terminal_set(
-        terminal: GhosttyTerminal,
-        option: GhosttyTerminalOption,
-        value: *const c_void,
     ) -> GhosttyResult;
 
     /// Query whether a terminal mode is currently set. `out_value` is a
@@ -496,11 +498,18 @@ pub struct VtScreen {
     inner: Arc<Mutex<VtInner>>,
 }
 
+pub type PtyWriteCallback = Arc<dyn Fn(&[u8]) + Send + Sync + 'static>;
+
+struct VtCallbackState {
+    write_pty: PtyWriteCallback,
+}
+
 struct VtInner {
     terminal: GhosttyTerminal,
     render_state: GhosttyRenderState,
     row_iter: GhosttyRowIterator,
     row_cells: GhosttyRowCells,
+    callback_state: Option<Box<VtCallbackState>>,
     cols: u16,
     rows: u16,
     generation: u64,
@@ -511,6 +520,15 @@ unsafe impl Send for VtInner {}
 
 impl VtScreen {
     pub fn new(cols: u16, rows: u16, theme: Option<&ThemeColors>) -> anyhow::Result<Self> {
+        Self::new_with_write_pty(cols, rows, theme, None)
+    }
+
+    pub fn new_with_write_pty(
+        cols: u16,
+        rows: u16,
+        theme: Option<&ThemeColors>,
+        write_pty: Option<PtyWriteCallback>,
+    ) -> anyhow::Result<Self> {
         let mut terminal: GhosttyTerminal = std::ptr::null_mut();
         let options = GhosttyTerminalOptions {
             cols,
@@ -527,6 +545,30 @@ impl VtScreen {
             anyhow::bail!("ghostty_terminal_new failed: rc={rc}");
         }
         log::info!("VtScreen::new: terminal={terminal:?}");
+
+        let mut callback_state = write_pty.map(|write_pty| Box::new(VtCallbackState { write_pty }));
+        if let Some(state) = callback_state.as_mut() {
+            let userdata = state.as_mut() as *mut VtCallbackState as *mut c_void;
+            let rc = unsafe {
+                ghostty_terminal_set(terminal, GhosttyTerminalOption::Userdata, userdata)
+            };
+            if rc != 0 {
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_terminal_set(USERDATA) failed: rc={rc}");
+            }
+
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    terminal,
+                    GhosttyTerminalOption::WritePty,
+                    vt_write_pty_callback as *const c_void,
+                )
+            };
+            if rc != 0 {
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_terminal_set(WRITE_PTY) failed: rc={rc}");
+            }
+        }
 
         let mut render_state: GhosttyRenderState = std::ptr::null_mut();
         let mut row_iter: GhosttyRowIterator = std::ptr::null_mut();
@@ -588,6 +630,7 @@ impl VtScreen {
                 render_state,
                 row_iter,
                 row_cells,
+                callback_state,
                 cols,
                 rows,
                 generation: 0,
@@ -887,6 +930,21 @@ impl VtScreen {
         let rc = unsafe { ghostty_terminal_mode_get(inner.terminal, mode, &mut on) };
         rc == 0 && on
     }
+}
+
+unsafe extern "C" fn vt_write_pty_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    data: *const u8,
+    len: usize,
+) {
+    if userdata.is_null() || data.is_null() || len == 0 {
+        return;
+    }
+
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    (state.write_pty)(bytes);
 }
 
 fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
