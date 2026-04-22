@@ -6286,7 +6286,7 @@ impl Render for ConWorkspace {
             .pr(px(6.0))
             .bg(theme.title_bar.opacity(ui_surface_opacity));
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(target_os = "macos"))]
         {
             top_bar = top_bar
                 .window_control_area(WindowControlArea::Drag)

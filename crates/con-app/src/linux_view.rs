@@ -413,7 +413,11 @@ impl Render for GhosttyView {
         };
 
         div()
+            .flex()
+            .flex_col()
             .size_full()
+            .min_w_0()
+            .min_h_0()
             .track_focus(&self.focus_handle)
             .bg(theme.background)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -438,7 +442,11 @@ impl Render for GhosttyView {
             )
             .child(
                 div()
+                    .flex()
+                    .flex_col()
                     .size_full()
+                    .min_w_0()
+                    .min_h_0()
                     .overflow_hidden()
                     .on_children_prepainted(move |bounds_list: Vec<Bounds<Pixels>>, window, cx| {
                         let Some(bounds) = bounds_list.first().copied() else {
@@ -457,13 +465,19 @@ impl Render for GhosttyView {
                     })
                     .child(
                         div()
+                            .flex()
+                            .flex_col()
                             .size_full()
+                            .min_w_0()
+                            .min_h_0()
                             .overflow_hidden()
                             .bg(theme.background)
                             .px(px(12.0))
                             .py(px(10.0))
+                            .text_color(theme.foreground)
                             .children(status_line.map(|(text, color)| {
                                 div()
+                                    .w_full()
                                     .font_family(theme.mono_font_family.clone())
                                     .text_size(px(self.initial_font_size.max(12.0)))
                                     .line_height(line_height)
@@ -473,6 +487,7 @@ impl Render for GhosttyView {
                             }))
                             .children(screen_lines.into_iter().map(|line| {
                                 div()
+                                    .w_full()
                                     .font_family(theme.mono_font_family.clone())
                                     .text_size(px(self.initial_font_size.max(12.0)))
                                     .line_height(line_height)
