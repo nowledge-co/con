@@ -172,15 +172,37 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMSBT_TRANSIENTWINDOW,
-        DWMWA_SYSTEMBACKDROP_TYPE,
+        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_MAINWINDOW,
+        DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
     };
+    use windows::Win32::UI::Controls::MARGINS;
 
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let hwnd = match handle.as_raw() {
         RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
         _ => return None,
     };
+
+    // DWMWA_SYSTEMBACKDROP_TYPE only paints in regions where the DWM
+    // frame has been extended. Without this call the backdrop shows
+    // only on the narrow non-client strip (titlebar), which looks like
+    // "transparent window, no blur" because the client area falls
+    // through to whatever is behind. MARGINS { -1, -1, -1, -1 } is
+    // the documented "extend the sheet of glass over the whole window"
+    // value from the Mica / Acrylic sample code.
+    let margins = MARGINS {
+        cxLeftWidth: -1,
+        cxRightWidth: -1,
+        cyTopHeight: -1,
+        cyBottomHeight: -1,
+    };
+    // SAFETY: hwnd is live; margins is a 16-byte POD we pass by &.
+    if let Err(err) = unsafe { DwmExtendFrameIntoClientArea(hwnd, &margins) } {
+        log::info!(
+            "Windows: DwmExtendFrameIntoClientArea failed ({err:?}); \
+             backdrop will paint only non-client area"
+        );
+    }
 
     let (backdrop, label) = if blur {
         (DWMSBT_TRANSIENTWINDOW.0, "Acrylic")
