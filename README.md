@@ -30,7 +30,7 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 ## What it does
 
-- native macOS terminal windows, tabs, and split panes
+- native terminal windows, tabs, and split panes
 - a built-in AI harness that can read context, ask before acting, and work directly in the terminal you can already see
 - terminal-native workflows for `ssh`, `tmux`, and coding-agent CLIs
 
@@ -39,7 +39,7 @@ If you're an old-school terminal user and only want enough AI harness when neede
 `con` is in active beta development.
 
 - **macOS** fully supported, beta.
-- **Windows** early beta Tracker: [#34](https://github.com/nowledge-co/con-terminal/issues/34).
+- **Windows** early beta. Tracker: [#34](https://github.com/nowledge-co/con-terminal/issues/34).
 - **Linux** planned. Tracker: [#18](https://github.com/nowledge-co/con-terminal/issues/18).
 
 ## Screenshot
