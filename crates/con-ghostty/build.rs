@@ -57,6 +57,7 @@ fn main() {
 fn build_macos() {
     let ghostty_dir = resolve_ghostty_source();
     let optimize = ghostty_optimize();
+    println!("cargo:warning=libghostty: -Doptimize={optimize}");
 
     let status = Command::new("zig")
         .args([
@@ -218,7 +219,13 @@ fn build_windows() {
     // `CON_GHOSTTY_VT_EMIT_OPTION=1` (force the option-based path).
     let invocation = pick_vt_invocation(&zig_bin, &ghostty_dir);
 
-    // `-Doptimize=ReleaseFast` for terminal-class throughput.
+    // `-Doptimize=ReleaseFast` for terminal-class throughput. Default
+    // matches macOS so debug Rust builds still get a release-grade VT
+    // parser — past macOS lag (resize/reflow stalls of seconds) was
+    // traced to building libghostty *without* an explicit optimize
+    // flag, which left it at zig's `-ODebug`. Same risk applies on
+    // Windows, so default it on regardless of cargo profile and let
+    // `CON_GHOSTTY_OPTIMIZE=Debug` opt back in for VT-debugging.
     //
     // `-Dsimd`: Ghostty vendors `simdutf` (a C++ SIMD UTF-8 library)
     // when SIMD is on. Zig's `-Demit-lib-vt=true` produces
@@ -240,13 +247,16 @@ fn build_windows() {
         "-Dsimd=false"
     };
 
+    let optimize = ghostty_optimize();
+    println!("cargo:warning=libghostty-vt: -Doptimize={optimize}");
+
     let mut cmd = Command::new(&zig_bin);
     cmd.current_dir(&ghostty_dir);
     cmd.arg("build");
     for arg in &invocation {
         cmd.arg(arg);
     }
-    cmd.args(["-Doptimize=ReleaseFast", simd_flag]);
+    cmd.args([&format!("-Doptimize={optimize}"), simd_flag]);
 
     let status = cmd
         .status()
