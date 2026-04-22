@@ -174,8 +174,10 @@ impl RenderSession {
     /// requested level. Bumping the VT generation forces the next
     /// prepaint to repaint with the new colors / opacity.
     pub fn set_appearance(&self, theme: Option<&ThemeColors>, background_opacity: f32) {
+        let clamped_opacity = background_opacity.clamp(0.0, 1.0);
         let mut config = self.config.lock();
-        config.background_opacity = background_opacity;
+        let opacity_changed = (config.background_opacity - clamped_opacity).abs() > f32::EPSILON;
+        config.background_opacity = clamped_opacity;
         if let Some(theme) = theme {
             // Margins (pixels outside the cell grid) paint from
             // `clear_color`, so a theme switch that only rewrites the
@@ -189,9 +191,20 @@ impl RenderSession {
                 1.0,
             ];
             config.theme = Some(theme.clone());
+            // `set_theme` bumps the VT generation itself, so the next
+            // prepaint re-runs draw_cells with the new palette + new
+            // clear_color + any new opacity.
             self.vt.set_theme(theme);
         } else {
             config.theme = None;
+            // An opacity-only change doesn't touch the VT screen, so
+            // the renderer's `needs_draw` gate (keyed on
+            // snapshot.generation ⨁ selection) would otherwise serve
+            // a stale cached frame until the next VT byte arrives.
+            // Force a generation bump so the change is visible now.
+            if opacity_changed {
+                self.vt.bump_generation();
+            }
         }
     }
 
