@@ -258,6 +258,7 @@ fn default_window_options(cx: &mut App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(1200.0), px(800.0)), cx)),
         titlebar: default_titlebar_options(transparent),
+        window_decorations: default_window_decorations(),
         window_background: if transparent {
             WindowBackgroundAppearance::Transparent
         } else {
@@ -267,11 +268,32 @@ fn default_window_options(cx: &mut App) -> WindowOptions {
     }
 }
 fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
-    Some(TitlebarOptions {
-        title: Some("con".into()),
-        appears_transparent: transparent,
-        ..Default::default()
-    })
+    #[cfg(target_os = "linux")]
+    {
+        let _ = transparent;
+        None
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Some(TitlebarOptions {
+            title: Some("con".into()),
+            appears_transparent: transparent,
+            ..Default::default()
+        })
+    }
+}
+
+fn default_window_decorations() -> Option<WindowDecorations> {
+    #[cfg(target_os = "linux")]
+    {
+        Some(WindowDecorations::Server)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bool, cx: &mut App) {

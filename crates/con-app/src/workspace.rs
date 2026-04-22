@@ -76,7 +76,7 @@ fn max_agent_panel_width(window_width: f32) -> f32 {
 /// tests). Size and hover colors mirror Windows 11's native caption
 /// buttons: 36px wide, 45px min height doesn't apply here (we honour
 /// the shared `top_bar_height` instead), red hover on Close.
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 fn caption_buttons(
     window: &Window,
     theme: &gpui_component::theme::ThemeColor,
@@ -6284,13 +6284,18 @@ impl Render for ConWorkspace {
             .items_end()
             .pl(px(leading_pad))
             .pr(px(6.0))
-            .bg(theme.title_bar.opacity(ui_surface_opacity))
-            .window_control_area(WindowControlArea::Drag)
-            .on_click(|event, window, _cx| {
-                if event.click_count() == 2 {
-                    window.titlebar_double_click();
-                }
-            });
+            .bg(theme.title_bar.opacity(ui_surface_opacity));
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            top_bar = top_bar
+                .window_control_area(WindowControlArea::Drag)
+                .on_click(|event, window, _cx| {
+                    if event.click_count() == 2 {
+                        window.titlebar_double_click();
+                    }
+                });
+        }
 
         // Tabs container — appears only when there is real tab selection to do
         let mut tabs_container = div().flex().flex_1().min_w_0().items_end();
@@ -6616,7 +6621,7 @@ impl Render for ConWorkspace {
         // macOS gets its traffic-light cluster from the system. We
         // render these *inside* the top bar so they share the same
         // vertical strip and never occlude terminal content.
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         {
             top_bar = top_bar.child(caption_buttons(window, theme, top_bar_height));
         }
