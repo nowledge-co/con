@@ -129,7 +129,7 @@ impl GhosttyView {
         // output bursts.
         cx.spawn(async move |this, cx| {
             while wake_rx.next().await.is_some() {
-                while let Ok(Some(_)) = wake_rx.try_next() {}
+                while wake_rx.try_recv().is_ok() {}
                 if this.update(cx, |_, cx| cx.notify()).is_err() {
                     return;
                 }
