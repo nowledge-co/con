@@ -53,6 +53,7 @@ use atlas::{GlyphCache, GlyphKey};
 use pipeline::{Globals, Instance, Pipeline, instance_for_cell};
 
 pub use atlas::CellMetrics;
+pub use super::vt::ThemeColors;
 
 const ATLAS_SIZE_PX: u32 = 2048;
 /// Initial instance-buffer capacity. 16 384 covers a 200×80 grid
@@ -66,7 +67,18 @@ pub struct RendererConfig {
     pub font_size_px: f32,
     pub initial_width: u32,
     pub initial_height: u32,
+    /// RGB clear-target color. Alpha is taken from `background_opacity`
+    /// at render time so opacity changes don't have to thread back into
+    /// here.
     pub clear_color: [f32; 4],
+    /// 0.0 (fully see-through) … 1.0 (opaque). Multiplied into the
+    /// clear-color alpha and the per-cell default-bg alpha so that
+    /// unstyled cells composite over Mica / DComp visuals beneath.
+    /// Cells with explicit SGR backgrounds stay solid.
+    pub background_opacity: f32,
+    /// Theme handed to libghostty so SGR colors resolve to the user's
+    /// palette. `None` keeps libghostty's built-in defaults.
+    pub theme: Option<ThemeColors>,
 }
 
 impl Default for RendererConfig {
@@ -77,6 +89,8 @@ impl Default for RendererConfig {
             initial_width: 800,
             initial_height: 600,
             clear_color: [0.06, 0.06, 0.07, 1.0],
+            background_opacity: 1.0,
+            theme: None,
         }
     }
 }
@@ -316,16 +330,28 @@ impl Renderer {
             MinDepth: 0.0,
             MaxDepth: 1.0,
         };
+        // Multiply alpha by background_opacity so transparent cells
+        // composite with the backdrop (Mica / DComp). Pre-multiply RGB
+        // so the BGRA readback handed to GPUI behaves correctly under
+        // GPUI's premultiplied-alpha blend (otherwise translucent
+        // pixels look washed out / haloed against the visual beneath).
+        let opacity = config.background_opacity.clamp(0.0, 1.0);
+        let clear = [
+            config.clear_color[0] * opacity,
+            config.clear_color[1] * opacity,
+            config.clear_color[2] * opacity,
+            config.clear_color[3] * opacity,
+        ];
         unsafe {
             self.context.RSSetViewports(Some(&[vp]));
             self.context
                 .OMSetRenderTargets(Some(&[Some(self.rtv.clone())]), None);
             self.context
-                .ClearRenderTargetView(&self.rtv, &config.clear_color);
+                .ClearRenderTargetView(&self.rtv, &clear);
         }
 
         if !snapshot.cells.is_empty() {
-            self.draw_cells(snapshot)?;
+            self.draw_cells(snapshot, config)?;
         }
 
         let bytes = self.readback_rt()?;
@@ -336,11 +362,24 @@ impl Renderer {
         }))
     }
 
-    fn draw_cells(&self, snapshot: &ScreenSnapshot) -> Result<()> {
+    fn draw_cells(&self, snapshot: &ScreenSnapshot, config: &RendererConfig) -> Result<()> {
         let selection = *self
             .selection
             .lock()
             .expect("selection mutex poisoned in draw_cells()");
+        // Sentinel alpha=0 in cell.bg means "default theme background"
+        // (set by the VT layer); rewrite it to the configured opacity
+        // so the shader composes the cell over Mica with the right
+        // see-through level. Cells with explicit SGR backgrounds carry
+        // alpha=0xFF and aren't touched.
+        let opacity_byte: u8 = (config.background_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let apply_opacity = |bg: u32| -> u32 {
+            if (bg & 0xFF) == 0 {
+                (bg & 0xFFFFFF00) | opacity_byte as u32
+            } else {
+                bg
+            }
+        };
 
         let mut atlas = self
             .atlas
@@ -372,7 +411,7 @@ impl Renderer {
                     atlas_pos: [0, 0],
                     atlas_size: [0, 0],
                     fg: cell.fg,
-                    bg: cell.bg,
+                    bg: apply_opacity(cell.bg),
                     attrs: effective_attrs as u32,
                 });
                 continue;
@@ -403,7 +442,7 @@ impl Renderer {
                                 atlas_pos: [0, 0],
                                 atlas_size: [0, 0],
                                 fg: cell.fg,
-                                bg: cell.bg,
+                                bg: apply_opacity(cell.bg),
                                 attrs: effective_attrs as u32,
                             });
                             continue;
@@ -417,7 +456,7 @@ impl Renderer {
                 row,
                 glyph,
                 cell.fg,
-                cell.bg,
+                apply_opacity(cell.bg),
                 effective_attrs,
             ));
         }

@@ -60,6 +60,19 @@ pub enum GhosttyTerminalData {
     Title = 12,
 }
 
+/// `GHOSTTY_TERMINAL_OPT_*` keys for `ghostty_terminal_set`. Only the
+/// color knobs we use today; integer values mirror `terminal.h` at the
+/// pinned revision (re-confirm on GHOSTTY_REV bumps).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum GhosttyTerminalOption {
+    ColorForeground = 11,
+    ColorBackground = 12,
+    ColorCursor = 13,
+    /// `GhosttyColorRgb[256]*` — full 256-entry palette.
+    ColorPalette = 14,
+}
+
 /// `GHOSTTY_RENDER_STATE_DATA_*` keys for `ghostty_render_state_get`.
 /// `RowIterator` (4) binds an existing row-iterator handle to this state.
 #[repr(C)]
@@ -282,6 +295,16 @@ unsafe extern "C" {
         key: GhosttyTerminalData,
         out: *mut c_void,
     ) -> GhosttyResult;
+    /// `value` semantics depend on `option`:
+    ///   - color knobs (FG/BG/CURSOR): pointer to a single `GhosttyColorRgb`
+    ///   - palette: pointer to `GhosttyColorRgb[256]`
+    /// Passing `value = NULL` clears the override and restores the
+    /// built-in defaults.
+    pub fn ghostty_terminal_set(
+        terminal: GhosttyTerminal,
+        option: GhosttyTerminalOption,
+        value: *const c_void,
+    ) -> GhosttyResult;
 
     /// Query whether a terminal mode is currently set. `out_value` is a
     /// `bool` (1 byte). Returns `GHOSTTY_SUCCESS` on success.
@@ -342,6 +365,80 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 
+// ── Theme ──────────────────────────────────────────────────────────────
+
+/// Default colors handed to libghostty via `ghostty_terminal_set`.
+///
+/// libghostty owns the SGR-color resolution: it looks up palette
+/// indices, applies bold/bright remaps, and falls back to the default
+/// fg/bg for unstyled cells. Pushing the user's theme in here means
+/// `read_cell` doesn't need any special-casing — every cell's fg/bg
+/// already arrives themed.
+#[derive(Debug, Clone)]
+pub struct ThemeColors {
+    pub fg: [u8; 3],
+    pub bg: [u8; 3],
+    /// Full 256-entry palette. Indices 0–15 are the user's ANSI
+    /// theme; 16–231 form the standard xterm 6×6×6 cube; 232–255 form
+    /// the 24-step grayscale ramp.
+    pub palette: [[u8; 3]; 256],
+}
+
+impl ThemeColors {
+    /// Build a 256-color palette from a 16-entry ANSI base.
+    pub fn from_ansi16(fg: [u8; 3], bg: [u8; 3], ansi16: [[u8; 3]; 16]) -> Self {
+        let mut palette = [[0u8; 3]; 256];
+        for i in 0..16 {
+            palette[i] = ansi16[i];
+        }
+        // 16..232: 6×6×6 RGB cube. xterm formula: x in 0..6 maps to
+        //   0 if x==0 else 55 + 40*x.
+        let step = |x: u8| -> u8 {
+            if x == 0 { 0 } else { 55 + 40 * x }
+        };
+        for i in 16..232 {
+            let idx = (i - 16) as u8;
+            let r = idx / 36;
+            let g = (idx / 6) % 6;
+            let b = idx % 6;
+            palette[i] = [step(r), step(g), step(b)];
+        }
+        // 232..256: grayscale ramp 8, 18, 28, …, 238.
+        for i in 232..256 {
+            let v = 8u8.saturating_add(((i - 232) as u8).saturating_mul(10));
+            palette[i] = [v, v, v];
+        }
+        Self { fg, bg, palette }
+    }
+}
+
+unsafe fn apply_theme_to_terminal(terminal: GhosttyTerminal, theme: &ThemeColors) {
+    let fg = GhosttyColorRgb { r: theme.fg[0], g: theme.fg[1], b: theme.fg[2] };
+    let bg = GhosttyColorRgb { r: theme.bg[0], g: theme.bg[1], b: theme.bg[2] };
+    let palette: [GhosttyColorRgb; 256] = std::array::from_fn(|i| GhosttyColorRgb {
+        r: theme.palette[i][0],
+        g: theme.palette[i][1],
+        b: theme.palette[i][2],
+    });
+    unsafe {
+        let _ = ghostty_terminal_set(
+            terminal,
+            GhosttyTerminalOption::ColorForeground,
+            &fg as *const _ as *const c_void,
+        );
+        let _ = ghostty_terminal_set(
+            terminal,
+            GhosttyTerminalOption::ColorBackground,
+            &bg as *const _ as *const c_void,
+        );
+        let _ = ghostty_terminal_set(
+            terminal,
+            GhosttyTerminalOption::ColorPalette,
+            palette.as_ptr() as *const c_void,
+        );
+    }
+}
+
 // ── Snapshot (renderer's view) ─────────────────────────────────────────
 
 #[repr(C)]
@@ -394,7 +491,7 @@ struct VtInner {
 unsafe impl Send for VtInner {}
 
 impl VtScreen {
-    pub fn new(cols: u16, rows: u16) -> anyhow::Result<Self> {
+    pub fn new(cols: u16, rows: u16, theme: Option<&ThemeColors>) -> anyhow::Result<Self> {
         let mut terminal: GhosttyTerminal = std::ptr::null_mut();
         let options = GhosttyTerminalOptions {
             cols,
@@ -465,6 +562,13 @@ impl VtScreen {
             );
         }
 
+        if let Some(theme) = theme {
+            // SAFETY: terminal handle owned, valid; theme is borrowed
+            // for the duration of the call (palette is copied by the
+            // C side before returning).
+            unsafe { apply_theme_to_terminal(terminal, theme) };
+        }
+
         Ok(Self {
             inner: Arc::new(Mutex::new(VtInner {
                 terminal,
@@ -477,6 +581,15 @@ impl VtScreen {
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
             })),
         })
+    }
+
+    /// Replace the default fg/bg/palette. Bumps the snapshot
+    /// generation so the next prepaint repaints with the new colors.
+    pub fn set_theme(&self, theme: &ThemeColors) {
+        let mut inner = self.inner.lock();
+        // SAFETY: terminal valid; theme borrowed for the call.
+        unsafe { apply_theme_to_terminal(inner.terminal, theme) };
+        inner.generation = inner.generation.wrapping_add(1);
     }
 
     /// Feed bytes from the PTY into the parser. Non-reentrant per
@@ -830,13 +943,19 @@ fn read_cell(
     // explicit-black on a non-black bg, which is rare).
     let is_default = |c: GhosttyColorRgb| c.r == 0 && c.g == 0 && c.b == 0;
     let fg = if is_default(fg) { default_fg } else { fg };
-    let bg = if is_default(bg) { default_bg } else { bg };
+    let bg_was_default = is_default(bg);
+    let bg = if bg_was_default { default_bg } else { bg };
 
     // Pack RGB into the 0xRRGGBBAA u32 our HLSL `unpackRGBA` expects
     // (high byte = R, low byte = A). A=0xFF (opaque).
-    let pack = |c: GhosttyColorRgb| -> u32 {
-        ((c.r as u32) << 24) | ((c.g as u32) << 16) | ((c.b as u32) << 8) | 0xFF
+    let pack = |c: GhosttyColorRgb, a: u8| -> u32 {
+        ((c.r as u32) << 24) | ((c.g as u32) << 16) | ((c.b as u32) << 8) | (a as u32)
     };
+    // Default-bg cells carry alpha=0 as a sentinel — the renderer
+    // rewrites it to `background_opacity * 255` before pushing the
+    // instance, so Mica / DComp visuals beneath show through unstyled
+    // regions while explicit SGR backgrounds stay solid.
+    let bg_alpha: u8 = if bg_was_default { 0 } else { 0xFF };
 
     // Pack style flags into the attrs byte the renderer (and HLSL
     // pixel shader) interpret. Underline is an `int` upstream
@@ -861,8 +980,8 @@ fn read_cell(
 
     Cell {
         codepoint,
-        fg: pack(fg),
-        bg: pack(bg),
+        fg: pack(fg, 0xFF),
+        bg: pack(bg, bg_alpha),
         attrs,
         _pad: [0; 3],
     }
