@@ -412,7 +412,10 @@ impl Render for GhosttyView {
             None
         };
 
-        let mut terminal_content = div()
+        let status_color = status_line.map(|(_, color)| color).unwrap_or(theme.foreground);
+        let terminal_text = render_terminal_block(status_line, &screen_lines);
+
+        let terminal_content = div()
             .flex()
             .flex_col()
             .size_full()
@@ -424,33 +427,16 @@ impl Render for GhosttyView {
             .py(px(10.0))
             .text_color(theme.foreground)
             .items_start()
-            .justify_start();
-
-        if let Some((text, color)) = status_line {
-            terminal_content = terminal_content.child(
+            .justify_start()
+            .child(
                 div()
                     .w_full()
                     .font_family(theme.mono_font_family.clone())
                     .text_size(px(self.initial_font_size.max(12.0)))
                     .line_height(line_height)
-                    .text_color(color)
-                    .whitespace_nowrap()
-                    .child(render_terminal_line(text)),
+                    .text_color(status_color)
+                    .child(terminal_text),
             );
-        }
-
-        for line in screen_lines {
-            terminal_content = terminal_content.child(
-                div()
-                    .w_full()
-                    .font_family(theme.mono_font_family.clone())
-                    .text_size(px(self.initial_font_size.max(12.0)))
-                    .line_height(line_height)
-                    .text_color(theme.foreground)
-                    .whitespace_nowrap()
-                    .child(render_terminal_line(&line)),
-            );
-        }
 
         div()
             .flex()
@@ -532,6 +518,19 @@ fn render_terminal_line(line: &str) -> String {
         }
     }
     rendered
+}
+
+fn render_terminal_block(status_line: Option<(&str, Hsla)>, screen_lines: &[String]) -> String {
+    let mut lines = Vec::with_capacity(screen_lines.len() + usize::from(status_line.is_some()));
+    if let Some((status, _)) = status_line {
+        lines.push(render_terminal_line(status));
+    }
+    lines.extend(screen_lines.iter().map(|line| render_terminal_line(line)));
+    if lines.is_empty() {
+        "\u{00A0}".to_string()
+    } else {
+        lines.join("\n")
+    }
 }
 
 fn xterm_modifier_param(modifiers: &Modifiers) -> Option<u8> {
