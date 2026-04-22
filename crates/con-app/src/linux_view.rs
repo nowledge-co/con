@@ -412,6 +412,46 @@ impl Render for GhosttyView {
             None
         };
 
+        let mut terminal_content = div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .bg(theme.background)
+            .px(px(12.0))
+            .py(px(10.0))
+            .text_color(theme.foreground)
+            .items_start()
+            .justify_start();
+
+        if let Some((text, color)) = status_line {
+            terminal_content = terminal_content.child(
+                div()
+                    .w_full()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_size(px(self.initial_font_size.max(12.0)))
+                    .line_height(line_height)
+                    .text_color(color)
+                    .whitespace_nowrap()
+                    .child(render_terminal_line(text)),
+            );
+        }
+
+        for line in screen_lines {
+            terminal_content = terminal_content.child(
+                div()
+                    .w_full()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_size(px(self.initial_font_size.max(12.0)))
+                    .line_height(line_height)
+                    .text_color(theme.foreground)
+                    .whitespace_nowrap()
+                    .child(render_terminal_line(&line)),
+            );
+        }
+
         div()
             .flex()
             .flex_col()
@@ -464,37 +504,7 @@ impl Render for GhosttyView {
                         }
                     })
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .size_full()
-                            .min_w_0()
-                            .min_h_0()
-                            .overflow_hidden()
-                            .bg(theme.background)
-                            .px(px(12.0))
-                            .py(px(10.0))
-                            .text_color(theme.foreground)
-                            .children(status_line.map(|(text, color)| {
-                                div()
-                                    .w_full()
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_size(px(self.initial_font_size.max(12.0)))
-                                    .line_height(line_height)
-                                    .text_color(color)
-                                    .whitespace_nowrap()
-                                    .child(render_terminal_line(text))
-                            }))
-                            .children(screen_lines.into_iter().map(|line| {
-                                div()
-                                    .w_full()
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_size(px(self.initial_font_size.max(12.0)))
-                                    .line_height(line_height)
-                                    .text_color(theme.foreground)
-                                    .whitespace_nowrap()
-                                    .child(render_terminal_line(&line))
-                            })),
+                        terminal_content,
                     ),
             )
     }
