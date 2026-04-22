@@ -895,6 +895,7 @@ impl ConWorkspace {
 
                     if workspace.pump_ghostty_views(cx) {
                         got_event = true;
+                        cx.notify();
                     }
                 })
                 .ok();
