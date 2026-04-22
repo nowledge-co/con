@@ -30,7 +30,7 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 ## What it does
 
-- native terminal windows, tabs, and split panes
+- a terminal that's fast, elegant
 - a built-in AI harness that can read context, ask before acting, and work directly in the terminal you can already see
 - terminal-native workflows for `ssh`, `tmux`, and coding-agent CLIs
 
