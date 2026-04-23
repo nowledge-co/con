@@ -237,3 +237,74 @@ _NET_FRAME_EXTENTS    = 0, 0, 0, 0            # xfwm draws no server frame
 _MOTIF_WM_HINTS       = 0x2, 0, 0, 0, 0       # decorations bit cleared (CSD)
 _NET_WM_NAME          = "con"
 ```
+
+## Follow-on fixes 5 & 6: Windows CI lint + Linux pump latency
+
+After the rounded / transparent / blur work landed, two follow-ups
+came in from the Windows CI run and from the user's interactive
+testing:
+
+5. **Windows CI failure: `unused_mut` in `caption_buttons`.** The
+   `caption_buttons` cluster was extended to also build on Linux, and
+   the function bound the button div as `let mut el = div()...` so
+   the Linux branch could re-bind via `el = el.on_mouse_down(...)`.
+   With `RUSTFLAGS=-D warnings`, the Windows build (where the Linux
+   re-bind is cfg-gated out) saw an unused `mut`. Fix: re-shape the
+   function so the Linux branch is `#[cfg(target_os = "linux")] let
+   el = el.on_mouse_down(...)` (a fresh shadow binding instead of an
+   in-place mutation), and `use gpui::MouseButton` inside the function
+   becomes Linux-only too. Same behavior on Linux; Windows no longer
+   sees a `mut` keyword that does nothing.
+
+6. **"Wait between Enter and htop rendering" on Linux.** The user
+   noticed a noticeable stall between hitting Enter on `htop` and
+   the alt-screen actually painting. Two compounding causes, both
+   in the path that drives the GPUI renderer from libghostty-vt
+   snapshots:
+
+   - `linux_view::pump_deferred_work` was calling
+     `self.refresh_snapshot()` *unconditionally* every poll tick
+     when the shell was alive — a 10k+ FFI call walk through
+     libghostty-vt's `render_state_row_iterator` plus a 50–200 KB
+     `Vec<Cell>` deep equality compare against the previous
+     snapshot. That ate measurable CPU on busy panes and also
+     drowned out the per-PTY-write wake signal we explicitly
+     wanted to react to. Restored the gating: only refresh when
+     `take_needs_render()` actually returns true.
+   - `refresh_snapshot()` itself was doing a `prev.cells ==
+     snapshot.cells` deep compare on every refresh. Callers only
+     invoke it when a real wake came in, so the compare always
+     mismatched — pure cost. Replaced with a
+     `prev.generation == snapshot.generation` check; libghostty-vt
+     bumps the screen generation on every parser feed that changed
+     grid state.
+   - The shared workspace poll loop in `workspace.rs` slept 16 ms
+     between iterations whenever no event fired in the previous
+     pass. PTY data arriving 1 ms after the loop entered the sleep
+     had to wait the full 15 ms before any render was even
+     scheduled — visible as a stall on Linux because Linux drives
+     the renderer through that loop instead of through libghostty's
+     own NSView pump (macOS) or D3D11 swapchain (Windows). Halved
+     the idle sleep to 8 ms. The work in `pump_ghostty_views`
+     short-circuits on unchanged `wake_generation`, so this is a
+     small CPU bump and is still capped at the GPUI vsync rate
+     (~60 Hz) on the actual paint path.
+
+Measured impact (control-socket round-trip of a single keystroke
+echo on the cloud-agent VM, 5 runs each):
+
+```
+PRE-FIX:  33ms 33ms 32ms 32ms 33ms   (mean 32.6ms)
+POST-FIX: 16ms 19ms 16ms 15ms 17ms   (mean 16.6ms)
+```
+
+That's a clean halving and matches the timer change exactly. The
+on-screen pixel paint is still vsync-bounded (typically 16.6 ms
+per frame at 60 Hz), so the user-visible improvement caps at one
+frame for fast bursts and grows on idle-then-burst patterns
+(htop startup, vim refresh, etc.).
+
+Visual confirmation: `screenshots/2026-04-23-htop.png` shows htop
+running cleanly in the styled-cell pane — colored CPU bars, the
+selected-row inverse highlight, the F-key footer, all column
+alignment, and a process list including the con binary itself.
