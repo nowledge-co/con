@@ -6,13 +6,13 @@ con is an open-source, GPU-accelerated terminal emulator with a built-in AI agen
 
 - **macOS** — primary target, shipped. Metal-backed libghostty, signed DMG, Sparkle auto-update.
 - **Windows** — first beta shipped as `v0.1.0-beta.25`. D3D11/DirectWrite renderer over ConPTY + libghostty-vt, unsigned ZIP distribution, notify-only update checker. Plan + open work: `docs/impl/windows-port.md`; status tracker: issue #34.
-- **Linux** — planned; tracker: issue #18.
+- **Linux** — preview. Real PTY pane via `libghostty-vt`, styled-cell paint (SGR colors / bold / italic / underline / inverse + block cursor), client-side decorations with the same caption cluster Windows uses, transparent ARGB window with rounded corners, and KWin-Wayland backdrop blur via `org_kde_kwin_blur` where the compositor exposes it. Plan + open work: `docs/impl/linux-port.md`; tracker: issue #18.
 
 ## Stack
 
 - **UI**: upstream Zed GPUI (git dependency on `zed-industries/zed`, Apache 2.0). Windows backend is D3D11/DirectComposition; HWND child-embedding is the known gap for the Windows port.
-- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. macOS-only today; see `docs/impl/windows-port.md` for the Windows strategy (likely `libghostty-vt` + ConPTY + custom renderer).
-- **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API (surface lifecycle, action callbacks, clipboard, key/mouse input). Cfg-gated to macOS; on other targets the crate compiles to an empty shell so the workspace resolves.
+- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. macOS uses the full embedded libghostty; Windows and Linux consume the carved-out `libghostty-vt` parser instead and pair it with their own renderers (D3D11/DirectWrite on Windows, GPUI per-row `StyledText` on the Linux preview today / GPUI-owned glyph-atlas grid renderer in the long term).
+- **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API on macOS (surface lifecycle, action callbacks, clipboard, key/mouse input). On Windows + Linux it wraps `libghostty-vt` plus per-platform PTY (`ConPTY` / Unix PTY) and renderer plumbing. Per-platform code lives in `con-ghostty/src/{terminal,windows,linux}/`; the workspace consumes the same `GhosttyApp` / `GhosttyTerminal` / `TerminalColors` type names from each.
 - **Terminal support crate**: con-terminal — theme and palette helpers only
 - **AI agent**: Rig v0.34.0 (from crates.io, 13 providers, Tool trait)
 - **Socket API**: JSON-RPC 2.0 with a platform-specific transport — Unix domain sockets on Unix, Windows Named Pipes (`\\.\pipe\con`) on Windows. Served by the app and consumed first by `con-cli`.
@@ -57,13 +57,16 @@ cargo run -p con       # run the terminal (macOS)
 cargo test --workspace # test
 ```
 
-The `con` UI binary builds on macOS, Linux, and Windows. On non-macOS
-targets the terminal pane uses a placeholder view ("backend under
-construction") until the Windows/Linux backend lands — the rest of the
-app (agent panel, settings, command palette, control socket at
-`\\.\pipe\con` on Windows / `/tmp/con.sock` on Unix) is fully wired.
-See `docs/impl/windows-port.md` for the porting plan and the path to
-a working terminal on Windows.
+The `con` UI binary builds on macOS, Linux, and Windows. macOS uses
+the embedded full libghostty + Metal renderer; Windows ships a
+ConPTY + libghostty-vt + D3D11/DirectWrite renderer; Linux ships a
+Unix PTY + libghostty-vt + GPUI-owned `StyledText` paint path. The
+agent panel, settings, command palette, and control socket
+(`\\.\pipe\con` on Windows, `/tmp/con.sock` on Unix) are fully
+wired on every platform. See `docs/impl/windows-port.md` and
+`docs/impl/linux-port.md` for the per-platform porting plans and
+the path to the long-term GPU-accelerated grid renderer on each
+non-macOS target.
 
 ```bash
 # Windows (from a Developer Command Prompt for VS 2022; needs Zig 0.15.2+ on PATH

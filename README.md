@@ -16,7 +16,7 @@
   <a href="https://github.com/nowledge-co/con-terminal/releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/nowledge-co/con-terminal?sort=semver&logo=github&style=flat"></a>
   <a href="https://developer.apple.com/macos/"><img alt="Native on macOS (Metal)" src="https://img.shields.io/badge/native-Metal-3D3D3D?logo=apple&logoColor=white&style=flat"></a>
   <a href="https://github.com/nowledge-co/con-terminal/issues/34"><img alt="Windows beta (tracker)" src="https://img.shields.io/badge/Windows-beta-0078D4?logo=windows&logoColor=white&style=flat"></a>
-  <a href="https://github.com/nowledge-co/con-terminal/issues/18"><img alt="Linux support planned (tracker)" src="https://img.shields.io/badge/Linux-planned-1D4ED8?logo=linux&logoColor=white&style=flat"></a>
+  <a href="https://github.com/nowledge-co/con-terminal/issues/18"><img alt="Linux preview (tracker)" src="https://img.shields.io/badge/Linux-preview-1D4ED8?logo=linux&logoColor=white&style=flat"></a>
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-CE422B?logo=rust&logoColor=white&style=flat"></a>
 </p>
 
@@ -40,7 +40,7 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 - **macOS** fully supported, beta.
 - **Windows** early beta. Tracker: [#34](https://github.com/nowledge-co/con-terminal/issues/34).
-- **Linux** planned. Tracker: [#18](https://github.com/nowledge-co/con-terminal/issues/18).
+- **Linux** preview. The same `con` binary runs on Linux now, with a real PTY pane fed through `libghostty-vt`, styled cell paint (SGR colors / bold / italic / underline / inverse + block cursor), client-side decorations, transparent rounded window, and KWin-backdrop blur where the compositor exposes it. Tracker: [#18](https://github.com/nowledge-co/con-terminal/issues/18).
 
 ## Screenshot
 
