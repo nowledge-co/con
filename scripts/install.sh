@@ -239,15 +239,34 @@ mkdir -p "$bin_dir" "$apps_dir" "$icons_dir"
 printf "   ${DIM}·${R}  installing"
 
 target_bin="${bin_dir}/con"
-# If con is currently running, the kernel keeps the open exe inode
-# alive even if we replace the file. Move-then-overwrite is the
-# rsync-style pattern that survives self-update — `cp` would fail
-# with `Text file busy` on some kernels.
-if [ -f "$target_bin" ]; then
-  rm -f "$target_bin" 2>/dev/null || true
-fi
-cp "$staged_root/con" "$target_bin"
-chmod +x "$target_bin"
+# Atomic replace, not rm-then-cp:
+#
+#   1. Stage the new binary to a sibling tempfile in the same dir
+#      (so `mv` is atomic — same filesystem).
+#   2. chmod +x the temp.
+#   3. `mv -f` swaps the directory entry to point at the new
+#      inode in one step.
+#
+# Why not `rm + cp + chmod`? If `cp` or `chmod` fails partway, the
+# user is left without a runnable `~/.local/bin/con` — the in-app
+# updater would have just bricked the install.
+#
+# Why mv works under self-update: when `con` is currently running,
+# the kernel keeps the OLD exe inode alive (mapped pages reference
+# the inode, not the directory entry). `mv -f` only swaps the
+# directory entry; the running con keeps painting on the old
+# inode and the next launch picks up the new binary.
+tmp_bin="${bin_dir}/.con.tmp.$$"
+# Layer the tmp-bin cleanup on top of the existing tmpdir trap (set
+# above when we created `$tmpdir`), don't replace it. Both run on
+# any exit path; mv removes tmp_bin on success so the rm is a no-op.
+trap 'rm -rf "$tmpdir"; rm -f "$tmp_bin"' EXIT
+cp "$staged_root/con" "$tmp_bin" \
+  || fail "could not copy con binary"
+chmod +x "$tmp_bin" \
+  || fail "could not mark con binary executable"
+mv -f "$tmp_bin" "$target_bin" \
+  || fail "could not install con binary"
 
 # Desktop entry — handles "con shows up in the launcher" and
 # "double-clicking a `con://` URL". The tarball ships a templated

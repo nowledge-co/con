@@ -285,10 +285,20 @@ jobs:
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
 
+          # `gh release create` defaults to a stable release. v*-beta.*
+          # and v*-dev.* tags must be marked --prerelease, otherwise
+          # GitHub's `/releases/latest` API includes them and the
+          # Windows install.ps1 / notify-only updater downstream paths
+          # treat them as the next stable release.
+          prerelease_args=()
+          case "$tag" in
+            *-beta.*|*-dev.*) prerelease_args+=(--prerelease) ;;
+          esac
+
           # The macOS job may have already created the release. If not,
           # create it now so a Windows-only tag still publishes.
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes
+            gh release create "$tag" --title "$tag" --generate-notes "${prerelease_args[@]}"
           fi
 
           while IFS= read -r -d '' file; do

@@ -454,30 +454,54 @@ pub fn apply_update_in_place() {
         Err(_) => None,
     };
 
-    // `sh -c 'export VAR=<v>; curl -fsSL <url> | sh'` is the
-    // pattern that gets the version into both halves of the pipe.
-    // `VAR=value <command>` only sets `VAR` for `<command>`'s
-    // process, so writing `CON_INSTALL_VERSION=... curl ... | sh`
-    // would scope the var to `curl` and the right-hand `sh`
-    // wouldn't see it. `export` lifts it onto the outer shell
-    // before the pipe is built, so both children inherit it.
-    // `setsid` puts the spawned shell in its own session so it
-    // survives `con`'s exit; the trailing `>/dev/null 2>&1
-    // </dev/null` detaches stdio so the script doesn't inherit
-    // our terminal.
+    // Download the script to a tempfile FIRST, then run it. The
+    // obvious-looking `curl ... | sh` pipeline has two problems we
+    // need to dodge:
+    //
+    //   1. POSIX `sh` returns the rightmost command's status, so a
+    //      `curl` failure (404, network error, DNS) silently
+    //      becomes a successful pipeline exit (`sh` reads empty
+    //      input and returns 0). The user clicks "Update now",
+    //      `con` exits as if the install kicked off, and they're
+    //      stranded on the old version with no error surfaced.
+    //   2. `pipefail` would solve (1) but isn't in POSIX —
+    //      depending on it would break on minimal busybox-style
+    //      shells.
+    //
+    // `mktemp && curl -o tmp && sh tmp` short-circuits cleanly via
+    // `&&`: any failure aborts before the next command runs.
+    //
+    // `export CON_INSTALL_VERSION=...` (rather than the
+    // `VAR=value <cmd>` env-prefix form) lifts the var onto the
+    // outer shell so both `curl` and `sh tmp` inherit it.
+    //
+    // `setsid -f` puts the spawned shell in its own session so
+    // it survives `con`'s exit; the trailing `>/dev/null 2>&1
+    // </dev/null` on the spawn detaches stdio so the script
+    // doesn't inherit our terminal.
+    //
+    // Both `install_url` and `version` go through `shell_quote()`
+    // so user-supplied env (`CON_INSTALL_URL`) and appcast-supplied
+    // version strings can't break out of the single-quoted argument
+    // even if they contain `&`, `;`, `$`, etc.
+    let url_arg = shell_quote(install_url.trim());
     let pipeline = match target_version.as_deref() {
         Some(version) => format!(
-            "export CON_INSTALL_VERSION={version}; curl -fsSL {url} | sh >/dev/null 2>&1",
+            "export CON_INSTALL_VERSION={version}; \
+             tmp=$(mktemp) && curl -fsSL {url} -o \"$tmp\" && sh \"$tmp\"; \
+             rc=$?; rm -f \"$tmp\"; exit $rc",
             // Strip any leading 'v' the appcast might carry;
             // install.sh re-adds the prefix when it builds the
             // `/releases/tags/v<version>` URL so a value of either
-            // shape works. shell_quote single-quotes the version
-            // string for safety even though tag-derived SemVer is
-            // ASCII-safe.
+            // shape works.
             version = shell_quote(version.trim_start_matches('v')),
-            url = install_url,
+            url = url_arg,
         ),
-        None => format!("curl -fsSL {url} | sh >/dev/null 2>&1", url = install_url),
+        None => format!(
+            "tmp=$(mktemp) && curl -fsSL {url} -o \"$tmp\" && sh \"$tmp\"; \
+             rc=$?; rm -f \"$tmp\"; exit $rc",
+            url = url_arg,
+        ),
     };
 
     let setsid = which_first(["setsid", "/usr/bin/setsid"]);

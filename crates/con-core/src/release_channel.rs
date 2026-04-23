@@ -73,13 +73,23 @@ impl ReleaseChannel {
     /// `host_platform()` still pin the file suffix so the test
     /// appcast must match the running binary's target.
     pub fn feed_url(self, platform: &str, arch: &str) -> String {
+        // Trim leading/trailing whitespace AND drop a trailing `/`
+        // before validating non-emptiness. A user pasting
+        // `CON_APPCAST_BASE=" http://localhost:8765/appcast/ "`
+        // into a shell's env should resolve to the same URL as if
+        // they pasted `http://localhost:8765/appcast`. The
+        // `filter` runs after normalization so a value that's
+        // *only* whitespace correctly falls through to the
+        // production default instead of producing a malformed
+        // `/{channel}-{platform}-{arch}.xml` URL.
         let base = std::env::var("CON_APPCAST_BASE")
             .ok()
-            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "https://con-releases.nowledge.co/appcast".to_string());
         format!(
             "{base}/{channel}-{platform}-{arch}.xml",
-            base = base.trim_end_matches('/'),
+            base = base,
             channel = self.name(),
             platform = platform,
             arch = arch,

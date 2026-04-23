@@ -127,8 +127,23 @@ jobs:
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
 
+          # `gh release create` defaults to a stable release. v*-beta.*
+          # and v*-dev.* tags must be marked --prerelease, otherwise
+          # GitHub's `/releases/latest` API includes them and a
+          # stable-channel user's `install.sh` (which queries
+          # /releases/latest) downloads a beta as if it were the next
+          # stable. The Linux notify-only updater also pins via
+          # CON_INSTALL_VERSION on apply, but that pin only kicks in
+          # when the user already saw "Update available" — the
+          # /releases/latest API is what install.sh hits on a fresh
+          # install or when CON_INSTALL_VERSION is unset.
+          prerelease_args=()
+          case "$tag" in
+            *-beta.*|*-dev.*) prerelease_args+=(--prerelease) ;;
+          esac
+
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes
+            gh release create "$tag" --title "$tag" --generate-notes "${prerelease_args[@]}"
           fi
 
           while IFS= read -r -d '' file; do
