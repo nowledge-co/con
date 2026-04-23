@@ -1,0 +1,296 @@
+name: Release Linux
+
+# v0 release pipeline for the Linux preview. Produces a self-contained
+# tarball, attaches it to the same GitHub release the macOS / Windows
+# jobs share (the `v*` tag triggers all three workflows), and publishes
+# a Sparkle-shaped appcast to gh-pages so the in-app notify-only
+# updater can discover new builds.
+#
+# Distribution shape is intentionally similar to the Windows preview:
+# unsigned, no installer, the user grabs `con-<version>-linux-<arch>.tar.gz`,
+# extracts it (or runs `install.sh`), and `con` lives at
+# ~/.local/bin/con. Auto-update applies via the same install.sh
+# pipeline. Real packaging (.deb, AppImage, Flatpak) is a follow-up.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build linux-x86_64
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Derive release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          channel="stable"
+          if [[ "$version" == *"-beta."* ]]; then
+            channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "channel=$channel" >>"$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Zig 0.15.2
+        # Same Zig the linux CI smoke test installs — needed for
+        # con-ghostty's libghostty-vt build.
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION="0.15.2"
+          ZIG_ARCH="x86_64"
+          ZIG_DIR="zig-${ZIG_ARCH}-linux-${ZIG_VERSION}"
+          ZIG_TARBALL="${ZIG_DIR}.tar.xz"
+          curl -sSfL "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_TARBALL}" -o "/tmp/${ZIG_TARBALL}"
+          mkdir -p "$HOME/.local"
+          tar -xJf "/tmp/${ZIG_TARBALL}" -C "$HOME/.local"
+          echo "$HOME/.local/${ZIG_DIR}" >> "$GITHUB_PATH"
+          "$HOME/.local/${ZIG_DIR}/zig" version
+
+      - name: apt deps for gpui_linux (wayland/x11 + font stack)
+        # Mirror the matrix from .github/workflows/ci-portable.yml so
+        # the release build links against the same set of system libs
+        # as the smoke check.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-composite0-dev libxcb-dri2-0-dev libxcb-glx0-dev \
+            libxcb-present-dev libxcb-xfixes0-dev libxkbcommon-x11-dev \
+            libwayland-dev libvulkan-dev \
+            libfreetype-dev libfontconfig1-dev
+
+      - name: Build + package release tarball
+        id: package
+        shell: bash
+        # scripts/linux/release.sh:
+        #   - cargo build -p con --release with the channel + version
+        #     baked in via CON_RELEASE_CHANNEL / CON_RELEASE_VERSION
+        #     (option_env! in con-core::release_channel reads them so
+        #     the notify-only updater knows which appcast to poll),
+        #   - strip --strip-debug the ~300 MB debug-laden binary down
+        #     to ~80 MB,
+        #   - stage the binary + LICENSE + README.md + a .desktop
+        #     entry + a 256x256 icon into a versioned dir,
+        #   - tar -czf the staging dir into
+        #     dist/con-<version>-linux-x86_64.tar.gz,
+        #   - emit dist/SHA256SUMS-linux.txt.
+        env:
+          CON_RELEASE_CHANNEL: ${{ steps.meta.outputs.channel }}
+          CON_RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          ./scripts/linux/release.sh
+          echo "tarball=dist/con-${{ steps.meta.outputs.version }}-linux-x86_64.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: linux-x86_64
+          path: |
+            dist/con-*-linux-x86_64.tar.gz
+            dist/SHA256SUMS-linux.txt
+          if-no-files-found: error
+
+  publish:
+    name: Attach to GitHub release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: linux-x86_64
+          path: release-artifacts
+
+      - name: Create or update release & upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        # macOS / Windows jobs may have already created the release.
+        # If not, create it now so a Linux-only tag still publishes.
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+
+          while IFS= read -r -d '' file; do
+            echo "Uploading: $file"
+            gh release upload "$tag" "$file" --clobber
+          done < <(find release-artifacts -type f \
+            \( -name '*.tar.gz' -o -name 'SHA256SUMS-linux.txt' \) \
+            -print0)
+
+  update-appcast:
+    name: Update Sparkle appcast (linux-x86_64)
+    # Run on macOS because Sparkle's `sign_update` tool ships only in
+    # the macOS Sparkle distribution. Identical pattern to
+    # release-windows.yml's appcast job — same Ed25519 keypair, same
+    # gh-pages target. The Linux notify-only client (in
+    # crates/con-app/src/updater.rs::notify_impl) verifies the
+    # signature server-side via GitHub Pages publishing today;
+    # in-app verification is a follow-up that mirrors the Windows
+    # hardening work tracked alongside it.
+    runs-on: macos-15
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Derive release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          channel="stable"
+          if [[ "$version" == *"-beta."* ]]; then
+            channel="beta"
+          fi
+          marketing="${version%%[-+]*}"
+          echo "version=$version"     >>"$GITHUB_OUTPUT"
+          echo "channel=$channel"     >>"$GITHUB_OUTPUT"
+          echo "marketing=$marketing" >>"$GITHUB_OUTPUT"
+
+      - name: Check Sparkle signing key
+        id: sparkle
+        shell: bash
+        env:
+          SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
+        run: |
+          if [[ -z "${SPARKLE_SIGNING_KEY:-}" ]]; then
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::warning::SPARKLE_SIGNING_KEY not set — skipping appcast update"
+          else
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Sparkle tools
+        if: steps.sparkle.outputs.available == 'true'
+        shell: bash
+        run: ./scripts/sparkle/download.sh
+
+      - name: Download Linux release artifact
+        if: steps.sparkle.outputs.available == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          name: linux-x86_64
+          path: release-artifacts
+
+      - name: Checkout gh-pages
+        if: steps.sparkle.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --single-branch --branch gh-pages \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            gh-pages 2>/dev/null || {
+            mkdir -p gh-pages/appcast
+            cd gh-pages
+            git init
+            git checkout -b gh-pages
+            git remote add origin \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+            echo "con-releases.nowledge.co" > CNAME
+            touch .nojekyll
+            git add CNAME .nojekyll
+            git commit -m "Initialize gh-pages"
+          }
+
+      - name: Sign tarball and update Linux appcast
+        if: steps.sparkle.outputs.available == 'true'
+        shell: bash
+        env:
+          SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
+          SPARKLE_DIR: ${{ github.workspace }}/.sparkle
+        run: |
+          set -euo pipefail
+
+          repo="${{ github.repository }}"
+          tag="$GITHUB_REF_NAME"
+          version="${{ steps.meta.outputs.version }}"
+          channel="${{ steps.meta.outputs.channel }}"
+          marketing="${{ steps.meta.outputs.marketing }}"
+          build_number="${{ github.run_number }}"
+
+          mkdir -p gh-pages/appcast
+
+          tarball=$(find release-artifacts -name "*-linux-x86_64.tar.gz" -type f | head -1)
+          if [[ -z "$tarball" ]]; then
+            echo "::warning::No Linux tarball found — skipping"
+            exit 0
+          fi
+
+          sig_output=$(./scripts/sparkle/sign-artifact.sh "$tarball")
+          signature=$(echo "$sig_output" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
+          if [[ -z "$signature" ]]; then
+            echo "::error::Failed to extract Ed25519 signature"
+            echo "sign_update output: $sig_output" >&2
+            exit 1
+          fi
+          length=$(stat -f%z "$tarball")
+          tarball_name=$(basename "$tarball")
+          download_url="https://github.com/${repo}/releases/download/${tag}/${tarball_name}"
+
+          appcast_file="gh-pages/appcast/${channel}-linux-x86_64.xml"
+
+          # Re-use the same appcast generator macOS + Windows use.
+          # Linux has no OS-minimum equivalent in the Sparkle schema
+          # and the notify-only client ignores the field, so feed a
+          # harmless sentinel like the Windows job does.
+          # ITEM_SHORT_VERSION is the string the Linux client compares
+          # against its baked CON_RELEASE_VERSION via the SemVer-aware
+          # is_newer check in updater.rs::notify_impl. Using the full
+          # tag-derived version (0.1.0-beta.31) keeps prerelease
+          # ordering correct.
+          APPCAST_FILE="$appcast_file" \
+          APPCAST_TITLE="con" \
+          APPCAST_LINK="https://con-releases.nowledge.co" \
+          ITEM_TITLE="Version ${version}" \
+          ITEM_VERSION="$build_number" \
+          ITEM_SHORT_VERSION="$version" \
+          ITEM_URL="$download_url" \
+          ITEM_LENGTH="$length" \
+          ITEM_SIGNATURE="$signature" \
+          ITEM_MIN_OS="0.0.0" \
+          ./scripts/sparkle/update-appcast.sh
+
+          echo "Updated appcast: ${channel}-linux-x86_64.xml (build $build_number)"
+
+      - name: Push appcast to gh-pages
+        if: steps.sparkle.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Keep install.sh in sync from main repo. The macOS release
+          # job also copies it, but if a Linux-only tag fires (or the
+          # macOS job hasn't run yet) we still want the latest script.
+          cp "${{ github.workspace }}/scripts/install.sh" install.sh
+          git add appcast/ install.sh
+          if git diff --cached --quiet; then
+            echo "No appcast changes to commit"
+            exit 0
+          fi
+          git commit -m "Update Linux appcast for $GITHUB_REF_NAME"
+          git pull --rebase origin gh-pages 2>/dev/null || true
+          git push origin gh-pages

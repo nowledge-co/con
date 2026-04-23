@@ -2017,17 +2017,25 @@ impl SettingsPanel {
 
         // Build the Updates card (only shown for channels that poll).
         let channel = con_core::release_channel::current();
-        // On Linux (and any other non-macOS-non-Windows target) we have no
-        // update backend, so skip the card even if the channel otherwise
-        // would poll.
+        // On any target outside macOS / Windows / Linux we have no
+        // update backend, so skip the card even if the channel
+        // otherwise would poll.
         #[cfg_attr(
-            all(not(target_os = "macos"), not(target_os = "windows")),
+            all(
+                not(target_os = "macos"),
+                not(target_os = "windows"),
+                not(target_os = "linux")
+            ),
             allow(unused_variables)
         )]
         let show_updates = channel.polls_for_updates();
 
         #[cfg_attr(
-            all(not(target_os = "macos"), not(target_os = "windows")),
+            all(
+                not(target_os = "macos"),
+                not(target_os = "windows"),
+                not(target_os = "linux")
+            ),
             allow(unused_mut)
         )]
         let mut container = section_content(
@@ -2036,7 +2044,7 @@ impl SettingsPanel {
             theme,
         );
 
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         if show_updates {
             let updater_status = crate::updater::status();
             let latest_state = crate::updater::latest_check();
@@ -2211,7 +2219,14 @@ impl SettingsPanel {
                                     .child({
                                         let actions = div().flex().items_center().gap(px(6.0));
 
-                                        #[cfg(target_os = "windows")]
+                                        // The notify-only updater
+                                        // (Windows + Linux) shows
+                                        // "Update now" when the
+                                        // latest state has a fresh
+                                        // version. macOS uses
+                                        // Sparkle's own dialog
+                                        // instead.
+                                        #[cfg(any(target_os = "windows", target_os = "linux"))]
                                         let actions = if matches!(
                                             &latest_state,
                                             crate::updater::CheckState::UpdateAvailable { .. }
@@ -4324,7 +4339,7 @@ impl Render for SettingsPanel {
 
 // ── Update status helpers ─────────────────────────────────────────
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn update_summary_and_detail(
     state: &crate::updater::CheckState,
     status: crate::updater::UpdaterStatus,
@@ -4354,7 +4369,7 @@ fn update_summary_and_detail(
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn update_download_url(state: &crate::updater::CheckState) -> Option<String> {
     match state {
         crate::updater::CheckState::UpdateAvailable { url, .. } => Some(url.clone()),
