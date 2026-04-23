@@ -165,11 +165,7 @@ impl Session {
         if let Some(path) = std::env::var_os("CON_SESSION_PATH") {
             return PathBuf::from(path);
         }
-        dirs::data_dir()
-            .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
-            .unwrap_or_else(std::env::temp_dir)
-            .join("con")
-            .join("session.json")
+        con_paths::app_data_dir().join("session.json")
     }
 }
 
@@ -199,10 +195,6 @@ impl GlobalHistoryState {
         if let Some(path) = std::env::var_os("CON_HISTORY_PATH") {
             return PathBuf::from(path);
         }
-        dirs::data_dir()
-            .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
-            .unwrap_or_else(std::env::temp_dir)
-            .join("con")
-            .join("history.json")
+        con_paths::app_data_dir().join("history.json")
     }
 }

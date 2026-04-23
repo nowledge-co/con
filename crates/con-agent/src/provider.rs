@@ -497,14 +497,7 @@ pub fn oauth_token_dir(kind: &ProviderKind) -> Option<PathBuf> {
         _ => return None,
     };
 
-    Some(
-        dirs::config_dir()
-            .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
-            .unwrap_or_else(std::env::temp_dir)
-            .join("con")
-            .join("auth")
-            .join(provider_dir),
-    )
+    Some(con_paths::app_config_dir().join("auth").join(provider_dir))
 }
 
 pub async fn authorize_oauth_provider<F>(kind: ProviderKind, prompt_handler: F) -> Result<()>

@@ -1618,32 +1618,7 @@ impl SettingsPanel {
             None => return,
         };
 
-        // Determine theme directory
-        let theme_dir = if cfg!(target_os = "macos") {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| std::path::PathBuf::from(h).join("Library/Application Support/con/themes"))
-        } else {
-            std::env::var("XDG_CONFIG_HOME")
-                .ok()
-                .map(std::path::PathBuf::from)
-                .or_else(|| {
-                    std::env::var("HOME")
-                        .ok()
-                        .map(|h| std::path::PathBuf::from(h).join(".config"))
-                })
-                .map(|p| p.join("con/themes"))
-        };
-
-        let dir = match theme_dir {
-            Some(d) => d,
-            None => {
-                self.custom_theme_status =
-                    Some("Error: could not determine themes directory".into());
-                cx.notify();
-                return;
-            }
-        };
+        let dir = con_terminal::TerminalTheme::user_themes_dir();
 
         // Create directory if needed
         if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -2027,11 +2002,12 @@ impl SettingsPanel {
             ],
             cx,
         );
+        let con_global_skills = con_paths::default_global_skills_path();
         let global_presets = self.render_path_presets(
             "global",
             &global_paths,
             &[
-                ("~/.config/con/skills", "con"),
+                (con_global_skills.as_str(), "con"),
                 ("~/.agents/skills", "Agents"),
             ],
             cx,

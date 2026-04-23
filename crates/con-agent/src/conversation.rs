@@ -299,11 +299,7 @@ impl Conversation {
         if let Some(path) = std::env::var_os("CON_CONVERSATIONS_DIR") {
             return PathBuf::from(path);
         }
-        dirs::data_dir()
-            .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
-            .unwrap_or_else(std::env::temp_dir)
-            .join("con")
-            .join("conversations")
+        con_paths::app_data_dir().join("conversations")
     }
 
     fn conversation_path(id: &str) -> PathBuf {

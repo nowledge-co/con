@@ -522,25 +522,7 @@ impl TerminalTheme {
     }
 
     pub fn load_user_themes() -> Vec<Self> {
-        let dir = if cfg!(target_os = "macos") {
-            std::env::var("HOME").ok().map(|home| {
-                std::path::PathBuf::from(home).join("Library/Application Support/con/themes")
-            })
-        } else {
-            std::env::var("XDG_CONFIG_HOME")
-                .ok()
-                .map(std::path::PathBuf::from)
-                .or_else(|| {
-                    std::env::var("HOME")
-                        .ok()
-                        .map(|home| std::path::PathBuf::from(home).join(".config"))
-                })
-                .map(|path| path.join("con/themes"))
-        };
-        let dir = match dir {
-            Some(dir) => dir,
-            None => return Vec::new(),
-        };
+        let dir = Self::user_themes_dir();
 
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
@@ -568,6 +550,10 @@ impl TerminalTheme {
         }
 
         themes
+    }
+
+    pub fn user_themes_dir() -> std::path::PathBuf {
+        con_paths::user_themes_dir()
     }
 }
 

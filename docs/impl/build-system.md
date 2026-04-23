@@ -2,7 +2,11 @@
 
 ## Overview
 
-con is a Cargo workspace with one terminal runtime target: embedded Ghostty on macOS.
+con is a Cargo workspace with platform terminal backends:
+
+- macOS embeds full Ghostty with Metal rendering.
+- Windows uses ConPTY plus `libghostty-vt` and a D3D11/DirectWrite renderer.
+- Linux uses a Unix PTY plus `libghostty-vt` and the preview GPUI paint path.
 
 The build no longer includes the old `vte` and `portable-pty` pipeline.
 
@@ -22,6 +26,7 @@ cargo test --workspace
 members = [
     "crates/con-app",
     "crates/con-core",
+    "crates/con-paths",
     "crates/con-terminal",
     "crates/con-ghostty",
     "crates/con-agent",
@@ -35,6 +40,7 @@ members = [
 |-------|---------|
 | `con` | GPUI app shell, tabs, splits, settings, agent panel |
 | `con-core` | harness, config, session persistence |
+| `con-paths` | shared platform-safe per-user app directories |
 | `con-ghostty` | Rust wrapper around libghostty C API |
 | `con-terminal` | terminal theme data and Ghostty palette translation helpers |
 | `con-agent` | built-in AI harness and tools |
@@ -60,9 +66,19 @@ members = [
 
 ## Platform boundary
 
-con currently requires macOS because the product depends on embedded Ghostty.
+The `con` UI binary builds on macOS, Windows, and Linux. Platform-specific
+runtime code is `cfg`-gated:
 
-That is enforced in the binary crate with a compile-time error on non-macOS targets.
+- macOS uses the embedded libghostty surface.
+- Windows uses the `con-app.exe` binary name because `CON` is a reserved DOS
+  device name.
+- Linux keeps the normal `con` binary name.
+
+## Per-user app paths
+
+Use `con-paths` for all user config, data, auth, theme, and skill storage paths.
+Windows cannot safely use a bare `con` path segment, so `con-paths` maps the app
+directory to `con-terminal` on Windows while preserving `con` on macOS and Linux.
 
 ## Ghostty build boundary
 

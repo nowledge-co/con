@@ -251,12 +251,10 @@ even read-only, which is why the UI crate now lives at
 cannot be created by most file-creation APIs. The `CON` reservation
 applies regardless of extension.
 
-Today this is latent: the UI binary is macOS-only via a `compile_error!`
-in `crates/con-app/src/main.rs`, so no `con.exe` is ever produced. When
-the Windows backend actually builds, the binary needs a new name on
-Windows only — macOS and Linux should keep the plain `con` muscle
-memory. Cargo does not support per-target `[[bin]] name` in the
-manifest, so the two practical mechanisms are:
+This is implemented with feature-gated twin `[[bin]]` entries: macOS and
+Linux keep the plain `con` binary, while Windows builds `con-app.exe`.
+Cargo does not support per-target `[[bin]] name` in the manifest, so the
+practical mechanisms were:
 
 1. **Feature-gated twin `[[bin]]` entries pointing at the same
    `main.rs`** —
@@ -286,11 +284,8 @@ manifest, so the two practical mechanisms are:
    command-line experience is unchanged. Simpler manifest, more work
    in the packaging scripts.
 
-We recommend mechanism 1 when Windows support lands. It keeps the
-binary-name behavior platform-local and doesn't require external
-installers to hide the difference. Until then, no change is needed —
-the `compile_error!` gate ensures the name only matters on macOS,
-where `con` is a valid filename.
+Mechanism 1 is the active policy. It keeps the binary-name behavior
+platform-local and does not require installers to hide the difference.
 
 ### Hurdle 3 — Host-side Windows-isms
 
@@ -301,8 +296,9 @@ if untouched. The Windows-prep PR series should land these incrementally:
   small transport abstraction backed by Unix sockets on `cfg(unix)` and
   Windows Named Pipes (`\\.\pipe\con-<user>`) on `cfg(windows)`.
 - **Path conventions.** Replace hard-coded `/tmp` fallbacks with
-  `std::env::temp_dir()`. Use `dirs::config_dir()` for config locations
-  (already done in most places).
+  `std::env::temp_dir()`. Use `con-paths` for config, data, auth,
+  theme, and skills storage so Windows gets `con-terminal` instead of
+  the reserved `con` path segment.
 - **Permissions.** Gate `set_permissions(0o600)` and any
   `std::os::unix::*` imports behind `cfg(unix)`.
 - **Bundle metadata.** `bundle_info_value`, `set_dock_icon`,
@@ -335,7 +331,7 @@ phase keeps the macOS build green.
 | 3b | Glyph atlas + grid render | HLSL shaders embedded and runtime-compiled via `D3DCompile`. Skyline-packed (`etagere`) BGRA8 glyph atlas (`con-ghostty/src/windows/render/atlas.rs`), glyphs rasterized via Direct2D `DrawText` with grayscale AA. Three-case PUA rasterization (fits-cell / width-overflow with lsb shift / height-overflow with scale-around-centre) for Nerd-Font icons, plus per-slot `PushAxisAlignedClip` + black pre-fill to prevent ClearType fringe bleeding between atlas neighbours. D3D11 pipeline (`pipeline.rs`): per-instance IA layout, dynamic instance buffer with `Map(WRITE_DISCARD)`, single `DrawIndexedInstanced(6, cell_count)` per frame — matches Windows Terminal AtlasEngine's architecture. Wide PUA instances are stable-sorted after narrow ones so DX11's in-order per-pixel writes let them win overlap with neighbour backgrounds; the cursor inverse-colour instance is captured pre-sort and pushed post-sort so it always draws last. `vt.rs` uses the `ghostty_render_state` API (row iterator + `row_cells_get_multi` + DIRTY row skip) — not the `grid_ref` path that the upstream header explicitly warns against for render loops. | Real glyph rendering on Windows, runtime-validated on real hardware against oh-my-posh prompt stacks and dense hyphen rules. Postmortem: `postmortem/2026-04-21-windows-atlas-pua-rasterization.md`. | ✅ landed (runtime-validated) |
 | 3c | Input + selection | VK_* → xterm escape sequence translation in `host_view::WM_KEYDOWN`; mouse selection / scroll forwarding; clipboard via OSC 52 + Win32 clipboard. | Real terminal interactivity. | — |
 | 3d | (Parallel, upstream) | `WindowsWindow::attach_external_swap_chain_handle(bounds, HANDLE)` PR to `zed-industries/zed`. ~50 LOC. When merged, swap our backend from `CreateSwapChainForHwnd(WS_CHILD HWND)` to `CreateSwapChainForCompositionSurfaceHandle` so DWM composites our visual cleanly with GPUI's. Zero user-visible change except popup Z-order becomes pixel-perfect. | (No con change required pre-merge.) | — |
-| 3e | **Renderer perf tuning** (in progress) | The current pipeline draws into an offscreen D3D11 texture, reads back BGRA bytes (`RenderSession::render_frame`), wraps them as `ImageSource::Render(Arc<RenderImage>)`, and lets GPUI re-upload them into its DComp tree. The GPU→CPU readback per dirty frame plus the CPU→GPU re-upload adds 5–15ms over Windows Terminal's direct-DComp present path. Plan: (1) ✅ wake GPUI from the ConPTY reader thread so freshly arrived shell output paints on the next prepaint instead of waiting for user input; (2) once Phase 3d lands, present the swap chain directly via `attach_external_swap_chain_handle` and drop the readback entirely; (3) profile with PIX / GPUView / ETW to verify Enter→glyph latency parity with WT. | First win in `crates/con-app/src/windows_view.rs` (`wake_tx` + coalescer task). | 🚧 in progress |
+| 3e | **Renderer perf tuning** (in progress) | The current pipeline draws into an offscreen D3D11 texture, reads back BGRA bytes (`RenderSession::render_frame`), wraps them as `ImageSource::Render(Arc<RenderImage>)`, and lets GPUI re-upload them into its DComp tree. The GPU→CPU readback per dirty frame plus the CPU→GPU re-upload adds 5–15ms over Windows Terminal's direct-DComp present path. Landed mitigations: (1) ✅ wake GPUI from the ConPTY reader thread so freshly arrived shell output paints on the next prepaint instead of waiting for user input; (2) ✅ skip default-background blank-cell instances that are already covered by the render-target clear; (3) ✅ avoid a full-frame zero-fill before D3D readback; (4) ✅ only stable-sort the instance stream when a frame actually contains overflowing wide glyphs. Long-term plan: once Phase 3d lands, present the swap chain directly via `attach_external_swap_chain_handle` and drop the readback entirely; profile with PIX / GPUView / ETW to verify Enter→glyph latency parity with WT. | Wins in `crates/con-app/src/windows_view.rs` (`wake_tx` + coalescer task) and `crates/con-ghostty/src/windows/render/mod.rs` (instance/readback hot path). | 🚧 in progress |
 | 4 | Hardening | Multi-pane, splits, IME, focus, resize, copy/paste, drag/drop, OSC 133 shell integration, ligatures | Beta-quality | — |
 | 5 | Distribution | MSI installer, code signing, auto-update (WiX or `cargo dist`), `con-app.exe` rename via feature-gated twin `[[bin]]` | Release-ready | — |
 
@@ -380,6 +376,13 @@ Compared to Windows Terminal's AtlasEngine, two costs are structural:
 The remaining structural cost (the readback) goes away once Phase 3d
 (`attach_external_swap_chain_handle`) lands and we can present the swap
 chain into GPUI's DComp tree directly.
+
+The current Phase 3e mitigations reduce work inside that temporary image
+path without changing rendering semantics: default-background blank cells
+are represented by the clear color, explicit SGR backgrounds and cursor /
+selection / underline state still get instances, readback copies directly
+into the output buffer capacity, and the wide-glyph sort is skipped on
+ordinary text frames.
 
 ### What you can do *today* on Windows after Phase 3b
 

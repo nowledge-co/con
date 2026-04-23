@@ -1,8 +1,8 @@
 [package]
-name = "con-terminal"
+name = "con-paths"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
-con-paths.workspace = true
+dirs.workspace = true
