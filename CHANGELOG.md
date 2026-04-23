@@ -39,6 +39,9 @@ Changes here are after `v0.1.0-beta.33`, the latest published beta release.
 **Terminal — Windows Backend (preview)**
 - Fixed Windows settings, theme, session, history, OAuth, conversation, and global skills paths so they no longer use `con` as a filesystem segment, avoiding Win32 reserved-device-name failures such as `os error 267`.
 
+**Interface**
+- Fixed the macOS 12 fallback layering path. Monterey keeps an opaque top-level window to prevent desktop bleed-through, but the GPUI root above the embedded Ghostty `NSView` stays transparent so the terminal surface is not painted over by the fallback background.
+
 ### Documentation
 
 - Updated the Linux implementation notes, tracker mirror, and postmortem for the first real Linux terminal preview.
