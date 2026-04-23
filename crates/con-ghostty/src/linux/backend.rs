@@ -12,12 +12,38 @@ use crate::stub::{
 };
 use crate::vt::ScreenSnapshot;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct LinuxBackendConfig {
     pub shell_program: Option<String>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
     pub colors: Option<TerminalColors>,
+    /// 0.0 (fully see-through) … 1.0 (opaque). Multiplied into the
+    /// terminal pane's solid background fill so the GPUI window
+    /// composites over the desktop / Wayland blur surface beneath.
+    /// Mirrors the Windows backend's `RendererConfig.background_opacity`
+    /// and the macOS pass-through to libghostty.
+    pub background_opacity: f32,
+    /// Whether the user opted into the Wayland `org_kde_kwin_blur`
+    /// surface region (only honored on KDE Plasma). Stored so
+    /// `LinuxGhosttyApp::backend_config()` consumers see the
+    /// authoritative state. Has no effect on the per-cell paint
+    /// itself — the `WindowBackgroundAppearance::Blurred` toggle is
+    /// applied at the GPUI window level in `con-app/main.rs`.
+    pub background_blur: bool,
+}
+
+impl Default for LinuxBackendConfig {
+    fn default() -> Self {
+        Self {
+            shell_program: None,
+            font_family: None,
+            font_size: None,
+            colors: None,
+            background_opacity: 1.0,
+            background_blur: false,
+        }
+    }
 }
 
 /// One per GPUI window. Holds Linux backend configuration that future
@@ -33,8 +59,8 @@ impl LinuxGhosttyApp {
         colors: Option<&TerminalColors>,
         font_family: Option<&str>,
         font_size: Option<f32>,
-        _background_opacity: Option<f32>,
-        _background_blur: Option<bool>,
+        background_opacity: Option<f32>,
+        background_blur: Option<bool>,
         _cursor_style: Option<&str>,
         _background_image: Option<&str>,
         _background_image_opacity: Option<f32>,
@@ -48,6 +74,8 @@ impl LinuxGhosttyApp {
                 font_family: font_family.map(ToOwned::to_owned),
                 font_size,
                 colors: colors.cloned(),
+                background_opacity: clamp_opacity(background_opacity.unwrap_or(1.0)),
+                background_blur: background_blur.unwrap_or(false),
             }),
             wake_generation: Arc::new(AtomicU64::new(1)),
         })
@@ -71,8 +99,8 @@ impl LinuxGhosttyApp {
         colors: &TerminalColors,
         font_family: &str,
         font_size: f32,
-        _background_opacity: f32,
-        _background_blur: bool,
+        background_opacity: f32,
+        background_blur: bool,
         _cursor_style: &str,
         _background_image: Option<&str>,
         _background_image_opacity: f32,
@@ -84,7 +112,17 @@ impl LinuxGhosttyApp {
         config.font_family = Some(font_family.to_string());
         config.font_size = Some(font_size);
         config.colors = Some(colors.clone());
+        config.background_opacity = clamp_opacity(background_opacity);
+        config.background_blur = background_blur;
         Ok(())
+    }
+
+    /// Current background opacity (0.0..=1.0). The view multiplies
+    /// this into its terminal-pane fill so per-pane translucency
+    /// composites against the GPUI window's transparent or blurred
+    /// background.
+    pub fn background_opacity(&self) -> f32 {
+        self.config.lock().background_opacity
     }
 
     pub fn update_config(&self, _patch: &GhosttyConfigPatch) -> Result<(), String> {
@@ -111,6 +149,10 @@ impl LinuxGhosttyApp {
 
 unsafe impl Send for LinuxGhosttyApp {}
 unsafe impl Sync for LinuxGhosttyApp {}
+
+fn clamp_opacity(value: f32) -> f32 {
+    value.clamp(0.0, 1.0)
+}
 
 fn default_linux_shell_program() -> Option<String> {
     if let Some(shell) = std::env::var("CON_LINUX_SHELL")
