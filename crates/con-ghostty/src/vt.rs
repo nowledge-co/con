@@ -988,6 +988,15 @@ impl VtScreen {
             row_idx += 1;
         }
 
+        if full_redraw && row_idx < rows {
+            for trailing_row in row_idx..rows {
+                let row_start = trailing_row as usize * cols as usize;
+                let row_end = row_start + cols as usize;
+                inner.scratch[row_start..row_end].fill(Cell::default());
+                dirty_rows.push(trailing_row);
+            }
+        }
+
         inner.force_full_snapshot = false;
 
         // Cursor read from the render state keys (not the terminal, to
