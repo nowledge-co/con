@@ -600,6 +600,8 @@ struct VtInner {
     rows: u16,
     generation: u64,
     force_full_snapshot: bool,
+    scratch_cols: u16,
+    scratch_rows: u16,
     scratch: Vec<Cell>,
 }
 
@@ -780,6 +782,8 @@ impl VtScreen {
                 rows,
                 generation: 0,
                 force_full_snapshot: true,
+                scratch_cols: cols,
+                scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
             })),
         })
@@ -846,15 +850,15 @@ impl VtScreen {
     pub fn snapshot(&self) -> ScreenSnapshot {
         let mut inner = self.inner.lock();
 
-        let cols = inner.cols;
-        let rows = inner.rows;
+        let fallback_cols = inner.cols;
+        let fallback_rows = inner.rows;
 
         if inner.render_state.is_null() {
             // Render-state path disabled — return empty snapshot. The
             // renderer still clears the pane to the background.
             return ScreenSnapshot {
-                cols,
-                rows,
+                cols: fallback_cols,
+                rows: fallback_rows,
                 cells: Vec::new(),
                 dirty_rows: Vec::new(),
                 cursor: Cursor::default(),
@@ -894,6 +898,27 @@ impl VtScreen {
             );
         }
 
+        // Ghostty's render-state dimensions can lag the host resize by a
+        // frame or two. Snapshot the actual render-state geometry so we
+        // don't invent blank tail rows from our requested size while the
+        // terminal catches up asynchronously.
+        let mut cols = fallback_cols;
+        let mut rows = fallback_rows;
+        unsafe {
+            let _ = ghostty_render_state_get(
+                inner.render_state,
+                GhosttyRenderStateData::Cols,
+                &mut cols as *mut _ as *mut c_void,
+            );
+            let _ = ghostty_render_state_get(
+                inner.render_state,
+                GhosttyRenderStateData::Rows,
+                &mut rows as *mut _ as *mut c_void,
+            );
+        }
+        cols = cols.max(1);
+        rows = rows.max(1);
+
         let mut full_redraw = inner.force_full_snapshot;
         let mut state_dirty = GhosttyRenderStateDirty::False;
         // SAFETY: DIRTY out param is sized for the enum.
@@ -909,9 +934,14 @@ impl VtScreen {
         }
 
         let total = cols as usize * rows as usize;
-        if inner.scratch.len() != total {
+        if inner.scratch.len() != total
+            || inner.scratch_cols != cols
+            || inner.scratch_rows != rows
+        {
             inner.scratch.clear();
             inner.scratch.resize(total, Cell::default());
+            inner.scratch_cols = cols;
+            inner.scratch_rows = rows;
             full_redraw = true;
         }
 
