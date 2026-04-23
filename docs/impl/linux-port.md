@@ -1,12 +1,20 @@
 # Linux Port — Plan and Status
 
-con ships on macOS, has a working Windows beta, and now has an
-in-progress local Linux terminal backend built around Unix PTY +
-`libghostty-vt`. This document is the Linux
-single-source-of-truth equivalent of `docs/impl/windows-port.md`: it
-captures the upstream constraints, the recommended architecture, and the
-staged path from today's first VT-backed pane to a fully shippable Linux
-terminal backend.
+con ships on macOS, has a working Windows beta, and now has a real
+Linux preview built around Unix PTY + `libghostty-vt` + a GPUI-owned
+per-row `StyledText` paint path. The same `con` binary that runs on
+macOS now opens on Linux with client-side decorations (no native WM
+titlebar stacked on top of the GPUI shell), a transparent ARGB
+window with rounded corners, the same caption cluster Windows
+ships, IoskeleyMono-shaped styled cells, the user's theme palette,
+and KWin Wayland backdrop blur where the compositor exposes it.
+This document is the Linux single-source-of-truth equivalent of
+`docs/impl/windows-port.md`: it captures the upstream constraints,
+the recommended architecture, and the staged path from today's
+preview pane to a fully shippable Linux terminal backend (the
+remaining work is the long-term GPUI-owned glyph-atlas grid
+renderer matching the D3D11/DirectWrite path Windows uses, plus
+mouse selection / reporting and packaging).
 
 This is a planning document, not an implementation log. The live issue
 tracker is GitHub issue #18. The deeper architecture notes live in
@@ -22,7 +30,7 @@ Current platform state:
 |:-------|:---------:|:-------------:|:--------------:|:----------------------:|
 | macOS  | ✅ real   | ✅ libghostty + Metal | `/tmp/con.sock` | ✅ |
 | Windows | ✅ real  | ✅ libghostty-vt + ConPTY + D3D11/DirectWrite | `\\.\pipe\con` | ✅ |
-| Linux  | ✅ builds | Unix PTY + `libghostty-vt` + GPUI text pane (in progress) | `/tmp/con.sock` | ✅ |
+| Linux  | ✅ real   | ✅ Unix PTY + `libghostty-vt` + GPUI per-row `StyledText` paint (preview — long-term glyph-atlas grid renderer pending) | `/tmp/con.sock` | ✅ |
 
 On Linux today:
 
@@ -32,36 +40,68 @@ cargo build -p con --release
 
 What that gives you:
 
-- GPUI window shell on Linux
+- GPUI window shell on Linux with **client-side decorations** (no
+  xfwm4 / mutter / kwin titlebar stacked on top of the GPUI shell);
+  the in-app top bar carries the same minimize / maximize / close
+  caption cluster Windows uses
 - tabs, sidebar, agent panel, settings, command palette
 - Unix-domain control socket at `/tmp/con.sock`
 - `con-cli` and all portable crates working
-- a first Linux terminal pane backed by Unix PTY + `libghostty-vt`
-  snapshots plus a temporary GPUI text renderer
+- a real Linux terminal pane backed by Unix PTY + `libghostty-vt` and
+  rendered as one GPUI `StyledText` per VT row, with one `TextRun`
+  per styled span: SGR colors, bold (`FontWeight::BOLD`), italic
+  (`FontStyle::Italic`), underline, strikethrough, inverse, and a
+  block cursor (fg/bg swap on the cursor cell) all survive
+- IoskeleyMono shaping (the user-facing display name `"Ioskeley
+  Mono"` is normalized to the registered TTF family `"IoskeleyMono"`
+  before lookup so GPUI's CosmicTextSystem resolves the embedded
+  font instead of falling back to a system proportional sans)
+- the user's `TerminalColors` (foreground / background / 16-color
+  ANSI palette) plumbed into `VtScreen::set_theme` at session spawn
+  and live whenever the user picks a theme in settings
+- transparent ARGB window with rounded corners (14 px on Linux, no
+  corners from `NSWindow` or DWM here so we clip the GPUI root
+  ourselves) and per-pane / per-surface opacity that composites
+  through to the desktop
+- backdrop blur on KDE Plasma Wayland via `org_kde_kwin_blur` —
+  real Gaussian blur of what's behind the window. On X11 / mutter /
+  sway the blur toggle still ships but the visible result is
+  transparency only (no portable backdrop-blur protocol exists
+  outside KWin)
+- a snappy paint pipeline: redundant per-tick snapshot refreshes
+  and `Vec<Cell>` deep-equality compares were removed, the workspace
+  idle poll loop tightened from 16 ms to 8 ms, and the placeholder
+  for "Waiting for shell prompt…" only ever shows before the first
+  prompt — alt-screen TUIs (htop, vim, less, fzf) no longer flash
+  the placeholder during their startup gap
 
 What it still does **not** give you:
 
-- a real glyph-atlas / GPU grid renderer (we paint via per-row
-  `StyledText` today — correct colors and SGR attributes, but not the
-  cell-accurate paint Windows gets from D3D11 + DirectWrite)
+- a real glyph-atlas / GPU grid renderer (today's per-row
+  `StyledText` shape covers SGR + bold/italic/underline/inverse +
+  a block cursor correctly, but per-cell metrics still come from
+  layout-time text shaping rather than a fixed cell grid the way
+  the Windows D3D11/DirectWrite path does)
 - validated mouse selection / reporting
-- polished Linux window chrome / focus behavior across environments
+- packaging artifacts (`.deb`, AppImage, Flatpak, …)
 
 Current verification note:
 
 - ChromeOS/Crostini is acceptable for Linux build/startup smoke checks.
-- It is not a reliable primary environment for con's Linux UI
-  verification anymore.
-- The current Linux backend reaches a live PTY + `libghostty-vt` prompt
-  state under Crostini, but click/focus/paint behavior there remains
-  unreliable.
-- Further Linux UI verification should move to a native Linux desktop
-  before we draw stronger conclusions from runtime behavior.
+- The Linux preview has been verified end-to-end on an XFCE +
+  software-Vulkan (llvmpipe) cloud-VM session — full launch flow,
+  styled output, transparent rounded chrome, htop in the
+  alternate screen — so the paint path is proven on a real Linux
+  desktop session, not just a headless harness. Validation on a
+  hardware-accelerated Wayland / X11 native session and on
+  multiple desktop environments (GNOME, KDE) is still the next
+  useful step before the Linux preview comes off "preview" on the
+  tracker.
 
 The Linux CI job already installs the GPUI runtime dependencies on
 `ubuntu-latest` (`libxcb-*`, `libxkbcommon-x11-dev`, `libwayland-dev`,
 `libvulkan-dev`, `libfreetype-dev`, `libfontconfig1-dev`) and verifies
-that the workspace still compiles there. The local Linux backend now
+that the workspace still compiles there. The local Linux backend
 also requires Zig so `con-ghostty` can build `libghostty-vt`, just like
 the Windows backend does.
 
@@ -219,32 +259,39 @@ can ship.
 | 2b | GPUI feasibility spike | confirm whether con needs foreign-surface embedding, texture interop, or neither | bounded GPUI worklist exists, or path is ruled out | ✅ landed |
 | 2c | Architecture decision | pick Linux backend lane | one recommended implementation path, no split-brain plan | ✅ landed |
 | 3 | Linux backend scaffold | `con-ghostty/src/linux/` plus `con-app/src/linux_view.rs` (or equivalent) with real lifecycle types | Linux no longer routes through the generic stub path conceptually | ✅ landed |
-| 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint, real product chrome (no native WM titlebar), embedded mono font, transparent + rounded window with compositor-gated blur | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / underline / inverse, cursor block, theme palette synced from settings, IoskeleyMono shaping, client-side titlebar with min/max/close caption cluster, transparent ARGB window with rounded corners and per-pane / per-surface opacity, real KWin Wayland blur where available | 🚧 styled `StyledText` paint + CSD top bar + transparent / rounded chrome landed; glyph-atlas grid renderer pending; non-KWin compositors get transparency without blur |
-| 5 | Input + selection | keyboard, mouse, clipboard, bracketed paste, DECCKM, selection | vim/tmux/fzf/less usable on Linux | ⏳ pending |
+| 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint, real product chrome (no native WM titlebar), embedded mono font, transparent + rounded window with compositor-gated blur | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / italic / underline / strikethrough / inverse, cursor block, theme palette synced from settings, IoskeleyMono shaping, client-side titlebar with min/max/close caption cluster, transparent ARGB window with rounded corners and per-pane / per-surface opacity, real KWin Wayland blur where available, fast paint pipeline (16 ms keystroke-echo round-trip), no placeholder flash on alt-screen TUIs | ✅ landed (preview) |
+| 5 | Input + selection + glyph-atlas grid renderer | keyboard, mouse, clipboard, bracketed paste, DECCKM, selection, plus the long-term GPUI-owned glyph-atlas grid renderer matching the D3D11/DirectWrite path Windows uses | vim/tmux/fzf/less usable on Linux at full speed | 🚧 in progress (DECCKM + bracketed paste already wired through `libghostty-vt` mode tracking; mouse reporting, selection, and the glyph-atlas renderer remain) |
 | 6 | Packaging | desktop entry, icon integration, artifact strategy (`.deb`, AppImage, Flatpak, etc.) | installable Linux artifact exists | ⏳ pending |
 
 ## Immediate next work
 
-The next concrete Linux tasks should be:
+With phase 4 landed (preview), the remaining Linux tasks are:
 
-1. Replace the per-row `StyledText` paint path with a real
+1. Replace the per-row `StyledText` paint path with the long-term
    GPUI-owned glyph-atlas grid renderer that paints background runs
-   under the text and pre-rasterizes per-cell glyphs (matching the
-   D3D11/DirectWrite path used on Windows). Today's view already
-   honors fg/bg/bold/italic/underline/inverse and draws a block
-   cursor, but per-cell metrics still come from layout-time text
-   shaping rather than a fixed cell grid.
-2. Finish Linux input correctness: bracketed paste, DECCKM, mouse
-   reporting, selection, and scrollback behavior. (DECCKM and
-   bracketed paste are already wired through `libghostty-vt` mode
-   tracking; mouse reporting and selection still need work.)
-3. Validate shell bring-up and app focus/chrome on real Linux desktops
-   (Wayland, X11, and ChromeOS/Crostini). The current X11 path has
-   been smoke-tested under a headless Xvfb + llvmpipe configuration in
-   the cloud agent VM and reaches a live `bash` prompt, with the
-   socket pane reachable via `con-cli`.
-4. Once the shell path is stable, iterate on packaging and Linux-native
-   polish.
+   under the text and pre-rasterizes per-cell glyphs, matching the
+   D3D11/DirectWrite path used on Windows. Today's view already
+   honors fg / bg / bold / italic / underline / strikethrough /
+   inverse and draws a block cursor, but per-cell metrics still
+   come from layout-time text shaping rather than a fixed cell
+   grid, which limits how dense the renderer can stay on huge
+   panes (the gap shows up first on `top -d 0.1`-class workloads).
+2. Finish Linux input correctness: mouse reporting (button + wheel),
+   selection (mouse drag → SGR 1006 / X10 reports + clipboard
+   integration), and scrollback gestures. DECCKM and bracketed
+   paste are already wired through `libghostty-vt` mode tracking
+   and exercised by the existing keystroke encoder.
+3. Validate on hardware-accelerated native Linux desktops (Wayland
+   on KDE Plasma to confirm `org_kde_kwin_blur`; Wayland on
+   GNOME / sway and X11 on each major WM to confirm the
+   transparency / CSD / caption-cluster fallback paths). The
+   cloud-VM XFCE + llvmpipe + Xvfb-style display has covered the
+   software path end to end (full launch flow, styled output,
+   transparent rounded chrome, htop in the alternate screen,
+   keystroke-echo benchmark), but the hardware path still wants a
+   real-desktop pass before we drop the "preview" label.
+4. Packaging: desktop entry, icon integration, and an artifact
+   strategy (`.deb`, AppImage, Flatpak, …).
 
 ## Tracker shape for issue #18
 
@@ -264,7 +311,7 @@ issues, so per-PR status updates are written into
 onto issue #18 by a human. Each file is dated and named after the
 landed milestone. Keep this list in chronological order:
 
-- `docs/impl/linux-port-tracker-updates/2026-04-23-styled-cell-renderer.md` — phase 4 styled-cell paint over `libghostty-vt`, theme plumbing, block cursor, env-bootstrap notes for a fresh Ubuntu cloud VM. Corresponds to PR #58.
+- `docs/impl/linux-port-tracker-updates/2026-04-23-styled-cell-renderer.md` — phase 4 milestone landing. Covers the styled-cell paint over `libghostty-vt`, theme plumbing, block cursor, env-bootstrap notes for a fresh Ubuntu cloud VM, plus the seven follow-on fixes that got the preview to ship-ready state: client-side decorations + caption cluster, IoskeleyMono normalization, transparent + rounded window, KWin Wayland blur, the 16 ms → 8 ms paint-loop tightening (keystroke echo 32.6 ms → 16.6 ms mean), and the alt-screen `seen_any_output` placeholder fix. Corresponds to PR #58.
 
 ## References
 

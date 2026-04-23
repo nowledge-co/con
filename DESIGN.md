@@ -256,7 +256,7 @@ con now has three platform states:
 
 - macOS: shipped, using the embedded libghostty + AppKit path
 - Windows: beta, using `libghostty-vt` + ConPTY + a local D3D11/DirectWrite renderer
-- Linux: in progress, using Unix PTY + shared `libghostty-vt` + a GPUI-owned renderer path
+- Linux: preview, using Unix PTY + shared `libghostty-vt` + a GPUI-owned per-row `StyledText` paint path. SGR colors / bold / italic / underline / inverse + block cursor all work, the window ships with client-side decorations, transparent ARGB visual, rounded corners, and KWin-Wayland backdrop blur where the compositor exposes it. The long-term GPUI-owned glyph-atlas grid renderer (matching the D3D11/DirectWrite path Windows uses) is the remaining Linux work.
 
 The platform architecture is no longer "macOS only," but it is still not
 "one backend everywhere."
@@ -545,7 +545,7 @@ GPUI implements the full `InputHandler` trait (modeled after `NSTextInputClient`
 - `marked_text_range()` / `replace_and_mark_text_in_range()` for IME composition
 - `bounds_for_range()` for candidate window positioning
 - GPUI has broader platform support, and con now ships macOS plus a
-  Windows beta. Linux remains planned; see `docs/impl/linux-port.md`.
+  Windows beta and a Linux preview; see `docs/impl/linux-port.md`.
 - CJK input works. No blocker.
 
 ### 3. GPU Fallback: Not Needed

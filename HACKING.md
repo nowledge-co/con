@@ -16,12 +16,16 @@ Terminal crates do not depend on the UI. The agent crate does not depend on a sp
 |-------|------|
 | `con` | GPUI shell: windows, tabs, panes, agent UI, settings, command surfaces |
 | `con-core` | Config, sessions, shared app logic, harness wiring |
-| `con-terminal` | Fallback terminal backend: `vte`, grid, PTY, input |
-| `con-ghostty` | macOS Ghostty integration and FFI |
+| `con-terminal` | Theme + palette helpers shared across backends |
+| `con-ghostty` | Per-platform terminal backends: macOS embedded libghostty + Metal, Windows libghostty-vt + ConPTY + D3D11/DirectWrite, Linux Unix PTY + libghostty-vt + GPUI-owned `StyledText` paint |
 | `con-agent` | Rig integration, tools, hooks, conversation, skills |
-| `con-cli` | CLI and future socket client |
+| `con-cli` | CLI + socket client for the live local control plane |
 
-macOS prefers `con-ghostty`; the fallback backend remains important for portability and testing.
+Each platform exposes the same `GhosttyApp` / `GhosttyTerminal` /
+`TerminalColors` type names from `con-ghostty`, so the rest of the
+workspace consumes the backend without per-call-site `cfg` gates.
+See `docs/impl/{linux,windows}-port.md` for the per-platform plans
+and the path to the long-term GPU-accelerated grid renderer.
 
 ## Agent Model
 
@@ -38,6 +42,15 @@ For the full breakdown, see `docs/impl/agent-harness.md`.
 - `cmake`
 - **macOS**: Zig 0.15.2+ (ghostty's `build.zig.zon` pins `minimum_zig_version = "0.15.2"`)
 - **Windows**: Zig 0.15.2+ (same reason), Visual Studio 2022 Build Tools with the Windows 10/11 SDK. Run the build from a _Developer Command Prompt for VS 2022_ so `rc.exe` is on `PATH`. If Windows Defender is on, either add an exclusion for the repo dir or disable real-time scanning — zig's sub-build exes get briefly locked by MpEngine and spawn with `FileNotFound`.
+- **Linux**: Zig 0.15.2+ (con-ghostty builds `libghostty-vt` for the Linux backend the same way it does for Windows), plus the GPUI runtime apt deps the CI job already installs:
+  ```sh
+  sudo apt-get install -y --no-install-recommends \
+    libxcb-composite0-dev libxcb-dri2-0-dev libxcb-glx0-dev \
+    libxcb-present-dev libxcb-xfixes0-dev libxkbcommon-x11-dev \
+    libwayland-dev libvulkan-dev libfreetype-dev libfontconfig1-dev \
+    mesa-vulkan-drivers
+  ```
+  The `mesa-vulkan-drivers` line gives you a software ICD (llvmpipe) as a fallback for headless / VM environments; on a real desktop with a hardware GPU you can skip it.
 
 ## Build
 
