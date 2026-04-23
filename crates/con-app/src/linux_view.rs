@@ -450,11 +450,23 @@ impl Render for GhosttyView {
         }
 
         if let Some(snapshot) = self.snapshot.as_ref() {
+            let cursor_col = if snapshot.cursor.visible {
+                Some(usize::from(snapshot.cursor.col))
+            } else {
+                None
+            };
             for row_idx in 0..usize::from(snapshot.rows) {
                 let row_start = row_idx * usize::from(snapshot.cols);
                 let row_end = row_start + usize::from(snapshot.cols);
                 let Some(cells) = snapshot.cells.get(row_start..row_end) else {
                     break;
+                };
+                let cursor_for_row = if cursor_col.is_some()
+                    && usize::from(snapshot.cursor.row) == row_idx
+                {
+                    cursor_col
+                } else {
+                    None
                 };
                 let row = render_terminal_row(
                     cells,
@@ -463,6 +475,7 @@ impl Render for GhosttyView {
                     &mono_font,
                     px(font_size_px),
                     px(line_height_px),
+                    cursor_for_row,
                 );
                 rows.push(row);
             }
@@ -571,10 +584,11 @@ fn render_terminal_row(
     base_font: &Font,
     font_size: Pixels,
     line_height: Pixels,
+    cursor_col: Option<usize>,
 ) -> AnyElement {
     let mut text = String::with_capacity(cells.len());
     let mut runs: Vec<TextRun> = Vec::new();
-    let mut last_signature: Option<(u32, u32, u8)> = None;
+    let mut last_signature: Option<(u32, u32, u8, bool)> = None;
     let mut active_run_len: usize = 0;
     let mut active_style: Option<RowStyle> = None;
 
@@ -598,9 +612,10 @@ fn render_terminal_row(
         *active_run_len = 0;
     }
 
-    for cell in cells {
-        let signature = (cell.fg, cell.bg, cell.attrs);
-        let style = RowStyle::from_cell(cell, default_fg, default_bg, base_font);
+    for (col_idx, cell) in cells.iter().enumerate() {
+        let is_cursor = cursor_col == Some(col_idx);
+        let signature = (cell.fg, cell.bg, cell.attrs, is_cursor);
+        let style = RowStyle::from_cell(cell, default_fg, default_bg, base_font, is_cursor);
 
         let glyph: char = match cell.codepoint {
             0 => ' ',
@@ -619,15 +634,19 @@ fn render_terminal_row(
 
     flush_run(&mut runs, &mut active_style, &mut active_run_len);
 
-    let trimmed_end = text.trim_end_matches(' ').len();
-    if trimmed_end < text.len() {
-        let removed = text.len() - trimmed_end;
-        text.truncate(trimmed_end);
-        if let Some(last) = runs.last_mut() {
-            let trim = removed.min(last.len);
-            last.len -= trim;
-            if last.len == 0 {
-                runs.pop();
+    if cursor_col.is_none() {
+        let trimmed_end = text.trim_end_matches(' ').len();
+        if trimmed_end < text.len() {
+            let mut to_remove = text.len() - trimmed_end;
+            text.truncate(trimmed_end);
+            while to_remove > 0 {
+                let Some(mut last) = runs.pop() else { break };
+                if last.len > to_remove {
+                    last.len -= to_remove;
+                    runs.push(last);
+                    break;
+                }
+                to_remove -= last.len;
             }
         }
     }
@@ -661,7 +680,13 @@ struct RowStyle {
 }
 
 impl RowStyle {
-    fn from_cell(cell: &VtCell, default_fg: Hsla, default_bg: Hsla, base_font: &Font) -> Self {
+    fn from_cell(
+        cell: &VtCell,
+        default_fg: Hsla,
+        default_bg: Hsla,
+        base_font: &Font,
+        is_cursor: bool,
+    ) -> Self {
         let mut font = base_font.clone();
         if cell.attrs & ATTR_BOLD != 0 {
             font.weight = FontWeight::BOLD;
@@ -677,6 +702,17 @@ impl RowStyle {
             let resolved_bg = bg.unwrap_or(default_bg);
             bg = Some(fg);
             fg = resolved_bg;
+        }
+
+        if is_cursor {
+            // Block cursor (focused): swap fg/bg so the glyph under
+            // the cursor stays legible, like xterm and Ghostty's own
+            // default. Selection / blink-state nuances are deferred
+            // to the proper grid renderer.
+            let cursor_bg = vt_color_to_hsla(cell.fg).unwrap_or(default_fg);
+            let cursor_fg = bg.unwrap_or(default_bg);
+            fg = cursor_fg;
+            bg = Some(cursor_bg);
         }
 
         let underline = if cell.attrs & ATTR_UNDERLINE != 0 {
@@ -839,13 +875,23 @@ mod tests {
             make_cell(' ', 0, 0, 0),
             make_cell('!', ATTR_INVERSE, 0, 0),
         ];
-        let _element = render_terminal_row(
+        let _no_cursor = render_terminal_row(
             &cells,
             fg(),
             bg(),
             &base_font(),
             Pixels::from(14.0),
             Pixels::from(20.0),
+            None,
+        );
+        let _with_cursor = render_terminal_row(
+            &cells,
+            fg(),
+            bg(),
+            &base_font(),
+            Pixels::from(14.0),
+            Pixels::from(20.0),
+            Some(2),
         );
     }
 }
