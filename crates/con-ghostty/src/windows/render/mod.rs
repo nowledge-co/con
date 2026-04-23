@@ -113,11 +113,13 @@ pub struct Renderer {
     atlas: Mutex<GlyphCache>,
 
     instances: Mutex<Vec<Instance>>,
-    /// Generation fingerprint of the last frame we actually rendered
-    /// (snapshot.generation ⨁ selection). Seeded with `u64::MAX` so the
-    /// very first call — which sees `generation = 0` on a quiet VT —
-    /// still produces a frame (the cleared background), giving the pane
-    /// something to show before the shell has printed anything.
+    /// Generation fingerprint of the last frame we actually rendered.
+    /// It includes VT generation, selection state, and snapshot/view
+    /// geometry so resize catch-up frames are not mistaken for
+    /// unchanged content. Seeded with `u64::MAX` so the very first call
+    /// — which sees `generation = 0` on a quiet VT — still produces a
+    /// frame (the cleared background), giving the pane something to
+    /// show before the shell has printed anything.
     last_generation: Mutex<u64>,
     selection: Mutex<Option<Selection>>,
 
@@ -346,10 +348,13 @@ impl Renderer {
             .lock()
             .expect("selection mutex poisoned in render()");
         let sel_hash = selection.map(|s| s.hash_u64()).unwrap_or(0);
+        let geometry_hash = ((snapshot.cols as u64) << 32)
+            | ((snapshot.rows as u64) << 16)
+            | ((self.width_px as u64) ^ (self.height_px as u64));
         let combined = snapshot
             .generation
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            .wrapping_add(sel_hash);
+            .wrapping_add(sel_hash ^ geometry_hash.rotate_left(13));
         let needs_draw = {
             let mut last = self
                 .last_generation

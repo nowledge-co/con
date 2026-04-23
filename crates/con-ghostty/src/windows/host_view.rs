@@ -151,11 +151,12 @@ impl RenderSession {
         renderer
             .resize(width_px, height_px)
             .context("Renderer::resize failed")?;
+        let metrics = renderer.metrics();
         let config = self.config.lock();
         let (cols, rows) = renderer.grid_for_dimensions(&config);
         drop(config);
-        let cell_w = (width_px / cols.max(1) as u32).max(1);
-        let cell_h = (height_px / rows.max(1) as u32).max(1);
+        let cell_w = metrics.cell_width_px.max(1);
+        let cell_h = metrics.cell_height_px.max(1);
         drop(renderer);
 
         self.vt
