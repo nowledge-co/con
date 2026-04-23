@@ -285,14 +285,27 @@ jobs:
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
 
-          # `gh release create` defaults to a stable release. v*-beta.*
-          # and v*-dev.* tags must be marked --prerelease, otherwise
-          # GitHub's `/releases/latest` API includes them and the
-          # Windows install.ps1 / notify-only updater downstream paths
-          # treat them as the next stable release.
+          # `gh release create` defaults to a stable release.
+          #
+          # Only `v*-dev.*` tags get marked --prerelease here. Dev
+          # tags are explicitly internal smoke tests of the release
+          # pipeline and must not appear in /releases/latest.
+          #
+          # Beta tags do NOT get --prerelease today: con is in an
+          # all-betas era (no stable v0.1.0 has shipped yet), so the
+          # latest beta IS what every fresh `install.ps1` should
+          # download. Marking it --prerelease excludes the release
+          # from /releases/latest entirely and breaks the one-line
+          # installer for new users — that's the regression
+          # v0.1.0-beta.34 hit (the maintainer had to un-tick
+          # "Pre-release" on the GitHub UI manually).
+          #
+          # When stable v0.1.0 ships, add `*-beta.*` back to this
+          # case so beta and stable channels stop colliding in
+          # /releases/latest.
           prerelease_args=()
           case "$tag" in
-            *-beta.*|*-dev.*) prerelease_args+=(--prerelease) ;;
+            *-dev.*) prerelease_args+=(--prerelease) ;;
           esac
 
           # The macOS job may have already created the release. If not,

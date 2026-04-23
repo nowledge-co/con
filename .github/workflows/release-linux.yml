@@ -127,19 +127,38 @@ jobs:
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
 
-          # `gh release create` defaults to a stable release. v*-beta.*
-          # and v*-dev.* tags must be marked --prerelease, otherwise
-          # GitHub's `/releases/latest` API includes them and a
-          # stable-channel user's `install.sh` (which queries
-          # /releases/latest) downloads a beta as if it were the next
-          # stable. The Linux notify-only updater also pins via
-          # CON_INSTALL_VERSION on apply, but that pin only kicks in
-          # when the user already saw "Update available" — the
-          # /releases/latest API is what install.sh hits on a fresh
-          # install or when CON_INSTALL_VERSION is unset.
+          # `gh release create` defaults to a stable release.
+          #
+          # Only `v*-dev.*` tags get marked --prerelease here. Dev
+          # tags are explicitly internal smoke tests of the release
+          # pipeline and must not appear in /releases/latest.
+          #
+          # Beta tags do NOT get --prerelease today: con is in an
+          # all-betas era (no stable v0.1.0 has shipped yet), so the
+          # latest beta IS what every fresh `install.sh` /
+          # `install.ps1` should download. Marking the beta
+          # --prerelease excludes it from /releases/latest entirely
+          # (GitHub returns the prior stable, or 404 if none exists),
+          # which breaks the one-line installer for new users and
+          # was the issue v0.1.0-beta.34 hit (release shipped marked
+          # as Pre-release; the maintainer un-ticked it manually).
+          #
+          # The original channel-divergence concern (a beta-channel
+          # user clicking "Update now" and getting a stable
+          # downgrade) only fires once a stable release is published.
+          # Until then, the in-app notify-only updater's
+          # `CON_INSTALL_VERSION` pin in `apply_update_in_place`
+          # already binds the installer to the appcast's chosen
+          # version on the apply path — the /releases/latest API is
+          # only the fresh-install fallback, which is correctly the
+          # latest beta in the all-betas era.
+          #
+          # When stable v0.1.0 ships, add `*-beta.*` back to this
+          # case so beta and stable channels stop colliding in
+          # /releases/latest.
           prerelease_args=()
           case "$tag" in
-            *-beta.*|*-dev.*) prerelease_args+=(--prerelease) ;;
+            *-dev.*) prerelease_args+=(--prerelease) ;;
           esac
 
           if ! gh release view "$tag" >/dev/null 2>&1; then
