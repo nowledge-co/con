@@ -319,19 +319,22 @@ impl Renderer {
     ///
     /// `prefer_latest` is set by the view/session for user-driven
     /// interactions (typing, paste, mouse actions). In that mode we
-    /// still drain any older in-flight slot first to keep the ring
-    /// healthy, but we prefer the freshly submitted slot over any older
-    /// already-drained frame so the caller paints the newest state now.
+    /// prefer the freshly submitted slot over any older already-drained
+    /// frame so the caller paints the newest state now, but only while
+    /// the staging ring is otherwise clear. Once the GPU is already
+    /// behind (for example after a fullscreen resize), unread staging
+    /// slots are treated as disposable and we stay non-blocking.
     ///
     /// Non-interactive work like resize/fullscreen keeps the old
     /// non-blocking behavior: if the ring has nothing older to drain,
     /// we return `Pending` and let the next prepaint pick up the fresh
     /// slot once the GPU copy has finished.
     ///
-    /// Outside that mode the ordering stays deliberately drain →
-    /// submit: draining first frees the slot we're about to overwrite,
-    /// and guarantees we never lose a frame to ring overflow even if
-    /// the caller calls us many times back-to-back.
+    /// The ring behaves like a mailbox, not a must-deliver queue:
+    /// unread readback slots are only cached copies of older terminal
+    /// frames, and the VT snapshot remains the source of truth. When we
+    /// run out of clean slots we reclaim the oldest unread one instead
+    /// of blocking the UI thread to preserve stale pixels.
     pub fn render(
         &self,
         snapshot: &ScreenSnapshot,
@@ -372,18 +375,11 @@ impl Renderer {
         let drain_target = ring.oldest_in_flight();
 
         let drained: Option<Vec<u8>> = if let Some(idx) = drain_target {
-            match ring.try_drain(&self.context, idx)? {
-                Some(bytes) => Some(bytes),
-                None => {
-                    // GPU somehow took longer than a full prepaint cycle.
-                    // Block to keep moving — better to stall once than to
-                    // leak in-flight slots indefinitely.
-                    ring.block_drain(&self.context, idx)?
-                }
-            }
+            ring.try_drain(&self.context, idx)?
         } else {
             None
         };
+        let backlog = drain_target.is_some() && drained.is_none();
 
         let mut submitted_idx: Option<usize> = None;
         if needs_draw {
@@ -423,11 +419,12 @@ impl Renderer {
             // command joins the same context queue as the draws above,
             // so by the next prepaint the GPU will have run them all
             // and the staging texture will be ready to Map().
-            submitted_idx = Some(ring.submit_copy(&self.context, &self.rt_texture));
+            submitted_idx = Some(ring.submit_copy_mailbox(&self.context, &self.rt_texture));
         }
 
         if prefer_latest
             && needs_draw
+            && !backlog
             && let Some(idx) = submitted_idx
             && let Some(bytes) = ring.block_drain(&self.context, idx)?
         {
@@ -450,17 +447,11 @@ impl Renderer {
             return Ok(RenderOutcome::Pending);
         }
 
-        // No new draw and nothing prior was drained. If a slot is still
-        // in flight from somewhere (unlikely after the drain pass above,
-        // but safe to handle) flush it so we don't strand the trail.
-        if let Some(idx) = ring.oldest_in_flight()
-            && let Some(bytes) = ring.block_drain(&self.context, idx)?
-        {
-            return Ok(RenderOutcome::Rendered(FrameBgra {
-                bytes,
-                width: self.width_px,
-                height: self.height_px,
-            }));
+        // No new draw and nothing was ready yet, but there is still GPU
+        // work outstanding. Ask the caller for another prepaint instead
+        // of blocking the UI thread on Map().
+        if ring.oldest_in_flight().is_some() {
+            return Ok(RenderOutcome::Pending);
         }
 
         Ok(RenderOutcome::Unchanged)
@@ -756,12 +747,10 @@ struct StagingSlot {
 
 /// Two-slot staging ring. See `Renderer::render` for the state machine.
 ///
-/// Capacity = 2 is chosen deliberately: any time `render()` runs we
-/// drain the oldest in-flight slot first, then submit a fresh copy. So
-/// at most one slot is in flight when leaving `render()`. We carry a
-/// second slot only so that the *next* call has a place to submit
-/// without waiting for the slot it's about to drain — i.e., to avoid
-/// reusing the very slot we're mapping.
+/// The ring behaves like a mailbox: each slot is a readback cache of a
+/// previously rendered frame, not authoritative terminal state. When
+/// the GPU falls behind we would rather reclaim the oldest unread slot
+/// than block GPUI's thread trying to preserve stale pixels.
 struct StagingRing {
     slots: Vec<StagingSlot>,
     next_idx: usize,
@@ -811,8 +800,16 @@ impl StagingRing {
         Ok(())
     }
 
-    fn submit_copy(&mut self, ctx: &ID3D11DeviceContext, source: &ID3D11Texture2D) -> usize {
-        let idx = self.next_idx;
+    fn submit_copy_mailbox(
+        &mut self,
+        ctx: &ID3D11DeviceContext,
+        source: &ID3D11Texture2D,
+    ) -> usize {
+        let idx = if self.slots[self.next_idx].in_flight {
+            self.oldest_in_flight().unwrap_or(self.next_idx)
+        } else {
+            self.next_idx
+        };
         unsafe {
             ctx.CopyResource(&self.slots[idx].texture, source);
         }

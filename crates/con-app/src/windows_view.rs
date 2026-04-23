@@ -26,10 +26,11 @@
 //! 3. Each subsequent prepaint: resize on geometry change, update DPI
 //!    on scale-factor change, pump one `render_frame()`. When the
 //!    frame is fresh we rebuild `cached_image` and `cx.notify()` so
-//!    the next `render()` picks it up. The renderer now drains a fresh
-//!    readback on the same prepaint when the staging ring has nothing
-//!    older ready, and local user input marks the next render
-//!    latency-critical so the freshest frame wins over any stale one.
+//!    the next `render()` picks it up. Local user input marks the next
+//!    render latency-critical so the freshest frame wins when the
+//!    staging ring is otherwise clear, while resize/backlog frames stay
+//!    non-blocking and may drop stale unread readbacks instead of
+//!    stalling GPUI's thread.
 //! 4. Drop releases the `RenderSession` and ends the child shell.
 
 use std::sync::Arc;
