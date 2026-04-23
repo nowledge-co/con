@@ -360,6 +360,13 @@ impl GhosttyView {
                     false
                 }
             }
+            Ok(RenderOutcome::Pending) => {
+                // A non-interactive frame (typically resize/fullscreen)
+                // submitted fresh GPU work but chose not to block the
+                // UI thread on readback. Come back next prepaint to
+                // drain the finished slot.
+                true
+            }
             Err(err) => {
                 log::warn!("RenderSession::render_frame failed: {err:#}");
                 false
