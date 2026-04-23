@@ -41,7 +41,9 @@ What that gives you:
 
 What it still does **not** give you:
 
-- final styled cell rendering
+- a real glyph-atlas / GPU grid renderer (we paint via per-row
+  `StyledText` today — correct colors and SGR attributes, but not the
+  cell-accurate paint Windows gets from D3D11 + DirectWrite)
 - validated mouse selection / reporting
 - polished Linux window chrome / focus behavior across environments
 
@@ -217,7 +219,7 @@ can ship.
 | 2b | GPUI feasibility spike | confirm whether con needs foreign-surface embedding, texture interop, or neither | bounded GPUI worklist exists, or path is ruled out | ✅ landed |
 | 2c | Architecture decision | pick Linux backend lane | one recommended implementation path, no split-brain plan | ✅ landed |
 | 3 | Linux backend scaffold | `con-ghostty/src/linux/` plus `con-app/src/linux_view.rs` (or equivalent) with real lifecycle types | Linux no longer routes through the generic stub path conceptually | ✅ landed |
-| 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint | VT-backed Linux pane compiles and displays live shell state | 🚧 in progress |
+| 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / underline / inverse, cursor block, theme palette synced from settings | 🚧 styled `StyledText` paint landed; glyph-atlas grid renderer pending |
 | 5 | Input + selection | keyboard, mouse, clipboard, bracketed paste, DECCKM, selection | vim/tmux/fzf/less usable on Linux | ⏳ pending |
 | 6 | Packaging | desktop entry, icon integration, artifact strategy (`.deb`, AppImage, Flatpak, etc.) | installable Linux artifact exists | ⏳ pending |
 
@@ -225,12 +227,22 @@ can ship.
 
 The next concrete Linux tasks should be:
 
-1. Replace the interim text-pane rendering with a real GPUI-owned styled
-   cell renderer fed from `libghostty-vt` snapshots.
+1. Replace the per-row `StyledText` paint path with a real
+   GPUI-owned glyph-atlas grid renderer that paints background runs
+   under the text and pre-rasterizes per-cell glyphs (matching the
+   D3D11/DirectWrite path used on Windows). Today's view already
+   honors fg/bg/bold/italic/underline/inverse and draws a block
+   cursor, but per-cell metrics still come from layout-time text
+   shaping rather than a fixed cell grid.
 2. Finish Linux input correctness: bracketed paste, DECCKM, mouse
-   reporting, selection, and scrollback behavior.
+   reporting, selection, and scrollback behavior. (DECCKM and
+   bracketed paste are already wired through `libghostty-vt` mode
+   tracking; mouse reporting and selection still need work.)
 3. Validate shell bring-up and app focus/chrome on real Linux desktops
-   (Wayland, X11, and ChromeOS/Crostini).
+   (Wayland, X11, and ChromeOS/Crostini). The current X11 path has
+   been smoke-tested under a headless Xvfb + llvmpipe configuration in
+   the cloud agent VM and reaches a live `bash` prompt, with the
+   socket pane reachable via `con-cli`.
 4. Once the shell path is stable, iterate on packaging and Linux-native
    polish.
 
