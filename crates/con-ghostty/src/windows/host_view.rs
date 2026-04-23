@@ -17,7 +17,7 @@
 //!   its own Mutex.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
@@ -38,6 +38,11 @@ pub struct RenderSession {
     config: Mutex<RendererConfig>,
     base_font_size_px: f32,
     dpi: AtomicU32,
+    /// When a local user action mutates terminal state (typing, paste,
+    /// mouse selection), the next render should prefer the freshest
+    /// frame over the lowest-latency non-blocking staging drain. This
+    /// avoids showing the stale pre-input frame for one more prepaint.
+    low_latency_requested: AtomicBool,
     drag_anchor: Mutex<Option<(u16, u16)>>,
 }
 
@@ -122,6 +127,7 @@ impl RenderSession {
             config: Mutex::new(renderer_config),
             base_font_size_px,
             dpi: AtomicU32::new(current_dpi),
+            low_latency_requested: AtomicBool::new(false),
             drag_anchor: Mutex::new(None),
         })
     }
@@ -132,7 +138,8 @@ impl RenderSession {
         let renderer = self.renderer.lock();
         let config = self.config.lock().clone();
         let snapshot = self.vt.snapshot();
-        renderer.render(&snapshot, &config)
+        let prefer_latest = self.low_latency_requested.swap(false, Ordering::AcqRel);
+        renderer.render(&snapshot, &config, prefer_latest)
     }
 
     /// Apply a new physical-pixel size. Idempotent for same dimensions.
@@ -257,6 +264,7 @@ impl RenderSession {
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
     /// quirk (shell expects CR, not LF).
     pub fn write_input(&self, text: &str) {
+        self.request_low_latency_present();
         let bytes: std::borrow::Cow<[u8]> = if text.as_bytes().contains(&b'\n') {
             std::borrow::Cow::Owned(text.replace('\n', "\r").into_bytes())
         } else {
@@ -268,6 +276,7 @@ impl RenderSession {
     /// Raw PTY write — no CR/LF normalization. Used for bracketed-paste
     /// wrappers (ESC [200~ / ESC [201~) whose bytes mustn't be touched.
     pub fn write_pty_raw(&self, data: &[u8]) {
+        self.request_low_latency_present();
         let _ = self.conpty.write(data);
     }
 
@@ -280,14 +289,14 @@ impl RenderSession {
     /// alone. Shift+click with an existing selection extends from the
     /// original anchor (matches every other terminal).
     pub fn mouse_down(&self, col: u16, row: u16, mods: MouseEventMods) {
+        self.request_low_latency_present();
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.report_sgr_button(0, col, row, mods, true);
             return;
         }
         if mods.shift {
             let renderer = self.renderer.lock();
-            let existing_anchor =
-                renderer.selection().map(|s| s.anchor).unwrap_or((col, row));
+            let existing_anchor = renderer.selection().map(|s| s.anchor).unwrap_or((col, row));
             *self.drag_anchor.lock() = Some(existing_anchor);
             renderer.set_selection(Some(Selection {
                 anchor: existing_anchor,
@@ -308,6 +317,7 @@ impl RenderSession {
     /// (BUTTON / ANY mode), we emit an SGR motion report with the
     /// motion bit (+32) set. Otherwise we extend the local drag.
     pub fn mouse_drag(&self, col: u16, row: u16, mods: MouseEventMods) {
+        self.request_low_latency_present();
         if self.vt.mouse_tracking_active() && !mods.shift {
             // Button 0 (LMB) + 32 = motion-with-button bit per SGR spec.
             self.report_sgr_button(32, col, row, mods, true);
@@ -329,6 +339,7 @@ impl RenderSession {
     /// selection — a click without drag shouldn't leave a lone cell
     /// highlighted.
     pub fn mouse_up(&self, col: u16, row: u16, mods: MouseEventMods) {
+        self.request_low_latency_present();
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.report_sgr_button(0, col, row, mods, false);
             return;
@@ -378,6 +389,7 @@ impl RenderSession {
         if delta_y.abs() < f32::EPSILON {
             return;
         }
+        self.request_low_latency_present();
         let mut button: u8 = if delta_y < 0.0 { 64 } else { 65 };
         if mods.alt {
             button |= 0x08;
@@ -409,6 +421,10 @@ impl RenderSession {
 
     pub fn dimensions_px(&self) -> (u32, u32) {
         self.renderer.lock().dimensions_px()
+    }
+
+    fn request_low_latency_present(&self) {
+        self.low_latency_requested.store(true, Ordering::Release);
     }
 }
 

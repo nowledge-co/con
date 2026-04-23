@@ -38,23 +38,21 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ,
     D3D11_MAPPED_SUBRESOURCE, D3D11_RENDER_TARGET_VIEW_DESC, D3D11_RTV_DIMENSION_TEXTURE2D,
     D3D11_SDK_VERSION, D3D11_TEX2D_RTV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-    D3D11_USAGE_STAGING, D3D11_VIEWPORT, D3D11CreateDevice, ID3D11Device,
-    ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
+    D3D11_USAGE_STAGING, D3D11_VIEWPORT, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
+    ID3D11RenderTargetView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory,
 };
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
-};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::DXGI_ERROR_WAS_STILL_DRAWING;
 
 use super::vt::{ATTR_INVERSE, ATTR_STRIKE, ATTR_UNDERLINE, Cell, ScreenSnapshot};
 use atlas::{GlyphCache, GlyphKey};
 use pipeline::{Globals, Instance, Pipeline, instance_for_cell};
 
-pub use atlas::CellMetrics;
 pub use super::vt::ThemeColors;
+pub use atlas::CellMetrics;
 
 const ATLAS_SIZE_PX: u32 = 2048;
 /// Initial instance-buffer capacity. 16 384 covers a 200×80 grid
@@ -140,11 +138,6 @@ pub enum RenderOutcome {
     Unchanged,
     /// Fresh BGRA bytes, ready to hand to GPUI as an `ImageSource`.
     Rendered(FrameBgra),
-    /// GPU work was submitted but the staging ring has nothing ready to
-    /// drain non-blocking. Caller should reuse the prior image and
-    /// schedule another prepaint so we can drain the in-flight slot
-    /// without stalling the render thread on `Map()`.
-    Pending,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -187,11 +180,13 @@ impl Renderer {
         log::info!("Renderer: RT texture + RTV created");
 
         let staging_ring = StagingRing::new(&device, width, height)?;
-        log::info!("Renderer: staging ring ({} slots) created", StagingRing::DEPTH);
+        log::info!(
+            "Renderer: staging ring ({} slots) created",
+            StagingRing::DEPTH
+        );
 
-        let dwrite: IDWriteFactory =
-            unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
-                .context("DWriteCreateFactory failed")?;
+        let dwrite: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
+            .context("DWriteCreateFactory failed")?;
         log::info!("Renderer: DWrite factory created");
 
         let bundled_collection =
@@ -217,8 +212,8 @@ impl Renderer {
         log::info!("Renderer: GlyphCache created");
 
         log::info!("Renderer: creating D3D11 pipeline (HLSL compile)");
-        let pipeline = Pipeline::new(&device, INITIAL_INSTANCE_CAPACITY)
-            .context("Pipeline::new failed")?;
+        let pipeline =
+            Pipeline::new(&device, INITIAL_INSTANCE_CAPACITY).context("Pipeline::new failed")?;
         log::info!("Renderer: pipeline ready");
 
         Ok(Self {
@@ -317,25 +312,25 @@ impl Renderer {
     /// Render one frame and return a BGRA byte buffer sized to the
     /// current render target.
     ///
-    /// Three outcomes:
+    /// When the ring has no older slot ready to drain, we synchronously
+    /// drain the freshly submitted slot before returning instead of
+    /// bouncing through an extra-frame `Pending` state.
     ///
-    /// * `Unchanged` — nothing has moved since the last call AND the ring
-    ///   has nothing in flight; caller reuses its cached image.
-    /// * `Rendered` — fresh BGRA bytes, drained from a slot that was
-    ///   submitted in a PRIOR call (so the GPU has had a full prepaint
-    ///   cycle to finish; `Map(DO_NOT_WAIT)` succeeds without stalling).
-    /// * `Pending` — we just submitted a fresh draw, but no prior slot
-    ///   was in flight to drain. Caller should reuse the prior image and
-    ///   schedule another prepaint so we can drain this slot next frame.
+    /// `prefer_latest` is set by the view/session for user-driven
+    /// interactions (typing, paste, mouse actions). In that mode we
+    /// still drain any older in-flight slot first to keep the ring
+    /// healthy, but we prefer the freshly submitted slot over any older
+    /// already-drained frame so the caller paints the newest state now.
     ///
-    /// The ordering inside the call is deliberately drain → submit:
-    /// draining first frees the slot we're about to overwrite, and
-    /// guarantees we never lose a frame to ring overflow even if the
-    /// caller calls us many times back-to-back.
+    /// Outside that mode the ordering stays deliberately drain →
+    /// submit: draining first frees the slot we're about to overwrite,
+    /// and guarantees we never lose a frame to ring overflow even if
+    /// the caller calls us many times back-to-back.
     pub fn render(
         &self,
         snapshot: &ScreenSnapshot,
         config: &RendererConfig,
+        prefer_latest: bool,
     ) -> Result<RenderOutcome> {
         let selection = *self
             .selection
@@ -384,6 +379,7 @@ impl Renderer {
             None
         };
 
+        let mut submitted_idx: Option<usize> = None;
         if needs_draw {
             let vp = D3D11_VIEWPORT {
                 TopLeftX: 0.0,
@@ -421,7 +417,19 @@ impl Renderer {
             // command joins the same context queue as the draws above,
             // so by the next prepaint the GPU will have run them all
             // and the staging texture will be ready to Map().
-            ring.submit_copy(&self.context, &self.rt_texture);
+            submitted_idx = Some(ring.submit_copy(&self.context, &self.rt_texture));
+        }
+
+        if prefer_latest
+            && needs_draw
+            && let Some(idx) = submitted_idx
+            && let Some(bytes) = ring.block_drain(&self.context, idx)?
+        {
+            return Ok(RenderOutcome::Rendered(FrameBgra {
+                bytes,
+                width: self.width_px,
+                height: self.height_px,
+            }));
         }
 
         if let Some(bytes) = drained {
@@ -430,13 +438,6 @@ impl Renderer {
                 width: self.width_px,
                 height: self.height_px,
             }));
-        }
-
-        if needs_draw {
-            // We submitted a fresh slot but had nothing prior to drain.
-            // Signal the caller to come back — the slot will be ready
-            // next prepaint.
-            return Ok(RenderOutcome::Pending);
         }
 
         // No new draw and nothing prior was drained. If a slot is still
@@ -634,10 +635,7 @@ impl Renderer {
             });
         }
 
-        let mut pipeline = self
-            .pipeline
-            .lock()
-            .expect("pipeline mutex poisoned");
+        let mut pipeline = self.pipeline.lock().expect("pipeline mutex poisoned");
         let needed = instances.len() as u32;
         if needed > pipeline.instance_capacity {
             let new_capacity = (needed + needed / 2).max(INITIAL_INSTANCE_CAPACITY);
@@ -803,7 +801,7 @@ impl StagingRing {
         Ok(())
     }
 
-    fn submit_copy(&mut self, ctx: &ID3D11DeviceContext, source: &ID3D11Texture2D) {
+    fn submit_copy(&mut self, ctx: &ID3D11DeviceContext, source: &ID3D11Texture2D) -> usize {
         let idx = self.next_idx;
         unsafe {
             ctx.CopyResource(&self.slots[idx].texture, source);
@@ -813,6 +811,7 @@ impl StagingRing {
         slot.seq = self.next_seq;
         self.next_seq = self.next_seq.wrapping_add(1);
         self.next_idx = (self.next_idx + 1) % self.slots.len();
+        idx
     }
 
     /// Slot with the lowest `seq` among in-flight slots, or `None` when
@@ -834,22 +833,14 @@ impl StagingRing {
 
     /// Non-blocking drain: returns `Ok(Some(bytes))` if the slot is
     /// ready, `Ok(None)` if the GPU is still drawing into it.
-    fn try_drain(
-        &mut self,
-        ctx: &ID3D11DeviceContext,
-        idx: usize,
-    ) -> Result<Option<Vec<u8>>> {
+    fn try_drain(&mut self, ctx: &ID3D11DeviceContext, idx: usize) -> Result<Option<Vec<u8>>> {
         self.drain_with_flags(ctx, idx, D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32)
     }
 
     /// Blocking drain: waits for the GPU to finish the slot's copy,
     /// then maps it. Used as a fallback when the GPU somehow exceeds a
     /// full prepaint cycle to drain `try_drain`'s target.
-    fn block_drain(
-        &mut self,
-        ctx: &ID3D11DeviceContext,
-        idx: usize,
-    ) -> Result<Option<Vec<u8>>> {
+    fn block_drain(&mut self, ctx: &ID3D11DeviceContext, idx: usize) -> Result<Option<Vec<u8>>> {
         self.drain_with_flags(ctx, idx, 0)
     }
 
@@ -867,16 +858,13 @@ impl StagingRing {
         }
 
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-        let map_result = unsafe {
-            ctx.Map(&slot.texture, 0, D3D11_MAP_READ, flags, Some(&mut mapped))
-        };
+        let map_result =
+            unsafe { ctx.Map(&slot.texture, 0, D3D11_MAP_READ, flags, Some(&mut mapped)) };
         if let Err(err) = map_result {
             if err.code() == DXGI_ERROR_WAS_STILL_DRAWING {
                 return Ok(None);
             }
-            return Err(anyhow::anyhow!(
-                "Map(staging slot {idx}) failed: {err}"
-            ));
+            return Err(anyhow::anyhow!("Map(staging slot {idx}) failed: {err}"));
         }
 
         let row_bytes = width * 4;

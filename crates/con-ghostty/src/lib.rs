@@ -5,7 +5,7 @@
 //! | target | backend | source |
 //! |---|---|---|
 //! | macOS | full libghostty (Metal + AppKit NSView) | `terminal.rs` + `ffi.rs` |
-//! | Windows | libghostty-vt + ConPTY + D3D11 + DirectWrite, hosted in a `WS_CHILD` HWND | `windows/` |
+//! | Windows | libghostty-vt + ConPTY + D3D11 + DirectWrite, hosted via GPUI image composition | `windows/` |
 //! | Linux | local backend scaffold (Unix PTY + future GPUI-owned renderer) | `linux/` |
 //! | other | no-op stub (UI compiles, terminal pane shows placeholder) | `stub.rs` |
 //!
@@ -66,7 +66,10 @@ pub use stub::{
 /// platform `vt` parser surface and are stable enough for the view
 /// to consume directly while we iterate on the Linux paint path.
 #[cfg(target_os = "linux")]
-pub use vt::{ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, Cell as VtCell, Cursor as VtCursor, ScreenSnapshot};
+pub use vt::{
+    ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, Cell as VtCell,
+    Cursor as VtCursor, ScreenSnapshot,
+};
 
 #[cfg(all(
     not(target_os = "macos"),
