@@ -49,7 +49,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::DXGI_ERROR_WAS_STILL_DRAWING;
 
-use super::vt::ScreenSnapshot;
+use super::vt::{ATTR_INVERSE, ATTR_STRIKE, ATTR_UNDERLINE, Cell, ScreenSnapshot};
 use atlas::{GlyphCache, GlyphKey};
 use pipeline::{Globals, Instance, Pipeline, instance_for_cell};
 
@@ -493,7 +493,16 @@ impl Renderer {
             .lock()
             .expect("instances mutex poisoned in draw_cells()");
         instances.clear();
-        instances.reserve(snapshot.cells.len());
+        instances.reserve(snapshot.cells.len().saturating_add(1));
+        let cell_w_px = atlas.metrics().cell_width_px;
+
+        let cursor_pos = if snapshot.cursor.visible {
+            Some((snapshot.cursor.col, snapshot.cursor.row))
+        } else {
+            None
+        };
+        let mut cursor_source: Option<Instance> = None;
+        let mut has_wide_glyph = false;
 
         for (i, cell) in snapshot.cells.iter().enumerate() {
             let col = (i % snapshot.cols as usize) as u16;
@@ -508,15 +517,30 @@ impl Renderer {
                 cell.attrs
             };
 
+            let is_cursor_cell = cursor_pos == Some((col, row));
+
+            // The render target clear already paints the pane's default
+            // background. Avoid emitting a bg-only instance for blank
+            // cells when it would be pixel-identical to the clear. This
+            // preserves explicit SGR backgrounds, selection / inverse,
+            // and underline / strike decorations on spaces.
+            if !is_cursor_cell && is_default_blank_cell(cell, effective_attrs, config) {
+                continue;
+            }
+
             if cell.codepoint == 0 || cell.codepoint == 0x20 {
-                instances.push(Instance {
+                let instance = Instance {
                     cell_pos: [col as u32, row as u32],
                     atlas_pos: [0, 0],
                     atlas_size: [0, 0],
                     fg: cell.fg,
                     bg: apply_opacity(cell.bg),
                     attrs: effective_attrs as u32,
-                });
+                };
+                if is_cursor_cell {
+                    cursor_source = Some(instance);
+                }
+                instances.push(instance);
                 continue;
             }
 
@@ -540,48 +564,39 @@ impl Renderer {
                                 "glyph larger than atlas capacity at U+{:04X}; skipping",
                                 cell.codepoint
                             );
-                            instances.push(Instance {
+                            let instance = Instance {
                                 cell_pos: [col as u32, row as u32],
                                 atlas_pos: [0, 0],
                                 atlas_size: [0, 0],
                                 fg: cell.fg,
                                 bg: apply_opacity(cell.bg),
                                 attrs: effective_attrs as u32,
-                            });
+                            };
+                            if is_cursor_cell {
+                                cursor_source = Some(instance);
+                            }
+                            instances.push(instance);
                             continue;
                         }
                     }
                 }
             };
 
-            instances.push(instance_for_cell(
+            let instance = instance_for_cell(
                 col,
                 row,
                 glyph,
                 cell.fg,
                 apply_opacity(cell.bg),
                 effective_attrs,
-            ));
-        }
-        let cell_w_px = atlas.metrics().cell_width_px;
-        drop(atlas);
-
-        // Capture the cursor cell's source instance BEFORE sorting —
-        // the row-major `idx = row * cols + col` mapping is only
-        // valid while `instances` is still in grid order.
-        let cursor_source: Option<Instance> = if snapshot.cursor.visible {
-            let col = snapshot.cursor.col as usize;
-            let row = snapshot.cursor.row as usize;
-            let cols_u = snapshot.cols as usize;
-            let rows_u = snapshot.rows as usize;
-            if col < cols_u && row < rows_u {
-                instances.get(row * cols_u + col).copied()
-            } else {
-                None
+            );
+            has_wide_glyph |= glyph.w as u32 > cell_w_px;
+            if is_cursor_cell {
+                cursor_source = Some(instance);
             }
-        } else {
-            None
-        };
+            instances.push(instance);
+        }
+        drop(atlas);
 
         // Sort so oversized PUA icons render LAST within the grid
         // pass. Their atlas slots are wider than a cell, so their
@@ -592,7 +607,9 @@ impl Renderer {
         // would otherwise paint on top. Stable partition keeps the
         // grid's row-major order within the narrow and wide groups
         // independently — bad ordering would show up as flicker.
-        instances.sort_by_key(|inst| (inst.atlas_size[0] > cell_w_px) as u8);
+        if has_wide_glyph {
+            instances.sort_by_key(|inst| (inst.atlas_size[0] > cell_w_px) as u8);
+        }
 
         // Push the cursor instance AFTER the sort so it always renders
         // last — on top of any wide PUA glyph that might otherwise
@@ -672,7 +689,47 @@ impl Renderer {
         drop(pipeline);
         Ok(())
     }
+}
 
+fn is_default_blank_cell(cell: &Cell, effective_attrs: u8, config: &RendererConfig) -> bool {
+    let is_blank = cell.codepoint == 0 || cell.codepoint == 0x20;
+    if !is_blank {
+        return false;
+    }
+
+    // Default-background cells use alpha=0 as a sentinel. Explicit SGR
+    // backgrounds are opaque and still need a quad, even for spaces.
+    if (cell.bg & 0xFF) != 0 {
+        return false;
+    }
+
+    // Bold / italic have no visual effect on a blank cell, but these
+    // attributes do: underline/strike draw bands, inverse/selection
+    // swaps fg/bg and paints a highlight.
+    if (effective_attrs & (ATTR_UNDERLINE | ATTR_STRIKE | ATTR_INVERSE)) != 0 {
+        return false;
+    }
+
+    let opacity = config.background_opacity.clamp(0.0, 1.0);
+    if opacity <= f32::EPSILON {
+        return true;
+    }
+
+    let clear_rgb = [
+        color_channel_byte(config.clear_color[0]),
+        color_channel_byte(config.clear_color[1]),
+        color_channel_byte(config.clear_color[2]),
+    ];
+    let bg_rgb = [
+        ((cell.bg >> 24) & 0xFF) as u8,
+        ((cell.bg >> 16) & 0xFF) as u8,
+        ((cell.bg >> 8) & 0xFF) as u8,
+    ];
+    clear_rgb == bg_rgb
+}
+
+fn color_channel_byte(v: f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 /// One slot in the readback ring.
@@ -823,7 +880,8 @@ impl StagingRing {
         }
 
         let row_bytes = width * 4;
-        let mut out = vec![0u8; row_bytes * height];
+        let len = row_bytes * height;
+        let mut out: Vec<u8> = Vec::with_capacity(len);
         let src_pitch = mapped.RowPitch as usize;
         for y in 0..height {
             unsafe {
@@ -833,6 +891,12 @@ impl StagingRing {
                     row_bytes,
                 );
             }
+        }
+        // Every byte has been filled by the row-copy loop above.
+        // Avoiding `vec![0; len]` saves a full-frame memset on the hot
+        // readback path before we immediately overwrite the buffer.
+        unsafe {
+            out.set_len(len);
         }
         unsafe {
             ctx.Unmap(&slot.texture, 0);

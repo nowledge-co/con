@@ -45,6 +45,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - IoskeleyMono's full Nerd-Font set (Powerline separators, devicons, Font Awesome, Octicons, Codicons, Material Design icons) now rasterizes correctly inside monospace cells via a three-case atlas strategy — normal glyphs stay in their cell, negative-`leftSideBearing` icons get a widened slot with a pen shift so the ink lands flush at the slot edge, and oversized glyphs scale around the cell centre. oh-my-posh, Starship, and Powerlevel10k prompts render out of the box.
 - Atlas packing is bleed-proof: every glyph rasterization is bracketed by a `PushAxisAlignedClip` + opaque black pre-fill, so ClearType fringe from one atlas neighbour can't contaminate the next. Thin glyphs like `-`, `_`, and `=` render cleanly against any prior atlas state.
 - Wide PUA icons that overflow their cell and the cell cursor now interact correctly — wide instances are stable-sorted after narrow ones so DX11's in-order per-pixel writes let them win against neighbour backgrounds, and the cursor's inverse-colour instance is captured pre-sort and drawn last so it always lands on the intended cell.
+- The Windows renderer now skips redundant default-background blank-cell instances, avoids full-frame zero-fill before D3D readback, and only pays the wide-glyph stable-sort cost when a frame actually contains overflowing glyphs.
 - The local control plane uses Windows Named Pipes (`\\.\pipe\con`) as its transport, so `con-cli` and external automation work the same way they do on macOS.
 - Phase 3c (input/selection polish) and Phase 3d (DirectComposition sibling visual upstream in GPUI) remain the outstanding Windows work; see `docs/impl/windows-port.md` for the full phased plan.
 
@@ -194,6 +195,7 @@ con is still pre-release, so entries may group larger areas of work while the pr
 - Fixed Ghostty resource packaging and dev-run bootstrap on macOS. Con now embeds Ghostty's `Resources/ghostty` payload into app bundles and points debug runs at the built Ghostty resources so child processes get `xterm-ghostty`, `TERMINFO`, and Ghostty shell integration instead of silently falling back to `xterm-256color`.
 
 **Terminal**
+- Fixed Windows settings/theme/session/auth persistence paths so they no longer use `con` as a filesystem segment, avoiding Win32 reserved-device-name failures such as `os error 267`.
 - Full terminal emulation with 256-color and truecolor support
 - Split panes — divide your workspace horizontally (Cmd+D) or vertically (Cmd+Shift+D), with drag-to-resize dividers
 - Mouse text selection with click-drag, double-click for words, triple-click for lines, and Cmd+A to select all

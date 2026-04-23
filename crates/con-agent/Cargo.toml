@@ -5,6 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+con-paths.workspace = true
 rig-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

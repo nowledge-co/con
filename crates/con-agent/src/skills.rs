@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 /// Discovery paths (in priority order):
 ///   1. Project-local: `<cwd>/.con/skills/*/SKILL.md`
 ///   2. Global user:   `~/.config/con/skills/*/SKILL.md`
+///      (`~/.config/con-terminal/skills/*/SKILL.md` on Windows)
 ///
 /// SKILL.md format (YAML frontmatter + markdown body):
 /// ```text
@@ -33,7 +34,7 @@ pub struct Skill {
 pub enum SkillSource {
     /// From <cwd>/.con/skills/
     Project(PathBuf),
-    /// From ~/.config/con/skills/
+    /// From the platform global skills directory.
     Global(PathBuf),
 }
 

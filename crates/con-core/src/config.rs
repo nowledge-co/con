@@ -299,6 +299,8 @@ pub struct Config {
 /// project_paths = [".con/skills"]
 /// global_paths = ["~/.config/con/skills"]
 /// ```
+/// On Windows, the default global path uses `~/.config/con-terminal/skills`
+/// because `con` is a reserved DOS device name.
 ///
 /// # Sharing with other agents
 /// ```toml
@@ -326,7 +328,10 @@ impl Default for SkillsConfig {
                 ".agents/skills".into(),
                 ".con/skills".into(),
             ],
-            global_paths: vec!["~/.config/con/skills".into(), "~/.agents/skills".into()],
+            global_paths: vec![
+                con_paths::default_global_skills_path(),
+                "~/.agents/skills".into(),
+            ],
         }
     }
 }
@@ -371,10 +376,24 @@ impl Config {
     }
 
     pub fn config_path() -> PathBuf {
-        dirs::config_dir()
-            .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
-            .unwrap_or_else(std::env::temp_dir)
-            .join("con")
-            .join("config.toml")
+        con_paths::config_file()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SkillsConfig;
+
+    #[test]
+    fn default_skill_path_uses_shared_app_path_policy() {
+        let config = SkillsConfig::default();
+        assert_eq!(
+            config.global_paths.first().map(String::as_str),
+            Some(if cfg!(target_os = "windows") {
+                "~/.config/con-terminal/skills"
+            } else {
+                "~/.config/con/skills"
+            })
+        );
     }
 }

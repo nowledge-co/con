@@ -1122,6 +1122,7 @@ dependencies = [
  "con-agent",
  "con-core",
  "con-ghostty",
+ "con-paths",
  "con-terminal",
  "crossbeam-channel",
  "dirs",
@@ -1158,6 +1159,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "con-paths",
  "crossbeam-channel",
  "dirs",
  "futures",
@@ -1192,6 +1194,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "con-agent",
+ "con-paths",
  "crossbeam-channel",
  "dirs",
  "futures",
@@ -1224,8 +1227,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "con-paths"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+]
+
+[[package]]
 name = "con-terminal"
 version = "0.1.0"
+dependencies = [
+ "con-paths",
+]
 
 [[package]]
 name = "concurrent-queue"

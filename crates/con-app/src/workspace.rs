@@ -6136,7 +6136,7 @@ impl Render for ConWorkspace {
             .collect();
 
         let cwd = active_terminal.current_dir(cx);
-        // Scan skills when cwd changes (project-local + global ~/.config/con/skills/)
+        // Scan skills when cwd changes (project-local + platform global skills path).
         if let Some(ref raw_cwd) = cwd {
             self.harness.scan_skills(raw_cwd);
         }
