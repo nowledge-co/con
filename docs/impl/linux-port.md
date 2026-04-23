@@ -305,13 +305,13 @@ Issue #18 should mirror the Windows tracker:
 
 ### Status updates mirrored to issue #18
 
-The cloud agent integration only has read-only access to GitHub
-issues, so per-PR status updates are written into
-`docs/impl/linux-port-tracker-updates/` first and then copy-pasted
-onto issue #18 by a human. Each file is dated and named after the
-landed milestone. Keep this list in chronological order:
+Per-PR status updates land on issue #18 directly. We also keep
+the same write-up in this directory, dated and named after the
+landed milestone, so the rationale survives outside of GitHub. Keep
+this list in chronological order:
 
-- `docs/impl/linux-port-tracker-updates/2026-04-23-styled-cell-renderer.md` — phase 4 milestone landing. Covers the styled-cell paint over `libghostty-vt`, theme plumbing, block cursor, env-bootstrap notes for a fresh Ubuntu cloud VM, plus the seven follow-on fixes that got the preview to ship-ready state: client-side decorations + caption cluster, IoskeleyMono normalization, transparent + rounded window, KWin Wayland blur, the 16 ms → 8 ms paint-loop tightening (keystroke echo 32.6 ms → 16.6 ms mean), and the alt-screen `seen_any_output` placeholder fix. Corresponds to PR #58.
+- `docs/impl/linux-port-tracker-updates/2026-04-23-styled-cell-renderer.md` — phase 4 milestone landing. Covers the styled-cell paint over `libghostty-vt`, theme plumbing, block cursor, env-bootstrap notes for a fresh Ubuntu cloud VM, plus the seven follow-on fixes that got the preview to ship-ready state: client-side decorations + caption cluster, IoskeleyMono normalization, transparent + rounded window, KWin Wayland blur, the 16 ms → 8 ms paint-loop tightening (keystroke echo 32.6 ms → 16.6 ms mean), and the alt-screen `seen_any_output` placeholder fix. Corresponds to merged PR #58.
+- `docs/impl/linux-port-tracker-updates/2026-04-23-release-pipeline.md` — full milestone summary covering both #58 (runtime backend) and #59 (release pipeline). One-liner installer (`install.sh` Unix dispatcher), tarball release script, `release-linux.yml` workflow, and the notify-only updater extension (Sparkle-shaped appcast XML + `apply_update_in_place` re-runs install.sh with `CON_INSTALL_VERSION` so beta-channel users never get silently downgraded to stable). Corresponds to PR #59.
 
 ## References
 
