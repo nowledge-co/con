@@ -8,8 +8,8 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-use crate::stub::{CommandFinishedSignal, SurfaceSize};
-use crate::vt::{ScreenSnapshot, VtScreen};
+use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
+use crate::vt::{ScreenSnapshot, ThemeColors, VtScreen};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -21,6 +21,7 @@ pub struct LinuxPtyOptions {
     pub program: Option<String>,
     pub size: SurfaceSize,
     pub wake_generation: Option<Arc<AtomicU64>>,
+    pub theme: Option<TerminalColors>,
 }
 
 impl Default for LinuxPtyOptions {
@@ -37,8 +38,13 @@ impl Default for LinuxPtyOptions {
                 cell_height_px: 0,
             },
             wake_generation: None,
+            theme: None,
         }
     }
+}
+
+fn theme_colors_to_vt(colors: &TerminalColors) -> ThemeColors {
+    ThemeColors::from_ansi16(colors.foreground, colors.background, colors.palette)
 }
 
 pub struct LinuxPtySession {
@@ -171,11 +177,12 @@ impl LinuxPtySession {
                 .take_writer()
                 .context("failed to take linux pty writer")?,
         ));
+        let theme_owned = options.theme.as_ref().map(theme_colors_to_vt);
         let screen = Arc::new(
             VtScreen::new_with_write_pty(
                 options.size.columns.max(1),
                 options.size.rows.max(1),
-                None,
+                theme_owned.as_ref(),
                 Some({
                     let writer = writer.clone();
                     Arc::new(move |data: &[u8]| {
@@ -298,6 +305,20 @@ impl LinuxPtySession {
 
     pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
         snapshot_to_lines(&self.shared.screen.snapshot(), max_lines)
+    }
+
+    /// Drive the libghostty-vt render-state pipeline once and return a
+    /// fresh `ScreenSnapshot`. Used by the GPUI-owned Linux paint
+    /// path to access per-cell fg/bg/attrs alongside the codepoint.
+    pub fn snapshot(&self) -> ScreenSnapshot {
+        self.shared.screen.snapshot()
+    }
+
+    pub fn set_theme(&self, colors: &TerminalColors) {
+        let theme = theme_colors_to_vt(colors);
+        self.shared.screen.set_theme(&theme);
+        self.shared.needs_render.store(true, Ordering::Release);
+        self.shared.wake();
     }
 
     pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {
