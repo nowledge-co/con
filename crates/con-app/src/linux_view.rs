@@ -1,20 +1,30 @@
-//! Linux terminal view backed by con's local Unix PTY + VT scaffold.
+//! Linux terminal view backed by con's local Unix PTY + libghostty-vt
+//! parser. Phase 4 styled-cell renderer: this view consumes the parsed
+//! `ScreenSnapshot` from `con-ghostty` and paints each row as a GPUI
+//! `StyledText` element with one `TextRun` per styled span. That keeps
+//! prompt colors, ANSI palette, bold/italic/underline, and selection
+//! inverse working without bringing the full D3D11 / DirectWrite stack
+//! the Windows backend needs.
 //!
-//! This still is not the final Linux grid renderer, but it now renders
-//! from parsed VT screen state instead of a lossy transcript. That keeps
-//! shell bring-up and prompt rendering aligned with the real terminal
-//! semantics while the full styled cell renderer is still pending.
+//! Rendering trade-off: this is a CPU-side per-cell paint path, not a
+//! real glyph atlas. It's good enough for shell prompts, vim/less, and
+//! basic TUIs while the long-term GPUI-owned grid renderer matures, and
+//! it avoids the previous "trim to plain text" downgrade that hid color
+//! and layout state. The Windows D3D11 path remains the model for the
+//! eventual native renderer.
 
 use std::sync::Arc;
 
-use con_ghostty::{GhosttyApp, GhosttySplitDirection, GhosttyTerminal, SurfaceSize};
+use con_ghostty::{
+    GhosttyApp, GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize, VtCell,
+    ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE,
+};
 use gpui::*;
 use gpui_component::ActiveTheme;
 
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const DEFAULT_CELL_WIDTH_RATIO: f32 = 0.62;
 const DEFAULT_CELL_HEIGHT_RATIO: f32 = 1.45;
-const MAX_RENDER_LINES: usize = 256;
 
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
@@ -39,7 +49,7 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     last_title: Option<String>,
     pending_write: Option<Vec<u8>>,
-    screen_lines: Vec<String>,
+    snapshot: Option<ScreenSnapshot>,
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
     last_surface_size: Option<(u32, u32, u16, u16)>,
@@ -64,7 +74,7 @@ impl GhosttyView {
             process_exit_emitted: false,
             last_title: None,
             pending_write: None,
-            screen_lines: Vec::new(),
+            snapshot: None,
             pane_bounds: None,
             scale_factor: 1.0,
             last_surface_size: None,
@@ -122,7 +132,7 @@ impl GhosttyView {
         self.process_exit_emitted = false;
         self.last_title = None;
         self.pending_write = None;
-        self.screen_lines.clear();
+        self.snapshot = None;
         self.last_surface_size = None;
     }
 
@@ -151,7 +161,7 @@ impl GhosttyView {
         };
 
         if terminal.take_needs_render() {
-            changed |= self.refresh_screen_cache();
+            changed |= self.refresh_snapshot();
         }
 
         let title = terminal.title();
@@ -179,9 +189,9 @@ impl GhosttyView {
 
         if let Some(terminal) = self.terminal.as_ref().cloned() {
             if terminal.take_needs_render() {
-                changed |= self.refresh_screen_cache();
+                changed |= self.refresh_snapshot();
             } else if self.initialized && terminal.is_alive() {
-                changed |= self.refresh_screen_cache();
+                changed |= self.refresh_snapshot();
             }
 
             let title = terminal.title();
@@ -224,7 +234,7 @@ impl GhosttyView {
                     terminal.write_to_pty(&pending);
                 }
                 self.last_title = terminal.title();
-                let _ = self.refresh_screen_cache();
+                let _ = self.refresh_snapshot();
                 cx.notify();
                 true
             }
@@ -235,16 +245,22 @@ impl GhosttyView {
         }
     }
 
-    fn refresh_screen_cache(&mut self) -> bool {
+    fn refresh_snapshot(&mut self) -> bool {
         let Some(terminal) = self.terminal.as_ref() else {
             return false;
         };
-        let lines = terminal.read_screen_text(MAX_RENDER_LINES);
-        if lines == self.screen_lines {
+        let Some(snapshot) = terminal.snapshot() else {
             return false;
+        };
+        match self.snapshot.as_ref() {
+            Some(prev) if prev.generation == snapshot.generation && prev.cells == snapshot.cells => {
+                false
+            }
+            _ => {
+                self.snapshot = Some(snapshot);
+                true
+            }
         }
-        self.screen_lines = lines;
-        true
     }
 
     fn sync_surface_size(&mut self, bounds: Bounds<Pixels>, scale_factor: f32) -> bool {
@@ -392,21 +408,77 @@ impl Render for GhosttyView {
         let theme = cx.theme();
         let focus = self.focus_handle.clone();
         let entity = cx.entity().downgrade();
-        let line_height = px((self.initial_font_size.max(12.0) * 1.45).round());
-        let screen_lines = self.screen_lines.clone();
+        let font_size_px = self.initial_font_size.max(12.0);
+        let line_height_px = (font_size_px * 1.45).round();
+        let mono_font = Font {
+            family: theme.mono_font_family.clone(),
+            features: FontFeatures::default(),
+            fallbacks: None,
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+        };
 
-        let status_line = if !self.initialized {
-            Some(("Launching Linux shell…", theme.foreground.opacity(0.55)))
+        let status_message = if !self.initialized {
+            Some("Launching Linux shell…")
         } else if !self.is_alive() {
-            Some(("Linux shell exited", theme.foreground.opacity(0.55)))
-        } else if screen_lines.is_empty() {
-            Some(("Waiting for shell prompt…", theme.foreground.opacity(0.45)))
+            Some("Linux shell exited")
+        } else if self
+            .snapshot
+            .as_ref()
+            .map(|s| s.cells.iter().all(|c| c.codepoint == 0))
+            .unwrap_or(true)
+        {
+            Some("Waiting for shell prompt…")
         } else {
             None
         };
 
-        let status_color = status_line.map(|(_, color)| color).unwrap_or(theme.foreground);
-        let terminal_text = render_terminal_block(status_line, &screen_lines);
+        let foreground = theme.foreground;
+        let status_color = foreground.opacity(0.5);
+
+        let mut rows: Vec<AnyElement> = Vec::new();
+        if let Some(message) = status_message {
+            rows.push(
+                div()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_size(px(font_size_px))
+                    .line_height(px(line_height_px))
+                    .text_color(status_color)
+                    .child(message.to_string())
+                    .into_any_element(),
+            );
+        }
+
+        if let Some(snapshot) = self.snapshot.as_ref() {
+            for row_idx in 0..usize::from(snapshot.rows) {
+                let row_start = row_idx * usize::from(snapshot.cols);
+                let row_end = row_start + usize::from(snapshot.cols);
+                let Some(cells) = snapshot.cells.get(row_start..row_end) else {
+                    break;
+                };
+                let row = render_terminal_row(
+                    cells,
+                    foreground,
+                    theme.background,
+                    &mono_font,
+                    px(font_size_px),
+                    px(line_height_px),
+                );
+                rows.push(row);
+            }
+        }
+
+        if rows.is_empty() {
+            rows.push(
+                div()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_size(px(font_size_px))
+                    .line_height(px(line_height_px))
+                    .text_color(status_color)
+                    .child("\u{00A0}".to_string())
+                    .into_any_element(),
+            );
+        }
 
         let terminal_content = div()
             .flex()
@@ -418,18 +490,10 @@ impl Render for GhosttyView {
             .bg(theme.background)
             .px(px(12.0))
             .py(px(10.0))
-            .text_color(theme.foreground)
+            .text_color(foreground)
             .items_start()
             .justify_start()
-            .child(
-                div()
-                    .w_full()
-                    .font_family(theme.mono_font_family.clone())
-                    .text_size(px(self.initial_font_size.max(12.0)))
-                    .line_height(line_height)
-                    .text_color(status_color)
-                    .child(terminal_text),
-            );
+            .children(rows);
 
         div()
             .flex()
@@ -482,9 +546,7 @@ impl Render for GhosttyView {
                             });
                         }
                     })
-                    .child(
-                        terminal_content,
-                    ),
+                    .child(terminal_content),
             )
     }
 }
@@ -497,33 +559,167 @@ impl Drop for GhosttyView {
     }
 }
 
-fn render_terminal_line(line: &str) -> String {
-    if line.is_empty() {
-        return "\u{00A0}".to_string();
+/// Build a single GPUI row element from a slice of `VtCell`s. We
+/// collapse runs of cells that share `(fg, bg, attrs)` into one
+/// `TextRun` so each row is a single `StyledText` element. That keeps
+/// allocations bounded by the number of *style changes*, not the cell
+/// count, while still preserving every SGR transition.
+fn render_terminal_row(
+    cells: &[VtCell],
+    default_fg: Hsla,
+    default_bg: Hsla,
+    base_font: &Font,
+    font_size: Pixels,
+    line_height: Pixels,
+) -> AnyElement {
+    let mut text = String::with_capacity(cells.len());
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut last_signature: Option<(u32, u32, u8)> = None;
+    let mut active_run_len: usize = 0;
+    let mut active_style: Option<RowStyle> = None;
+
+    fn flush_run(
+        runs: &mut Vec<TextRun>,
+        active_style: &mut Option<RowStyle>,
+        active_run_len: &mut usize,
+    ) {
+        if *active_run_len == 0 || active_style.is_none() {
+            return;
+        }
+        let style = active_style.take().expect("active style");
+        runs.push(TextRun {
+            len: *active_run_len,
+            font: style.font,
+            color: style.fg,
+            background_color: style.bg,
+            underline: style.underline,
+            strikethrough: style.strikethrough,
+        });
+        *active_run_len = 0;
     }
 
-    let mut rendered = String::with_capacity(line.len());
-    for ch in line.chars() {
-        match ch {
-            ' ' => rendered.push('\u{00A0}'),
-            '\t' => rendered.push_str("\u{00A0}\u{00A0}\u{00A0}\u{00A0}"),
-            _ => rendered.push(ch),
+    for cell in cells {
+        let signature = (cell.fg, cell.bg, cell.attrs);
+        let style = RowStyle::from_cell(cell, default_fg, default_bg, base_font);
+
+        let glyph: char = match cell.codepoint {
+            0 => ' ',
+            cp => char::from_u32(cp).unwrap_or('\u{FFFD}'),
+        };
+
+        if Some(signature) != last_signature {
+            flush_run(&mut runs, &mut active_style, &mut active_run_len);
+            active_style = Some(style);
+            last_signature = Some(signature);
+        }
+
+        text.push(glyph);
+        active_run_len += glyph.len_utf8();
+    }
+
+    flush_run(&mut runs, &mut active_style, &mut active_run_len);
+
+    let trimmed_end = text.trim_end_matches(' ').len();
+    if trimmed_end < text.len() {
+        let removed = text.len() - trimmed_end;
+        text.truncate(trimmed_end);
+        if let Some(last) = runs.last_mut() {
+            let trim = removed.min(last.len);
+            last.len -= trim;
+            if last.len == 0 {
+                runs.pop();
+            }
         }
     }
-    rendered
+
+    if text.is_empty() {
+        text.push('\u{00A0}');
+        runs.push(TextRun {
+            len: '\u{00A0}'.len_utf8(),
+            font: base_font.clone(),
+            color: default_fg,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    div()
+        .text_size(font_size)
+        .line_height(line_height)
+        .child(StyledText::new(text).with_runs(runs))
+        .into_any_element()
 }
 
-fn render_terminal_block(status_line: Option<(&str, Hsla)>, screen_lines: &[String]) -> String {
-    let mut lines = Vec::with_capacity(screen_lines.len() + usize::from(status_line.is_some()));
-    if let Some((status, _)) = status_line {
-        lines.push(render_terminal_line(status));
+/// Resolved per-cell style ready to emit as a `TextRun`.
+struct RowStyle {
+    font: Font,
+    fg: Hsla,
+    bg: Option<Hsla>,
+    underline: Option<UnderlineStyle>,
+    strikethrough: Option<StrikethroughStyle>,
+}
+
+impl RowStyle {
+    fn from_cell(cell: &VtCell, default_fg: Hsla, default_bg: Hsla, base_font: &Font) -> Self {
+        let mut font = base_font.clone();
+        if cell.attrs & ATTR_BOLD != 0 {
+            font.weight = FontWeight::BOLD;
+        }
+        if cell.attrs & ATTR_ITALIC != 0 {
+            font.style = FontStyle::Italic;
+        }
+
+        let mut fg = vt_color_to_hsla(cell.fg).unwrap_or(default_fg);
+        let mut bg = vt_color_to_hsla(cell.bg);
+
+        if cell.attrs & ATTR_INVERSE != 0 {
+            let resolved_bg = bg.unwrap_or(default_bg);
+            bg = Some(fg);
+            fg = resolved_bg;
+        }
+
+        let underline = if cell.attrs & ATTR_UNDERLINE != 0 {
+            Some(UnderlineStyle {
+                color: Some(fg),
+                thickness: px(1.0),
+                wavy: false,
+            })
+        } else {
+            None
+        };
+
+        let strikethrough = if cell.attrs & ATTR_STRIKE != 0 {
+            Some(StrikethroughStyle {
+                color: Some(fg),
+                thickness: px(1.0),
+            })
+        } else {
+            None
+        };
+
+        Self {
+            font,
+            fg,
+            bg,
+            underline,
+            strikethrough,
+        }
     }
-    lines.extend(screen_lines.iter().map(|line| render_terminal_line(line)));
-    if lines.is_empty() {
-        "\u{00A0}".to_string()
-    } else {
-        lines.join("\n")
+}
+
+/// Decode the VT cell color (0xRRGGBBAA — alpha=0 means "default"
+/// per `con-ghostty/src/vt.rs::read_cell`) into a GPUI `Hsla`.
+fn vt_color_to_hsla(packed: u32) -> Option<Hsla> {
+    let a = (packed & 0xFF) as u8;
+    if a == 0 {
+        return None;
     }
+    let r = ((packed >> 24) & 0xFF) as f32 / 255.0;
+    let g = ((packed >> 16) & 0xFF) as f32 / 255.0;
+    let b = ((packed >> 8) & 0xFF) as f32 / 255.0;
+    let a = a as f32 / 255.0;
+    Some(Rgba { r, g, b, a }.into())
 }
 
 fn xterm_modifier_param(modifiers: &Modifiers) -> Option<u8> {
@@ -581,4 +777,75 @@ fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<
         "tab" => "\t".into(),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_terminal_row, vt_color_to_hsla};
+    use con_ghostty::{VtCell, ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE};
+    use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, Rgba};
+
+    fn base_font() -> Font {
+        Font {
+            family: "monospace".into(),
+            features: FontFeatures::default(),
+            fallbacks: None,
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+        }
+    }
+
+    fn fg() -> Hsla {
+        Rgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        }
+        .into()
+    }
+
+    fn bg() -> Hsla {
+        Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        }
+        .into()
+    }
+
+    fn make_cell(ch: char, attrs: u8, fg: u32, bg: u32) -> VtCell {
+        VtCell {
+            codepoint: ch as u32,
+            fg,
+            bg,
+            attrs,
+            _pad: [0; 3],
+        }
+    }
+
+    #[test]
+    fn vt_color_zero_alpha_means_default() {
+        assert_eq!(vt_color_to_hsla(0x000000_00), None);
+        assert!(vt_color_to_hsla(0x112233_FF).is_some());
+    }
+
+    #[test]
+    fn renders_row_without_panicking() {
+        let cells = [
+            make_cell('h', 0, 0, 0),
+            make_cell('i', ATTR_BOLD | ATTR_UNDERLINE, 0xFF0000FF, 0),
+            make_cell(' ', 0, 0, 0),
+            make_cell('!', ATTR_INVERSE, 0, 0),
+        ];
+        let _element = render_terminal_row(
+            &cells,
+            fg(),
+            bg(),
+            &base_font(),
+            Pixels::from(14.0),
+            Pixels::from(20.0),
+        );
+    }
 }

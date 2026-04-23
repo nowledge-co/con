@@ -10,12 +10,14 @@ use crate::stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
+use crate::vt::ScreenSnapshot;
 
 #[derive(Debug, Clone, Default)]
 pub struct LinuxBackendConfig {
     pub shell_program: Option<String>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
+    pub colors: Option<TerminalColors>,
 }
 
 /// One per GPUI window. Holds Linux backend configuration that future
@@ -28,7 +30,7 @@ pub struct LinuxGhosttyApp {
 impl LinuxGhosttyApp {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        _colors: Option<&TerminalColors>,
+        colors: Option<&TerminalColors>,
         font_family: Option<&str>,
         font_size: Option<f32>,
         _background_opacity: Option<f32>,
@@ -45,6 +47,7 @@ impl LinuxGhosttyApp {
                 shell_program: default_linux_shell_program(),
                 font_family: font_family.map(ToOwned::to_owned),
                 font_size,
+                colors: colors.cloned(),
             }),
             wake_generation: Arc::new(AtomicU64::new(1)),
         })
@@ -56,14 +59,16 @@ impl LinuxGhosttyApp {
         self.wake_generation.load(Ordering::Acquire)
     }
 
-    pub fn update_colors(&self, _colors: &TerminalColors) -> Result<(), String> {
+    pub fn update_colors(&self, colors: &TerminalColors) -> Result<(), String> {
+        let mut config = self.config.lock();
+        config.colors = Some(colors.clone());
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn update_appearance(
         &self,
-        _colors: &TerminalColors,
+        colors: &TerminalColors,
         font_family: &str,
         font_size: f32,
         _background_opacity: f32,
@@ -78,6 +83,7 @@ impl LinuxGhosttyApp {
         let mut config = self.config.lock();
         config.font_family = Some(font_family.to_string());
         config.font_size = Some(font_size);
+        config.colors = Some(colors.clone());
         Ok(())
     }
 
@@ -97,6 +103,7 @@ impl LinuxGhosttyApp {
             cwd: cwd.map(PathBuf::from),
             program: config.shell_program,
             wake_generation: Some(self.wake_generation.clone()),
+            theme: config.colors,
             ..LinuxPtyOptions::default()
         }
     }
@@ -220,7 +227,7 @@ impl LinuxGhosttyTerminal {
     #[allow(clippy::too_many_arguments)]
     pub fn update_appearance(
         &self,
-        _colors: &TerminalColors,
+        colors: &TerminalColors,
         _font_family: &str,
         _font_size: f32,
         _background_opacity: f32,
@@ -232,7 +239,17 @@ impl LinuxGhosttyTerminal {
         _background_image_fit: Option<&str>,
         _background_image_repeat: bool,
     ) -> Result<(), String> {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.set_theme(colors);
+        }
         Ok(())
+    }
+
+    /// Returns the current libghostty-vt screen snapshot, if a PTY
+    /// session has been spawned. Used by `con-app/src/linux_view.rs`
+    /// to drive the styled-cell paint path.
+    pub fn snapshot(&self) -> Option<ScreenSnapshot> {
+        self.inner.lock().as_ref().map(LinuxPtySession::snapshot)
     }
 
     pub fn write_to_pty(&self, data: &[u8]) {

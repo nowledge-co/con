@@ -542,7 +542,7 @@ unsafe fn apply_theme_to_terminal(terminal: GhosttyTerminal, theme: &ThemeColors
 // ── Snapshot (renderer's view) ─────────────────────────────────────────
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Cell {
     pub codepoint: u32,
     /// Foreground RGBA (0xRRGGBBAA).

@@ -61,6 +61,12 @@ pub use stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
+/// Re-exports for the Linux GPUI-owned terminal renderer in
+/// `con-app/src/linux_view.rs`. These types are part of the cross-
+/// platform `vt` parser surface and are stable enough for the view
+/// to consume directly while we iterate on the Linux paint path.
+#[cfg(target_os = "linux")]
+pub use vt::{ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, Cell as VtCell, Cursor as VtCursor, ScreenSnapshot};
 
 #[cfg(all(
     not(target_os = "macos"),
