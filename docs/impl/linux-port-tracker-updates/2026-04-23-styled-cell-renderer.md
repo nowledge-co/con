@@ -74,3 +74,39 @@ What's still not complete after this PR (carry-over for phase 5/6):
 - desktop-environment validation on Wayland and X11 native sessions
   (not just llvmpipe-on-Xvfb)
 - packaging (`.deb` / AppImage / Flatpak)
+
+## Visual verification on a Linux desktop session
+
+After the initial PR push I went back and visually verified the
+build on the cloud-agent VM's actual XFCE desktop session (not just
+the headless `con-cli` round-trip). The XFCE compositor, `xfwm4`
+window manager, and real `xfdesktop` panel are running on `:1`; con
+joins as a regular client window. Two captures, taken via `xwd` →
+`convert`:
+
+`screenshots/2026-04-23-fresh-launch.png` — fresh launch, empty
+shell. The Flexoki Light terminal pane shows the live `~ $` bash
+prompt and a solid dark **block cursor** sitting after the `$`. Top
+icon row and bottom "Type a command or ask AI…" input bar render.
+
+`screenshots/2026-04-23-styled-output.png` — after pushing styled
+output via the control socket. Confirms in one frame:
+
+- `printf "...\033[31mred \033[32mgreen \033[34mblue
+  \033[1;33mbold-yellow \033[4mund\033[0m default\n"` paints "red"
+  in red, "green" in green, "blue" in blue, "bold-yellow" in bolded
+  yellow (visibly heavier weight than the surrounding text), "und"
+  in yellow with an underline beneath it, then "default" snaps back
+  to the theme foreground.
+- `ls --color=always /etc | head -6` paints `alternatives`,
+  `apparmor.d`, `apport`, `apt` in the dircolors directory blue and
+  `bash.bashrc` in the default foreground (a plain file).
+- Block cursor is parked on the next prompt line.
+
+So the styled-cell paint path is proven on a real Linux desktop
+session, not just at the snapshot-API level. The remaining honest
+caveat for native verification: GPU is `llvmpipe` (software Vulkan)
+and the desktop session is XFCE on a cloud VM. Validation on a
+hardware-accelerated Wayland or X11 session, and on multiple desktop
+environments, is still useful before the Linux build comes off
+"in progress" on the tracker.
