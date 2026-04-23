@@ -599,6 +599,7 @@ struct VtInner {
     cols: u16,
     rows: u16,
     generation: u64,
+    force_full_snapshot: bool,
     scratch: Vec<Cell>,
 }
 
@@ -778,6 +779,7 @@ impl VtScreen {
                 cols,
                 rows,
                 generation: 0,
+                force_full_snapshot: true,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
             })),
         })
@@ -788,6 +790,7 @@ impl VtScreen {
     pub fn set_theme(&self, theme: &ThemeColors) {
         let mut inner = self.inner.lock();
         unsafe { apply_theme_to_terminal(inner.terminal, theme) };
+        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
     }
 
@@ -835,6 +838,7 @@ impl VtScreen {
             state.cell_height.store(cell_height_px.max(1), Ordering::Release);
         }
         inner.scratch = Vec::with_capacity(cols as usize * rows as usize);
+        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
         Ok(())
     }
@@ -890,10 +894,25 @@ impl VtScreen {
             );
         }
 
+        let mut full_redraw = inner.force_full_snapshot;
+        let mut state_dirty = GhosttyRenderStateDirty::False;
+        // SAFETY: DIRTY out param is sized for the enum.
+        unsafe {
+            let _ = ghostty_render_state_get(
+                inner.render_state,
+                GhosttyRenderStateData::Dirty,
+                &mut state_dirty as *mut _ as *mut c_void,
+            );
+        }
+        if state_dirty == GhosttyRenderStateDirty::Full {
+            full_redraw = true;
+        }
+
         let total = cols as usize * rows as usize;
         if inner.scratch.len() != total {
             inner.scratch.clear();
             inner.scratch.resize(total, Cell::default());
+            full_redraw = true;
         }
 
         let mut dirty_rows: Vec<u16> = Vec::new();
@@ -929,7 +948,7 @@ impl VtScreen {
                 );
             }
 
-            if dirty == GhosttyRenderStateDirty::False {
+            if !full_redraw && dirty == GhosttyRenderStateDirty::False {
                 row_idx += 1;
                 continue;
             }
@@ -968,6 +987,8 @@ impl VtScreen {
 
             row_idx += 1;
         }
+
+        inner.force_full_snapshot = false;
 
         // Cursor read from the render state keys (not the terminal, to
         // stay consistent with the render snapshot).

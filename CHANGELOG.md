@@ -48,6 +48,7 @@ Changes here are after `v0.1.0-beta.35`, the latest published beta release.
 **Terminal — Windows Backend (preview)**
 - Fixed Windows settings, theme, session, history, OAuth, conversation, and global skills paths so they no longer use `con` as a filesystem segment, avoiding Win32 reserved-device-name failures such as `os error 267`.
 - Fixed Windows `con-ghostty` builds that failed in Ghostty/uucode with `uucode_build_tables.exe: FileNotFound` by defaulting Zig's global cache to a short path when `ZIG_GLOBAL_CACHE_DIR` is unset.
+- Fixed Windows fullscreen/maximize redraws in alt-screen apps such as Neovim by forcing a full VT snapshot after resize/full invalidation instead of trusting per-row dirty flags for newly exposed rows.
 
 **Interface**
 - Fixed the macOS 12 fallback layering path. Monterey keeps an opaque top-level window to prevent desktop bleed-through, but the GPUI root above the embedded Ghostty `NSView` stays transparent so the terminal surface is not painted over by the fallback background.
