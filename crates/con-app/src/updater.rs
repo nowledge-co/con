@@ -428,7 +428,16 @@ pub fn apply_update_in_place() {
 pub fn apply_update_in_place() {
     use std::process::{Command, Stdio};
 
-    const INSTALL_URL: &str = "https://con-releases.nowledge.co/install.sh";
+    const DEFAULT_INSTALL_URL: &str = "https://con-releases.nowledge.co/install.sh";
+
+    // `CON_INSTALL_URL` overrides the script source for offline /
+    // local-server verification. Same env-only opt-in as
+    // `CON_APPCAST_BASE` — release builds default to the public
+    // gh-pages-served install.sh; tests can point at their own.
+    let install_url = std::env::var("CON_INSTALL_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_INSTALL_URL.to_string());
 
     // `sh -c 'curl -fsSL <url> | sh'` mirrors the documented one-liner
     // exactly. `setsid` puts the spawned shell in its own session so
@@ -436,7 +445,7 @@ pub fn apply_update_in_place() {
     // detaches stdio so the script doesn't inherit our terminal.
     let pipeline = format!(
         "curl -fsSL {url} | sh >/dev/null 2>&1",
-        url = INSTALL_URL
+        url = install_url
     );
 
     let setsid = which_first(["setsid", "/usr/bin/setsid"]);
@@ -588,7 +597,14 @@ mod notify_impl {
             .ok_or_else(|| "appcast missing shortVersionString or enclosure".to_string())?;
 
         let running = crate::app_display_version();
-        if is_newer(&version, &running) {
+        let newer = is_newer(&version, &running);
+        log::info!(
+            "updater: appcast advertises version={version} (running {running}); is_newer={newer}",
+            version = version,
+            running = running,
+            newer = newer,
+        );
+        if newer {
             Ok(CheckState::UpdateAvailable { version, url })
         } else {
             Ok(CheckState::UpToDate)

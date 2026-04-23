@@ -60,9 +60,26 @@ impl ReleaseChannel {
     ///
     /// This is stable across releases. The CI pipeline publishes
     /// updated appcasts to the corresponding GitHub Pages path.
+    ///
+    /// `CON_APPCAST_BASE` overrides the host + path prefix at
+    /// runtime — used by release-pipeline integration tests and
+    /// the documented manual-verification flow in
+    /// `docs/impl/linux-port.md` so we can stand up a local HTTP
+    /// server, drop a generated appcast there, and watch the
+    /// notify-only updater transition through `Checking →
+    /// UpdateAvailable → Apply` without touching production. The
+    /// override is plain runtime env, not `option_env!`, so a
+    /// user can opt in without rebuilding. `host_arch()` /
+    /// `host_platform()` still pin the file suffix so the test
+    /// appcast must match the running binary's target.
     pub fn feed_url(self, platform: &str, arch: &str) -> String {
+        let base = std::env::var("CON_APPCAST_BASE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "https://con-releases.nowledge.co/appcast".to_string());
         format!(
-            "https://con-releases.nowledge.co/appcast/{channel}-{platform}-{arch}.xml",
+            "{base}/{channel}-{platform}-{arch}.xml",
+            base = base.trim_end_matches('/'),
             channel = self.name(),
             platform = platform,
             arch = arch,
