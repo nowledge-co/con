@@ -308,3 +308,55 @@ Visual confirmation: `screenshots/2026-04-23-htop.png` shows htop
 running cleanly in the styled-cell pane — colored CPU bars, the
 selected-row inverse highlight, the F-key footer, all column
 alignment, and a process list including the con binary itself.
+
+## Follow-on fix 7: alt-screen TUIs no longer flash "Waiting for shell prompt…"
+
+After the perf fix shipped, the user reported that `htop` (and by
+extension every alt-screen TUI: vim, less, nvim, fzf, man, …) still
+felt slow — the placeholder text "Waiting for shell prompt…" sat on
+top of an empty pane for ~1 s before the TUI's own UI painted.
+
+Root cause: the placeholder gate was
+
+```rust
+} else if self
+    .snapshot
+    .as_ref()
+    .map(|s| s.cells.iter().all(|c| c.codepoint == 0))
+    .unwrap_or(true)
+{
+    Some("Waiting for shell prompt…")
+}
+```
+
+— "every cell in the current snapshot is empty" → show placeholder.
+That's exactly what an alt-screen entry looks like in libghostty-vt:
+`ESC[?1049h` switches to a freshly cleared grid, htop polls
+`/proc`, builds its layout, and only then sends the first paint
+sequences. Between the alt-screen switch and the first htop paint
+the snapshot is "all zeros" → we drew "Waiting for shell prompt…"
+over a black backdrop, exactly the wrong message at exactly the
+wrong time.
+
+Fix: latch a `seen_any_output: bool` on `GhosttyView` and flip it
+the first time `refresh_snapshot()` sees any printable codepoint.
+Once latched, the placeholder branch never runs again for that PTY
+session, so alt-screen TUIs that briefly leave the grid empty stay
+silent. `shutdown_surface` resets the latch so a fresh respawn
+starts with the correct "Launching Linux shell…" → "Waiting for
+shell prompt…" → first prompt sequence.
+
+Visual proof: `screenshots/2026-04-23-htop-altscreen-blank.png` is a
+screenshot taken 100 ms after `htop\n` is sent. htop has cleared the
+screen via the alt-screen switch and hasn't drawn its UI yet — the
+pane is just the empty theme background, no placeholder text. Frame
+two of the same launch (200 ms after Enter) is the fully-painted
+htop in `screenshots/2026-04-23-htop.png`.
+
+Note on the user's "2 sec" perception: the placeholder was making
+htop's launch *feel* much slower than it actually was. With the fix
+the cloud-agent VM (llvmpipe software Vulkan, XFCE on Xvfb-style
+display) renders htop fully ~200 ms after Enter. On hardware-
+accelerated Wayland / X11 desktops users should see ~80–150 ms.
+The remaining time is htop's own startup (`/proc` scan + ncurses
+init), not anything we can shave off our paint path.

@@ -50,6 +50,13 @@ pub struct GhosttyView {
     last_title: Option<String>,
     pending_write: Option<Vec<u8>>,
     snapshot: Option<ScreenSnapshot>,
+    /// Latched after the first PTY snapshot that contained any
+    /// printable content. Used to gate the "Waiting for shell
+    /// prompt…" placeholder so it disappears the moment bash echoes
+    /// its first prompt and never comes back — even when a TUI like
+    /// htop / vim / less switches to the alternate screen and
+    /// briefly leaves the grid empty before drawing its own UI.
+    seen_any_output: bool,
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
     last_surface_size: Option<(u32, u32, u16, u16)>,
@@ -75,6 +82,7 @@ impl GhosttyView {
             last_title: None,
             pending_write: None,
             snapshot: None,
+            seen_any_output: false,
             pane_bounds: None,
             scale_factor: 1.0,
             last_surface_size: None,
@@ -133,6 +141,7 @@ impl GhosttyView {
         self.last_title = None;
         self.pending_write = None;
         self.snapshot = None;
+        self.seen_any_output = false;
         self.last_surface_size = None;
     }
 
@@ -270,6 +279,17 @@ impl GhosttyView {
             .is_some_and(|prev| prev.generation == snapshot.generation)
         {
             return false;
+        }
+        // Latch once the parser has handed us any printable cell.
+        // Used to suppress the "Waiting for shell prompt…" placeholder
+        // for the lifetime of the PTY session — important for TUIs
+        // (htop, vim, less, fzf, …) that switch to the alternate
+        // screen and leave the grid empty for ~hundreds of ms before
+        // drawing their UI. Without this latch the placeholder would
+        // briefly flash over a black backdrop on every alt-screen
+        // entry and look like a regression in shell readiness.
+        if !self.seen_any_output && snapshot.cells.iter().any(|c| c.codepoint != 0) {
+            self.seen_any_output = true;
         }
         self.snapshot = Some(snapshot);
         true
@@ -434,12 +454,12 @@ impl Render for GhosttyView {
             Some("Launching Linux shell…")
         } else if !self.is_alive() {
             Some("Linux shell exited")
-        } else if self
-            .snapshot
-            .as_ref()
-            .map(|s| s.cells.iter().all(|c| c.codepoint == 0))
-            .unwrap_or(true)
-        {
+        } else if !self.seen_any_output {
+            // Only show the "waiting for prompt" placeholder before
+            // bash has echoed *anything* for the first time. Once
+            // the latch flips, alt-screen TUIs like htop / vim that
+            // briefly clear the grid stay silent instead of
+            // flashing this placeholder over their startup gap.
             Some("Waiting for shell prompt…")
         } else {
             None
