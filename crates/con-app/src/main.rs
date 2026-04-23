@@ -351,16 +351,25 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
                 // transparent Root. If Mica isn't available (Win10,
                 // RDP, older Win11), fall back to an opaque theme fill
                 // so the window doesn't look "see-through to desktop".
+                //
+                // On macOS 12 and older we still need the window itself
+                // to be opaque, but the GPUI root above the embedded
+                // Ghostty NSView must stay transparent. Making both the
+                // window and the root opaque fixed the desktop leak but
+                // painted the fallback theme background over the terminal
+                // surface, leaving Monterey users with a blank beige pane.
                 let background = if cfg!(target_os = "windows") {
                     if mica_applied {
                         cx.theme().transparent
                     } else {
                         cx.theme().background
                     }
-                } else if supports_transparent_main_window() {
-                    cx.theme().transparent
                 } else {
-                    cx.theme().background
+                    // The window background policy decides whether the
+                    // desktop can bleed through. The root itself should
+                    // remain transparent so the embedded terminal view
+                    // below GPUI remains visible.
+                    cx.theme().transparent
                 };
                 gpui_component::Root::new(view, window, cx).bg(background)
             })

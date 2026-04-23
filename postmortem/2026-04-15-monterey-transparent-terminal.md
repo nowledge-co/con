@@ -18,8 +18,15 @@ Con now detects the runtime macOS major version and disables terminal glass on m
 - terminal blur is forced off
 - the user's configured glass values remain saved and take effect again on supported macOS versions
 
-This preserves the embedded Ghostty architecture while giving Monterey users an opaque, readable terminal.
+We later found that the first fallback pass overshot: it also made the GPUI root opaque. Because Con hosts the embedded Ghostty `NSView` *under* GPUI, that beige fallback surface painted over the terminal and produced a different failure mode: the window was no longer transparent, but the terminal area stayed blank.
+
+The corrected Monterey fallback keeps two separate rules:
+
+- the top-level macOS window is opaque, so the desktop cannot bleed through
+- the GPUI root above the embedded terminal remains transparent, so the Ghostty surface under it is still visible
+
+This preserves the embedded Ghostty architecture while giving Monterey users a solid window frame without hiding the terminal itself.
 
 ## What We Learned
 
-Native transparency around embedded Metal views must be treated as an OS-version capability, not just a user preference. When the fallback for a visual effect is an unusable terminal, compatibility gates should prefer solid rendering over preserving the effect.
+Native transparency around embedded Metal views must be treated as an OS-version capability, not just a user preference. Just as important: for embedded native views, "make the window opaque" and "make the UI root opaque" are not interchangeable fixes. The window can safely fall back to opaque while the host UI above the embedded surface still needs transparency to avoid painting over the terminal.
