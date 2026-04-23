@@ -256,6 +256,16 @@ Issue #18 should mirror the Windows tracker:
 - links to the Linux plan doc and the Windows tracker where relevant
 - phase-based progress rather than a flat brainstorm list
 
+### Status updates mirrored to issue #18
+
+The cloud agent integration only has read-only access to GitHub
+issues, so per-PR status updates are written into
+`docs/impl/linux-port-tracker-updates/` first and then copy-pasted
+onto issue #18 by a human. Each file is dated and named after the
+landed milestone. Keep this list in chronological order:
+
+- `docs/impl/linux-port-tracker-updates/2026-04-23-styled-cell-renderer.md` — phase 4 styled-cell paint over `libghostty-vt`, theme plumbing, block cursor, env-bootstrap notes for a fresh Ubuntu cloud VM. Corresponds to PR #58.
+
 ## References
 
 - Linux tracker: issue #18
