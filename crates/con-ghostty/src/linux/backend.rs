@@ -151,6 +151,15 @@ unsafe impl Send for LinuxGhosttyApp {}
 unsafe impl Sync for LinuxGhosttyApp {}
 
 fn clamp_opacity(value: f32) -> f32 {
+    // `f32::clamp` propagates NaN, which would then leak into the
+    // pane fill alpha and downstream color math (every Hsla
+    // multiplication also propagates NaN, so a malformed setting
+    // could make the entire pane go black). Settings already
+    // round-trip through serde validation in practice, but we get
+    // the safety belt for free.
+    if !value.is_finite() {
+        return 1.0;
+    }
     value.clamp(0.0, 1.0)
 }
 

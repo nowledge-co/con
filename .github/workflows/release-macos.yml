@@ -134,8 +134,18 @@ jobs:
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
 
+          # `gh release create` defaults to a stable release. v*-beta.*
+          # and v*-dev.* tags must be marked --prerelease, otherwise
+          # GitHub's `/releases/latest` API includes them and the
+          # macOS install.sh / Sparkle / Homebrew tap downstream paths
+          # treat them as the next stable release.
+          prerelease_args=()
+          case "$tag" in
+            *-beta.*|*-dev.*) prerelease_args+=(--prerelease) ;;
+          esac
+
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes
+            gh release create "$tag" --title "$tag" --generate-notes "${prerelease_args[@]}"
           fi
 
           # Upload files one at a time to avoid GitHub API race conditions.

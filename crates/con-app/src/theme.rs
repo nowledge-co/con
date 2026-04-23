@@ -274,10 +274,31 @@ fn apply_font_overrides(
 pub fn canonical_terminal_font_family(name: &str) -> String {
     #[cfg(target_os = "linux")]
     {
-        return match name.trim() {
-            "Ioskeley Mono" | "IoskeleyMono" | "Ioskeley-Mono" => "IoskeleyMono".to_string(),
-            other => other.to_string(),
-        };
+        // Normalize aggressively: trim, lowercase, strip whitespace
+        // and hyphens. That way `"Ioskeley Mono"`, `"IoskeleyMono"`,
+        // `"Ioskeley-Mono"`, `"ioskeley mono"`, `" IOSKELEY  MONO "`,
+        // and any other casing / spacing the user might paste into
+        // the config or settings UI all resolve to the registered
+        // TTF family `"IoskeleyMono"`. CosmicText's exact-match
+        // lookup would otherwise miss them and fall back to a
+        // proportional system sans.
+        let key: String = name
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '-')
+            .flat_map(|c| c.to_lowercase())
+            .collect();
+        if key == "ioskeleymono" {
+            return "IoskeleyMono".to_string();
+        }
+        // Preserve the trim-on-fall-through that the original
+        // helper had before we added the case-insensitive
+        // canonicalization above. A user with accidental
+        // whitespace padding around their custom font name
+        // (common when copy-pasting from a font catalog into the
+        // settings panel or the TOML config) would otherwise hit
+        // CosmicText's exact-match lookup with the padded string
+        // and silently fall back to the system sans.
+        return name.trim().to_string();
     }
 
     #[cfg(not(target_os = "linux"))]

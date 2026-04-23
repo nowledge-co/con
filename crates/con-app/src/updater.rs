@@ -74,7 +74,7 @@ pub fn latest_check() -> CheckState {
     latest_slot().lock().map(|g| g.clone()).unwrap_or(CheckState::Idle)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn set_latest(state: CheckState) {
     if let Ok(mut g) = latest_slot().lock() {
         *g = state;
@@ -119,10 +119,13 @@ impl UpdaterStatus {
     pub fn detail(self) -> &'static str {
         match self {
             Self::Active => {
-                if cfg!(target_os = "windows") {
-                    "Periodic checks against the release feed; download installed manually."
-                } else {
+                if cfg!(target_os = "macos") {
                     "Sparkle is loaded and polling this release channel."
+                } else {
+                    // Windows + Linux: notify-only checker that polls
+                    // the same Sparkle-shaped appcast XML and re-runs
+                    // install.ps1 / install.sh on apply.
+                    "Periodic checks against the release feed; the in-app installer applies the update."
                 }
             }
             Self::Disabled(UpdaterDisabledReason::ChannelDoesNotPoll) => {
@@ -289,7 +292,7 @@ fn init_inner() -> bool {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn init_inner() -> bool {
     let channel = con_core::release_channel::current();
     if !channel.polls_for_updates() {
@@ -304,7 +307,7 @@ fn init_inner() -> bool {
     }
 
     let _ = STATUS.set(UpdaterStatus::Active);
-    windows_impl::spawn_check(channel);
+    notify_impl::spawn_check(channel);
     log::info!(
         "updater: notify-only check started — channel={}",
         channel.name()
@@ -312,7 +315,11 @@ fn init_inner() -> bool {
     true
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_os = "linux")
+))]
 fn init_inner() -> bool {
     let _ = STATUS.set(UpdaterStatus::Disabled(
         UpdaterDisabledReason::ChannelDoesNotPoll,
@@ -336,7 +343,7 @@ pub fn check_for_updates() {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub fn check_for_updates() {
     let channel = con_core::release_channel::current();
     if !channel.polls_for_updates() {
@@ -346,10 +353,14 @@ pub fn check_for_updates() {
         );
         return;
     }
-    windows_impl::spawn_check(channel);
+    notify_impl::spawn_check(channel);
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(target_os = "linux")
+))]
 pub fn check_for_updates() {}
 
 /// Re-run `install.ps1` in a new console and exit this process so the
@@ -396,7 +407,184 @@ pub fn apply_update_in_place() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Re-run `install.sh` in a detached background process and exit
+/// cleanly so the script can replace `~/.local/bin/con` and any
+/// other staged files. Linux only.
+///
+/// `install.sh` does the full lifecycle: download, sha-check,
+/// extract, drop the .desktop entry, and atomically move the new
+/// binary into place. Move-then-overwrite means the running con
+/// inode survives — the kernel keeps the old text in memory until
+/// this process exits — so re-running con after the installer
+/// finishes picks up the new build. We `setsid -f` to detach so
+/// killing con does not kill the installer.
+///
+/// Unlike Windows, we do **not** open a new terminal here. Linux
+/// has no portable "spawn a visible console" API equivalent to
+/// `CREATE_NEW_CONSOLE`; the user already has a Settings → Updates
+/// card showing the same install command they can paste into any
+/// shell if they want to watch progress.
+#[cfg(target_os = "linux")]
+pub fn apply_update_in_place() {
+    use std::process::{Command, Stdio};
+
+    const DEFAULT_INSTALL_URL: &str = "https://con-releases.nowledge.co/install.sh";
+
+    // `CON_INSTALL_URL` overrides the script source for offline /
+    // local-server verification. Same env-only opt-in as
+    // `CON_APPCAST_BASE` — release builds default to the public
+    // gh-pages-served install.sh; tests can point at their own.
+    let install_url = std::env::var("CON_INSTALL_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_INSTALL_URL.to_string());
+
+    // Pull the version the appcast advertised — this is what the
+    // user just clicked "Update now" on. install.sh's default path
+    // queries GitHub's `/releases/latest`, which silently skips
+    // prereleases — so a beta-channel user clicking through to the
+    // installer would otherwise risk getting a stable downgrade
+    // instead of the beta the appcast actually pointed at. Pin the
+    // installer to the exact version the channel resolved to.
+    let target_version = match latest_slot().lock() {
+        Ok(g) => match &*g {
+            CheckState::UpdateAvailable { version, .. } => Some(version.clone()),
+            _ => None,
+        },
+        Err(_) => None,
+    };
+
+    // Download the script to a tempfile FIRST, then run it. The
+    // obvious-looking `curl ... | sh` pipeline has two problems we
+    // need to dodge:
+    //
+    //   1. POSIX `sh` returns the rightmost command's status, so a
+    //      `curl` failure (404, network error, DNS) silently
+    //      becomes a successful pipeline exit (`sh` reads empty
+    //      input and returns 0). The user clicks "Update now",
+    //      `con` exits as if the install kicked off, and they're
+    //      stranded on the old version with no error surfaced.
+    //   2. `pipefail` would solve (1) but isn't in POSIX —
+    //      depending on it would break on minimal busybox-style
+    //      shells.
+    //
+    // `mktemp && curl -o tmp && sh tmp` short-circuits cleanly via
+    // `&&`: any failure aborts before the next command runs.
+    //
+    // `export CON_INSTALL_VERSION=...` (rather than the
+    // `VAR=value <cmd>` env-prefix form) lifts the var onto the
+    // outer shell so both `curl` and `sh tmp` inherit it.
+    //
+    // `setsid -f` puts the spawned shell in its own session so
+    // it survives `con`'s exit; the trailing `>/dev/null 2>&1
+    // </dev/null` on the spawn detaches stdio so the script
+    // doesn't inherit our terminal.
+    //
+    // Both `install_url` and `version` go through `shell_quote()`
+    // so user-supplied env (`CON_INSTALL_URL`) and appcast-supplied
+    // version strings can't break out of the single-quoted argument
+    // even if they contain `&`, `;`, `$`, etc.
+    let url_arg = shell_quote(install_url.trim());
+    let pipeline = match target_version.as_deref() {
+        Some(version) => format!(
+            "export CON_INSTALL_VERSION={version}; \
+             tmp=$(mktemp) && curl -fsSL {url} -o \"$tmp\" && sh \"$tmp\"; \
+             rc=$?; rm -f \"$tmp\"; exit $rc",
+            // Strip any leading 'v' the appcast might carry;
+            // install.sh re-adds the prefix when it builds the
+            // `/releases/tags/v<version>` URL so a value of either
+            // shape works.
+            version = shell_quote(version.trim_start_matches('v')),
+            url = url_arg,
+        ),
+        None => format!(
+            "tmp=$(mktemp) && curl -fsSL {url} -o \"$tmp\" && sh \"$tmp\"; \
+             rc=$?; rm -f \"$tmp\"; exit $rc",
+            url = url_arg,
+        ),
+    };
+
+    let setsid = which_first(["setsid", "/usr/bin/setsid"]);
+
+    let spawn = if let Some(setsid) = setsid {
+        Command::new(setsid)
+            .arg("-f")
+            .arg("sh")
+            .arg("-c")
+            .arg(&pipeline)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    } else {
+        // setsid is part of util-linux and present on every modern
+        // distro, but be defensive: fall back to a plain `sh -c`
+        // and let the OS clean it up.
+        Command::new("sh")
+            .arg("-c")
+            .arg(&pipeline)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    };
+
+    match spawn {
+        Ok(_) => {
+            // Same 400ms grace as Windows: let the installer get its
+            // first network call out before our pending writes
+            // (config, sessions) flush and we drop the exe inode.
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            std::process::exit(0);
+        }
+        Err(e) => {
+            log::error!("updater: failed to spawn install.sh: {e}");
+            set_latest(CheckState::Error(format!(
+                "could not launch installer: {e}"
+            )));
+        }
+    }
+}
+
+/// Single-quote a value safely for inclusion in a `sh -c` script.
+/// Versions are tag-derived (SemVer ASCII), but the quoting is cheap
+/// and prevents accidental injection if the appcast ever serves a
+/// version string with shell metacharacters.
+#[cfg(target_os = "linux")]
+fn shell_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
+#[cfg(target_os = "linux")]
+fn which_first<I, S>(candidates: I) -> Option<std::path::PathBuf>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    use std::path::PathBuf;
+    for cand in candidates {
+        let p = PathBuf::from(cand.as_ref());
+        if p.is_absolute() {
+            if p.is_file() {
+                return Some(p);
+            }
+            continue;
+        }
+        // Plain name — search PATH.
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in path_var.split(':') {
+                let probe = std::path::Path::new(dir).join(&p);
+                if probe.is_file() {
+                    return Some(probe);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 #[allow(dead_code)]
 pub fn apply_update_in_place() {}
 
@@ -412,13 +600,22 @@ pub fn status() -> UpdaterStatus {
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // Windows + Linux notify-only path. `init_inner` flips
+            // STATUS to Active when the channel polls; on Dev / no
+            // network this stays Disabled.
             UpdaterStatus::Disabled(UpdaterDisabledReason::ChannelDoesNotPoll)
         }
     })
 }
 
-#[cfg(target_os = "windows")]
-mod windows_impl {
+/// Cross-platform notify-only updater shared by the Windows and
+/// Linux backends. Polls the Sparkle-shaped appcast XML at
+/// `https://con-releases.nowledge.co/appcast/{channel}-{platform}-{arch}.xml`,
+/// compares the published version against the running binary, and
+/// flips the shared `LATEST` slot. macOS uses Sparkle directly and
+/// doesn't need this path.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod notify_impl {
     use super::{CheckState, set_latest};
     use con_core::release_channel::{self, ReleaseChannel};
 
@@ -439,7 +636,7 @@ mod windows_impl {
             match result {
                 Ok(state) => set_latest(state),
                 Err(e) => {
-                    log::warn!("updater: windows check failed: {e}");
+                    log::warn!("updater: notify-only check failed: {e}");
                     set_latest(CheckState::Error(e));
                 }
             }
@@ -466,7 +663,14 @@ mod windows_impl {
             .ok_or_else(|| "appcast missing shortVersionString or enclosure".to_string())?;
 
         let running = crate::app_display_version();
-        if is_newer(&version, &running) {
+        let newer = is_newer(&version, &running);
+        log::info!(
+            "updater: appcast advertises version={version} (running {running}); is_newer={newer}",
+            version = version,
+            running = running,
+            newer = newer,
+        );
+        if newer {
             Ok(CheckState::UpdateAvailable { version, url })
         } else {
             Ok(CheckState::UpToDate)

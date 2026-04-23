@@ -101,6 +101,22 @@ For signed macOS release artifacts, use:
 ./scripts/macos/release.sh
 ```
 
+For a Linux release tarball (un-signed; mirrors the Windows
+preview's distribution shape), use:
+
+```bash
+CON_RELEASE_VERSION=0.1.0-beta.X CON_RELEASE_CHANNEL=beta \
+  ./scripts/linux/release.sh
+```
+
+Output lands in `dist/con-<version>-linux-<arch>.tar.gz` with a
+SHA256 sum next to it. The CI workflow at
+`.github/workflows/release-linux.yml` runs the same script on every
+`v*` tag, attaches the tarball to the shared GitHub release, and
+updates the Sparkle-shaped appcast at
+`https://con-releases.nowledge.co/appcast/<channel>-linux-x86_64.xml`
+that the in-app notify-only updater polls.
+
 ## Useful Paths
 
 - `crates/con-app/src` — app shell and GPUI surfaces (the crate directory is `con-app` because `con` is a reserved DOS device name on Windows; the Cargo package and binary are still named `con` on macOS, so `cargo run -p con` works as before — see `docs/impl/windows-port.md`)

@@ -60,9 +60,36 @@ impl ReleaseChannel {
     ///
     /// This is stable across releases. The CI pipeline publishes
     /// updated appcasts to the corresponding GitHub Pages path.
+    ///
+    /// `CON_APPCAST_BASE` overrides the host + path prefix at
+    /// runtime — used by release-pipeline integration tests and
+    /// the documented manual-verification flow in
+    /// `docs/impl/linux-port.md` so we can stand up a local HTTP
+    /// server, drop a generated appcast there, and watch the
+    /// notify-only updater transition through `Checking →
+    /// UpdateAvailable → Apply` without touching production. The
+    /// override is plain runtime env, not `option_env!`, so a
+    /// user can opt in without rebuilding. `host_arch()` /
+    /// `host_platform()` still pin the file suffix so the test
+    /// appcast must match the running binary's target.
     pub fn feed_url(self, platform: &str, arch: &str) -> String {
+        // Trim leading/trailing whitespace AND drop a trailing `/`
+        // before validating non-emptiness. A user pasting
+        // `CON_APPCAST_BASE=" http://localhost:8765/appcast/ "`
+        // into a shell's env should resolve to the same URL as if
+        // they pasted `http://localhost:8765/appcast`. The
+        // `filter` runs after normalization so a value that's
+        // *only* whitespace correctly falls through to the
+        // production default instead of producing a malformed
+        // `/{channel}-{platform}-{arch}.xml` URL.
+        let base = std::env::var("CON_APPCAST_BASE")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "https://con-releases.nowledge.co/appcast".to_string());
         format!(
-            "https://con-releases.nowledge.co/appcast/{channel}-{platform}-{arch}.xml",
+            "{base}/{channel}-{platform}-{arch}.xml",
+            base = base,
             channel = self.name(),
             platform = platform,
             arch = arch,
