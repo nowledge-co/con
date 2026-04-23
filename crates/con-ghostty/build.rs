@@ -34,6 +34,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_STEP");
     println!("cargo:rerun-if-env-changed=CON_ZIG_BIN");
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_OPTIMIZE");
+    println!("cargo:rerun-if-env-changed=ZIG_GLOBAL_CACHE_DIR");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
@@ -169,7 +170,14 @@ fn build_vt_backend(target_os: &str) {
     // etc.) and the PATH we searched so the user can diagnose — previous
     // silent warnings led to confusing link-time failures.
     let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
-    let zig_probe = Command::new(&zig_bin).arg("version").output();
+    let zig_global_cache_dir = zig_global_cache_dir(target_os);
+    if let Some(dir) = &zig_global_cache_dir {
+        println!("cargo:warning=using zig global cache dir {}", dir.display());
+    }
+
+    let mut zig_probe_cmd = Command::new(&zig_bin);
+    configure_zig_command(&mut zig_probe_cmd, zig_global_cache_dir.as_deref());
+    let zig_probe = zig_probe_cmd.arg("version").output();
     match zig_probe {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -223,7 +231,7 @@ fn build_vt_backend(target_os: &str) {
     // We probe `zig build -h` to pick the right invocation. Override
     // the probe via `CON_GHOSTTY_VT_STEP` (step name) or
     // `CON_GHOSTTY_VT_EMIT_OPTION=1` (force the option-based path).
-    let invocation = pick_vt_invocation(&zig_bin, &ghostty_dir);
+    let invocation = pick_vt_invocation(&zig_bin, &ghostty_dir, zig_global_cache_dir.as_deref());
 
     // `-Doptimize=ReleaseFast` for terminal-class throughput. Default
     // matches macOS so debug Rust builds still get a release-grade VT
@@ -253,6 +261,7 @@ fn build_vt_backend(target_os: &str) {
 
     let mut cmd = Command::new(&zig_bin);
     cmd.current_dir(&ghostty_dir);
+    configure_zig_command(&mut cmd, zig_global_cache_dir.as_deref());
     cmd.arg("build");
     for arg in &invocation {
         cmd.arg(arg);
@@ -347,17 +356,21 @@ fn build_vt_backend(target_os: &str) {
 ///   1. `CON_GHOSTTY_VT_STEP` env var -> single named step.
 ///   2. `-Demit-lib-vt=` option in help -> `["-Demit-lib-vt=true"]`.
 ///   3. Named step matching one of the known candidates.
-fn pick_vt_invocation(zig_bin: &std::ffi::OsStr, ghostty_dir: &PathBuf) -> Vec<String> {
+fn pick_vt_invocation(
+    zig_bin: &std::ffi::OsStr,
+    ghostty_dir: &PathBuf,
+    zig_global_cache_dir: Option<&std::path::Path>,
+) -> Vec<String> {
     if let Some(val) = env::var_os("CON_GHOSTTY_VT_STEP") {
         if let Some(s) = val.to_str() {
             return vec![s.to_string()];
         }
     }
 
-    let output = Command::new(zig_bin)
-        .args(["build", "-h"])
-        .current_dir(ghostty_dir)
-        .output();
+    let mut cmd = Command::new(zig_bin);
+    cmd.args(["build", "-h"]).current_dir(ghostty_dir);
+    configure_zig_command(&mut cmd, zig_global_cache_dir);
+    let output = cmd.output();
 
     let help_text = match output {
         Ok(out) => {
@@ -543,5 +556,30 @@ fn run(command: &mut Command, context: &str) {
         .unwrap_or_else(|err| panic!("{context}: {err}"));
     if !status.success() {
         panic!("{context}");
+    }
+}
+
+fn zig_global_cache_dir(target_os: &str) -> Option<PathBuf> {
+    if let Some(dir) = env::var_os("ZIG_GLOBAL_CACHE_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+
+    if target_os != "windows" {
+        return None;
+    }
+
+    let candidates = [PathBuf::from(r"C:\zc"), env::temp_dir().join("zc")];
+    for candidate in candidates {
+        if fs::create_dir_all(&candidate).is_ok() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn configure_zig_command(command: &mut Command, zig_global_cache_dir: Option<&std::path::Path>) {
+    if let Some(dir) = zig_global_cache_dir {
+        command.env("ZIG_GLOBAL_CACHE_DIR", dir);
     }
 }
