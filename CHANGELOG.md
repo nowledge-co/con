@@ -6,7 +6,9 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## [Unreleased]
 
-Changes here are after `v0.1.0-beta.33`, the latest published beta release.
+Changes here are after `v0.1.0-beta.34`, the latest published beta release.
+
+## [v0.1.0-beta.34] - 2026-04-23
 
 ### Added
 
