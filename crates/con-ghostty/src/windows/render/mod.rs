@@ -372,6 +372,7 @@ impl Renderer {
         // new one. That slot is the one whose GPU CopyResource has had
         // the longest coast time — i.e., the only one we should try to
         // drain non-blocking.
+        let in_flight_before_submit = ring.in_flight_count();
         let drain_target = ring.oldest_in_flight();
 
         let drained: Option<Vec<u8>> = if let Some(idx) = drain_target {
@@ -381,7 +382,7 @@ impl Renderer {
         };
         let backlog = drain_target.is_some() && drained.is_none();
 
-        let mut submitted_idx: Option<usize> = None;
+        let mut submitted: Option<SubmittedCopy> = None;
         if needs_draw {
             let vp = D3D11_VIEWPORT {
                 TopLeftX: 0.0,
@@ -419,13 +420,15 @@ impl Renderer {
             // command joins the same context queue as the draws above,
             // so by the next prepaint the GPU will have run them all
             // and the staging texture will be ready to Map().
-            submitted_idx = Some(ring.submit_copy_mailbox(&self.context, &self.rt_texture));
+            submitted = Some(ring.submit_copy_mailbox(&self.context, &self.rt_texture));
         }
 
         if prefer_latest
             && needs_draw
-            && !backlog
-            && let Some(idx) = submitted_idx
+            && can_block_for_latest(in_flight_before_submit, backlog, submitted)
+            && let Some(submitted) = submitted
+            && !submitted.replaced_in_flight
+            && let idx = submitted.idx
             && let Some(bytes) = ring.block_drain(&self.context, idx)?
         {
             return Ok(RenderOutcome::Rendered(FrameBgra {
@@ -731,6 +734,24 @@ fn color_channel_byte(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+fn can_block_for_latest(
+    in_flight_before_submit: usize,
+    backlog: bool,
+    submitted: Option<SubmittedCopy>,
+) -> bool {
+    if !backlog {
+        return true;
+    }
+
+    // One older slot still being copied after a resize is common and
+    // acceptable: if the fresh interactive frame lands in the other,
+    // clean slot we can still wait for it without inheriting the full
+    // backlog tail. Once both slots are already busy, or we had to
+    // reuse an in-flight slot, keep the UI thread non-blocking.
+    in_flight_before_submit <= 1
+        && submitted.is_some_and(|copy| !copy.replaced_in_flight)
+}
+
 /// One slot in the readback ring.
 struct StagingSlot {
     texture: ID3D11Texture2D,
@@ -743,6 +764,12 @@ struct StagingSlot {
     /// can't disambiguate "oldest" from "newest" once both are in
     /// flight.)
     seq: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SubmittedCopy {
+    idx: usize,
+    replaced_in_flight: bool,
 }
 
 /// Two-slot staging ring. See `Renderer::render` for the state machine.
@@ -804,8 +831,9 @@ impl StagingRing {
         &mut self,
         ctx: &ID3D11DeviceContext,
         source: &ID3D11Texture2D,
-    ) -> usize {
-        let idx = if self.slots[self.next_idx].in_flight {
+    ) -> SubmittedCopy {
+        let replaced_in_flight = self.slots[self.next_idx].in_flight;
+        let idx = if replaced_in_flight {
             self.oldest_in_flight().unwrap_or(self.next_idx)
         } else {
             self.next_idx
@@ -817,8 +845,15 @@ impl StagingRing {
         slot.in_flight = true;
         slot.seq = self.next_seq;
         self.next_seq = self.next_seq.wrapping_add(1);
-        self.next_idx = (self.next_idx + 1) % self.slots.len();
-        idx
+        self.next_idx = (idx + 1) % self.slots.len();
+        SubmittedCopy {
+            idx,
+            replaced_in_flight,
+        }
+    }
+
+    fn in_flight_count(&self) -> usize {
+        self.slots.iter().filter(|slot| slot.in_flight).count()
     }
 
     /// Slot with the lowest `seq` among in-flight slots, or `None` when

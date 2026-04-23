@@ -989,6 +989,9 @@ impl VtScreen {
         }
 
         if full_redraw && row_idx < rows {
+            log::warn!(
+                "vt snapshot full redraw ended early: iter_rows={row_idx} expected_rows={rows} cols={cols}"
+            );
             for trailing_row in row_idx..rows {
                 let row_start = trailing_row as usize * cols as usize;
                 let row_end = row_start + cols as usize;
