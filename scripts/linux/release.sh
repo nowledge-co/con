@@ -152,4 +152,13 @@ fi
 
 echo
 echo "==> done"
-ls -la "${tarball}" ${sha_file:+"$sha_file"}
+# `sha_file` is always non-empty (it's a default-derived path), so the
+# previous `${sha_file:+"$sha_file"}` always expanded — `ls` then
+# failed loudly when checksum generation was skipped because neither
+# sha256sum nor shasum was on PATH. Test for the file's existence
+# instead so the listing matches what was actually produced.
+if [[ -f "$sha_file" ]]; then
+  ls -la "${tarball}" "${sha_file}"
+else
+  ls -la "${tarball}"
+fi

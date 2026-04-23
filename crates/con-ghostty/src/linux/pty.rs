@@ -355,6 +355,12 @@ impl LinuxPtySession {
 
     pub fn set_dark_mode(&self, dark: bool) {
         self.shared.screen.set_dark_mode(dark);
+        // Same shape as `set_theme` / `resize`: a parser-state mutation
+        // that doesn't go through a PTY-output path. Without
+        // `mark_needs_render` the next pump tick won't re-fetch a
+        // snapshot and Linux panes can keep painting the previous
+        // mode-derived colors until new shell output arrives.
+        self.mark_needs_render();
     }
 
     fn poll_child_status(&self) {

@@ -149,7 +149,11 @@ jobs:
     # in-app verification is a follow-up that mirrors the Windows
     # hardening work tracked alongside it.
     runs-on: macos-15
-    needs: build
+    # `needs: [build, publish]` so the appcast is never updated until
+    # the GitHub release asset it points at is actually attached. If
+    # `publish` fails, the appcast doesn't move and old beta clients
+    # don't chase a 404 on the enclosure URL.
+    needs: [build, publish]
 
     steps:
       - uses: actions/checkout@v5
@@ -161,13 +165,17 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           channel="stable"
+          # Channel mapping must match the build job above. A v*-dev.*
+          # tag previously fell through to "stable" here and would have
+          # written the dev build's metadata into stable-linux-x86_64.xml,
+          # notifying stable-channel users about a dev prerelease.
           if [[ "$version" == *"-beta."* ]]; then
             channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
           fi
-          marketing="${version%%[-+]*}"
-          echo "version=$version"     >>"$GITHUB_OUTPUT"
-          echo "channel=$channel"     >>"$GITHUB_OUTPUT"
-          echo "marketing=$marketing" >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "channel=$channel" >>"$GITHUB_OUTPUT"
 
       - name: Check Sparkle signing key
         id: sparkle
@@ -206,6 +214,13 @@ jobs:
             cd gh-pages
             git init
             git checkout -b gh-pages
+            # Identity must be configured before the bootstrap
+            # commit, otherwise `git commit` fails on a fresh runner
+            # without a global config and the very first Linux
+            # appcast publish breaks. Match the identity the publish
+            # step further down uses.
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git remote add origin \
               "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
             echo "con-releases.nowledge.co" > CNAME
@@ -227,7 +242,6 @@ jobs:
           tag="$GITHUB_REF_NAME"
           version="${{ steps.meta.outputs.version }}"
           channel="${{ steps.meta.outputs.channel }}"
-          marketing="${{ steps.meta.outputs.marketing }}"
           build_number="${{ github.run_number }}"
 
           mkdir -p gh-pages/appcast

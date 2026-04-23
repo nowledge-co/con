@@ -439,14 +439,46 @@ pub fn apply_update_in_place() {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_INSTALL_URL.to_string());
 
-    // `sh -c 'curl -fsSL <url> | sh'` mirrors the documented one-liner
-    // exactly. `setsid` puts the spawned shell in its own session so
-    // it survives `con`'s exit; the trailing `>/dev/null 2>&1 </dev/null`
-    // detaches stdio so the script doesn't inherit our terminal.
-    let pipeline = format!(
-        "curl -fsSL {url} | sh >/dev/null 2>&1",
-        url = install_url
-    );
+    // Pull the version the appcast advertised — this is what the
+    // user just clicked "Update now" on. install.sh's default path
+    // queries GitHub's `/releases/latest`, which silently skips
+    // prereleases — so a beta-channel user clicking through to the
+    // installer would otherwise risk getting a stable downgrade
+    // instead of the beta the appcast actually pointed at. Pin the
+    // installer to the exact version the channel resolved to.
+    let target_version = match latest_slot().lock() {
+        Ok(g) => match &*g {
+            CheckState::UpdateAvailable { version, .. } => Some(version.clone()),
+            _ => None,
+        },
+        Err(_) => None,
+    };
+
+    // `sh -c 'export VAR=<v>; curl -fsSL <url> | sh'` is the
+    // pattern that gets the version into both halves of the pipe.
+    // `VAR=value <command>` only sets `VAR` for `<command>`'s
+    // process, so writing `CON_INSTALL_VERSION=... curl ... | sh`
+    // would scope the var to `curl` and the right-hand `sh`
+    // wouldn't see it. `export` lifts it onto the outer shell
+    // before the pipe is built, so both children inherit it.
+    // `setsid` puts the spawned shell in its own session so it
+    // survives `con`'s exit; the trailing `>/dev/null 2>&1
+    // </dev/null` detaches stdio so the script doesn't inherit
+    // our terminal.
+    let pipeline = match target_version.as_deref() {
+        Some(version) => format!(
+            "export CON_INSTALL_VERSION={version}; curl -fsSL {url} | sh >/dev/null 2>&1",
+            // Strip any leading 'v' the appcast might carry;
+            // install.sh re-adds the prefix when it builds the
+            // `/releases/tags/v<version>` URL so a value of either
+            // shape works. shell_quote single-quotes the version
+            // string for safety even though tag-derived SemVer is
+            // ASCII-safe.
+            version = shell_quote(version.trim_start_matches('v')),
+            url = install_url,
+        ),
+        None => format!("curl -fsSL {url} | sh >/dev/null 2>&1", url = install_url),
+    };
 
     let setsid = which_first(["setsid", "/usr/bin/setsid"]);
 
@@ -488,6 +520,16 @@ pub fn apply_update_in_place() {
             )));
         }
     }
+}
+
+/// Single-quote a value safely for inclusion in a `sh -c` script.
+/// Versions are tag-derived (SemVer ASCII), but the quoting is cheap
+/// and prevents accidental injection if the appcast ever serves a
+/// version string with shell metacharacters.
+#[cfg(target_os = "linux")]
+fn shell_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
 }
 
 #[cfg(target_os = "linux")]

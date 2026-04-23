@@ -73,12 +73,30 @@ case "$arch" in
 esac
 
 # ── Resolve ─────────────────────────────────────────────────────────────────
+#
+# `CON_INSTALL_VERSION` lets the in-app `apply_update_in_place` path
+# pin the installer to the exact version the appcast advertised.
+# Without that pin, GitHub's `/releases/latest` silently skips
+# prereleases — a beta-channel user clicking through to "Update
+# now" would otherwise risk getting a stable downgrade. Treat
+# `0.1.0-beta.32`, `v0.1.0-beta.32`, and a stray-whitespace mix of
+# either as equivalent.
 
-release_json="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null)" \
+install_version="${CON_INSTALL_VERSION:-}"
+install_version="$(printf '%s' "$install_version" | tr -d '[:space:]')"
+install_version="${install_version#v}"
+
+if [ -n "$install_version" ]; then
+  release_api="https://api.github.com/repos/${REPO}/releases/tags/v${install_version}"
+else
+  release_api="https://api.github.com/repos/${REPO}/releases/latest"
+fi
+
+release_json="$(curl -fsSL "$release_api" 2>/dev/null)" \
   || fail "could not reach GitHub"
 
 tag="$(printf '%s' "$release_json" | grep '"tag_name"' | head -1 | sed 's/.*: *"//;s/".*//')"
-[ -n "$tag" ] || fail "could not determine latest release"
+[ -n "$tag" ] || fail "could not determine release${install_version:+ for v${install_version}}"
 version="${tag#v}"
 
 channel=""

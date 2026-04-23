@@ -290,7 +290,15 @@ pub fn canonical_terminal_font_family(name: &str) -> String {
         if key == "ioskeleymono" {
             return "IoskeleyMono".to_string();
         }
-        return name.to_string();
+        // Preserve the trim-on-fall-through that the original
+        // helper had before we added the case-insensitive
+        // canonicalization above. A user with accidental
+        // whitespace padding around their custom font name
+        // (common when copy-pasting from a font catalog into the
+        // settings panel or the TOML config) would otherwise hit
+        // CosmicText's exact-match lookup with the padded string
+        // and silently fall back to the system sans.
+        return name.trim().to_string();
     }
 
     #[cfg(not(target_os = "linux"))]
