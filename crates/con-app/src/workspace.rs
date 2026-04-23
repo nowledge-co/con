@@ -86,7 +86,9 @@ fn caption_buttons(
     theme: &gpui_component::theme::ThemeColor,
     height: f32,
 ) -> impl IntoElement {
-    use gpui::{div, px, svg, Hsla, MouseButton, ParentElement, Rgba, Styled, WindowControlArea};
+    use gpui::{div, px, svg, Hsla, ParentElement, Rgba, Styled, WindowControlArea};
+    #[cfg(target_os = "linux")]
+    use gpui::MouseButton;
 
     let close_red: Hsla = Rgba {
         r: 232.0 / 255.0,
@@ -110,7 +112,7 @@ fn caption_buttons(
         // a `group(id)` so the svg's `.group_hover(id, ...)` fires when
         // the 36px hit-target is hovered, not just the 10px icon ink.
         let hover_fg = if close { gpui::white() } else { fg };
-        let mut el = div()
+        let el = div()
             .id(id)
             .group(id)
             .flex()
@@ -136,23 +138,19 @@ fn caption_buttons(
             );
 
         // Linux: GPUI's X11 hit-test doesn't fire `WindowControlArea`
-        // dispatchers, so wire each button to its Window action by
+        // dispatchers, so wire each button to its `Window` action by
         // hand. `on_mouse_down` matches macOS / Windows feel: the
         // action fires on the click-down edge rather than after the
-        // up edge, which keeps the cluster snappy.
+        // up edge, which keeps the cluster snappy. Windows already
+        // dispatches via the WindowControlArea hit-test set above —
+        // no extra handler needed there.
         #[cfg(target_os = "linux")]
-        {
-            el = el.on_mouse_down(MouseButton::Left, move |_, window, _cx| match area {
-                WindowControlArea::Min => window.minimize_window(),
-                WindowControlArea::Max => window.zoom_window(),
-                WindowControlArea::Close => window.remove_window(),
-                _ => {}
-            });
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = MouseButton::Left;
-        }
+        let el = el.on_mouse_down(MouseButton::Left, move |_, window, _cx| match area {
+            WindowControlArea::Min => window.minimize_window(),
+            WindowControlArea::Max => window.zoom_window(),
+            WindowControlArea::Close => window.remove_window(),
+            _ => {}
+        });
 
         el
     };
@@ -926,8 +924,24 @@ impl ConWorkspace {
                 .ok();
 
                 if !got_event {
+                    // Idle tick. The previous 16ms cap meant a PTY
+                    // chunk arriving 1ms after the loop entered the
+                    // sleep had to wait the full 15ms before any
+                    // GPUI repaint was even scheduled — visible as
+                    // a stall between "user hits Enter on htop" and
+                    // "htop's alt-screen actually paints" on Linux,
+                    // because Linux drives the renderer through this
+                    // loop instead of through libghostty's own
+                    // NSView pump (macOS) or D3D11 swapchain
+                    // (Windows). 8ms keeps the work bounded —
+                    // `pump_ghostty_views` short-circuits on
+                    // unchanged `wake_generation` — while halving
+                    // the worst-case PTY-to-frame latency. Refresh
+                    // is still capped at the GPUI vsync rate
+                    // (typically 60 Hz) so this doesn't actually
+                    // double the paint work.
                     cx.background_executor()
-                        .timer(std::time::Duration::from_millis(16))
+                        .timer(std::time::Duration::from_millis(8))
                         .await;
                 }
             }

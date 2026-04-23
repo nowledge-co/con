@@ -155,6 +155,31 @@ captures used the buggy build):
   titlebar that hid the real product chrome. Always screenshot the
   actual desktop session, not just the headless harness, before
   declaring a paint path "verified."
+- The shared workspace poll loop's 16 ms idle sleep was the
+  dominant Linux PTY-to-frame latency. macOS / Windows hide it
+  because their renderers tick on their own (NSView display link
+  on macOS, D3D11 swapchain on Windows). Linux drives everything
+  through the workspace loop, so the loop's `timer(16ms).await`
+  *is* the cap on first-frame latency after an idle period. Halving
+  to 8 ms gave a measurable 2× drop in keystroke-echo latency
+  (32.6 ms → 16.6 ms mean across 5 runs on the cloud-agent VM)
+  with negligible CPU overhead (work short-circuits on unchanged
+  `wake_generation`).
+- A `Vec<Cell>` deep-equality compare in `refresh_snapshot` ran
+  on every snapshot refresh and never short-circuited (callers
+  only invoke when a real wake came in). Switched to a
+  generation-counter compare. The previous `take_needs_render`
+  fallback in `pump_deferred_work` was also re-running the full
+  libghostty-vt FFI walk every poll tick when the shell was alive
+  — masked the wake signal and burned CPU on busy panes. Removed.
+- Cross-platform CI surfaced a real Linux-only correctness fix:
+  the `caption_buttons` cluster bound a `let mut el = div()...`
+  so the Linux `el = el.on_mouse_down(...)` re-bind compiled.
+  With `RUSTFLAGS=-D warnings` the Windows build saw a dead
+  `mut` keyword. Re-shape was small (cfg-gated shadow binding
+  instead of in-place mutation) but a useful reminder that any
+  cfg-conditional re-bind needs to compile clean on every other
+  cfg too.
 - Backdrop blur on Linux is a compositor-not-app capability today.
   KDE Plasma Wayland exposes `org_kde_kwin_blur` and gpui_linux
   honors it via `WindowBackgroundAppearance::Blurred`. Mutter

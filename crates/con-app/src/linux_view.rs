@@ -188,9 +188,14 @@ impl GhosttyView {
         let mut changed = self.ensure_session(cx);
 
         if let Some(terminal) = self.terminal.as_ref().cloned() {
+            // Only re-snapshot when libghostty-vt actually has new
+            // output. The previous code also fell through to
+            // `refresh_snapshot()` on every poll tick whenever the
+            // shell was alive — that re-ran the full FFI walk
+            // 60×/s for nothing, ate measurable CPU on busy panes
+            // (htop / vim), and also drowned out the per-PTY-write
+            // wake signal we explicitly want to react to.
             if terminal.take_needs_render() {
-                changed |= self.refresh_snapshot();
-            } else if self.initialized && terminal.is_alive() {
                 changed |= self.refresh_snapshot();
             }
 
@@ -252,15 +257,22 @@ impl GhosttyView {
         let Some(snapshot) = terminal.snapshot() else {
             return false;
         };
-        match self.snapshot.as_ref() {
-            Some(prev) if prev.generation == snapshot.generation && prev.cells == snapshot.cells => {
-                false
-            }
-            _ => {
-                self.snapshot = Some(snapshot);
-                true
-            }
+        // Generation alone is enough: libghostty-vt bumps the screen
+        // generation on every parser feed that changed grid state.
+        // The previous code also did a `prev.cells == snapshot.cells`
+        // deep-compare on every refresh — that was a 50–200 KB Vec
+        // compare per frame on busy panes and never short-circuited
+        // (callers only invoke this when `take_needs_render()`
+        // already returned true), so it was pure cost.
+        if self
+            .snapshot
+            .as_ref()
+            .is_some_and(|prev| prev.generation == snapshot.generation)
+        {
+            return false;
         }
+        self.snapshot = Some(snapshot);
+        true
     }
 
     fn sync_surface_size(&mut self, bounds: Bounds<Pixels>, scale_factor: f32) -> bool {
