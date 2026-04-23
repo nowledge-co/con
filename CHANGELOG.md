@@ -38,7 +38,7 @@ Changes here are after `v0.1.0-beta.35`, the latest published beta release.
 
 **Terminal — Windows Backend (preview)**
 - Reduced Windows renderer hot-path work by skipping redundant default-background blank-cell instances, avoiding full-frame zero-fill before D3D readback, and only sorting the instance stream when a frame contains overflowing wide glyphs.
-- Reduced Windows terminal latency by removing the extra-frame pending hop when the staging ring has nothing older to drain, and by marking user-driven updates latency-critical so the freshest submitted frame wins over stale readback.
+- Reduced Windows interactive terminal latency by marking user-driven updates latency-critical so the freshest submitted frame wins over stale readback, while keeping resize/fullscreen frames on the non-blocking staging path.
 
 ### Fixed
 

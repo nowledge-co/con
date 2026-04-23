@@ -138,6 +138,11 @@ pub enum RenderOutcome {
     Unchanged,
     /// Fresh BGRA bytes, ready to hand to GPUI as an `ImageSource`.
     Rendered(FrameBgra),
+    /// GPU work was submitted but the staging ring has nothing older
+    /// ready to drain without waiting. Caller should keep the previous
+    /// image and schedule another prepaint unless this frame was marked
+    /// latency-critical.
+    Pending,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -312,15 +317,16 @@ impl Renderer {
     /// Render one frame and return a BGRA byte buffer sized to the
     /// current render target.
     ///
-    /// When the ring has no older slot ready to drain, we synchronously
-    /// drain the freshly submitted slot before returning instead of
-    /// bouncing through an extra-frame `Pending` state.
-    ///
     /// `prefer_latest` is set by the view/session for user-driven
     /// interactions (typing, paste, mouse actions). In that mode we
     /// still drain any older in-flight slot first to keep the ring
     /// healthy, but we prefer the freshly submitted slot over any older
     /// already-drained frame so the caller paints the newest state now.
+    ///
+    /// Non-interactive work like resize/fullscreen keeps the old
+    /// non-blocking behavior: if the ring has nothing older to drain,
+    /// we return `Pending` and let the next prepaint pick up the fresh
+    /// slot once the GPU copy has finished.
     ///
     /// Outside that mode the ordering stays deliberately drain →
     /// submit: draining first frees the slot we're about to overwrite,
@@ -438,6 +444,10 @@ impl Renderer {
                 width: self.width_px,
                 height: self.height_px,
             }));
+        }
+
+        if needs_draw {
+            return Ok(RenderOutcome::Pending);
         }
 
         // No new draw and nothing prior was drained. If a slot is still
