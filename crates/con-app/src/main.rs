@@ -151,7 +151,15 @@ fn supports_transparent_main_window() -> bool {
 
 #[cfg(target_os = "linux")]
 fn supports_transparent_main_window() -> bool {
-    false
+    // GPUI's X11 backend already creates the window against an ARGB
+    // (depth-32) visual when transparency is requested, and the
+    // Wayland backend drops the opaque-region hint so the compositor
+    // honors per-pixel alpha. Both xfwm4 / mutter / kwin composite
+    // through it, so an always-on transparent root is safe on every
+    // Linux session that has any compositor at all. Headless / minimal
+    // sessions still render correctly because the workspace itself
+    // paints `theme.background.opacity(...)` on its surfaces.
+    true
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -185,6 +193,31 @@ fn apply_windows_backdrop(window: &mut Window, blur: bool) -> bool {
 #[cfg(target_os = "windows")]
 pub fn set_windows_backdrop_blur(window: &mut Window, blur: bool) {
     let _ = set_windows_backdrop(window, blur);
+}
+
+/// Live re-apply of the Linux background appearance. Mirrors
+/// `set_windows_backdrop_blur` so the workspace theme-update path
+/// can toggle "background blur" in settings without restarting the
+/// window.
+///
+/// `blur=true` requests `WindowBackgroundAppearance::Blurred`. The
+/// gpui_linux Wayland backend honors that via the
+/// `org_kde_kwin_blur` protocol (real Gaussian blur of what's
+/// behind the window — works on KDE Plasma Wayland). On X11 and on
+/// Wayland compositors that don't expose the blur protocol
+/// (mutter / GNOME, sway by default), the renderer keeps the
+/// window transparent but does NOT draw a blur — there's no
+/// equivalent of DWM's Acrylic API there. We still flip to
+/// `Transparent` in that case so per-pane opacity has a desktop
+/// to composite over.
+#[cfg(target_os = "linux")]
+pub fn set_linux_window_blur(window: &mut Window, blur: bool) {
+    use gpui::WindowBackgroundAppearance;
+    window.set_background_appearance(if blur {
+        WindowBackgroundAppearance::Blurred
+    } else {
+        WindowBackgroundAppearance::Transparent
+    });
 }
 
 #[cfg(target_os = "windows")]
@@ -307,6 +340,9 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
             let mica_applied = apply_windows_backdrop(window, config.appearance.terminal_blur);
             #[cfg(not(target_os = "windows"))]
             let mica_applied = false;
+
+            #[cfg(target_os = "linux")]
+            set_linux_window_blur(window, config.appearance.terminal_blur);
             cx.new(|cx| {
                 // On Windows we want the DWM-provided backdrop (Mica)
                 // to shine through wherever the app isn't painting —

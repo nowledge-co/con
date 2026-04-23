@@ -493,6 +493,7 @@ impl Render for GhosttyView {
             );
         }
 
+        let pane_opacity = self.app.background_opacity().clamp(0.0, 1.0);
         let terminal_content = div()
             .flex()
             .flex_col()
@@ -500,7 +501,7 @@ impl Render for GhosttyView {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .bg(theme.background)
+            .bg(theme.background.opacity(pane_opacity))
             .px(px(12.0))
             .py(px(10.0))
             .text_color(foreground)
@@ -515,7 +516,7 @@ impl Render for GhosttyView {
             .min_w_0()
             .min_h_0()
             .track_focus(&self.focus_handle)
-            .bg(theme.background)
+            .bg(theme.background.opacity(pane_opacity))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;

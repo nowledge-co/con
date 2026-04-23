@@ -3210,6 +3210,8 @@ impl ConWorkspace {
         }
         #[cfg(target_os = "windows")]
         crate::set_windows_backdrop_blur(window, self.terminal_blur);
+        #[cfg(target_os = "linux")]
+        crate::set_linux_window_blur(window, self.terminal_blur);
         // Sync GPUI UI theme colors with terminal theme
         crate::theme::sync_gpui_theme(
             &theme,
@@ -6662,8 +6664,22 @@ impl Render for ConWorkspace {
             .flex_col()
             .size_full()
             .bg(theme.transparent)
-            .font_family(theme.mono_font_family.clone())
-            .key_context("ConWorkspace")
+            .font_family(theme.mono_font_family.clone());
+
+        // Linux: con paints its own client-side decorations, so we
+        // also have to clip the window to a rounded rectangle the
+        // same way macOS gets from NSWindow + transparent backdrop
+        // and Windows 11 gets from DWM. Wrap with `overflow_hidden`
+        // so child surfaces (top bar, terminal pane, modals) all
+        // respect the corner radius. 14px matches Mica's perceived
+        // radius on Win11 and reads as "windowed" rather than
+        // "phone-app sheet".
+        #[cfg(target_os = "linux")]
+        {
+            root = root.rounded(px(14.0)).overflow_hidden();
+        }
+
+        root = root.key_context("ConWorkspace")
             // Pane drag-to-resize: capture mouse move/up on root so it works
             // even when cursor is over terminal views (which capture mouse events).
             .on_mouse_move({

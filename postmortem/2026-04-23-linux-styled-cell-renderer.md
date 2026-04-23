@@ -155,3 +155,11 @@ captures used the buggy build):
   titlebar that hid the real product chrome. Always screenshot the
   actual desktop session, not just the headless harness, before
   declaring a paint path "verified."
+- Backdrop blur on Linux is a compositor-not-app capability today.
+  KDE Plasma Wayland exposes `org_kde_kwin_blur` and gpui_linux
+  honors it via `WindowBackgroundAppearance::Blurred`. Mutter
+  (GNOME) and X11 in general have no equivalent app-driven blur
+  protocol, so the same toggle ships transparent-but-not-blurred
+  there. This isn't a bug on our side — there's no portable
+  backdrop-blur API to wire into. Document it, don't paper over it,
+  and let users on KDE Plasma get the full effect.
