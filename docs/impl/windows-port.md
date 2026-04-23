@@ -51,6 +51,7 @@ Build-time env vars for `con-ghostty`:
 | `CON_STUB_GHOSTTY_VT=1` | Compile `src/windows/ghostty_vt_stub.c` and link it instead of libghostty-vt. The resulting `con-app.exe` launches fully, the terminal pane creates the real WS_CHILD HWND and swapchain, ConPTY spawns the shell — but the terminal grid is empty because the VT parser is stubbed. Useful for iterating GPUI / HWND / renderer paths while a real libghostty-vt is broken. |
 | `CON_GHOSTTY_VT_RENDER_STATE=0` | Skip `ghostty_render_state_new` at startup. Default on (render state is how we read cells back for display). The escape hatch exists because older Ghostty revisions have a broken render-state implementation on Windows; the `GHOSTTY_REV` pin as of 2026-04-17 tip-of-main works, but if you pull a regression from upstream you can ship a runnable app with `=0` while the fix is in flight. |
 | `CON_SKIP_GHOSTTY_VT=1` | Skip both. `cargo build` will fail at link. Only useful for `cargo check`. |
+| `ZIG_GLOBAL_CACHE_DIR` | Optional Zig cache override. On Windows, `con-ghostty` now defaults this to a short path (`C:\zc`, then `%TEMP%\zc` fallback) when unset so Ghostty/uucode helper spawns stay under `MAX_PATH`. |
 
 Common Windows pitfalls when the Zig step fails mid-build with
 `FileNotFound` on a just-compiled `uucode_build_tables.exe`:
@@ -61,6 +62,9 @@ Common Windows pitfalls when the Zig step fails mid-build with
 2. **MAX_PATH** — the default 260-char limit trips on Zig's deep cache
    layout. Enable long paths (`HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1`)
    OR point `CON_GHOSTTY_SOURCE_DIR` at a short path like `C:\ghostty`.
+   `con-ghostty` now also defaults `ZIG_GLOBAL_CACHE_DIR` to a short
+   path on Windows; if your machine disallows `C:\zc`, set
+   `ZIG_GLOBAL_CACHE_DIR` explicitly to another short writable path.
 3. **Zig version mismatch** — our pinned Ghostty revision was built
    against an older Zig; Zig 0.15+ may break upstream. Either install
    the matching Zig, or bump `GHOSTTY_REV` in `build.rs` (requires
