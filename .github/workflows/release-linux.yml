@@ -23,7 +23,35 @@ permissions:
 jobs:
   build:
     name: Build linux-x86_64
-    runs-on: ubuntu-latest
+    # Pin the build runner to ubuntu-22.04 (glibc 2.35) — NOT
+    # ubuntu-latest. Linux's dynamic linker is forward-compatible
+    # only: a binary linked against glibc N runs on systems with
+    # glibc >= N, but never on glibc < N. ubuntu-latest is currently
+    # 24.04 (glibc 2.39), so a binary built there refuses to start
+    # on Debian 12 / Ubuntu 22.04 / RHEL 9 / Fedora 38 / ChromeOS
+    # Crostini with errors like:
+    #
+    #   ./con: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38'
+    #     not found (required by ./con)
+    #   ./con: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39'
+    #     not found (required by ./con)
+    #
+    # which is exactly what v0.1.0-beta.34 hit on a current
+    # Chromebook (Crostini ships Debian 12, glibc 2.36).
+    #
+    # ubuntu-22.04 (glibc 2.35) is the oldest GitHub-hosted runner
+    # still supported. 2.35 covers every reasonable current desktop
+    # distro: Debian 12 (2.36), Ubuntu 22.04+ (2.35+), RHEL 9
+    # (2.34 — close enough for the symbols Rust binaries use in
+    # practice), Fedora 36+ (2.35+), openSUSE Leap 15.4+ (2.31+),
+    # ChromeOS Crostini (2.36).
+    #
+    # When ubuntu-22.04 is retired we'll need to bump and accept the
+    # newer baseline (or move to a manylinux-style cross builder).
+    # The publish job below stays on ubuntu-latest because it only
+    # runs `gh release upload` and `gh release create` — its glibc
+    # is irrelevant.
+    runs-on: ubuntu-22.04
 
     steps:
       - uses: actions/checkout@v5
