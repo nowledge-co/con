@@ -26,7 +26,10 @@
 //! 3. Each subsequent prepaint: resize on geometry change, update DPI
 //!    on scale-factor change, pump one `render_frame()`. When the
 //!    frame is fresh we rebuild `cached_image` and `cx.notify()` so
-//!    the next `render()` picks it up.
+//!    the next `render()` picks it up. The renderer now drains a fresh
+//!    readback on the same prepaint when the staging ring has nothing
+//!    older ready, and local user input marks the next render
+//!    latency-critical so the freshest frame wins over any stale one.
 //! 4. Drop releases the `RenderSession` and ends the child shell.
 
 use std::sync::Arc;
@@ -238,10 +241,7 @@ impl GhosttyView {
         // `on_terminal_process_exited` runs when the child shell exits.
         if self.initialized
             && !self.process_exit_emitted
-            && self
-                .terminal
-                .as_ref()
-                .is_some_and(|t| !t.is_alive())
+            && self.terminal.as_ref().is_some_and(|t| !t.is_alive())
         {
             self.process_exit_emitted = true;
             cx.emit(GhosttyProcessExited);
@@ -359,15 +359,6 @@ impl GhosttyView {
                 } else {
                     false
                 }
-            }
-            Ok(RenderOutcome::Pending) => {
-                // The renderer submitted a new draw into its staging
-                // ring but had nothing prior to drain non-blocking. The
-                // slot will be ready by the next prepaint — return
-                // `true` so the caller `cx.notify()`s and we come back
-                // to drain it. Cached image stays untouched so the
-                // user sees the previous frame in the meantime (~16ms).
-                true
             }
             Err(err) => {
                 log::warn!("RenderSession::render_frame failed: {err:#}");
@@ -555,9 +546,7 @@ impl GhosttyView {
         // without the `alt` flag on most layouts, and Ctrl+Alt is left
         // for the terminal's own modifyOtherKeys semantics if added
         // later.
-        if keystroke.modifiers.alt
-            && !keystroke.modifiers.control
-            && !keystroke.modifiers.platform
+        if keystroke.modifiers.alt && !keystroke.modifiers.control && !keystroke.modifiers.platform
         {
             if let Some(ch) = keystroke.key_char.as_deref().filter(|s| !s.is_empty()) {
                 let mut out = String::with_capacity(1 + ch.len());
@@ -676,9 +665,7 @@ fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<
         "backspace" => "\x7f".into(),
         // Shift+Tab is the xterm "back-tab" CSI Z — bash/zsh completion
         // menus and fzf use it to cycle backwards.
-        "tab" if modifiers.shift && !modifiers.control && !modifiers.platform => {
-            "\x1b[Z".into()
-        }
+        "tab" if modifiers.shift && !modifiers.control && !modifiers.platform => "\x1b[Z".into(),
         "tab" => "\t".into(),
         _ => return None,
     })
@@ -718,14 +705,11 @@ impl Render for GhosttyView {
         // of a pixel smaller than our source texture — the LINEAR sprite
         // sampler then blends neighbouring texels and every terminal cell
         // shows faint speckles below the glyph baseline.
-        let image_child = self
-            .cached_image
-            .clone()
-            .map(|img_arc| {
-                img(ImageSource::Render(img_arc))
-                    .size_full()
-                    .object_fit(ObjectFit::Fill)
-            });
+        let image_child = self.cached_image.clone().map(|img_arc| {
+            img(ImageSource::Render(img_arc))
+                .size_full()
+                .object_fit(ObjectFit::Fill)
+        });
 
         let focus = self.focus_handle.clone();
 
@@ -776,22 +760,20 @@ impl Render for GhosttyView {
             .child(
                 div()
                     .size_full()
-                    .on_children_prepainted(
-                        move |bounds_list: Vec<Bounds<Pixels>>, window, cx| {
-                            let Some(bounds) = bounds_list.first().copied() else {
-                                return;
-                            };
-                            let scale = window.scale_factor();
-                            if let Some(view) = entity.upgrade() {
-                                view.update(cx, |view, cx| {
-                                    let changed = view.sync_render(bounds, scale, window);
-                                    if changed {
-                                        cx.notify();
-                                    }
-                                });
-                            }
-                        },
-                    )
+                    .on_children_prepainted(move |bounds_list: Vec<Bounds<Pixels>>, window, cx| {
+                        let Some(bounds) = bounds_list.first().copied() else {
+                            return;
+                        };
+                        let scale = window.scale_factor();
+                        if let Some(view) = entity.upgrade() {
+                            view.update(cx, |view, cx| {
+                                let changed = view.sync_render(bounds, scale, window);
+                                if changed {
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    })
                     .children(image_child)
                     // A 1×1 placeholder so `on_children_prepainted` always
                     // fires with at least one bounds entry; flex growth
@@ -808,4 +790,3 @@ impl Drop for GhosttyView {
         }
     }
 }
-
