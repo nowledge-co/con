@@ -97,6 +97,38 @@ Environment changes captured for future runs:
   the control socket at `/tmp/con.sock`, and survives end-to-end
   `con-cli panes list / read / send-keys` traffic.
 
+## Follow-on fixes after visual review
+
+A Linux-desktop screenshot from the user surfaced two more
+regressions that the cloud-VM smoke didn't catch (because both my
+captures used the buggy build):
+
+3. The terminal pane was rendering in the system fallback font, not
+   IoskeleyMono. Root cause: `default_font_family` returns `"Ioskeley
+   Mono"` (with space) but the embedded TTFs report
+   `family = "IoskeleyMono"` (no space). macOS Core Text / Windows
+   DirectWrite resolve both forms to the same font (forgiving family
+   matching), but GPUI Linux's CosmicText backend does an exact
+   `face.families.iter().any(|family| *name == family.0)` match and
+   falls through to a proportional sans on miss. Fix: a Linux-only
+   `canonical_terminal_font_family()` in `crates/con-app/src/theme.rs`
+   that normalizes the display name to the registered family name
+   before storing into `Theme::mono_font_family`. macOS / Windows
+   stay byte-identical (the helper returns the input unchanged).
+4. The Linux window stacked the native xfwm4 titlebar on top of the
+   in-app top bar. Root cause: `default_window_decorations()` was
+   pinned to `WindowDecorations::Server` on Linux. Fix: switched
+   Linux to `WindowDecorations::Client`, gave it the same
+   `TitlebarOptions` Windows uses, and extended `caption_buttons` in
+   `workspace.rs` to also build on Linux. The X11 backend's
+   `on_hit_test_window_control` is a no-op, so each Linux caption
+   button gets an explicit `on_mouse_down` handler that calls
+   `window.minimize_window()` / `zoom_window()` / `remove_window()`.
+   The top-bar drag area already calls `start_window_move()` on
+   Linux via `_NET_WM_MOVERESIZE`, which xfwm honors. The X11
+   backend gracefully falls back to server decorations when no
+   compositor is present, so the change is safe on minimal sessions.
+
 ## What we learned
 
 - Hooking `read_screen_text` into a renderer is always wrong. The
@@ -112,3 +144,14 @@ Environment changes captured for future runs:
   software Vulkan ICD (`mesa-vulkan-drivers`) are present. We should
   recommend an env-setup agent that pre-installs these so future
   Linux work doesn't pay the ~3 min reinstall cost on every fresh VM.
+- Cross-platform font name resolution is not as forgiving as it
+  looks. Core Text / DirectWrite hide a real bug — `"Foo Bar"`
+  silently resolves to a `"FooBar"`-named TTF — that the Linux text
+  system doesn't paper over. When in doubt, the canonical name is
+  whatever `fc-scan --format='%{family}\n'` reports for the file.
+- Per-platform window-decoration choices need explicit visual proof.
+  The Linux pane *worked* (control socket round-tripped, snapshot
+  diffed, prompt moved) but also painted underneath a server-drawn
+  titlebar that hid the real product chrome. Always screenshot the
+  actual desktop session, not just the headless harness, before
+  declaring a paint path "verified."

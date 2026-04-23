@@ -242,13 +242,48 @@ fn apply_font_overrides(
     ui_font_size: f32,
     cx: &mut App,
 ) {
-    Theme::global_mut(cx).mono_font_family = terminal_font_family.to_string().into();
+    Theme::global_mut(cx).mono_font_family =
+        canonical_terminal_font_family(terminal_font_family).into();
     Theme::global_mut(cx).font_family = ui_font_family.to_string().into();
     let clamped_ui_font_size = ui_font_size.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE);
     Theme::global_mut(cx).font_size = gpui::px(clamped_ui_font_size);
     Theme::global_mut(cx).mono_font_size = gpui::px(
         (clamped_ui_font_size - 3.0).clamp(MIN_UI_FONT_SIZE - 1.0, MAX_UI_FONT_SIZE - 3.0),
     );
+}
+
+/// Map the user-facing display name (`"Ioskeley Mono"` — what the
+/// settings UI shows and what `con-core::config::default_font_family`
+/// returns) to the actual `name` table entry on the registered TTFs
+/// (`"IoskeleyMono"`, no space).
+///
+/// macOS Core Text and Windows DirectWrite are forgiving about the
+/// space-vs-no-space variant and resolve both names to the same font,
+/// which is why the workspace shipped with `"Ioskeley Mono"` as the
+/// default and macOS / Windows ship that way in production. GPUI
+/// Linux's CosmicText backend, however, only matches the exact
+/// `family` string in the TTF `name` table — `"Ioskeley Mono"`
+/// misses, the lookup falls through to the system fallback (a
+/// proportional sans on most desktops), and the terminal pane loses
+/// its monospace shaping.
+///
+/// Normalizing only on Linux keeps every consumer (linux_view,
+/// chat_markdown, agent_panel preview, settings) on the registered
+/// family name on Linux, and leaves macOS / Windows behavior
+/// byte-identical to what's currently in production.
+pub fn canonical_terminal_font_family(name: &str) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        return match name.trim() {
+            "Ioskeley Mono" | "IoskeleyMono" | "Ioskeley-Mono" => "IoskeleyMono".to_string(),
+            other => other.to_string(),
+        };
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        name.to_string()
+    }
 }
 
 /// Apply con's scrollbar overrides after any Theme::change call.
