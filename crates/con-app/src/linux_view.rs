@@ -23,8 +23,25 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 
 const DEFAULT_FONT_SIZE: f32 = 14.0;
+const MIN_FONT_SIZE_PX: f32 = 12.0;
 const DEFAULT_CELL_WIDTH_RATIO: f32 = 0.62;
 const DEFAULT_CELL_HEIGHT_RATIO: f32 = 1.45;
+
+/// Resolved logical font size used for both the cell-grid estimate
+/// (`estimate_surface_size`) and the actual paint (`render`). Both
+/// callers used to clamp differently — paint floored at 12 px,
+/// estimate didn't — which let a sub-12 px config size the PTY grid
+/// to cells smaller than the cells we actually drew, so text
+/// overran the estimated column count and lines wrapped unexpectedly
+/// on the alternate screen. Centralising here keeps them honest.
+fn effective_font_size(configured: f32) -> f32 {
+    let base = if configured > 0.0 {
+        configured
+    } else {
+        DEFAULT_FONT_SIZE
+    };
+    base.max(MIN_FONT_SIZE_PX)
+}
 
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
@@ -319,14 +336,14 @@ impl GhosttyView {
         let height_px = ((f32::from(bounds.size.height) * scale_factor).ceil() as u32).max(1);
 
         // Until the real grid renderer lands we estimate the PTY grid
-        // from the configured mono font size so shells and TUIs do not
-        // stay stuck at the initial 80x24 forever.
-        let logical_font_size = if self.initial_font_size > 0.0 {
-            self.initial_font_size
-        } else {
-            DEFAULT_FONT_SIZE
-        };
-        let font_size_px = logical_font_size * scale_factor;
+        // from the configured mono font size so shells and TUIs do
+        // not stay stuck at the initial 80x24 forever. Run through
+        // the same `effective_font_size` clamp `render()` uses so
+        // the grid we ask the PTY for matches the cell size we
+        // actually paint at — picking different floors here would
+        // make text overrun the estimated column count and lines
+        // wrap unexpectedly on the alternate screen.
+        let font_size_px = effective_font_size(self.initial_font_size) * scale_factor;
         let cell_width_px = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0) as u32;
         let cell_height_px = (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0) as u32;
         let columns = (width_px / cell_width_px.max(1))
@@ -440,7 +457,7 @@ impl Render for GhosttyView {
         let theme = cx.theme();
         let focus = self.focus_handle.clone();
         let entity = cx.entity().downgrade();
-        let font_size_px = self.initial_font_size.max(12.0);
+        let font_size_px = effective_font_size(self.initial_font_size);
         let line_height_px = (font_size_px * 1.45).round();
         let mono_font = Font {
             family: theme.mono_font_family.clone(),
@@ -619,7 +636,37 @@ fn render_terminal_row(
     line_height: Pixels,
     cursor_col: Option<usize>,
 ) -> AnyElement {
-    let mut text = String::with_capacity(cells.len());
+    // First pass: find the last column we have to keep. A column
+    // matters if it has a real glyph, OR if it carries a non-default
+    // background / underline / strikethrough / inverse style, OR if
+    // it sits under the cursor. Trailing default-styled blanks past
+    // that column are dropped so we don't emit hundreds of empty
+    // cells per row, but trailing *styled* blanks (status bars,
+    // selection highlights, full-width fills) survive — those carry
+    // visual information in their background color and dropping them
+    // would collapse the line paint width.
+    let last_meaningful_col = cells
+        .iter()
+        .enumerate()
+        .rposition(|(col_idx, cell)| {
+            let glyph_present = cell.codepoint != 0
+                && char::from_u32(cell.codepoint).is_some_and(|ch| ch != ' ');
+            let styled_blank = (cell.bg & 0xFF) != 0
+                || (cell.attrs
+                    & (ATTR_INVERSE | ATTR_UNDERLINE | ATTR_STRIKE))
+                    != 0;
+            let cursor_here = cursor_col == Some(col_idx);
+            glyph_present || styled_blank || cursor_here
+        })
+        // `rposition` already returns the index relative to `cells`,
+        // not `iter().enumerate()`'s output. Map it back to a slice
+        // length via +1.
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+
+    let kept = &cells[..last_meaningful_col];
+
+    let mut text = String::with_capacity(kept.len());
     let mut runs: Vec<TextRun> = Vec::new();
     let mut last_signature: Option<(u32, u32, u8, bool)> = None;
     let mut active_run_len: usize = 0;
@@ -645,7 +692,7 @@ fn render_terminal_row(
         *active_run_len = 0;
     }
 
-    for (col_idx, cell) in cells.iter().enumerate() {
+    for (col_idx, cell) in kept.iter().enumerate() {
         let is_cursor = cursor_col == Some(col_idx);
         let signature = (cell.fg, cell.bg, cell.attrs, is_cursor);
         let style = RowStyle::from_cell(cell, default_fg, default_bg, base_font, is_cursor);
@@ -666,23 +713,6 @@ fn render_terminal_row(
     }
 
     flush_run(&mut runs, &mut active_style, &mut active_run_len);
-
-    if cursor_col.is_none() {
-        let trimmed_end = text.trim_end_matches(' ').len();
-        if trimmed_end < text.len() {
-            let mut to_remove = text.len() - trimmed_end;
-            text.truncate(trimmed_end);
-            while to_remove > 0 {
-                let Some(mut last) = runs.pop() else { break };
-                if last.len > to_remove {
-                    last.len -= to_remove;
-                    runs.push(last);
-                    break;
-                }
-                to_remove -= last.len;
-            }
-        }
-    }
 
     if text.is_empty() {
         text.push('\u{00A0}');
@@ -738,11 +768,17 @@ impl RowStyle {
         }
 
         if is_cursor {
-            // Block cursor (focused): swap fg/bg so the glyph under
-            // the cursor stays legible, like xterm and Ghostty's own
-            // default. Selection / blink-state nuances are deferred
-            // to the proper grid renderer.
-            let cursor_bg = vt_color_to_hsla(cell.fg).unwrap_or(default_fg);
+            // Block cursor (focused): swap the *currently resolved*
+            // fg / bg so the glyph under the cursor stays legible,
+            // like xterm and Ghostty's own default. Crucially we
+            // operate on `fg` / `bg` (post `ATTR_INVERSE`) and *not*
+            // on the raw `cell.fg` / `cell.bg`, so an inverse cell
+            // under the cursor de-inverts to draw the block over
+            // the already-inverted content rather than collapsing
+            // into a single color and turning the glyph invisible
+            // (selected rows in htop, vim status lines, less search
+            // highlights all hit this exact case).
+            let cursor_bg = fg;
             let cursor_fg = bg.unwrap_or(default_bg);
             fg = cursor_fg;
             bg = Some(cursor_bg);

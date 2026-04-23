@@ -85,6 +85,15 @@ fn caption_buttons(
     window: &Window,
     theme: &gpui_component::theme::ThemeColor,
     height: f32,
+    // Linux Close needs a workspace handle so it can call
+    // `prepare_window_close` (cancel sessions, flush state, drop
+    // pending control responses) before yanking the window — same
+    // shutdown path the macOS / Windows X-button hits via
+    // `on_window_should_close`. Windows has its own caption-area
+    // hit-test that runs through the workspace cleanup; on Linux
+    // GPUI's X11 backend doesn't fire that path so we have to
+    // route it explicitly.
+    #[cfg(target_os = "linux")] workspace: gpui::WeakEntity<ConWorkspace>,
 ) -> impl IntoElement {
     use gpui::{div, px, svg, Hsla, ParentElement, Rgba, Styled, WindowControlArea};
     #[cfg(target_os = "linux")]
@@ -145,10 +154,24 @@ fn caption_buttons(
         // dispatches via the WindowControlArea hit-test set above —
         // no extra handler needed there.
         #[cfg(target_os = "linux")]
-        let el = el.on_mouse_down(MouseButton::Left, move |_, window, _cx| match area {
+        let workspace_for_close = workspace.clone();
+        #[cfg(target_os = "linux")]
+        let el = el.on_mouse_down(MouseButton::Left, move |_, window, cx| match area {
             WindowControlArea::Min => window.minimize_window(),
             WindowControlArea::Max => window.zoom_window(),
-            WindowControlArea::Close => window.remove_window(),
+            WindowControlArea::Close => {
+                // Mirror the macOS / Windows close path: run the
+                // workspace cleanup (cancel agent sessions, flush
+                // session save, drop pending control responses,
+                // shut down terminal surfaces) *before* the window
+                // goes away. Without this, clicking the Linux CSD
+                // close button bypasses agent cancellation and
+                // pending control-request responses entirely.
+                let _ = workspace_for_close.update(cx, |workspace, cx| {
+                    workspace.prepare_window_close(cx);
+                });
+                window.remove_window();
+            }
             _ => {}
         });
 
@@ -6669,7 +6692,15 @@ impl Render for ConWorkspace {
         // vertical strip and never occlude terminal content.
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
-            top_bar = top_bar.child(caption_buttons(window, theme, top_bar_height));
+            #[cfg(target_os = "linux")]
+            let workspace_handle = cx.weak_entity();
+            top_bar = top_bar.child(caption_buttons(
+                window,
+                theme,
+                top_bar_height,
+                #[cfg(target_os = "linux")]
+                workspace_handle,
+            ));
         }
 
         let mut root = div()

@@ -238,7 +238,9 @@ impl LinuxPtySession {
         self.master
             .lock()
             .resize(pty_size_from_surface(&size))
-            .context("failed to resize linux pty")
+            .context("failed to resize linux pty")?;
+        self.mark_needs_render();
+        Ok(())
     }
 
     pub fn resize(&self, size: SurfaceSize) -> Result<()> {
@@ -255,7 +257,22 @@ impl LinuxPtySession {
         self.master
             .lock()
             .resize(pty_size_from_surface(&size))
-            .context("failed to resize linux pty")
+            .context("failed to resize linux pty")?;
+        self.mark_needs_render();
+        Ok(())
+    }
+
+    /// Stamp the shared `needs_render` flag and wake the workspace
+    /// loop so the next pump tick re-fetches a fresh snapshot. Used
+    /// after resize / theme / mode changes that mutate the parser
+    /// state without going through a PTY-output path. Without this,
+    /// idle-shell resizes silently keep painting the previous grid
+    /// dimensions until new shell output arrives.
+    fn mark_needs_render(&self) {
+        self.shared
+            .needs_render
+            .store(true, Ordering::Release);
+        self.shared.wake();
     }
 
     pub fn write_input(&self, data: &[u8]) -> Result<()> {
@@ -317,8 +334,7 @@ impl LinuxPtySession {
     pub fn set_theme(&self, colors: &TerminalColors) {
         let theme = theme_colors_to_vt(colors);
         self.shared.screen.set_theme(&theme);
-        self.shared.needs_render.store(true, Ordering::Release);
-        self.shared.wake();
+        self.mark_needs_render();
     }
 
     pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {

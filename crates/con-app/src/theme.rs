@@ -274,10 +274,23 @@ fn apply_font_overrides(
 pub fn canonical_terminal_font_family(name: &str) -> String {
     #[cfg(target_os = "linux")]
     {
-        return match name.trim() {
-            "Ioskeley Mono" | "IoskeleyMono" | "Ioskeley-Mono" => "IoskeleyMono".to_string(),
-            other => other.to_string(),
-        };
+        // Normalize aggressively: trim, lowercase, strip whitespace
+        // and hyphens. That way `"Ioskeley Mono"`, `"IoskeleyMono"`,
+        // `"Ioskeley-Mono"`, `"ioskeley mono"`, `" IOSKELEY  MONO "`,
+        // and any other casing / spacing the user might paste into
+        // the config or settings UI all resolve to the registered
+        // TTF family `"IoskeleyMono"`. CosmicText's exact-match
+        // lookup would otherwise miss them and fall back to a
+        // proportional system sans.
+        let key: String = name
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '-')
+            .flat_map(|c| c.to_lowercase())
+            .collect();
+        if key == "ioskeleymono" {
+            return "IoskeleyMono".to_string();
+        }
+        return name.to_string();
     }
 
     #[cfg(not(target_os = "linux"))]
