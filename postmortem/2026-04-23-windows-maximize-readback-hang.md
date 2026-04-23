@@ -14,9 +14,9 @@ The bug was structural: staging textures are only cached copies of already-known
 
 - Changed the Windows staging ring to mailbox semantics.
 - Drains of older in-flight slots are now non-blocking only.
-- If the ring is backlogged, the renderer returns `Pending` and schedules another prepaint instead of blocking.
+- If the ring is truly backlogged, the renderer returns `Pending` and schedules another prepaint instead of blocking.
 - When all slots are busy, the renderer reclaims the oldest unread slot for the newest frame instead of rescuing stale pixels.
-- The synchronous low-latency path remains only for interactive renders when the ring is otherwise clear.
+- The synchronous low-latency path remains for interactive renders when the newest frame can still land in a clean slot.
 
 ## What we learned
 
