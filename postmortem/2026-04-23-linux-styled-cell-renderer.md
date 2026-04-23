@@ -155,6 +155,19 @@ captures used the buggy build):
   titlebar that hid the real product chrome. Always screenshot the
   actual desktop session, not just the headless harness, before
   declaring a paint path "verified."
+- "Snapshot is empty" is not the same as "the PTY hasn't painted
+  anything yet." The placeholder gate
+  `s.cells.iter().all(|c| c.codepoint == 0)` was naively true on
+  every alt-screen entry too: htop / vim / less switch to the
+  alternate screen, get a freshly cleared grid, and only paint
+  their UI after some startup work. We were flashing
+  "Waiting for shell prompt…" over their startup gap, which made
+  TUI launches feel ~1 s slower than the actual paint pipeline
+  warranted. Fix: latch `seen_any_output` on the first non-empty
+  snapshot for a PTY session and gate the placeholder on the
+  latch instead. The lesson generalizes: any "is the screen
+  ready?" heuristic in a terminal renderer needs to think about
+  alt-screen lifecycle, not just the current frame's cell mask.
 - The shared workspace poll loop's 16 ms idle sleep was the
   dominant Linux PTY-to-frame latency. macOS / Windows hide it
   because their renderers tick on their own (NSView display link
