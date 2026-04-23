@@ -364,12 +364,16 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
                     } else {
                         cx.theme().background
                     }
-                } else {
+                } else if cfg!(target_os = "macos") {
                     // The window background policy decides whether the
-                    // desktop can bleed through. The root itself should
-                    // remain transparent so the embedded terminal view
-                    // below GPUI remains visible.
+                    // desktop can bleed through. On macOS the root
+                    // itself must remain transparent so the embedded
+                    // Ghostty NSView below GPUI stays visible, even on
+                    // Monterey where the top-level window falls back to
+                    // opaque.
                     cx.theme().transparent
+                } else {
+                    cx.theme().background
                 };
                 gpui_component::Root::new(view, window, cx).bg(background)
             })
