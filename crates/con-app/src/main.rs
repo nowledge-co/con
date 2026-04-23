@@ -268,26 +268,26 @@ fn default_window_options(cx: &mut App) -> WindowOptions {
     }
 }
 fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
-    #[cfg(target_os = "linux")]
-    {
-        let _ = transparent;
-        None
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        Some(TitlebarOptions {
-            title: Some("con".into()),
-            appears_transparent: transparent,
-            ..Default::default()
-        })
-    }
+    Some(TitlebarOptions {
+        title: Some("con".into()),
+        appears_transparent: transparent,
+        ..Default::default()
+    })
 }
 
 fn default_window_decorations() -> Option<WindowDecorations> {
+    // Linux now ships a client-side titlebar drawn in
+    // `workspace.rs::draw_top_bar` (the same top bar Windows uses),
+    // so the GPUI app shell paints its own brand chrome instead of
+    // stacking the xfwm4 / mutter / kwin frame on top of it. The
+    // gpui_linux X11 backend gracefully falls back to server-side
+    // decorations when no compositor is present, so this is safe on
+    // headless / minimal sessions too. macOS continues to use the
+    // default (system traffic-light cluster over an in-app top bar
+    // with `leading_pad = 78px`).
     #[cfg(target_os = "linux")]
     {
-        Some(WindowDecorations::Server)
+        Some(WindowDecorations::Client)
     }
 
     #[cfg(not(target_os = "linux"))]

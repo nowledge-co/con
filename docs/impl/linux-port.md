@@ -219,7 +219,7 @@ can ship.
 | 2b | GPUI feasibility spike | confirm whether con needs foreign-surface embedding, texture interop, or neither | bounded GPUI worklist exists, or path is ruled out | ✅ landed |
 | 2c | Architecture decision | pick Linux backend lane | one recommended implementation path, no split-brain plan | ✅ landed |
 | 3 | Linux backend scaffold | `con-ghostty/src/linux/` plus `con-app/src/linux_view.rs` (or equivalent) with real lifecycle types | Linux no longer routes through the generic stub path conceptually | ✅ landed |
-| 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / underline / inverse, cursor block, theme palette synced from settings | 🚧 styled `StyledText` paint landed; glyph-atlas grid renderer pending |
+| 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint, real product chrome (no native WM titlebar), embedded mono font | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / underline / inverse, cursor block, theme palette synced from settings, IoskeleyMono shaping, client-side titlebar with min/max/close caption cluster | 🚧 styled `StyledText` paint + CSD top bar landed; glyph-atlas grid renderer pending |
 | 5 | Input + selection | keyboard, mouse, clipboard, bracketed paste, DECCKM, selection | vim/tmux/fzf/less usable on Linux | ⏳ pending |
 | 6 | Packaging | desktop entry, icon integration, artifact strategy (`.deb`, AppImage, Flatpak, etc.) | installable Linux artifact exists | ⏳ pending |
 

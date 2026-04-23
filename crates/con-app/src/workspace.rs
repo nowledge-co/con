@@ -65,10 +65,14 @@ fn max_agent_panel_width(window_width: f32) -> f32 {
 /// Windows / Linux caption buttons (Min / Max+Restore / Close).
 ///
 /// Each button is marked with `.window_control_area(..)` so GPUI's
-/// platform layer hit-tests it during `WM_NCHITTEST` on Windows (or
-/// the equivalent on Linux) and dispatches the OS-level action on
-/// click — no explicit `minimize_window()` / `zoom_window()` /
-/// `remove_window()` plumbing needed here.
+/// platform layer hit-tests it during `WM_NCHITTEST` on Windows and
+/// dispatches the OS-level action automatically. The X11 backend in
+/// `gpui_linux` doesn't currently dispatch through that hit-test
+/// path (`on_hit_test_window_control` is a no-op there), so on Linux
+/// we additionally wire explicit `start_window_move` / `zoom_window`
+/// / `minimize_window` / `remove_window` calls on click. The marker
+/// is still set for future-proofing once the Linux backend grows
+/// `_NET_WM_MOVERESIZE`-style server hit testing.
 ///
 /// Uses Phosphor SVGs instead of Segoe Fluent Icons so the bar
 /// renders identically on hosts where Segoe Fluent Icons isn't
@@ -76,13 +80,13 @@ fn max_agent_panel_width(window_width: f32) -> f32 {
 /// tests). Size and hover colors mirror Windows 11's native caption
 /// buttons: 36px wide, 45px min height doesn't apply here (we honour
 /// the shared `top_bar_height` instead), red hover on Close.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn caption_buttons(
     window: &Window,
     theme: &gpui_component::theme::ThemeColor,
     height: f32,
 ) -> impl IntoElement {
-    use gpui::{div, px, svg, Hsla, ParentElement, Rgba, Styled, WindowControlArea};
+    use gpui::{div, px, svg, Hsla, MouseButton, ParentElement, Rgba, Styled, WindowControlArea};
 
     let close_red: Hsla = Rgba {
         r: 232.0 / 255.0,
@@ -106,7 +110,7 @@ fn caption_buttons(
         // a `group(id)` so the svg's `.group_hover(id, ...)` fires when
         // the 36px hit-target is hovered, not just the 10px icon ink.
         let hover_fg = if close { gpui::white() } else { fg };
-        div()
+        let mut el = div()
             .id(id)
             .group(id)
             .flex()
@@ -129,7 +133,28 @@ fn caption_buttons(
                     .size(px(10.0))
                     .text_color(fg)
                     .group_hover(id, move |s| s.text_color(hover_fg)),
-            )
+            );
+
+        // Linux: GPUI's X11 hit-test doesn't fire `WindowControlArea`
+        // dispatchers, so wire each button to its Window action by
+        // hand. `on_mouse_down` matches macOS / Windows feel: the
+        // action fires on the click-down edge rather than after the
+        // up edge, which keeps the cluster snappy.
+        #[cfg(target_os = "linux")]
+        {
+            el = el.on_mouse_down(MouseButton::Left, move |_, window, _cx| match area {
+                WindowControlArea::Min => window.minimize_window(),
+                WindowControlArea::Max => window.zoom_window(),
+                WindowControlArea::Close => window.remove_window(),
+                _ => {}
+            });
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = MouseButton::Left;
+        }
+
+        el
     };
 
     let (max_icon, max_area) = if window.is_maximized() {
@@ -6626,7 +6651,7 @@ impl Render for ConWorkspace {
         // macOS gets its traffic-light cluster from the system. We
         // render these *inside* the top bar so they share the same
         // vertical strip and never occlude terminal content.
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
             top_bar = top_bar.child(caption_buttons(window, theme, top_bar_height));
         }

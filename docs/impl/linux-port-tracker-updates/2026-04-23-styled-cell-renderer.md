@@ -77,36 +77,78 @@ What's still not complete after this PR (carry-over for phase 5/6):
 
 ## Visual verification on a Linux desktop session
 
-After the initial PR push I went back and visually verified the
-build on the cloud-agent VM's actual XFCE desktop session (not just
-the headless `con-cli` round-trip). The XFCE compositor, `xfwm4`
-window manager, and real `xfdesktop` panel are running on `:1`; con
-joins as a regular client window. Two captures, taken via `xwd` →
-`convert`:
+Verified on the cloud-agent VM's actual XFCE desktop session (not
+just the headless `con-cli` round-trip). The XFCE compositor,
+`xfwm4` window manager, and real `xfdesktop` panel are running on
+`:1`; con joins as a regular client window with **client-side
+decorations** (the GPUI top bar replaces xfwm's frame). Captures
+taken via `xwd` → `convert`:
 
 `screenshots/2026-04-23-fresh-launch.png` — fresh launch, empty
-shell. The Flexoki Light terminal pane shows the live `~ $` bash
-prompt and a solid dark **block cursor** sitting after the `$`. Top
-icon row and bottom "Type a command or ask AI…" input bar render.
+shell. The Flexoki Dark terminal pane shows the live `~ $` bash
+prompt and a solid dark **block cursor** sitting after the `$`,
+rendered in **IoskeleyMono** (proper monospace cell grid). The con
+top bar paints across the full window width, with the right-side
+caption cluster (sidebar / AI / settings + minimize / maximize /
+close) matching the Windows beta layout. No xfwm4 titlebar above
+the GPUI window.
 
 `screenshots/2026-04-23-styled-output.png` — after pushing styled
 output via the control socket. Confirms in one frame:
 
 - `printf "...\033[31mred \033[32mgreen \033[34mblue
-  \033[1;33mbold-yellow \033[4mund\033[0m default\n"` paints "red"
-  in red, "green" in green, "blue" in blue, "bold-yellow" in bolded
-  yellow (visibly heavier weight than the surrounding text), "und"
-  in yellow with an underline beneath it, then "default" snaps back
-  to the theme foreground.
+  \033[1;33mbold-yellow \033[4mund\033[0m\n"` paints "red" in red,
+  "green" in green, "blue" in blue, "bold-yellow" in bolded yellow
+  (visibly heavier weight than the surrounding text), "und" in
+  yellow with an underline beneath it.
 - `ls --color=always /etc | head -6` paints `alternatives`,
-  `apparmor.d`, `apport`, `apt` in the dircolors directory blue and
-  `bash.bashrc` in the default foreground (a plain file).
+  `apparmor.d`, `apport`, `apt` in the dircolors directory blue
+  and `bash.bashrc` in the default foreground (a plain file).
 - Block cursor is parked on the next prompt line.
+- Every monospace cell aligns vertically, confirming the
+  IoskeleyMono lookup actually resolves on Linux.
 
-So the styled-cell paint path is proven on a real Linux desktop
-session, not just at the snapshot-API level. The remaining honest
-caveat for native verification: GPU is `llvmpipe` (software Vulkan)
-and the desktop session is XFCE on a cloud VM. Validation on a
-hardware-accelerated Wayland or X11 session, and on multiple desktop
-environments, is still useful before the Linux build comes off
-"in progress" on the tracker.
+So the styled-cell paint path, the IoskeleyMono shaping, and the
+client-side titlebar are all proven on a real Linux desktop session.
+The remaining honest caveat for native verification: GPU is
+`llvmpipe` (software Vulkan) and the desktop session is XFCE on a
+cloud VM. Validation on a hardware-accelerated Wayland or X11
+session, and on multiple desktop environments (GNOME, KDE), is
+still useful before the Linux build comes off "in progress" on the
+tracker.
+
+## Follow-up fixes after first review
+
+Two regressions surfaced when the styled-cell PR was reviewed
+against a Linux desktop screenshot (not the cloud-VM capture):
+
+1. **Terminal pane was rendering in the system fallback font, not
+   IoskeleyMono.** The workspace ships with
+   `default_font_family = "Ioskeley Mono"` (with a space). macOS
+   Core Text and Windows DirectWrite happily resolve that to the
+   embedded TTF (whose `name` table reports `family =
+   "IoskeleyMono"`, no space). GPUI Linux's CosmicText backend
+   does an exact `face.families.iter().any(|family| *name ==
+   family.0)` match — `"Ioskeley Mono"` misses, the lookup falls
+   through to a proportional sans, and the terminal cells stop
+   aligning. Fix lives in `crates/con-app/src/theme.rs` as
+   `canonical_terminal_font_family()`: a Linux-only normalization
+   that maps `"Ioskeley Mono"` → `"IoskeleyMono"` before storing
+   into `Theme::mono_font_family`. macOS / Windows behavior is
+   byte-identical to before.
+2. **Linux window had the native xfwm4 titlebar stacked on top of
+   the in-app top bar.** Linux was opting into
+   `WindowDecorations::Server`, so xfwm drew a real titlebar
+   above the GPUI window. Switched to
+   `WindowDecorations::Client` in `default_window_decorations`,
+   added a `TitlebarOptions` (matching what Windows already
+   passes), and extended the existing `caption_buttons` cluster
+   in `workspace.rs` to also build on Linux. The X11 backend's
+   `on_hit_test_window_control` is a no-op, so each Linux button
+   gets an explicit `on_mouse_down` handler that calls
+   `window.minimize_window()` / `zoom_window()` / `remove_window()`
+   directly. The top-bar drag area already calls
+   `start_window_move` on Linux via `_NET_WM_MOVERESIZE`, which
+   xfwm honors.
+
+Both fixes are visible in the new screenshot pair.
