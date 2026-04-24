@@ -150,18 +150,46 @@ impl RenderSession {
     /// Render one frame. `Rendered` returns freshly-read BGRA bytes;
     /// `Unchanged` means "nothing moved, reuse the last image".
     pub fn render_frame(&self) -> Result<RenderOutcome> {
+        let prof_started = perf_trace_enabled().then(Instant::now);
         let renderer = self.renderer.lock();
         let config = self.config.lock().clone();
+        let snapshot_started = perf_trace_enabled().then(Instant::now);
         let snapshot = self.vt.snapshot();
+        let snapshot_ms = snapshot_started
+            .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
         let immediate = self.low_latency_requested.swap(false, Ordering::AcqRel);
         let target_generation = self.low_latency_generation_target.load(Ordering::Acquire);
         let generation_ready = target_generation != 0 && snapshot.generation >= target_generation;
         let burst_active = self.burst_low_latency_active();
         let prefer_latest = immediate || generation_ready || burst_active;
+        let render_started = perf_trace_enabled().then(Instant::now);
         let outcome = renderer.render(&snapshot, &config, prefer_latest)?;
+        let render_ms = render_started
+            .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
         if generation_ready && !matches!(outcome, RenderOutcome::Pending) {
             self.low_latency_generation_target
                 .store(0, Ordering::Release);
+        }
+        if let Some(started) = prof_started {
+            let outcome_name = match &outcome {
+                RenderOutcome::Rendered(_) => "rendered",
+                RenderOutcome::Pending => "pending",
+                RenderOutcome::Unchanged => "unchanged",
+            };
+            log::info!(
+                target: "con::perf",
+                "win_render_frame generation={} rows={} cols={} prefer_latest={} outcome={} snapshot_ms={:.3} render_ms={:.3} total_ms={:.3}",
+                snapshot.generation,
+                snapshot.rows,
+                snapshot.cols,
+                prefer_latest,
+                outcome_name,
+                snapshot_ms,
+                render_ms,
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
         }
         Ok(outcome)
     }
@@ -480,6 +508,13 @@ impl RenderSession {
             None => false,
         }
     }
+}
+
+fn perf_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
 }
 
 fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
