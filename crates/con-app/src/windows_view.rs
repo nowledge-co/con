@@ -109,6 +109,12 @@ pub struct GhosttyView {
     wake_tx: UnboundedSender<()>,
 }
 
+enum SyncRenderResult {
+    Unchanged,
+    Rendered,
+    Pending,
+}
+
 pub fn init(_cx: &mut App) {
     // Keyboard input on Windows flows through GPUI focus → `on_key_down`
     // below (no HWND-level WM_CHAR routing), so no bindings are needed.
@@ -291,16 +297,24 @@ impl GhosttyView {
         }
     }
 
-    /// Called from the children-prepainted listener. Drives session
-    /// lifecycle (init/resize/DPI) and pumps one render. Returns `true`
-    /// when a fresh image was produced — the caller uses that to decide
-    /// whether to `cx.notify()`.
-    fn sync_render(
-        &mut self,
-        bounds: Bounds<Pixels>,
-        scale_factor: f32,
-        window: &mut Window,
-    ) -> bool {
+    fn update_pane_bounds(&mut self, bounds: Bounds<Pixels>, scale_factor: f32) -> bool {
+        let bounds_changed = self.pane_bounds != Some(bounds);
+        let scale_changed = (self.scale_factor - scale_factor).abs() > f32::EPSILON;
+        self.pane_bounds = Some(bounds);
+        self.scale_factor = scale_factor;
+        bounds_changed || scale_changed
+    }
+
+    /// Drives session lifecycle (init/resize/DPI) and pumps one render
+    /// using the most recently observed pane bounds. Returns whether
+    /// the call produced a new image, needs another frame, or made no
+    /// visible progress.
+    fn sync_render(&mut self, window: &mut Window) -> SyncRenderResult {
+        let Some(bounds) = self.pane_bounds else {
+            return SyncRenderResult::Unchanged;
+        };
+        let scale_factor = self.scale_factor.max(f32::EPSILON);
+
         // Drop the tile that the PRIOR frame painted. Paint has already
         // flushed for that frame (we're in prepaint for the next one),
         // so its sprite-atlas entry is no longer referenced and we can
@@ -308,9 +322,6 @@ impl GhosttyView {
         if let Some(old) = self.image_to_drop.take() {
             let _ = window.drop_image(old);
         }
-
-        self.pane_bounds = Some(bounds);
-        self.scale_factor = scale_factor;
 
         // `.ceil()` matches `Window::paint_image`, which does
         // `map_size(|size| size.ceil())` on the scaled physical quad. If
@@ -323,15 +334,15 @@ impl GhosttyView {
 
         self.ensure_session(width_px, height_px, dpi);
         if !self.initialized {
-            return false;
+            return SyncRenderResult::Unchanged;
         }
 
         let Some(session_arc) = self.terminal.as_ref().map(|t| t.inner()) else {
-            return false;
+            return SyncRenderResult::Unchanged;
         };
         let guard = session_arc.lock();
         let Some(session) = guard.as_ref() else {
-            return false;
+            return SyncRenderResult::Unchanged;
         };
 
         if (scale_factor - self.last_scale_factor).abs() > f32::EPSILON {
@@ -349,28 +360,24 @@ impl GhosttyView {
         }
 
         match session.render_frame() {
-            Ok(RenderOutcome::Unchanged) => false,
+            Ok(RenderOutcome::Unchanged) => SyncRenderResult::Unchanged,
             Ok(RenderOutcome::Rendered(frame)) => {
                 if let Some(image) = bgra_frame_to_image(frame.bytes, frame.width, frame.height) {
                     // Stash the prior image so next prepaint can drop
                     // its atlas tile. `Option::replace` returns the old
                     // inner value, matching our `Option<Arc<_>>` slot.
                     self.image_to_drop = self.cached_image.replace(image);
-                    true
+                    SyncRenderResult::Rendered
                 } else {
-                    false
+                    SyncRenderResult::Unchanged
                 }
             }
             Ok(RenderOutcome::Pending) => {
-                // A non-interactive frame (typically resize/fullscreen)
-                // submitted fresh GPU work but chose not to block the
-                // UI thread on readback. Come back next prepaint to
-                // drain the finished slot.
-                true
+                SyncRenderResult::Pending
             }
             Err(err) => {
                 log::warn!("RenderSession::render_frame failed: {err:#}");
-                false
+                SyncRenderResult::Unchanged
             }
         }
     }
@@ -704,7 +711,12 @@ impl Focusable for GhosttyView {
 }
 
 impl Render for GhosttyView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        match self.sync_render(window) {
+            SyncRenderResult::Pending => cx.notify(),
+            SyncRenderResult::Rendered | SyncRenderResult::Unchanged => {}
+        }
+
         let theme = cx.theme();
         let entity = cx.entity().downgrade();
         // `ObjectFit::Fill` keeps the image quad exactly equal to the
@@ -784,8 +796,7 @@ impl Render for GhosttyView {
                         let scale = window.scale_factor();
                         if let Some(view) = entity.upgrade() {
                             view.update(cx, |view, cx| {
-                                let changed = view.sync_render(bounds, scale, window);
-                                if changed {
+                                if view.update_pane_bounds(bounds, scale) {
                                     cx.notify();
                                 }
                             });
