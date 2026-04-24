@@ -97,16 +97,14 @@ impl Default for AppearanceConfig {
 
 // Default keybindings are chosen per platform. On macOS the `secondary-`
 // modifier token (⌘) is the right primary: Cmd+<letter> doesn't collide
-// with anything the terminal expects. On Windows `secondary-` resolves
-// to `Ctrl`, and bare Ctrl+<letter> is already a meaningful byte to
-// every POSIX/PowerShell shell (Ctrl+L = clear, Ctrl+C = SIGINT, Ctrl+I
-// = Tab, Ctrl+D = EOF, Ctrl+W = kill-word, ...). Binding app actions
-// to those steals them from the shell, which is exactly the feedback
-// a previous session missed. So for Windows we prefer Ctrl+Shift+
-// <letter> for actions that share a letter with a common terminal key,
-// matching Windows Terminal's own convention. Non-letter bindings
-// (Ctrl+`, Ctrl+,, Ctrl+;, Ctrl+') stay on bare Ctrl because those
-// keys don't produce control characters.
+// with anything the terminal expects. On Windows/Linux `secondary-`
+// resolves to `Ctrl`, and bare Ctrl+<letter> often has shell meaning
+// (Ctrl+L = clear, Ctrl+C = SIGINT, Ctrl+I = Tab, ...), so most app
+// actions avoid that space. Pane split/close is the one explicit
+// exception here: those shortcuts are window-management commands in Con
+// itself, not shell editing commands, and issue #67 calls out that the
+// Windows/Linux defaults need to be deliberate and user-visible rather
+// than half-wired placeholders.
 #[cfg(target_os = "macos")]
 fn default_toggle_agent() -> String {
     "secondary-l".into()
@@ -148,6 +146,10 @@ fn default_close_tab() -> String {
     "ctrl-shift-w".into()
 }
 
+fn default_close_pane() -> String {
+    "ctrl-d".into()
+}
+
 fn default_next_tab() -> String {
     "ctrl-tab".into()
 }
@@ -180,16 +182,7 @@ fn default_split_right() -> String {
 }
 #[cfg(not(target_os = "macos"))]
 fn default_split_right() -> String {
-    // Windows Terminal's "split pane right" is the user-visible
-    // `Alt+Shift+=`. GPUI's Windows key mapper resolves `VK_OEM_PLUS`
-    // with shift held to the *shifted* character `+` and zeroes the
-    // shift modifier, so the binding string must describe what the OS
-    // actually delivers: `alt-+`. Authoring it as `alt-shift-=` stores
-    // the binding as `key="=" modifiers=alt+shift`, which will never
-    // match the inbound `key="+" modifiers=alt` and the keystroke
-    // falls through to the terminal. Ctrl+D is EOF so we can't use
-    // secondary-d here.
-    "alt-+".into()
+    "alt-d".into()
 }
 
 #[cfg(target_os = "macos")]
@@ -198,12 +191,7 @@ fn default_split_down() -> String {
 }
 #[cfg(not(target_os = "macos"))]
 fn default_split_down() -> String {
-    // Mirrors Windows Terminal's user-visible `Alt+Shift+-`. GPUI's
-    // Windows key mapper resolves `VK_OEM_MINUS` with shift held to
-    // `_` and zeroes shift, so we author the binding as `alt-_` to
-    // match what the OS actually delivers. See `default_split_right`
-    // for the same reasoning applied to `+`.
-    "alt-_".into()
+    "alt-shift-d".into()
 }
 
 #[cfg(target_os = "macos")]
@@ -240,6 +228,7 @@ pub struct KeybindingConfig {
     pub new_window: String,
     pub new_tab: String,
     pub close_tab: String,
+    pub close_pane: String,
     pub next_tab: String,
     pub previous_tab: String,
     pub settings: String,
@@ -262,6 +251,7 @@ impl Default for KeybindingConfig {
             new_window: default_new_window(),
             new_tab: default_new_tab(),
             close_tab: default_close_tab(),
+            close_pane: default_close_pane(),
             next_tab: default_next_tab(),
             previous_tab: default_previous_tab(),
             settings: default_settings(),

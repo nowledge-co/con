@@ -1823,6 +1823,7 @@ impl SettingsPanel {
             "new_window" => self.config.keybindings.new_window = binding,
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
+            "close_pane" => self.config.keybindings.close_pane = binding,
             "next_tab" => self.config.keybindings.next_tab = binding,
             "previous_tab" => self.config.keybindings.previous_tab = binding,
             "settings" => self.config.keybindings.settings = binding,
@@ -1848,6 +1849,7 @@ impl SettingsPanel {
             "new_window" => &self.config.keybindings.new_window,
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
+            "close_pane" => &self.config.keybindings.close_pane,
             "next_tab" => &self.config.keybindings.next_tab,
             "previous_tab" => &self.config.keybindings.previous_tab,
             "settings" => &self.config.keybindings.settings,
@@ -3741,8 +3743,11 @@ impl SettingsPanel {
             ("Quit", "quit"),
         ];
 
-        let pane_keys: &[(&str, &str)] =
-            &[("Split Right", "split_right"), ("Split Down", "split_down")];
+        let pane_keys: &[(&str, &str)] = &[
+            ("Split Right", "split_right"),
+            ("Split Down", "split_down"),
+            ("Close Pane", "close_pane"),
+        ];
 
         let build_card = |keys: &[(&str, &str)],
                           recording: &Option<String>,
@@ -3991,8 +3996,7 @@ impl SettingsPanel {
                 .flex_col()
                 .gap(px(8.0))
                 .child(group_label("Panes", &theme))
-                .child(pane_card)
-                .child(card(theme, card_opacity).child(key_row("Close Pane", "ctrl-d", theme))),
+                .child(pane_card),
         )
         .child(
             div()

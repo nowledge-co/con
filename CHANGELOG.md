@@ -4,6 +4,13 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## [Unreleased]
+
+### Fixed
+
+**Interface**
+- Completed pane-close keyboard handling instead of only showing dead UI. `Close Pane` is now a real configurable shortcut in Settings, and Windows/Linux pane split defaults now use `Alt+D` / `Alt+Shift+D` instead of fragile symbol-based bindings.
+
 ## [v0.1.0-beta.37] - 2026-04-24
 
 ### Improved
