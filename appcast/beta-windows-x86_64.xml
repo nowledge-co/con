@@ -6,6 +6,14 @@
     <description>Most recent changes</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.0-beta.36</title>
+      <pubDate/>
+      <sparkle:version>12</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-beta.36</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>10.0.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.36/con-0.1.0-beta.36-windows-x86_64.zip" length="41109520" type="application/octet-stream" sparkle:edSignature="mG2cOzI99W2P6sO0CdIAdQau0DZQuiMhl6UCDMJ7WZYKNV73JbQ503/qiccAm+K/rPPmj6hImGOG9VbTh/UeDw=="/>
+    </item>
+    <item>
       <title>Version 0.1.0-beta.35</title>
       <pubDate/>
       <sparkle:version>11</sparkle:version>
