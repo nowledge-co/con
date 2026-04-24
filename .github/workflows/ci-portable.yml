@@ -16,19 +16,21 @@ name: ci-portable
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "postmortem/**"
-      - "LICENSE"
-      - ".gitignore"
+    paths:
+      - ".github/workflows/ci-portable.yml"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "assets/**"
+      - "crates/**"
   pull_request:
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "postmortem/**"
-      - "LICENSE"
-      - ".gitignore"
+    paths:
+      - ".github/workflows/ci-portable.yml"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "assets/**"
+      - "crates/**"
 
 env:
   CARGO_TERM_COLOR: always
