@@ -8,6 +8,14 @@
     <item>
       <title>Version 0.1.0</title>
       <pubDate/>
+      <sparkle:version>40</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.36/con-Beta-0.1.0-beta.36-macos-x86_64.dmg" length="46389815" type="application/octet-stream" sparkle:edSignature="1cFxePT7UAg+P1pSEJ5kLBSuJHCDuN0Hdn103sfe2Dx5i3OQZLhNgcQaKZr3F5mMOxoGU7zieq8JRo0a3P3IDg=="/>
+    </item>
+    <item>
+      <title>Version 0.1.0</title>
+      <pubDate/>
       <sparkle:version>39</sparkle:version>
       <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
