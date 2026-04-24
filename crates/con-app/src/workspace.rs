@@ -749,6 +749,7 @@ impl ConWorkspace {
                         None,
                         i,
                     );
+                    let pane_count = tab.pane_tree.pane_terminals().len();
                     SessionEntry {
                         name: presentation.name,
                         subtitle: presentation.subtitle,
@@ -756,6 +757,7 @@ impl ConWorkspace {
                         needs_attention: false,
                         icon: presentation.icon,
                         has_user_label: tab.user_label.is_some(),
+                        pane_count,
                     }
                 })
                 .collect();
@@ -3220,6 +3222,7 @@ impl ConWorkspace {
                     current_dir.as_deref(),
                     i,
                 );
+                let pane_count = tab.pane_tree.pane_terminals().len();
                 SessionEntry {
                     name: presentation.name,
                     subtitle: presentation.subtitle,
@@ -3227,6 +3230,7 @@ impl ConWorkspace {
                     needs_attention: tab.needs_attention,
                     icon: presentation.icon,
                     has_user_label: tab.user_label.is_some(),
+                    pane_count,
                 }
             })
             .collect();
@@ -6509,12 +6513,12 @@ impl Render for ConWorkspace {
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
 
-        // Render the vertical-tabs peek overlay up front so it takes
-        // the (re-entrant) sidebar borrow before `theme` claims the
-        // immutable cx borrow that the rest of `render` relies on.
+        // Render the vertical-tabs hover-card overlay up front so it
+        // takes the (re-entrant) sidebar borrow before `theme` claims
+        // the immutable cx borrow that the rest of `render` relies on.
         let vertical_tabs_overlay = if self.vertical_tabs_active() {
             self.sidebar
-                .update(cx, |sidebar, cx| sidebar.render_peek_overlay(window, cx))
+                .update(cx, |sidebar, cx| sidebar.render_hover_card_overlay(window, cx))
         } else {
             None
         };
@@ -7798,11 +7802,27 @@ fn smart_tab_presentation(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
+        // User label overrides the *name* but we still pick a smart
+        // icon from whatever signals are available — a tab labelled
+        // "Editor" deserves the editor icon, not a fallback terminal
+        // icon. Hostname > focused-process detection > terminal.
+        let icon = if let Some(host) = hostname.map(str::trim).filter(|s| !s.is_empty()) {
+            // Use globe for SSH-labelled tabs.
+            let _ = host;
+            "phosphor/globe.svg"
+        } else if let Some(raw) = title.map(str::trim).filter(|s| !s.is_empty()) {
+            parse_focused_process(raw)
+                .map(|(_, ic)| ic)
+                .unwrap_or("phosphor/terminal.svg")
+        } else {
+            "phosphor/terminal.svg"
+        };
+        let is_ssh = hostname.is_some();
         return VerticalTabPresentation {
             name: label.to_string(),
             subtitle: cwd_subtitle(current_dir),
-            icon: "phosphor/terminal.svg",
-            is_ssh: false,
+            icon,
+            is_ssh,
         };
     }
 
