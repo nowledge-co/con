@@ -303,7 +303,7 @@ Important consequence:
 - [x] Cmd+1..9 tab switching
 - [x] Session persistence (tabs, active tab, agent panel state)
 - [x] Kitty keyboard protocol (CSI u encoding, push/pop/query flags)
-- [x] Split panes (horizontal Cmd+D, vertical Cmd+Shift+D, pane tree)
+- [x] Split panes (macOS: Cmd+D / Cmd+Shift+D, Windows/Linux: Alt+D / Alt+Shift+D, pane tree)
 
 ### Phase 2: Agent Harness
 
