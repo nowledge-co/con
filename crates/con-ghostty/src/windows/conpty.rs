@@ -21,11 +21,15 @@ use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use parking_lot::Mutex;
-use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, TRUE};
+use windows::Win32::Foundation::{
+    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, TRUE,
+};
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 use windows::Win32::System::Console::{
@@ -34,12 +38,18 @@ use windows::Win32::System::Console::{
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, INFINITE,
-    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, INFINITE, InitializeProcThreadAttributeList,
+    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
+    STARTUPINFOEXW, STARTUPINFOW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use windows::core::PWSTR;
+
+fn perf_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
 
 /// Close the pseudo-console if it hasn't been closed yet, clearing the
 /// slot so a second caller becomes a no-op. Called from two places —
@@ -364,7 +374,10 @@ fn create_pipe() -> Result<(OwnedHandle, OwnedHandle)> {
     // this stack frame for the duration of the call.
     unsafe { CreatePipe(&mut read, &mut write, Some(&security), 0) }
         .context("CreatePipe failed")?;
-    Ok((OwnedHandle::from_handle(read), OwnedHandle::from_handle(write)))
+    Ok((
+        OwnedHandle::from_handle(read),
+        OwnedHandle::from_handle(write),
+    ))
 }
 
 /// Build a `STARTUPINFOEXW` whose attribute list binds the pseudo-console
@@ -441,6 +454,9 @@ where
         .spawn(move || {
             let mut buf = [0u8; 4096];
             let mut total_bytes: u64 = 0;
+            let mut chunk_index: u64 = 0;
+            let started = perf_trace_enabled().then(Instant::now);
+            let mut last_chunk_at: Option<Instant> = None;
             loop {
                 let mut bytes_read: u32 = 0;
                 let handle = read_handle.as_handle();
@@ -457,6 +473,24 @@ where
                     break; // EOF or error; child exited.
                 }
                 total_bytes += bytes_read as u64;
+                if let Some(started) = started {
+                    let now = Instant::now();
+                    let since_prev_ms = last_chunk_at
+                        .map(|last| now.duration_since(last).as_secs_f64() * 1000.0)
+                        .unwrap_or(0.0);
+                    let since_start_ms = now.duration_since(started).as_secs_f64() * 1000.0;
+                    log::info!(
+                        target: "con::perf",
+                        "conpty_read chunk={} bytes={} total_bytes={} since_prev_ms={:.3} since_start_ms={:.3}",
+                        chunk_index,
+                        bytes_read,
+                        total_bytes,
+                        since_prev_ms,
+                        since_start_ms,
+                    );
+                    last_chunk_at = Some(now);
+                }
+                chunk_index = chunk_index.wrapping_add(1);
                 log::trace!(
                     "conpty reader: +{bytes_read} bytes (total {total_bytes})"
                 );
@@ -479,7 +513,10 @@ where
 /// cmd because Windows Terminal does, and because pwsh is the modern
 /// default on Windows 11 / Server 2025.
 pub fn default_shell_command() -> String {
-    if let Some(cmd) = std::env::var("CON_SHELL").ok().filter(|s| !s.trim().is_empty()) {
+    if let Some(cmd) = std::env::var("CON_SHELL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
         return cmd;
     }
     for candidate in ["pwsh.exe", "powershell.exe"] {
@@ -487,7 +524,10 @@ pub fn default_shell_command() -> String {
             return candidate.to_string();
         }
     }
-    if let Some(cmd) = std::env::var("COMSPEC").ok().filter(|s| !s.trim().is_empty()) {
+    if let Some(cmd) = std::env::var("COMSPEC")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
         return cmd;
     }
     "cmd.exe".to_string()
