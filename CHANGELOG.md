@@ -10,11 +10,18 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Workspace — Vertical Tabs**
 - Added a vertical-tabs layout for the workspace tab strip, modelled on Chrome's vertical tabs. Toggle in *Settings → Appearance → Tabs → Vertical Tabs*.
-- Three states matching the Chrome reference: collapsed icon rail (~44 px) by default; hover-peek panel (~220 px) that floats over the terminal area when the cursor enters the rail; pinned panel that displaces the terminal area to the right.
+- Three states matching the Chrome reference: collapsed icon rail (~44 px) by default; hover-peek panel (~240 px) that floats over the terminal area when the cursor enters the rail; pinned panel that displaces the terminal area to the right.
 - Hover-peek deliberately does not reflow the terminal area — it overlays in absolute layout above the terminal pane. Pinning via the rail/header sidebar-toggle button reflows.
-- Click activates a tab; middle-click closes it; pinned-mode rows expose a hover-only `X` close affordance. `+` button at the top spawns a new tab. Per-tab `needs attention` dot mirrors the horizontal strip.
-- Pinned/collapsed state is persisted across restarts (`vertical_tabs_pinned` in `~/.local/share/con/session.json`); the orientation choice itself lives in `~/.config/con/config.toml` under `appearance.tabs_orientation`.
-- Horizontal tabs remain the default for backward compatibility with every shipped beta. Switching orientation at runtime takes effect immediately — no restart needed.
+- Smooth tween between collapsed and pinned states (220ms ease-out cubic on width); peek slides in from -8 px with a 160ms fade so the overlay arrives gracefully instead of popping.
+- Smart per-tab naming. Priority: user override → SSH host → focused process (parsed from the OSC-set terminal title — `vim README.md`, `htop`, `less log.txt`, etc.) → cwd basename → shell. Bare shells fall through so a row never reads as "bash" when there's something more useful to show.
+- Smart per-tab icons keyed off the focused process: `terminal` for shells, `globe` for SSH, `</>` for editors (vim/nvim/nano/emacs/helix/code), `pulse` for monitors (htop/top/btop/k9s), `book-open` for pagers (less/more/man/bat), `file-code` for git tools (git/lazygit/tig/gh).
+- Two-line rows in pinned/peek mode: name (system font) on top, optional cwd / `user@host` subtitle (mono font) below. Long paths collapse to `…/parent/last`; `$HOME` collapses to `~`.
+- Inline rename: double-click a row's label, or right-click → Rename. Enter commits, Esc cancels. The label is persisted via a new `user_label` field on `TabState`. Reset Name in the context menu clears the override and falls back to smart auto-naming.
+- Right-click context menu per row: Rename / Duplicate / Reset Name (if user-labelled) / Move Up / Move Down / Close Tab / Close Other Tabs.
+- Drag a row to reorder. The dragged tab follows the cursor as a small floating chip; a 2-px accent line marks the drop target between rows; drop fires `SidebarReorder` which the workspace applies in-place and persists to session.
+- Click activates a tab; middle-click closes it; rows expose a hover-only `X` close affordance and pencil rename affordance (always visible on the active row). `+` button at the top spawns a new tab. Per-tab `needs attention` dot mirrors the horizontal strip.
+- Active row gets a 3-px primary-color accent bar on the leading edge (Apple-style "selection").
+- Pinned/collapsed state and the orientation choice persist across restarts (`vertical_tabs_pinned` in session, `appearance.tabs_orientation` in config). Horizontal tabs remain the default for backward compatibility with every shipped beta. Switching orientation at runtime takes effect immediately.
 
 ### Improved
 
