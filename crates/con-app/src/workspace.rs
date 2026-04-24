@@ -5979,6 +5979,7 @@ impl ConWorkspace {
             cx,
         );
 
+        self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
     }
