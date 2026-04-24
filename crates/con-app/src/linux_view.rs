@@ -16,8 +16,8 @@
 use std::sync::Arc;
 
 use con_ghostty::{
-    Cursor, GhosttyApp, GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize,
-    VtCell, ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE,
+    GhosttyApp, GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize, VtCell,
+    VtCursor, ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE,
 };
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -69,7 +69,7 @@ pub struct GhosttyView {
     snapshot: Option<ScreenSnapshot>,
     row_cache: Vec<CachedTerminalRow>,
     row_cache_generation: Option<u64>,
-    row_cache_cursor: Option<Cursor>,
+    row_cache_cursor: Option<VtCursor>,
     row_cache_style: Option<RowCacheStyleKey>,
     row_cache_shape: Option<(u16, u16)>,
     /// Latched after the first PTY snapshot that contained any
@@ -703,7 +703,7 @@ struct RowCacheStyleKey {
     line_height: Pixels,
 }
 
-fn cursor_col_for_row(cursor: Cursor, row_idx: usize) -> Option<usize> {
+fn cursor_col_for_row(cursor: VtCursor, row_idx: usize) -> Option<usize> {
     if cursor.visible && usize::from(cursor.row) == row_idx {
         Some(usize::from(cursor.col))
     } else {
@@ -713,7 +713,7 @@ fn cursor_col_for_row(cursor: Cursor, row_idx: usize) -> Option<usize> {
 
 fn rows_needing_refresh(
     snapshot: &ScreenSnapshot,
-    previous_cursor: Option<Cursor>,
+    previous_cursor: Option<VtCursor>,
     force_full_rebuild: bool,
 ) -> Vec<usize> {
     if force_full_rebuild {
@@ -1020,7 +1020,7 @@ fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<
 #[cfg(test)]
 mod tests {
     use super::{build_terminal_row, rows_needing_refresh, vt_color_to_hsla};
-    use con_ghostty::{Cursor, ScreenSnapshot, VtCell, ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE};
+    use con_ghostty::{ScreenSnapshot, VtCell, VtCursor, ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE};
     use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, Rgba};
 
     fn base_font() -> Font {
@@ -1088,7 +1088,7 @@ mod tests {
             rows: 3,
             cells: vec![Default::default(); 12],
             dirty_rows: vec![1],
-            cursor: Cursor {
+            cursor: VtCursor {
                 col: 2,
                 row: 2,
                 visible: true,
@@ -1099,7 +1099,7 @@ mod tests {
 
         let mut rows = rows_needing_refresh(
             &snapshot,
-            Some(Cursor {
+            Some(VtCursor {
                 col: 1,
                 row: 0,
                 visible: true,
