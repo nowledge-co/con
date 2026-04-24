@@ -6,6 +6,16 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## [Unreleased]
 
+### Added
+
+**Workspace — Vertical Tabs**
+- Added a vertical-tabs layout for the workspace tab strip, modelled on Chrome's vertical tabs. Toggle in *Settings → Appearance → Tabs → Vertical Tabs*.
+- Three states matching the Chrome reference: collapsed icon rail (~44 px) by default; hover-peek panel (~220 px) that floats over the terminal area when the cursor enters the rail; pinned panel that displaces the terminal area to the right.
+- Hover-peek deliberately does not reflow the terminal area — it overlays in absolute layout above the terminal pane. Pinning via the rail/header sidebar-toggle button reflows.
+- Click activates a tab; middle-click closes it; pinned-mode rows expose a hover-only `X` close affordance. `+` button at the top spawns a new tab. Per-tab `needs attention` dot mirrors the horizontal strip.
+- Pinned/collapsed state is persisted across restarts (`vertical_tabs_pinned` in `~/.local/share/con/session.json`); the orientation choice itself lives in `~/.config/con/config.toml` under `appearance.tabs_orientation`.
+- Horizontal tabs remain the default for backward compatibility with every shipped beta. Switching orientation at runtime takes effect immediately — no restart needed.
+
 ### Improved
 
 **Terminal — Windows Backend (preview)**

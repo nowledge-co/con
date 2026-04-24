@@ -66,7 +66,7 @@ kingston/
 │   │       ├── input_bar.rs    # smart input bar (NLP/shell/skill modes)
 │   │       ├── pane_tree.rs    # split pane layout tree
 │   │       ├── settings_panel.rs # provider config UI (Cmd+,)
-│   │       ├── sidebar.rs      # session sidebar
+│   │       ├── sidebar.rs      # vertical-tabs side panel (rail / hover-peek / pinned)
 │   │       └── theme.rs        # Flexoki themes (Light default, Dark available)
 │   │
 │   ├── con-core/              # shared logic, no UI dependency

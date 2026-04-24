@@ -221,7 +221,9 @@ use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
 use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
-use crate::sidebar::{NewSession, SessionEntry, SessionSidebar, SidebarSelect};
+use crate::sidebar::{
+    NewSession, SessionEntry, SessionSidebar, SidebarCloseTab, SidebarSelect,
+};
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
 
@@ -234,7 +236,7 @@ use crate::{
     SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
 };
 use con_agent::{AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse};
-use con_core::config::Config;
+use con_core::config::{Config, TabsOrientation};
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
@@ -303,6 +305,7 @@ pub struct ConWorkspace {
     background_image_position: String,
     background_image_fit: String,
     background_image_repeat: bool,
+    tabs_orientation: TabsOrientation,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -571,7 +574,12 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let sidebar = cx.new(|cx| SessionSidebar::new(cx));
+        let initial_vertical_pinned = session.vertical_tabs_pinned;
+        let sidebar = cx.new(|cx| {
+            let mut s = SessionSidebar::new(cx);
+            s.set_pinned(initial_vertical_pinned, cx);
+            s
+        });
         let terminal_font_family = config.terminal.font_family.clone();
         let ui_font_family = config.appearance.ui_font_family.clone();
         let ui_font_size = config.appearance.ui_font_size;
@@ -587,6 +595,7 @@ impl ConWorkspace {
         let background_image_position = config.appearance.background_image_position.clone();
         let background_image_fit = config.appearance.background_image_fit.clone();
         let background_image_repeat = config.appearance.background_image_repeat;
+        let tabs_orientation = config.appearance.tabs_orientation;
         let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
         let colors = theme_to_ghostty_colors(&terminal_theme);
         let ghostty_app = con_ghostty::GhosttyApp::new(
@@ -714,6 +723,33 @@ impl ConWorkspace {
             });
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
+        // Seed the vertical-tabs side panel with the restored tab list
+        // so it has something to render before the first
+        // `sync_sidebar` call (which only fires when the live terminal
+        // title or the tab set changes). Without this seed the panel
+        // would draw an empty rail until the user opened or activated
+        // a tab.
+        {
+            let entries: Vec<SessionEntry> = tabs
+                .iter()
+                .enumerate()
+                .map(|(i, tab)| {
+                    let name = if tab.title.trim().is_empty() {
+                        format!("Tab {}", i + 1)
+                    } else {
+                        tab.title.clone()
+                    };
+                    SessionEntry {
+                        name,
+                        is_ssh: false,
+                        needs_attention: false,
+                    }
+                })
+                .collect();
+            sidebar.update(cx, |s, cx| {
+                s.sync_sessions(entries, active_tab, cx);
+            });
+        }
         let persisted_history = GlobalHistoryState::load().unwrap_or_else(|err| {
             log::warn!("Failed to load command history: {}", err);
             GlobalHistoryState::default()
@@ -812,6 +848,16 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
             .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_close_tab)
+            .detach();
+        cx.observe(&sidebar, |this, _sidebar, cx| {
+            // The sidebar's pin/peek state lives in the sidebar entity,
+            // so the workspace re-renders when it changes — and we save
+            // pinned state so it survives restart.
+            this.save_session(cx);
+            cx.notify();
+        })
+        .detach();
         let workspace_handle = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             // Two shutdown paths, two behaviours:
@@ -1011,6 +1057,7 @@ impl ConWorkspace {
             background_image_position,
             background_image_fit,
             background_image_repeat,
+            tabs_orientation,
             agent_panel,
             input_bar,
             settings_panel,
@@ -1061,15 +1108,22 @@ impl ConWorkspace {
         make_ghostty_terminal(&self.ghostty_app, cwd, self.font_size, window, cx)
     }
 
+    fn horizontal_tabs_visible(&self) -> bool {
+        matches!(self.tabs_orientation, TabsOrientation::Horizontal) && self.tabs.len() > 1
+    }
+
+    fn vertical_tabs_active(&self) -> bool {
+        matches!(self.tabs_orientation, TabsOrientation::Vertical)
+    }
+
     fn sync_tab_strip_motion(&mut self) {
-        self.tab_strip_motion.set_target(
-            if self.tabs.len() > 1 { 1.0 } else { 0.0 },
-            std::time::Duration::from_millis(180),
-        );
+        let target = if self.horizontal_tabs_visible() { 1.0 } else { 0.0 };
+        self.tab_strip_motion
+            .set_target(target, std::time::Duration::from_millis(180));
     }
 
     fn current_top_bar_height(&self) -> f32 {
-        if self.tab_strip_motion.is_animating() || self.tabs.len() > 1 {
+        if self.tab_strip_motion.is_animating() || self.horizontal_tabs_visible() {
             TOP_BAR_TABS_HEIGHT
         } else {
             TOP_BAR_COMPACT_HEIGHT
@@ -2500,6 +2554,7 @@ impl ConWorkspace {
                 .collect(),
             input_history: self.global_input_history.iter().cloned().collect(),
             conversation_id: None, // deprecated — per-tab now
+            vertical_tabs_pinned: self.sidebar.read(cx).is_pinned(),
         }
     }
 
@@ -2995,6 +3050,16 @@ impl ConWorkspace {
         self.new_tab(&NewTab, window, cx);
     }
 
+    fn on_sidebar_close_tab(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarCloseTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_tab_by_index(event.index, window, cx);
+    }
+
     fn sync_sidebar(&self, cx: &mut Context<Self>) {
         let sessions: Vec<SessionEntry> = self
             .tabs
@@ -3007,7 +3072,11 @@ impl ConWorkspace {
                 let title = terminal.title(cx);
                 let current_dir = terminal.current_dir(cx);
                 let name = pane_display_name(&hostname, &title, &current_dir, i);
-                SessionEntry { name, is_ssh }
+                SessionEntry {
+                    name,
+                    is_ssh,
+                    needs_attention: tab.needs_attention,
+                }
             })
             .collect();
         self.sidebar.update(cx, |sidebar, cx| {
@@ -3153,6 +3222,15 @@ impl ConWorkspace {
         self.background_image_position = appearance_config.background_image_position.clone();
         self.background_image_fit = appearance_config.background_image_fit.clone();
         self.background_image_repeat = appearance_config.background_image_repeat;
+        if self.tabs_orientation != appearance_config.tabs_orientation {
+            self.tabs_orientation = appearance_config.tabs_orientation;
+            // Tab strip motion drives the top-bar height. In vertical
+            // mode the strip is always hidden — collapse the motion now
+            // so we don't pay an unrelated transition.
+            self.sync_tab_strip_motion();
+            self.save_session(cx);
+            cx.notify();
+        }
         self.agent_panel
             .update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
         self.input_bar
@@ -6277,6 +6355,17 @@ impl Render for ConWorkspace {
         let tab_strip_progress = self.tab_strip_motion.value(window);
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
+
+        // Render the vertical-tabs peek overlay up front so it takes
+        // the (re-entrant) sidebar borrow before `theme` claims the
+        // immutable cx borrow that the rest of `render` relies on.
+        let vertical_tabs_overlay = if self.vertical_tabs_active() {
+            self.sidebar
+                .update(cx, |sidebar, cx| sidebar.render_peek_overlay(cx))
+        } else {
+            None
+        };
+
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
@@ -6313,7 +6402,13 @@ impl Render for ConWorkspace {
             .bg(theme.transparent)
             .child(pane_tree_rendered);
 
-        let mut main_area = div().flex().flex_1().min_h_0().child(terminal_area);
+        let mut main_area = div().relative().flex().flex_1().min_h_0();
+
+        if self.vertical_tabs_active() {
+            main_area = main_area.child(self.sidebar.clone());
+        }
+
+        main_area = main_area.child(terminal_area);
 
         if agent_panel_progress > 0.01 {
             main_area = main_area.child(
@@ -6370,8 +6465,11 @@ impl Render for ConWorkspace {
             );
         }
 
+        if let Some(overlay) = vertical_tabs_overlay {
+            main_area = main_area.child(overlay);
+        }
+
         // Top bar — compact titlebar for one tab, full strip for many
-        let tab_count = self.tabs.len();
         let top_bar_height = self.current_top_bar_height();
         let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
@@ -6412,10 +6510,13 @@ impl Render for ConWorkspace {
                 });
         }
 
-        // Tabs container — appears only when there is real tab selection to do
+        // Tabs container — appears only when there is real tab selection to do.
+        // In vertical-tabs mode the side panel owns the tab list so we keep
+        // this strip empty even with multiple tabs.
+        let show_horizontal_tabs = self.horizontal_tabs_visible();
         let mut tabs_container = div().flex().flex_1().min_w_0().items_end();
 
-        if tab_count > 1 {
+        if show_horizontal_tabs {
             for (index, tab) in self.tabs.iter().enumerate() {
                 let is_active = index == self.active_tab;
                 let needs_attention = tab.needs_attention && !is_active;
@@ -6808,6 +6909,16 @@ impl Render for ConWorkspace {
                         }
                     }
 
+                    // Compute layout-dependent inputs *before* re-borrowing
+                    // `this` mutably for the pane tree, otherwise we
+                    // collide with the immutable borrow needed by
+                    // `vertical_tabs_active` / `sidebar.read`.
+                    let vertical_tabs_w = if this.vertical_tabs_active() {
+                        this.sidebar.read(cx).occupied_width()
+                    } else {
+                        0.0
+                    };
+
                     let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
 
                     if !pane_tree.is_dragging() {
@@ -6815,7 +6926,8 @@ impl Render for ConWorkspace {
                     }
 
                     // Estimate terminal area from window bounds minus fixed chrome
-                    // (tab bar ~38px, input bar ~40px, agent panel if open)
+                    // (tab bar ~38px, input bar ~40px, agent panel if open,
+                    // vertical-tabs panel on the leading edge if enabled).
                     let win_w = f32::from(win.bounds().size.width);
                     let win_h = f32::from(win.bounds().size.height);
                     let effective_agent_panel_width =
@@ -6829,7 +6941,10 @@ impl Render for ConWorkspace {
                                     } else {
                                         0.0
                                     };
-                                    (f32::from(event.position.x), win_w - panel_w)
+                                    (
+                                        f32::from(event.position.x) - vertical_tabs_w,
+                                        win_w - panel_w - vertical_tabs_w,
+                                    )
                                 }
                                 SplitDirection::Vertical => (
                                     f32::from(event.position.y),

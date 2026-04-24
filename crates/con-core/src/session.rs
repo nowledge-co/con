@@ -18,6 +18,13 @@ pub struct Session {
     pub input_history: Vec<String>,
     #[serde(default)]
     pub conversation_id: Option<String>,
+    /// Whether the vertical-tabs side panel is pinned open (full panel)
+    /// or collapsed to its icon rail. Only consulted when the user has
+    /// `appearance.tabs_orientation = vertical` in config; in horizontal
+    /// mode this field is preserved verbatim across restarts so toggling
+    /// orientation later restores the previous expansion state.
+    #[serde(default)]
+    pub vertical_tabs_pinned: bool,
 }
 
 /// App-wide command history, stored separately from window layout so it survives
@@ -135,6 +142,7 @@ impl Default for Session {
             global_shell_history: Vec::new(),
             input_history: Vec::new(),
             conversation_id: None,
+            vertical_tabs_pinned: false,
         }
     }
 }

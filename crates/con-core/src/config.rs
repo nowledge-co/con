@@ -63,6 +63,24 @@ impl Default for TerminalConfig {
     }
 }
 
+/// How the workspace presents its tabs.
+///
+/// `Horizontal` keeps the historical behavior — a strip of pills along the
+/// top of the window that only appears once the second tab opens.
+///
+/// `Vertical` moves the strip to a left-side panel modelled on Chrome's
+/// vertical tabs: a narrow icon rail by default that can be pinned open
+/// to show full titles, with a hover-to-peek overlay in between. The top
+/// titlebar collapses to its compact one-tab form so the rail owns the
+/// tab list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TabsOrientation {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceConfig {
@@ -76,6 +94,9 @@ pub struct AppearanceConfig {
     pub background_image_position: String,
     pub background_image_fit: String,
     pub background_image_repeat: bool,
+    /// Layout of the workspace tab strip. Defaults to `Horizontal` for
+    /// backward compatibility with every shipped beta.
+    pub tabs_orientation: TabsOrientation,
 }
 
 impl Default for AppearanceConfig {
@@ -91,6 +112,7 @@ impl Default for AppearanceConfig {
             background_image_position: default_background_image_position(),
             background_image_fit: default_background_image_fit(),
             background_image_repeat: false,
+            tabs_orientation: TabsOrientation::default(),
         }
     }
 }

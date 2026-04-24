@@ -2790,6 +2790,38 @@ impl SettingsPanel {
                 ),
         );
 
+        let vertical_tabs_enabled = matches!(
+            self.config.appearance.tabs_orientation,
+            con_core::config::TabsOrientation::Vertical,
+        );
+        content = content.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Tabs", &theme))
+                .child(
+                    card(theme, card_opacity).child(toggle_row(
+                        "Vertical Tabs",
+                        "Move the tab strip from the top of the window into a collapsible \
+                         left-side panel. Hover the rail to peek at full titles, click the \
+                         sidebar icon to pin it open.",
+                        Switch::new("vertical-tabs-toggle")
+                            .checked(vertical_tabs_enabled)
+                            .small()
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.config.appearance.tabs_orientation = if *checked {
+                                    con_core::config::TabsOrientation::Vertical
+                                } else {
+                                    con_core::config::TabsOrientation::Horizontal
+                                };
+                                cx.notify();
+                            })),
+                        theme,
+                    )),
+                ),
+        );
+
         content = content.child(
             div()
                 .flex()
