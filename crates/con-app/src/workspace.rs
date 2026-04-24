@@ -5820,17 +5820,22 @@ impl ConWorkspace {
 
             let surviving_terminals: Vec<TerminalPane> =
                 pane_tree.all_terminals().into_iter().cloned().collect();
-            for terminal in &surviving_terminals {
-                terminal.set_native_view_visible(true, cx);
-                terminal.ensure_surface(window, cx);
-                terminal.notify(cx);
+            let tab_is_visible = tab_idx == self.active_tab;
+            if tab_is_visible {
+                for terminal in &surviving_terminals {
+                    terminal.set_native_view_visible(true, cx);
+                    terminal.ensure_surface(window, cx);
+                    terminal.notify(cx);
+                }
             }
 
             if let Some(closing) = closing {
                 cx.on_next_frame(window, move |_workspace, _window, cx| {
                     closing.shutdown_surface(cx);
-                    for terminal in &surviving_terminals {
-                        terminal.notify(cx);
+                    if tab_is_visible {
+                        for terminal in &surviving_terminals {
+                            terminal.notify(cx);
+                        }
                     }
                 });
             }
