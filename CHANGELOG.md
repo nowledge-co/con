@@ -53,6 +53,7 @@ Changes here are after `v0.1.0-beta.35`, the latest published beta release.
 - Fixed Windows resize/render-state drift by snapshotting Ghostty's actual render-state rows/cols during asynchronous resize catch-up and by including snapshot geometry in the renderer invalidation key so the corrected frame is not skipped as "unchanged".
 - Fixed Windows VT resize to report Ghostty the renderer's real cell metrics instead of re-deriving per-cell pixels from pane size and grid count.
 - Fixed a Windows input-latency hole where the low-latency hint could be consumed before ConPTY echo/prompt output advanced the VT; input-driven fast presents now stay armed until the next VT generation arrives.
+- Fixed Windows terminal-pane bounds capture to size from the full child union during prepaint instead of the first child only, avoiding zoom/maximize cases where the image quad stopped short and hid the bottom command row.
 
 **Interface**
 - Fixed the macOS 12 fallback layering path. Monterey keeps an opaque top-level window to prevent desktop bleed-through, but the GPUI root above the embedded Ghostty `NSView` stays transparent so the terminal surface is not painted over by the fallback background.
