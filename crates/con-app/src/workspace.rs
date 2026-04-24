@@ -5779,8 +5779,19 @@ impl ConWorkspace {
             return;
         }
 
-        let pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
-        let _ = self.close_pane_in_tab(self.active_tab, pane_id, window, cx);
+        if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
+            let pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
+            let _ = self.close_pane_in_tab(self.active_tab, pane_id, window, cx);
+            return;
+        }
+
+        if self.tabs.len() > 1 {
+            self.close_tab_by_index(self.active_tab, window, cx);
+            return;
+        }
+
+        self.cancel_all_sessions();
+        cx.quit();
     }
 
     fn close_pane_in_tab(
