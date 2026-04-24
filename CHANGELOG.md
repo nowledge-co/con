@@ -12,6 +12,11 @@ con is still pre-release, so entries may group related beta work while the produ
 - Reduced Linux preview renderer CPU cost by caching per-row `StyledText` text/runs in `linux_view` and only rebuilding rows marked dirty by the VT snapshot, plus cursor-affected rows.
 - Documented the remaining Linux performance constraint explicitly: after the row-cache change, the main latency floor is the workspace's 8 ms PTY wake poll and the longer-term fix remains the planned glyph-atlas grid renderer.
 
+### Fixed
+
+**Release pipeline — multi-platform race**
+- Fixed `irm https://nowled.ge/con-ps1 | iex` (and the `install.sh` equivalents) failing with `✗ no ZIP found for windows-x86_64` when the Linux release job won the create-and-upload race ahead of the Windows / macOS jobs. Each `release-{linux,macos,windows}.yml` now creates the GitHub release as `--draft`, so `/releases/latest` and the public REST API stay blind to the tag while assets are uploading. A new `release-finalize.yml` workflow watches all three platform workflows via `workflow_run` and atomically promotes the draft to public only once every platform reports a `success` conclusion for the same `head_sha`. If a platform fails, the draft stays drafted on purpose — better to block than to ship an incomplete release.
+
 ## [v0.1.0-beta.36] - 2026-04-24
 
 ### Fixed

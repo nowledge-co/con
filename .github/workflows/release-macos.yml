@@ -134,31 +134,41 @@ jobs:
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
 
-          # `gh release create` defaults to a stable release.
+          # The release is always created as a --draft so that the
+          # tag stays invisible to /releases/latest and to the
+          # one-line installers (install.sh / install.ps1) until
+          # every platform's assets are attached. See the long-form
+          # rationale in release-linux.yml; the short version is that
+          # whichever platform job won the create+upload race used to
+          # flip the release public immediately, leaving fresh
+          # installers chasing
+          #   ✗ no ZIP found for windows-x86_64
+          # (or the macOS/Linux equivalents) until the slower
+          # platforms caught up. That's the bug
+          # `irm https://nowled.ge/con-ps1 | iex` hit on
+          # v0.1.0-beta.35.
           #
-          # Only `v*-dev.*` tags get marked --prerelease here. Dev
-          # tags are explicitly internal smoke tests of the release
-          # pipeline and must not appear in /releases/latest.
+          # Drafts are atomically promoted to public by
+          # .github/workflows/release-finalize.yml once every
+          # release-{linux,macos,windows}.yml workflow_run reports a
+          # `success` conclusion for the same tag. If any platform
+          # fails, the draft stays drafted (intentional — better to
+          # block than to ship an incomplete release).
           #
-          # Beta tags do NOT get --prerelease today: con is in an
-          # all-betas era (no stable v0.1.0 has shipped yet), so the
-          # latest beta IS what every fresh `install.sh` should
-          # download. Marking it --prerelease excludes the release
-          # from /releases/latest entirely and breaks the one-line
-          # installer for new users — that's the regression
-          # v0.1.0-beta.34 hit (the maintainer had to un-tick
-          # "Pre-release" on the GitHub UI manually).
-          #
-          # When stable v0.1.0 ships, add `*-beta.*` back to this
-          # case so beta and stable channels stop colliding in
-          # /releases/latest.
+          # --prerelease is still set on `v*-dev.*` as defence in
+          # depth (in case someone publishes the draft manually).
+          # Beta tags are NOT marked --prerelease today: con is in an
+          # all-betas era and the latest beta IS what fresh
+          # install.sh should download once the finalize step
+          # promotes the release.
           prerelease_args=()
           case "$tag" in
             *-dev.*) prerelease_args+=(--prerelease) ;;
           esac
 
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes "${prerelease_args[@]}"
+            gh release create "$tag" --title "$tag" --generate-notes \
+              --draft "${prerelease_args[@]}"
           fi
 
           # Upload files one at a time to avoid GitHub API race conditions.
