@@ -70,7 +70,9 @@ What that gives you:
   outside KWin)
 - a snappy paint pipeline: redundant per-tick snapshot refreshes
   and `Vec<Cell>` deep-equality compares were removed, the workspace
-  idle poll loop tightened from 16 ms to 8 ms, and the placeholder
+  idle poll loop tightened from 16 ms to 8 ms, the view now caches
+  per-row `StyledText` text/runs and only rebuilds rows flagged dirty
+  by the VT snapshot (plus cursor-affected rows), and the placeholder
   for "Waiting for shell prompt…" only ever shows before the first
   prompt — alt-screen TUIs (htop, vim, less, fzf) no longer flash
   the placeholder during their startup gap
@@ -272,16 +274,24 @@ With phase 4 landed (preview), the remaining Linux tasks are:
    under the text and pre-rasterizes per-cell glyphs, matching the
    D3D11/DirectWrite path used on Windows. Today's view already
    honors fg / bg / bold / italic / underline / strikethrough /
-   inverse and draws a block cursor, but per-cell metrics still
-   come from layout-time text shaping rather than a fixed cell
-   grid, which limits how dense the renderer can stay on huge
-   panes (the gap shows up first on `top -d 0.1`-class workloads).
+   inverse and draws a block cursor, and the preview path now caches
+   row text/runs so steady-state updates only rebuild dirty rows.
+   The remaining cost is structural: per-cell metrics still come from
+   layout-time text shaping rather than a fixed cell grid, which
+   limits how dense the renderer can stay on huge panes (the gap
+   shows up first on `top -d 0.1`-class workloads).
 2. Finish Linux input correctness: mouse reporting (button + wheel),
    selection (mouse drag → SGR 1006 / X10 reports + clipboard
    integration), and scrollback gestures. DECCKM and bracketed
    paste are already wired through `libghostty-vt` mode tracking
    and exercised by the existing keystroke encoder.
-3. Validate on hardware-accelerated native Linux desktops (Wayland
+3. Replace the workspace's 8 ms idle poll discovery path with a true
+   PTY wake signal into GPUI. The current poll cap was the right
+   preview tradeoff and is already much better than the old 16 ms
+   loop, but it is still the remaining input-to-paint latency floor
+   until the terminal backend can wake the app immediately on new PTY
+   output.
+4. Validate on hardware-accelerated native Linux desktops (Wayland
    on KDE Plasma to confirm `org_kde_kwin_blur`; Wayland on
    GNOME / sway and X11 on each major WM to confirm the
    transparency / CSD / caption-cluster fallback paths). The
