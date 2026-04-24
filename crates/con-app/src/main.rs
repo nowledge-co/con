@@ -79,6 +79,7 @@ actions!(
         ToggleAgentPanel,
         ToggleInputBar,
         CloseTab,
+        ClosePane,
         SplitRight,
         SplitDown,
         FocusInput,
@@ -733,6 +734,7 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new("secondary-shift-[", PreviousTab, None),
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
         KeyBinding::new(&kb.close_tab, CloseTab, None),
+        KeyBinding::new(&kb.close_pane, ClosePane, None),
         KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
         KeyBinding::new(
             &kb.command_palette,
@@ -754,6 +756,7 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new("secondary-shift-[", PreviousTab, Some("Input")),
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, Some("Input")),
         KeyBinding::new(&kb.close_tab, CloseTab, Some("Input")),
+        KeyBinding::new(&kb.close_pane, ClosePane, Some("Input")),
         KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, Some("Input")),
         KeyBinding::new(
             &kb.command_palette,
@@ -1063,6 +1066,7 @@ fn main() {
                     MenuItem::action("New Window", NewWindow),
                     MenuItem::action("New Tab", NewTab),
                     MenuItem::action("Close Tab", CloseTab),
+                    MenuItem::action("Close Pane", ClosePane),
                     MenuItem::separator(),
                     MenuItem::action("Split Right", SplitRight),
                     MenuItem::action("Split Down", SplitDown),

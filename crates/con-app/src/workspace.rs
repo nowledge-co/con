@@ -230,8 +230,8 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit, SplitDown,
-    SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
+    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit,
+    SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
 };
 use con_agent::{AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse};
 use con_core::config::Config;
@@ -5774,6 +5774,71 @@ impl ConWorkspace {
         }
     }
 
+    fn close_pane(&mut self, _: &ClosePane, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
+        let _ = self.close_pane_in_tab(self.active_tab, pane_id, window, cx);
+    }
+
+    fn close_pane_in_tab(
+        &mut self,
+        tab_idx: usize,
+        pane_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if tab_idx >= self.tabs.len() || self.tabs[tab_idx].pane_tree.pane_count() <= 1 {
+            return false;
+        }
+
+        let mut focus_after_close = None;
+        {
+            let pane_tree = &mut self.tabs[tab_idx].pane_tree;
+            let closing = pane_tree
+                .pane_terminals()
+                .into_iter()
+                .find(|(candidate_pane_id, _)| *candidate_pane_id == pane_id)
+                .map(|(_, terminal)| terminal);
+
+            if closing.is_none() || !pane_tree.close_pane(pane_id) {
+                return false;
+            }
+
+            let surviving_terminals: Vec<TerminalPane> =
+                pane_tree.all_terminals().into_iter().cloned().collect();
+            for terminal in &surviving_terminals {
+                terminal.set_native_view_visible(true, cx);
+                terminal.ensure_surface(window, cx);
+                terminal.notify(cx);
+            }
+
+            if let Some(closing) = closing {
+                cx.on_next_frame(window, move |_workspace, _window, cx| {
+                    closing.shutdown_surface(cx);
+                    for terminal in &surviving_terminals {
+                        terminal.notify(cx);
+                    }
+                });
+            }
+
+            if tab_idx == self.active_tab {
+                focus_after_close = Some(pane_tree.focused_terminal().clone());
+            }
+        }
+
+        if let Some(focused) = focus_after_close {
+            focused.focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
+        }
+
+        self.save_session(cx);
+        cx.notify();
+        true
+    }
+
     fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.tabs.len() || index == self.active_tab {
             return;
@@ -5939,42 +6004,10 @@ impl ConWorkspace {
         }
 
         if self.tabs[tab_idx].pane_tree.pane_count() > 1 {
-            let mut focus_after_close = None;
-            {
-                let pane_tree = &mut self.tabs[tab_idx].pane_tree;
-                // Close the specific pane whose process exited, not the focused pane.
-                if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
-                    let closing = pane_tree
-                        .all_terminals()
-                        .into_iter()
-                        .find(|terminal| terminal.entity_id() == entity_id)
-                        .cloned();
-                    pane_tree.close_pane(pane_id);
-                    let surviving_terminals: Vec<TerminalPane> =
-                        pane_tree.all_terminals().into_iter().cloned().collect();
-                    for terminal in &surviving_terminals {
-                        terminal.set_native_view_visible(true, cx);
-                        terminal.ensure_surface(window, cx);
-                        terminal.notify(cx);
-                    }
-                    if let Some(closing) = closing {
-                        cx.on_next_frame(window, move |_workspace, _window, cx| {
-                            closing.shutdown_surface(cx);
-                            for terminal in &surviving_terminals {
-                                terminal.notify(cx);
-                            }
-                        });
-                    }
-                }
-                if tab_idx == self.active_tab {
-                    focus_after_close = Some(pane_tree.focused_terminal().clone());
-                }
-            }
-
-            if let Some(focused) = focus_after_close {
-                focused.focus(window, cx);
-                self.sync_active_terminal_focus_states(cx);
-            }
+            let Some(pane_id) = self.tabs[tab_idx].pane_tree.pane_id_for_entity(entity_id) else {
+                return;
+            };
+            let _ = self.close_pane_in_tab(tab_idx, pane_id, window, cx);
         } else if self.tabs.len() > 1 {
             // Last pane in this tab — close the tab.
             self.close_tab_by_index(tab_idx, window, cx);
@@ -6830,6 +6863,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::next_tab))
             .on_action(cx.listener(Self::previous_tab))
             .on_action(cx.listener(Self::close_tab))
+            .on_action(cx.listener(Self::close_pane))
             .on_action(cx.listener(Self::split_right))
             .on_action(cx.listener(Self::split_down))
             .on_action(cx.listener(Self::focus_input))
