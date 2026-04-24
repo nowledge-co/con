@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use super::pty::{LinuxPtyOptions, LinuxPtySession};
+use super::pty::{LinuxPtyOptions, LinuxPtySession, LinuxWakeCallback};
 use crate::stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
@@ -190,12 +190,14 @@ fn default_linux_shell_program() -> Option<String> {
 /// once the pane has real bounds.
 pub struct LinuxGhosttyTerminal {
     inner: Arc<Mutex<Option<LinuxPtySession>>>,
+    wake_callback: Arc<Mutex<Option<LinuxWakeCallback>>>,
 }
 
 impl LinuxGhosttyTerminal {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
+            wake_callback: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -208,9 +210,15 @@ impl LinuxGhosttyTerminal {
     }
 
     pub fn spawn_with_options(&self, options: LinuxPtyOptions) -> Result<(), String> {
+        let mut options = options;
+        options.wake_callback = self.wake_callback.lock().clone();
         let session = LinuxPtySession::spawn(options).map_err(|err| err.to_string())?;
         self.attach(session);
         Ok(())
+    }
+
+    pub fn set_wake_callback(&self, callback: Option<LinuxWakeCallback>) {
+        *self.wake_callback.lock() = callback;
     }
 
     pub fn inner(&self) -> Arc<Mutex<Option<LinuxPtySession>>> {

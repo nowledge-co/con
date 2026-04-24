@@ -15,12 +15,15 @@ const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const MAX_TRANSCRIPT_BYTES: usize = 256 * 1024;
 
+pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
+
 #[derive(Clone)]
 pub struct LinuxPtyOptions {
     pub cwd: Option<PathBuf>,
     pub program: Option<String>,
     pub size: SurfaceSize,
     pub wake_generation: Option<Arc<AtomicU64>>,
+    pub wake_callback: Option<LinuxWakeCallback>,
     pub theme: Option<TerminalColors>,
 }
 
@@ -38,6 +41,7 @@ impl Default for LinuxPtyOptions {
                 cell_height_px: 0,
             },
             wake_generation: None,
+            wake_callback: None,
             theme: None,
         }
     }
@@ -65,19 +69,25 @@ struct SessionShared {
     alive: AtomicBool,
     needs_render: AtomicBool,
     wake_generation: Option<Arc<AtomicU64>>,
+    wake_callback: Option<LinuxWakeCallback>,
     finished_signal: Mutex<Option<CommandFinishedSignal>>,
     last_exit_code: Mutex<Option<i32>>,
     last_duration: Mutex<Option<Duration>>,
 }
 
 impl SessionShared {
-    fn new(screen: Arc<VtScreen>, wake_generation: Option<Arc<AtomicU64>>) -> Self {
+    fn new(
+        screen: Arc<VtScreen>,
+        wake_generation: Option<Arc<AtomicU64>>,
+        wake_callback: Option<LinuxWakeCallback>,
+    ) -> Self {
         Self {
             screen,
             transcript: Mutex::new(TranscriptBuffer::default()),
             alive: AtomicBool::new(true),
             needs_render: AtomicBool::new(false),
             wake_generation,
+            wake_callback,
             finished_signal: Mutex::new(None),
             last_exit_code: Mutex::new(None),
             last_duration: Mutex::new(None),
@@ -87,6 +97,9 @@ impl SessionShared {
     fn wake(&self) {
         if let Some(wake_generation) = self.wake_generation.as_ref() {
             wake_generation.fetch_add(1, Ordering::AcqRel);
+        }
+        if let Some(wake_callback) = self.wake_callback.as_ref() {
+            wake_callback();
         }
     }
 
@@ -199,7 +212,11 @@ impl LinuxPtySession {
             .spawn_command(command)
             .context("failed to spawn shell in linux pty")?;
 
-        let shared = Arc::new(SessionShared::new(screen, options.wake_generation));
+        let shared = Arc::new(SessionShared::new(
+            screen,
+            options.wake_generation,
+            options.wake_callback,
+        ));
         spawn_reader_thread(reader, shared.clone());
 
         Ok(Self {
@@ -269,9 +286,7 @@ impl LinuxPtySession {
     /// idle-shell resizes silently keep painting the previous grid
     /// dimensions until new shell output arrives.
     fn mark_needs_render(&self) {
-        self.shared
-            .needs_render
-            .store(true, Ordering::Release);
+        self.shared.needs_render.store(true, Ordering::Release);
         self.shared.wake();
     }
 
