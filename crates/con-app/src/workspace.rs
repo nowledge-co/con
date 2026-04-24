@@ -3078,8 +3078,7 @@ impl ConWorkspace {
                 cx.dispatch_action(&crate::CheckForUpdates);
             }
             "quit" => {
-                self.cancel_all_sessions();
-                cx.quit();
+                self.quit(&Quit, window, cx);
             }
             _ => {}
         }
@@ -5790,8 +5789,7 @@ impl ConWorkspace {
             return;
         }
 
-        self.cancel_all_sessions();
-        cx.quit();
+        self.quit(&Quit, window, cx);
     }
 
     fn close_pane_in_tab(
@@ -6029,8 +6027,7 @@ impl ConWorkspace {
             self.close_tab_by_index(tab_idx, window, cx);
         } else {
             // Last pane in last tab — quit the app.
-            self.cancel_all_sessions();
-            cx.quit();
+            self.quit(&Quit, window, cx);
         }
         cx.notify();
     }
