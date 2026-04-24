@@ -13,25 +13,22 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use etagere::{size2, AllocId, AtlasAllocator};
-use windows::core::Interface;
+use etagere::{AllocId, AtlasAllocator, size2};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
+    D2D_RECT_F, D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_CLIP,
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
-    D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Factory,
-    ID2D1RenderTarget, ID2D1SolidColorBrush,
+    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_NONE,
+    D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory,
+    ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
-use windows_numerics::Matrix3x2;
 use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_SHADER_RESOURCE_VIEW_DESC,
-    D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device,
-    ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D,
+    D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext,
+    ID3D11ShaderResourceView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
@@ -42,6 +39,8 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
+use windows::core::Interface;
+use windows_numerics::Matrix3x2;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)] // offset_x/offset_y are wired in Phase 3b-2 (glyph bearing).
@@ -160,8 +159,7 @@ impl GlyphCache {
         // — cells sized for a 9/10-em Segoe 'M' advance, and glyphs
         // drawn from Segoe UI rather than IoskeleyMono. Use the name
         // that actually resolves in our bundled collection.
-        let resolved_family =
-            resolve_bundled_family(bundled_collection.as_ref(), font_family);
+        let resolved_family = resolve_bundled_family(bundled_collection.as_ref(), font_family);
 
         let text_format_regular = make_text_format(
             dwrite,
@@ -303,10 +301,8 @@ impl GlyphCache {
             minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
         };
         // SAFETY: surface + props valid.
-        let d2d_rt = unsafe {
-            d2d_factory.CreateDxgiSurfaceRenderTarget(&dxgi_surface, &rt_props)
-        }
-        .context("CreateDxgiSurfaceRenderTarget failed")?;
+        let d2d_rt = unsafe { d2d_factory.CreateDxgiSurfaceRenderTarget(&dxgi_surface, &rt_props) }
+            .context("CreateDxgiSurfaceRenderTarget failed")?;
 
         // Custom rendering params give us consistent ClearType output
         // across machines regardless of the user's Control-Panel
@@ -319,10 +315,10 @@ impl GlyphCache {
         let custom_params: Option<IDWriteRenderingParams> = unsafe {
             dwrite
                 .CreateCustomRenderingParams(
-                    1.8,                         // gamma
-                    0.5,                         // enhanced contrast
-                    1.0,                         // ClearType level
-                    DWRITE_PIXEL_GEOMETRY_RGB,   // subpixel layout
+                    1.8,                       // gamma
+                    0.5,                       // enhanced contrast
+                    1.0,                       // ClearType level
+                    DWRITE_PIXEL_GEOMETRY_RGB, // subpixel layout
                     DWRITE_RENDERING_MODE_NATURAL,
                 )
                 .ok()
@@ -454,8 +450,8 @@ impl GlyphCache {
         // `atlasSize.x` as the quad width (via the `max(cellSize.x,
         // atlasSize.x)` branch in `shaders.hlsl::vs_main`).
         let codepoint = key.codepoint;
-        let is_scalable_pua = matches!(codepoint, 0xE000..=0xF8FF)
-            && !matches!(codepoint, 0xE0A0..=0xE0D4);
+        let is_scalable_pua =
+            matches!(codepoint, 0xE000..=0xF8FF) && !matches!(codepoint, 0xE0A0..=0xE0D4);
         let metrics = if is_scalable_pua {
             self.primary_glyph_metrics_px(codepoint)
         } else {
@@ -651,17 +647,13 @@ impl GlyphCache {
         let mut indices = [0u16; 1];
         let cps = [codepoint];
         // SAFETY: inputs sized 1; writes through out-pointer.
-        let hr = unsafe {
-            face.GetGlyphIndices(cps.as_ptr(), 1, indices.as_mut_ptr())
-        };
+        let hr = unsafe { face.GetGlyphIndices(cps.as_ptr(), 1, indices.as_mut_ptr()) };
         if hr.is_err() || indices[0] == 0 {
             return None;
         }
         let mut gm = [DWRITE_GLYPH_METRICS::default(); 1];
         // SAFETY: gid + gm both length 1; horizontal mode.
-        let hr = unsafe {
-            face.GetDesignGlyphMetrics(indices.as_ptr(), 1, gm.as_mut_ptr(), false)
-        };
+        let hr = unsafe { face.GetDesignGlyphMetrics(indices.as_ptr(), 1, gm.as_mut_ptr(), false) };
         if hr.is_err() {
             return None;
         }
@@ -670,10 +662,8 @@ impl GlyphCache {
             return None;
         }
         let du_to_px = self.font_size_px / self.primary_upm;
-        let ink_w_du =
-            (m.advanceWidth as i32 - m.leftSideBearing - m.rightSideBearing) as f32;
-        let ink_h_du =
-            (m.advanceHeight as i32 - m.topSideBearing - m.bottomSideBearing) as f32;
+        let ink_w_du = (m.advanceWidth as i32 - m.leftSideBearing - m.rightSideBearing) as f32;
+        let ink_h_du = (m.advanceHeight as i32 - m.topSideBearing - m.bottomSideBearing) as f32;
         if ink_w_du <= 0.0 || ink_h_du <= 0.0 {
             return None;
         }
@@ -691,8 +681,7 @@ impl GlyphCache {
     /// compared to the D3D stall a texture recreate would cause.
     pub fn purge(&mut self) {
         self.entries.clear();
-        self.allocator =
-            AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
+        self.allocator = AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
         // SAFETY: d2d_rt owned by self and aliases the atlas texture.
         // Re-clear so stale subpixel coverage doesn't bleed into freshly-
         // allocated slots.
@@ -711,8 +700,7 @@ impl GlyphCache {
     pub fn rebuild(&mut self, font_size_px: f32) -> Result<()> {
         self.font_size_px = font_size_px;
         self.entries.clear();
-        self.allocator =
-            AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
+        self.allocator = AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
         self.text_format_regular = make_text_format(
             &self.dwrite,
             self.bundled_collection.as_ref(),
@@ -1012,8 +1000,7 @@ fn find_face_in_collection(
     }
 
     // SAFETY: index is valid per DWrite contract when exists=TRUE.
-    let family_obj =
-        unsafe { collection.GetFontFamily(index) }.context("GetFontFamily failed")?;
+    let family_obj = unsafe { collection.GetFontFamily(index) }.context("GetFontFamily failed")?;
     // SAFETY: we want regular/normal for the measurement probe — bold
     // and italic have the same advance on a monospace face, so the
     // regular weight is representative and always present.

@@ -22,32 +22,27 @@
 //! system font (Segoe / Consolas). We log a warning in that case.
 
 use anyhow::{Context, Result};
-use windows::core::Interface;
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteFactory, IDWriteFactory2, IDWriteFactory5, IDWriteFontCollection, IDWriteFontFallback,
     IDWriteFontFile, IDWriteFontSet, IDWriteFontSetBuilder1, IDWriteInMemoryFontFileLoader,
 };
+use windows::core::Interface;
 
 /// Family name the bundled TTFs advertise (must match the `name` table's
 /// family-name record inside the TTF). `IoskeleyMono-*.ttf` follow the
 /// Iosevka convention: concatenated family name with no space.
 pub const BUNDLED_FONT_FAMILY: &str = "IoskeleyMono";
 
-const FONT_REGULAR: &[u8] =
-    include_bytes!("../../../../../assets/fonts/IoskeleyMono-Regular.ttf");
-const FONT_BOLD: &[u8] =
-    include_bytes!("../../../../../assets/fonts/IoskeleyMono-Bold.ttf");
-const FONT_ITALIC: &[u8] =
-    include_bytes!("../../../../../assets/fonts/IoskeleyMono-Italic.ttf");
+const FONT_REGULAR: &[u8] = include_bytes!("../../../../../assets/fonts/IoskeleyMono-Regular.ttf");
+const FONT_BOLD: &[u8] = include_bytes!("../../../../../assets/fonts/IoskeleyMono-Bold.ttf");
+const FONT_ITALIC: &[u8] = include_bytes!("../../../../../assets/fonts/IoskeleyMono-Italic.ttf");
 const FONT_BOLD_ITALIC: &[u8] =
     include_bytes!("../../../../../assets/fonts/IoskeleyMono-BoldItalic.ttf");
 
 /// Build a private `IDWriteFontCollection` containing the bundled
 /// IoskeleyMono weights. Returns `Ok(None)` when the runtime doesn't
 /// support `IDWriteFactory5` (loader API added in Windows 10 1607).
-pub fn build_bundled_collection(
-    dwrite: &IDWriteFactory,
-) -> Result<Option<IDWriteFontCollection>> {
+pub fn build_bundled_collection(dwrite: &IDWriteFactory) -> Result<Option<IDWriteFontCollection>> {
     // Cast up: IDWriteFactory → IDWriteFactory5. The shared factory
     // returned by DWriteCreateFactory on Windows 10+ implements this
     // interface; on older hosts the cast fails and we fall back.
@@ -66,20 +61,18 @@ pub fn build_bundled_collection(
     // SAFETY: factory5 owned above; the returned loader is retained by
     // us (and by the factory via RegisterFontFileLoader) for the life
     // of the process.
-    let loader: IDWriteInMemoryFontFileLoader =
-        unsafe { factory5.CreateInMemoryFontFileLoader() }
-            .context("CreateInMemoryFontFileLoader failed")?;
+    let loader: IDWriteInMemoryFontFileLoader = unsafe { factory5.CreateInMemoryFontFileLoader() }
+        .context("CreateInMemoryFontFileLoader failed")?;
     // SAFETY: loader COM-refcount is bumped by Register; safe to hand
     // the same reference.
-    unsafe { factory5.RegisterFontFileLoader(&loader) }
-        .context("RegisterFontFileLoader failed")?;
+    unsafe { factory5.RegisterFontFileLoader(&loader) }.context("RegisterFontFileLoader failed")?;
 
     // SAFETY: factory5 owns the font-set builder. `CreateFontSetBuilder`
     // on `IDWriteFactory5` returns the `...1` flavour in the Win10+ SDK
     // we pin; it inherits from `IDWriteFontSetBuilder`, but windows-rs
     // binds the concrete type so we accept it here.
-    let builder: IDWriteFontSetBuilder1 = unsafe { factory5.CreateFontSetBuilder() }
-        .context("CreateFontSetBuilder failed")?;
+    let builder: IDWriteFontSetBuilder1 =
+        unsafe { factory5.CreateFontSetBuilder() }.context("CreateFontSetBuilder failed")?;
 
     for (label, bytes) in [
         ("regular", FONT_REGULAR),
@@ -107,16 +100,16 @@ pub fn build_bundled_collection(
     }
 
     // SAFETY: builder valid; CreateFontSet is the terminal op.
-    let set: IDWriteFontSet =
-        unsafe { builder.CreateFontSet() }.context("CreateFontSet failed")?;
+    let set: IDWriteFontSet = unsafe { builder.CreateFontSet() }.context("CreateFontSet failed")?;
 
     // SAFETY: set valid. CreateFontCollectionFromFontSet returns an
     // IDWriteFontCollection1 which inherits IDWriteFontCollection.
     let collection = unsafe { factory5.CreateFontCollectionFromFontSet(&set) }
         .context("CreateFontCollectionFromFontSet failed")?;
 
-    let collection: IDWriteFontCollection =
-        collection.cast::<IDWriteFontCollection>().unwrap_or_else(|_| {
+    let collection: IDWriteFontCollection = collection
+        .cast::<IDWriteFontCollection>()
+        .unwrap_or_else(|_| {
             // This can't fail — IDWriteFontCollection1 inherits from
             // IDWriteFontCollection — but use unwrap_or_else to avoid
             // introducing an Err path.
@@ -191,9 +184,7 @@ pub fn build_bundled_collection(
 /// posh / Starship themes) are **not** covered — Windows ships no
 /// Nerd Font by default. A follow-up can add a custom fallback builder
 /// that prepends a user-installed NF when present.
-pub fn system_font_fallback(
-    dwrite: &IDWriteFactory,
-) -> Option<IDWriteFontFallback> {
+pub fn system_font_fallback(dwrite: &IDWriteFactory) -> Option<IDWriteFontFallback> {
     let factory2: IDWriteFactory2 = match dwrite.cast() {
         Ok(f) => f,
         Err(err) => {

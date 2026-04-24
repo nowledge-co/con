@@ -19,17 +19,16 @@ use anyhow::{Context, Result};
 use windows::Win32::Graphics::Direct3D::Fxc::{
     D3DCOMPILE_ENABLE_STRICTNESS, D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile,
 };
-use windows::Win32::Graphics::Direct3D::{ID3DBlob, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST};
+use windows::Win32::Graphics::Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_INDEX_BUFFER, D3D11_BIND_VERTEX_BUFFER,
     D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_CULL_NONE, D3D11_FILL_SOLID,
-    D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_INSTANCE_DATA, D3D11_MAPPED_SUBRESOURCE,
-    D3D11_MAP_WRITE_DISCARD, D3D11_RASTERIZER_DESC, D3D11_SUBRESOURCE_DATA,
-    D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE, ID3D11Buffer, ID3D11Device,
-    ID3D11DeviceContext, ID3D11InputLayout, ID3D11PixelShader, ID3D11RasterizerState,
-    ID3D11SamplerState, ID3D11VertexShader,
+    D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_INSTANCE_DATA, D3D11_MAP_WRITE_DISCARD,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_RASTERIZER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_USAGE_DYNAMIC,
+    D3D11_USAGE_IMMUTABLE, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11InputLayout,
+    ID3D11PixelShader, ID3D11RasterizerState, ID3D11SamplerState, ID3D11VertexShader,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32G32_UINT, DXGI_FORMAT_R32_UINT};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32G32_UINT};
 
 use super::atlas::GlyphRect;
 
@@ -48,12 +47,12 @@ const HLSL_SOURCE: &str = include_str!("shaders.hlsl");
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Instance {
-    pub cell_pos: [u32; 2],       // CELLPOS
-    pub atlas_pos: [u32; 2],      // ATLAS_POS (x, y)
-    pub atlas_size: [u32; 2],     // ATLAS_SIZE (w, h)
-    pub fg: u32,                  // FGCOLOR
-    pub bg: u32,                  // BGCOLOR
-    pub attrs: u32,               // ATTRS
+    pub cell_pos: [u32; 2],   // CELLPOS
+    pub atlas_pos: [u32; 2],  // ATLAS_POS (x, y)
+    pub atlas_size: [u32; 2], // ATLAS_SIZE (w, h)
+    pub fg: u32,              // FGCOLOR
+    pub bg: u32,              // BGCOLOR
+    pub attrs: u32,           // ATTRS
 }
 
 /// Per-frame constant buffer matching `cbuffer Globals` in HLSL.
@@ -128,10 +127,8 @@ impl Pipeline {
 
         let mut input_layout: Option<ID3D11InputLayout> = None;
         // SAFETY: layout and vs_bytes live for the call.
-        unsafe {
-            device.CreateInputLayout(&layout, vs_bytes, Some(&mut input_layout))
-        }
-        .context("CreateInputLayout failed")?;
+        unsafe { device.CreateInputLayout(&layout, vs_bytes, Some(&mut input_layout)) }
+            .context("CreateInputLayout failed")?;
         let input_layout = input_layout.context("CreateInputLayout produced no layout")?;
 
         // Sampler: point clamp — pixel-accurate atlas reads.
@@ -144,11 +141,8 @@ impl Pipeline {
 
         // Index buffer: 6 indices (two triangles, CCW).
         let indices: [u32; 6] = [0, 1, 2, 2, 1, 3];
-        let index_buffer = create_immutable_buffer(
-            device,
-            &indices,
-            D3D11_BIND_INDEX_BUFFER.0 as u32,
-        )?;
+        let index_buffer =
+            create_immutable_buffer(device, &indices, D3D11_BIND_INDEX_BUFFER.0 as u32)?;
 
         // Instance buffer: dynamic.
         let instance_buffer = create_dynamic_instance_buffer(device, initial_instance_capacity)?;
@@ -201,7 +195,13 @@ impl Pipeline {
         // is the contract. We unmap before returning.
         unsafe {
             context
-                .Map(&self.instance_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+                .Map(
+                    &self.instance_buffer,
+                    0,
+                    D3D11_MAP_WRITE_DISCARD,
+                    0,
+                    Some(&mut mapped),
+                )
                 .context("Map(instance_buffer) failed")?;
             let dst = mapped.pData as *mut Instance;
             std::ptr::copy_nonoverlapping(instances.as_ptr(), dst, instances.len());
@@ -210,16 +210,18 @@ impl Pipeline {
         Ok(())
     }
 
-    pub fn upload_globals(
-        &self,
-        context: &ID3D11DeviceContext,
-        globals: &Globals,
-    ) -> Result<()> {
+    pub fn upload_globals(&self, context: &ID3D11DeviceContext, globals: &Globals) -> Result<()> {
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         // SAFETY: cbuffer is DYNAMIC + CPU_WRITE.
         unsafe {
             context
-                .Map(&self.globals_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+                .Map(
+                    &self.globals_buffer,
+                    0,
+                    D3D11_MAP_WRITE_DISCARD,
+                    0,
+                    Some(&mut mapped),
+                )
                 .context("Map(globals) failed")?;
             *(mapped.pData as *mut Globals) = *globals;
             context.Unmap(&self.globals_buffer, 0);
@@ -416,10 +418,7 @@ fn create_immutable_buffer<T: Copy>(
     out.context("CreateBuffer (immutable) produced no buffer")
 }
 
-fn create_dynamic_instance_buffer(
-    device: &ID3D11Device,
-    capacity: u32,
-) -> Result<ID3D11Buffer> {
+fn create_dynamic_instance_buffer(device: &ID3D11Device, capacity: u32) -> Result<ID3D11Buffer> {
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: capacity * std::mem::size_of::<Instance>() as u32,
         Usage: D3D11_USAGE_DYNAMIC,
