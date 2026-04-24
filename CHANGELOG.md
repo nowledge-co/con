@@ -4,6 +4,14 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## [Unreleased]
+
+### Improved
+
+**Terminal — Windows Backend (preview)**
+- Reduced redundant Windows pre-echo repaint work by letting handled keyboard input wait for actual VT/ConPTY progress instead of forcing a speculative GPUI repaint on every key press.
+- Added Windows render-path timing instrumentation behind `CON_GHOSTTY_PROFILE` so `RenderSession::render_frame` and the GPUI image-wrap stage can be measured separately from the shared VT snapshot timing.
+
 ## **v0.1.0-beta.38** - 2026-04-24
 
 ### Fixed

@@ -34,6 +34,7 @@
 //! 4. Drop releases the `RenderSession` and ends the child shell.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use con_ghostty::{GhosttyApp, GhosttySplitDirection, GhosttyTerminal};
 use futures::StreamExt;
@@ -310,6 +311,7 @@ impl GhosttyView {
     /// the call produced a new image, needs another frame, or made no
     /// visible progress.
     fn sync_render(&mut self, window: &mut Window) -> SyncRenderResult {
+        let sync_started = perf_trace_enabled().then(Instant::now);
         let Some(bounds) = self.pane_bounds else {
             return SyncRenderResult::Unchanged;
         };
@@ -359,20 +361,52 @@ impl GhosttyView {
             self.last_physical_size = Some((width_px, height_px));
         }
 
+        let render_started = perf_trace_enabled().then(Instant::now);
         match session.render_frame() {
             Ok(RenderOutcome::Unchanged) => SyncRenderResult::Unchanged,
             Ok(RenderOutcome::Rendered(frame)) => {
+                let render_frame_ms = render_started
+                    .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                let image_started = perf_trace_enabled().then(Instant::now);
                 if let Some(image) = bgra_frame_to_image(frame.bytes, frame.width, frame.height) {
                     // Stash the prior image so next prepaint can drop
                     // its atlas tile. `Option::replace` returns the old
                     // inner value, matching our `Option<Arc<_>>` slot.
                     self.image_to_drop = self.cached_image.replace(image);
+                    if let Some(started) = sync_started {
+                        let image_ms = image_started
+                            .map(|image_started| image_started.elapsed().as_secs_f64() * 1000.0)
+                            .unwrap_or(0.0);
+                        log::info!(
+                            target: "con::perf",
+                            "win_sync_render outcome=rendered width_px={} height_px={} session_ms={:.3} image_ms={:.3} total_ms={:.3}",
+                            width_px,
+                            height_px,
+                            render_frame_ms,
+                            image_ms,
+                            started.elapsed().as_secs_f64() * 1000.0,
+                        );
+                    }
                     SyncRenderResult::Rendered
                 } else {
                     SyncRenderResult::Unchanged
                 }
             }
             Ok(RenderOutcome::Pending) => {
+                if let Some(started) = sync_started {
+                    let render_frame_ms = render_started
+                        .map(|render_started| render_started.elapsed().as_secs_f64() * 1000.0)
+                        .unwrap_or(0.0);
+                    log::info!(
+                        target: "con::perf",
+                        "win_sync_render outcome=pending width_px={} height_px={} session_ms={:.3} total_ms={:.3}",
+                        width_px,
+                        height_px,
+                        render_frame_ms,
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    );
+                }
                 SyncRenderResult::Pending
             }
             Err(err) => {
@@ -510,7 +544,6 @@ impl GhosttyView {
                     {
                         if !text.is_empty() {
                             send_paste(terminal, &text);
-                            cx.notify();
                         }
                     }
                     return true;
@@ -771,7 +804,6 @@ impl Render for GhosttyView {
                 if this.handle_key_down(event, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
-                    cx.notify();
                 }
             }))
             .on_mouse_down(
@@ -839,4 +871,11 @@ impl Drop for GhosttyView {
             terminal.request_close();
         }
     }
+}
+
+fn perf_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
 }
