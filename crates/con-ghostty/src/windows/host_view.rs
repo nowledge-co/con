@@ -18,6 +18,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
@@ -48,6 +49,11 @@ pub struct RenderSession {
     /// VT generation reaches this target so shell echo/prompt redraws
     /// can still take the freshest-frame path.
     low_latency_generation_target: AtomicU64,
+    /// Typing and paste arrive as short bursts, not isolated edges.
+    /// Keep the freshest-frame path enabled briefly across that burst so
+    /// follow-on echoed generations don't fall back to the stale-frame
+    /// path in the middle of one interactive run.
+    low_latency_burst_until: Mutex<Option<Instant>>,
     drag_anchor: Mutex<Option<(u16, u16)>>,
 }
 
@@ -70,6 +76,8 @@ pub struct MouseEventMods {
 }
 
 impl RenderSession {
+    const LOW_LATENCY_BURST_WINDOW: Duration = Duration::from_millis(100);
+
     /// Build a renderer + VT parser + ConPTY child shell.
     ///
     /// `wake` is invoked from the ConPTY reader thread after every
@@ -134,6 +142,7 @@ impl RenderSession {
             dpi: AtomicU32::new(current_dpi),
             low_latency_requested: AtomicBool::new(false),
             low_latency_generation_target: AtomicU64::new(0),
+            low_latency_burst_until: Mutex::new(None),
             drag_anchor: Mutex::new(None),
         })
     }
@@ -146,12 +155,13 @@ impl RenderSession {
         let snapshot = self.vt.snapshot();
         let immediate = self.low_latency_requested.swap(false, Ordering::AcqRel);
         let target_generation = self.low_latency_generation_target.load(Ordering::Acquire);
-        let generation_ready =
-            target_generation != 0 && snapshot.generation >= target_generation;
-        let prefer_latest = immediate || generation_ready;
+        let generation_ready = target_generation != 0 && snapshot.generation >= target_generation;
+        let burst_active = self.burst_low_latency_active();
+        let prefer_latest = immediate || generation_ready || burst_active;
         let outcome = renderer.render(&snapshot, &config, prefer_latest)?;
         if generation_ready && !matches!(outcome, RenderOutcome::Pending) {
-            self.low_latency_generation_target.store(0, Ordering::Release);
+            self.low_latency_generation_target
+                .store(0, Ordering::Release);
         }
         Ok(outcome)
     }
@@ -442,13 +452,33 @@ impl RenderSession {
     }
 
     fn request_low_latency_present(&self) {
+        self.arm_low_latency_burst();
         self.low_latency_requested.store(true, Ordering::Release);
     }
 
     fn request_low_latency_after_next_generation(&self) {
+        self.arm_low_latency_burst();
         let target = self.vt.generation().wrapping_add(1).max(1);
         self.low_latency_generation_target
             .store(target, Ordering::Release);
+    }
+
+    fn arm_low_latency_burst(&self) {
+        *self.low_latency_burst_until.lock() =
+            Some(Instant::now() + Self::LOW_LATENCY_BURST_WINDOW);
+    }
+
+    fn burst_low_latency_active(&self) -> bool {
+        let now = Instant::now();
+        let mut guard = self.low_latency_burst_until.lock();
+        match *guard {
+            Some(deadline) if now <= deadline => true,
+            Some(_) => {
+                *guard = None;
+                false
+            }
+            None => false,
+        }
     }
 }
 

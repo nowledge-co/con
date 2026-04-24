@@ -53,6 +53,7 @@ Changes here are after `v0.1.0-beta.35`, the latest published beta release.
 - Fixed Windows resize/render-state drift by snapshotting Ghostty's actual render-state rows/cols during asynchronous resize catch-up and by including snapshot geometry in the renderer invalidation key so the corrected frame is not skipped as "unchanged".
 - Fixed Windows VT resize to report Ghostty the renderer's real cell metrics instead of re-deriving per-cell pixels from pane size and grid count.
 - Fixed a Windows input-latency hole where the low-latency hint could be consumed before ConPTY echo/prompt output advanced the VT; input-driven fast presents now stay armed until the next VT generation arrives.
+- Fixed a Windows typing-latency cadence issue where sustained local input could fall back to stale-frame presents mid-burst; interactive low-latency mode now stays armed across a short typing/paste burst instead of only a single echoed generation.
 - Fixed Windows terminal-pane bounds capture to measure a dedicated full-size wrapper during prepaint, avoiding zoom/maximize cases where sizing from image/layout children could stop the image quad short and hide the bottom command row.
 - Reduced Windows steady-state input latency by moving terminal image generation out of the prepaint callback and into the main render path, removing an extra frame where freshly rendered images previously only became visible on the following paint.
 
