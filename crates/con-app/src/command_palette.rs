@@ -253,16 +253,15 @@ impl Render for CommandPalette {
 
         let theme = cx.theme();
 
-        let mut list = div()
+        let mut list_content = div()
             .id("palette-list")
             .flex()
             .flex_col()
-            .max_h(px(320.0))
+            .size_full()
             .py(px(6.0))
             .px(px(6.0))
             .overflow_y_scroll()
-            .track_scroll(&self.scroll_handle)
-            .vertical_scrollbar(&self.scroll_handle);
+            .track_scroll(&self.scroll_handle);
 
         for (i, action) in actions.iter().enumerate() {
             let is_selected = i == selected;
@@ -291,7 +290,7 @@ impl Render for CommandPalette {
                     .into_any_element()
             };
 
-            list = list.child(
+            list_content = list_content.child(
                 div()
                     .id(SharedString::from(format!("palette-{}", action.id)))
                     .flex()
@@ -318,6 +317,12 @@ impl Render for CommandPalette {
                             this.select_action(cx);
                         }),
                     )
+                    .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
+                        if this.selected_index != idx {
+                            this.selected_index = idx;
+                            cx.notify();
+                        }
+                    }))
                     .child(
                         div()
                             .flex()
@@ -345,7 +350,7 @@ impl Render for CommandPalette {
         }
 
         if actions.is_empty() {
-            list = list.child(
+            list_content = list_content.child(
                 div()
                     .px(px(16.0))
                     .py(px(12.0))
@@ -359,6 +364,13 @@ impl Render for CommandPalette {
             self.scroll_handle.scroll_to_item(selected);
             self.reveal_selected = false;
         }
+
+        let list = div()
+            .relative()
+            .max_h(px(320.0))
+            .min_h_0()
+            .child(list_content)
+            .vertical_scrollbar(&self.scroll_handle);
 
         let backdrop = div()
             .id("palette-backdrop")
