@@ -155,31 +155,35 @@ jobs:
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
 
-          # `gh release create` defaults to a stable release.
+          # The release is always created as a --draft. Drafts are
+          # invisible to /releases/latest, the public REST API, and
+          # the GitHub UI release list — so neither install.sh nor
+          # install.ps1 can resolve the tag while the draft is still
+          # missing one or more platforms' assets. That's the race
+          # `irm https://nowled.ge/con-ps1 | iex` hit on
+          # v0.1.0-beta.35: this Linux job won the create+upload
+          # race, the release became `latest` immediately, and a
+          # fresh Windows install fell over with
+          #   ✗ no ZIP found for windows-x86_64
+          # because the Windows publish job hadn't finished yet.
           #
-          # Only `v*-dev.*` tags get marked --prerelease here. Dev
-          # tags are explicitly internal smoke tests of the release
-          # pipeline and must not appear in /releases/latest.
+          # The draft is flipped to public by .github/workflows/
+          # release-finalize.yml, which fires on workflow_run.completed
+          # for any of release-{linux,macos,windows}.yml and only
+          # promotes the draft once all three workflows have a
+          # `success` conclusion for the same tag. If any platform
+          # fails, the draft stays a draft and the user has to either
+          # re-run the failing workflow or flip the draft manually
+          # via the GitHub UI — that's intentional, since shipping
+          # an incomplete release is exactly what broke before.
           #
-          # Beta tags do NOT get --prerelease today: con is in an
-          # all-betas era (no stable v0.1.0 has shipped yet), so the
-          # latest beta IS what every fresh `install.sh` /
-          # `install.ps1` should download. Marking the beta
-          # --prerelease excludes it from /releases/latest entirely
-          # (GitHub returns the prior stable, or 404 if none exists),
-          # which breaks the one-line installer for new users and
-          # was the issue v0.1.0-beta.34 hit (release shipped marked
-          # as Pre-release; the maintainer un-ticked it manually).
-          #
-          # The original channel-divergence concern (a beta-channel
-          # user clicking "Update now" and getting a stable
-          # downgrade) only fires once a stable release is published.
-          # Until then, the in-app notify-only updater's
-          # `CON_INSTALL_VERSION` pin in `apply_update_in_place`
-          # already binds the installer to the appcast's chosen
-          # version on the apply path — the /releases/latest API is
-          # only the fresh-install fallback, which is correctly the
-          # latest beta in the all-betas era.
+          # --prerelease is still set on `v*-dev.*` so that even if
+          # someone manually publishes a dev draft, it can never
+          # appear in /releases/latest. Beta tags are NOT marked
+          # --prerelease: con is in an all-betas era (no stable
+          # v0.1.0 has shipped), so the latest beta IS what every
+          # fresh install.sh / install.ps1 should download once the
+          # finalize step makes the release public.
           #
           # When stable v0.1.0 ships, add `*-beta.*` back to this
           # case so beta and stable channels stop colliding in
@@ -190,7 +194,8 @@ jobs:
           esac
 
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes "${prerelease_args[@]}"
+            gh release create "$tag" --title "$tag" --generate-notes \
+              --draft "${prerelease_args[@]}"
           fi
 
           while IFS= read -r -d '' file; do

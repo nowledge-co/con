@@ -285,33 +285,41 @@ jobs:
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
 
-          # `gh release create` defaults to a stable release.
+          # The release is always created as a --draft. Drafts are
+          # invisible to /releases/latest, the public REST API, and
+          # the GitHub UI release list — so install.ps1 / install.sh
+          # cannot resolve the tag until every platform's assets are
+          # attached. See the matching comment block in
+          # release-linux.yml for the long-form rationale; in short:
+          # one platform finishing first must not flip the release
+          # public while the other two are still uploading, or new
+          # users hit
+          #   ✗ no ZIP found for windows-x86_64
+          # (the bug `irm https://nowled.ge/con-ps1 | iex` reported
+          # on v0.1.0-beta.35).
           #
-          # Only `v*-dev.*` tags get marked --prerelease here. Dev
-          # tags are explicitly internal smoke tests of the release
-          # pipeline and must not appear in /releases/latest.
+          # The draft is promoted to public by
+          # .github/workflows/release-finalize.yml after every
+          # release-{linux,macos,windows}.yml workflow_run reports
+          # `success` for this tag.
           #
-          # Beta tags do NOT get --prerelease today: con is in an
-          # all-betas era (no stable v0.1.0 has shipped yet), so the
-          # latest beta IS what every fresh `install.ps1` should
-          # download. Marking it --prerelease excludes the release
-          # from /releases/latest entirely and breaks the one-line
-          # installer for new users — that's the regression
-          # v0.1.0-beta.34 hit (the maintainer had to un-tick
-          # "Pre-release" on the GitHub UI manually).
-          #
-          # When stable v0.1.0 ships, add `*-beta.*` back to this
-          # case so beta and stable channels stop colliding in
-          # /releases/latest.
+          # --prerelease is still set on `v*-dev.*` for defence in
+          # depth (in case someone publishes the draft manually).
+          # Beta tags are NOT marked --prerelease — con is all-betas
+          # today, so the latest beta IS what fresh install.ps1
+          # should download.
           prerelease_args=()
           case "$tag" in
             *-dev.*) prerelease_args+=(--prerelease) ;;
           esac
 
-          # The macOS job may have already created the release. If not,
-          # create it now so a Windows-only tag still publishes.
+          # The macOS or Linux job may have already created the
+          # draft release. If not, create it now so a Windows-only
+          # tag still drafts (the finalize workflow simply won't
+          # promote it without all three platforms succeeding).
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes "${prerelease_args[@]}"
+            gh release create "$tag" --title "$tag" --generate-notes \
+              --draft "${prerelease_args[@]}"
           fi
 
           while IFS= read -r -d '' file; do
