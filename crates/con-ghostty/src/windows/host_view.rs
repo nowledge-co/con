@@ -164,10 +164,20 @@ impl RenderSession {
         let burst_active = self.burst_low_latency_active();
         let prefer_latest = immediate || generation_ready || burst_active;
         let render_started = perf_trace_enabled().then(Instant::now);
-        let outcome = renderer.render(&snapshot, &config, prefer_latest)?;
+        let mut outcome = renderer.render(&snapshot, &config, prefer_latest)?;
         let render_ms = render_started
             .map(|started| started.elapsed().as_secs_f64() * 1000.0)
             .unwrap_or(0.0);
+        let latest_generation = self.vt.generation();
+        let superseded = latest_generation > snapshot.generation;
+        if superseded && matches!(outcome, RenderOutcome::Rendered(_)) {
+            // The VT advanced again while we were rendering / reading
+            // this frame back. Showing it now would regress the pane to
+            // a state we already know is obsolete (e.g. command output
+            // first, prompt later). Treat it as pending and let the next
+            // prepaint target the newer generation directly.
+            outcome = RenderOutcome::Pending;
+        }
         if generation_ready && !matches!(outcome, RenderOutcome::Pending) {
             self.low_latency_generation_target
                 .store(0, Ordering::Release);
@@ -180,12 +190,13 @@ impl RenderSession {
             };
             log::info!(
                 target: "con::perf",
-                "win_render_frame generation={} rows={} cols={} prefer_latest={} outcome={} snapshot_ms={:.3} render_ms={:.3} total_ms={:.3}",
+                "win_render_frame generation={} rows={} cols={} prefer_latest={} outcome={} superseded={} snapshot_ms={:.3} render_ms={:.3} total_ms={:.3}",
                 snapshot.generation,
                 snapshot.rows,
                 snapshot.cols,
                 prefer_latest,
                 outcome_name,
+                superseded,
                 snapshot_ms,
                 render_ms,
                 started.elapsed().as_secs_f64() * 1000.0,
