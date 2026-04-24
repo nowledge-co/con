@@ -348,9 +348,8 @@ impl Renderer {
             .lock()
             .expect("selection mutex poisoned in render()");
         let sel_hash = selection.map(|s| s.hash_u64()).unwrap_or(0);
-        let geometry_hash = ((snapshot.cols as u64) << 32)
-            | ((snapshot.rows as u64) << 16)
-            | ((self.width_px as u64) ^ (self.height_px as u64));
+        let geometry_hash =
+            geometry_fingerprint(snapshot.cols, snapshot.rows, self.width_px, self.height_px);
         let combined = snapshot
             .generation
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -736,6 +735,18 @@ fn is_default_blank_cell(cell: &Cell, effective_attrs: u8, config: &RendererConf
 
 fn color_channel_byte(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn geometry_fingerprint(cols: u16, rows: u16, width_px: u32, height_px: u32) -> u64 {
+    let mut hash = 0x9E37_79B9_7F4A_7C15u64;
+    hash ^= cols as u64;
+    hash = hash.rotate_left(13).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    hash ^= rows as u64;
+    hash = hash.rotate_left(17).wrapping_mul(0x94D0_49BB_1331_11EB);
+    hash ^= width_px as u64;
+    hash = hash.rotate_left(29).wrapping_mul(0xD6E8_FEB8_6659_FD93);
+    hash ^= height_px as u64;
+    hash.rotate_left(31)
 }
 
 fn can_block_for_latest(
