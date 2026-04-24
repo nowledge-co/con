@@ -54,30 +54,6 @@ fn mouse_mods_from(modifiers: &Modifiers) -> MouseEventMods {
     }
 }
 
-fn union_bounds(bounds_list: &[Bounds<Pixels>]) -> Option<Bounds<Pixels>> {
-    let first = *bounds_list.first()?;
-    let mut min_x = f32::from(first.origin.x);
-    let mut min_y = f32::from(first.origin.y);
-    let mut max_x = min_x + f32::from(first.size.width);
-    let mut max_y = min_y + f32::from(first.size.height);
-
-    for bounds in &bounds_list[1..] {
-        let x0 = f32::from(bounds.origin.x);
-        let y0 = f32::from(bounds.origin.y);
-        let x1 = x0 + f32::from(bounds.size.width);
-        let y1 = y0 + f32::from(bounds.size.height);
-        min_x = min_x.min(x0);
-        min_y = min_y.min(y0);
-        max_x = max_x.max(x1);
-        max_y = max_y.max(y1);
-    }
-
-    Some(Bounds::new(
-        point(px(min_x), px(min_y)),
-        size(px((max_x - min_x).max(0.0)), px((max_y - min_y).max(0.0))),
-    ))
-}
-
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[allow(dead_code)]
@@ -802,7 +778,7 @@ impl Render for GhosttyView {
                     .min_h_0()
                     .overflow_hidden()
                     .on_children_prepainted(move |bounds_list: Vec<Bounds<Pixels>>, window, cx| {
-                        let Some(bounds) = union_bounds(&bounds_list) else {
+                        let Some(bounds) = bounds_list.first().copied() else {
                             return;
                         };
                         let scale = window.scale_factor();
@@ -815,11 +791,10 @@ impl Render for GhosttyView {
                             });
                         }
                     })
-                    .children(image_child)
-                    // A 1×1 placeholder so `on_children_prepainted` always
-                    // fires with at least one bounds entry; flex growth
-                    // makes it expand to the full pane.
-                    .child(div().size_full()),
+                    // Measure a dedicated full-size wrapper child so the
+                    // prepaint callback always sees pane bounds rather than
+                    // whichever image/layout child happens to be present.
+                    .child(div().size_full().children(image_child)),
             )
     }
 }
