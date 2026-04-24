@@ -29,8 +29,8 @@
 #![allow(non_camel_case_types, dead_code)]
 
 use std::os::raw::{c_int, c_void};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use parking_lot::Mutex;
 
@@ -472,9 +472,7 @@ impl ThemeColors {
         for i in 0..16 {
             palette[i] = ansi16[i];
         }
-        let step = |x: u8| -> u8 {
-            if x == 0 { 0 } else { 55 + 40 * x }
-        };
+        let step = |x: u8| -> u8 { if x == 0 { 0 } else { 55 + 40 * x } };
         for i in 16..232 {
             let idx = (i - 16) as u8;
             let r = idx / 36;
@@ -842,10 +840,18 @@ impl VtScreen {
         if let Some(state) = inner.callback_state.as_ref() {
             state.cols.store(cols, Ordering::Release);
             state.rows.store(rows, Ordering::Release);
-            state.cell_width.store(cell_width_px.max(1), Ordering::Release);
-            state.cell_height.store(cell_height_px.max(1), Ordering::Release);
+            state
+                .cell_width
+                .store(cell_width_px.max(1), Ordering::Release);
+            state
+                .cell_height
+                .store(cell_height_px.max(1), Ordering::Release);
         }
-        inner.scratch = Vec::with_capacity(cols as usize * rows as usize);
+        let total = cols as usize * rows as usize;
+        inner.scratch.clear();
+        inner.scratch.resize(total, Cell::default());
+        inner.scratch_cols = cols;
+        inner.scratch_rows = rows;
         inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
         Ok(())
@@ -938,9 +944,7 @@ impl VtScreen {
         }
 
         let total = cols as usize * rows as usize;
-        if inner.scratch.len() != total
-            || inner.scratch_cols != cols
-            || inner.scratch_rows != rows
+        if inner.scratch.len() != total || inner.scratch_cols != cols || inner.scratch_rows != rows
         {
             inner.scratch.clear();
             inner.scratch.resize(total, Cell::default());

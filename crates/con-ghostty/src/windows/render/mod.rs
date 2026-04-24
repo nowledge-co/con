@@ -433,8 +433,7 @@ impl Renderer {
             && can_block_for_latest(in_flight_before_submit, backlog, submitted)
             && let Some(submitted) = submitted
             && !submitted.replaced_in_flight
-            && let idx = submitted.idx
-            && let Some(bytes) = ring.block_drain(&self.context, idx)?
+            && let Some(bytes) = ring.block_drain(&self.context, submitted.idx)?
         {
             return Ok(RenderOutcome::Rendered(FrameBgra {
                 bytes,
@@ -753,8 +752,7 @@ fn can_block_for_latest(
     // clean slot we can still wait for it without inheriting the full
     // backlog tail. Once both slots are already busy, or we had to
     // reuse an in-flight slot, keep the UI thread non-blocking.
-    in_flight_before_submit <= 1
-        && submitted.is_some_and(|copy| !copy.replaced_in_flight)
+    in_flight_before_submit <= 1 && submitted.is_some_and(|copy| !copy.replaced_in_flight)
 }
 
 /// One slot in the readback ring.
@@ -837,12 +835,17 @@ impl StagingRing {
         ctx: &ID3D11DeviceContext,
         source: &ID3D11Texture2D,
     ) -> SubmittedCopy {
-        let replaced_in_flight = self.slots[self.next_idx].in_flight;
-        let idx = if replaced_in_flight {
-            self.oldest_in_flight().unwrap_or(self.next_idx)
+        let clean_idx = self
+            .slots
+            .iter()
+            .enumerate()
+            .find_map(|(i, slot)| (!slot.in_flight).then_some(i));
+        let idx = if let Some(idx) = clean_idx {
+            idx
         } else {
-            self.next_idx
+            self.oldest_in_flight().unwrap_or(self.next_idx)
         };
+        let replaced_in_flight = self.slots[idx].in_flight;
         unsafe {
             ctx.CopyResource(&self.slots[idx].texture, source);
         }
