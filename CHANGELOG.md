@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## [v0.1.0-beta.38] - 2026-04-24
+## **v0.1.0-beta.38** - 2026-04-24
 
 ### Fixed
 
@@ -17,7 +17,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal — Windows Backend (preview)**
 - Reduced the first-frame flash when splitting a new pane on Windows. Brand-new panes now paint their configured terminal background while the first renderer image is still warming up, instead of briefly showing a transparent hole.
 
-## [v0.1.0-beta.37] - 2026-04-24
+## **v0.1.0-beta.37** - 2026-04-24
 
 ### Improved
 
@@ -30,19 +30,19 @@ con is still pre-release, so entries may group related beta work while the produ
 **Release pipeline — multi-platform race**
 - Fixed `irm https://nowled.ge/con-ps1 | iex` (and the `install.sh` equivalents) failing with `✗ no ZIP found for windows-x86_64` when the Linux release job won the create-and-upload race ahead of the Windows / macOS jobs. Each `release-{linux,macos,windows}.yml` now creates the GitHub release as `--draft`, so `/releases/latest` and the public REST API stay blind to the tag while assets are uploading. A new `release-finalize.yml` workflow watches all three platform workflows via `workflow_run` and atomically promotes the draft to public only once every platform reports a `success` conclusion for the same `head_sha`. If a platform fails, the draft stays drafted on purpose — better to block than to ship an incomplete release.
 
-## [v0.1.0-beta.36] - 2026-04-24
+## **v0.1.0-beta.36** - 2026-04-24
 
 ### Fixed
 
 - Windows con no longer be laggy!!!
 
-## [v0.1.0-beta.35] - 2026-04-23
+## **v0.1.0-beta.35** - 2026-04-23
 
 ### Fixed
 
 - Fixed Linux con cannot support older GLIBC
 
-## [v0.1.0-beta.34] - 2026-04-23
+## **v0.1.0-beta.34** - 2026-04-23
 
 ### Added
 
@@ -95,7 +95,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Updated the Linux implementation notes, tracker mirror, and postmortem for the first real Linux terminal preview.
 - Updated build-system and Windows-port notes to document the shared `con-paths` crate and the current Windows renderer performance track.
 
-## [v0.1.0-beta.33] - 2026-04-22
+## **v0.1.0-beta.33** - 2026-04-22
 
 ### Improved
 
@@ -104,7 +104,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Wired terminal theme colors, opacity, and transparency into the Windows renderer.
 - Hardened Windows resize/readback behavior, theme switching clear colors, and DWM backdrop behavior across the beta feedback loop.
 
-## [v0.1.0-beta.32] - 2026-04-21
+## **v0.1.0-beta.32** - 2026-04-21
 
 ### Added
 
@@ -118,7 +118,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Made the PowerShell installer ASCII-safe for `irm | iex` usage.
 - Updated release/download documentation for the renamed `con-terminal` repository.
 
-## [v0.1.0-beta.31] - 2026-04-21
+## **v0.1.0-beta.31** - 2026-04-21
 
 ### Added
 
@@ -134,7 +134,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Switched Windows builds to the console subsystem behavior needed for terminal process startup.
 - Baked the full release channel/version into the Windows binary for update polling and user-visible version display.
 
-## [v0.1.0-beta.30] - 2026-04-21
+## **v0.1.0-beta.30** - 2026-04-21
 
 ### Added
 
@@ -148,57 +148,57 @@ con is still pre-release, so entries may group related beta work while the produ
 - Hardened the Windows release workflow against Defender interference, Zig/uucode spawn flakes, Windows runner instability, and MAX_PATH-sensitive cache paths.
 - Renamed in-tree repository URLs from `nowledge-co/con` to `nowledge-co/con-terminal`.
 
-## [v0.1.0-beta.29] - 2026-04-21
+## **v0.1.0-beta.29** - 2026-04-21
 
 Tag-only release workflow iteration folded into the `v0.1.0-beta.30` GitHub release notes.
 
 ### Changed
 - Renamed repository URLs to `nowledge-co/con-terminal`.
 
-## [v0.1.0-beta.28] - 2026-04-21
+## **v0.1.0-beta.28** - 2026-04-21
 
 Tag-only release workflow iteration folded into the `v0.1.0-beta.30` GitHub release notes.
 
 ### Fixed
 - Pinned the Windows release runner to `windows-2022` and added on-failure diagnostics.
 
-## [v0.1.0-beta.27] - 2026-04-21
+## **v0.1.0-beta.27** - 2026-04-21
 
 Tag-only release workflow iteration folded into the `v0.1.0-beta.30` GitHub release notes.
 
 ### Fixed
 - Retried Windows release builds around intermittent Zig/uucode spawn failures.
 
-## [v0.1.0-beta.26] - 2026-04-21
+## **v0.1.0-beta.26** - 2026-04-21
 
 Tag-only release workflow iteration folded into the `v0.1.0-beta.30` GitHub release notes.
 
 ### Fixed
 - Disabled Defender real-time scanning during Windows release builds.
 
-## [v0.1.0-beta.25] - 2026-04-21
+## **v0.1.0-beta.25** - 2026-04-21
 
 Tag-only release workflow iteration folded into the `v0.1.0-beta.30` GitHub release notes.
 
 ### Added
 - Advanced the Windows beta port toward the first published Windows preview.
 
-## [v0.1.0-beta.24] - 2026-04-20
+## **v0.1.0-beta.24** - 2026-04-20
 
 ### Improved
 - Shipped CI fixes, documentation updates, and broad UI/terminal polish before the Windows beta push.
 
-## [v0.1.0-beta.23] - 2026-04-20
+## **v0.1.0-beta.23** - 2026-04-20
 
 ### Added
 - Landed Windows support phase 0: non-macOS build scaffolding, portability gates, and an initial Windows-renderable terminal path.
 
-## [v0.1.0-beta.22] - 2026-04-16
+## **v0.1.0-beta.22** - 2026-04-16
 
 ### Improved
 - Shipped a broad optimization pass across terminal/app behavior.
 
-## [v0.1.0-beta.21] - 2026-04-16
+## **v0.1.0-beta.21** - 2026-04-16
 
 ### Added
 - Added Kimi provider support for coding workflows.
@@ -206,7 +206,7 @@ Tag-only release workflow iteration folded into the `v0.1.0-beta.30` GitHub rele
 ### Fixed
 - Fixed Homebrew promotion and release workflow YAML issues.
 
-## [v0.1.0-beta.20] - 2026-04-15
+## **v0.1.0-beta.20** - 2026-04-15
 
 ### Added
 - Added Homebrew cask and a one-line install path.
@@ -214,12 +214,12 @@ Tag-only release workflow iteration folded into the `v0.1.0-beta.30` GitHub rele
 ### Improved
 - Shipped another beta optimization pass and Zig CI hardening.
 
-## [v0.1.0-beta.19] - 2026-04-15
+## **v0.1.0-beta.19** - 2026-04-15
 
 ### Fixed
 - Polished terminal cursor behavior for CJK IME input.
 
-## [v0.1.0-beta.18] - 2026-04-15
+## **v0.1.0-beta.18** - 2026-04-15
 
 ### Added
 - Added early installer work and beta feature polish.
@@ -227,12 +227,12 @@ Tag-only release workflow iteration folded into the `v0.1.0-beta.30` GitHub rele
 ### Fixed
 - Fixed Vim quit handling, IME text input issues, macOS hotkeys, terminal flashing, and Ghostty Zig CI pinning.
 
-## [v0.1.0-beta.14] - 2026-04-14
+## **v0.1.0-beta.14** - 2026-04-14
 
 ### Improved
 - Optimized settings, markdown table rendering, and CJK rendering paths.
 
-## [v0.1.0-beta.3] - 2026-04-14
+## **v0.1.0-beta.3** - 2026-04-14
 
 ### Added
 - Added configurable UI font size.
@@ -240,7 +240,7 @@ Tag-only release workflow iteration folded into the `v0.1.0-beta.30` GitHub rele
 ### Fixed
 - Fixed a markdown code-block rendering performance issue.
 
-## [v0.1.0-beta.1] - 2026-04-14
+## **v0.1.0-beta.1** - 2026-04-14
 
 ### Added
 - Initial public beta of con.
