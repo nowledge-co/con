@@ -809,6 +809,10 @@ impl VtScreen {
         inner.generation = inner.generation.wrapping_add(1);
     }
 
+    pub fn generation(&self) -> u64 {
+        self.inner.lock().generation
+    }
+
     /// Feed bytes from the PTY into the parser. Non-reentrant per
     /// upstream: do not call from inside a registered callback.
     pub fn feed(&self, bytes: &[u8]) {

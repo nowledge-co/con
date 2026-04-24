@@ -17,7 +17,7 @@
 //!   its own Mutex.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
@@ -43,6 +43,11 @@ pub struct RenderSession {
     /// frame over the lowest-latency non-blocking staging drain. This
     /// avoids showing the stale pre-input frame for one more prepaint.
     low_latency_requested: AtomicBool,
+    /// PTY-driven visible updates often arrive one frame after the user
+    /// input that triggered them. Keep low-latency mode armed until the
+    /// VT generation reaches this target so shell echo/prompt redraws
+    /// can still take the freshest-frame path.
+    low_latency_generation_target: AtomicU64,
     drag_anchor: Mutex<Option<(u16, u16)>>,
 }
 
@@ -128,6 +133,7 @@ impl RenderSession {
             base_font_size_px,
             dpi: AtomicU32::new(current_dpi),
             low_latency_requested: AtomicBool::new(false),
+            low_latency_generation_target: AtomicU64::new(0),
             drag_anchor: Mutex::new(None),
         })
     }
@@ -138,8 +144,16 @@ impl RenderSession {
         let renderer = self.renderer.lock();
         let config = self.config.lock().clone();
         let snapshot = self.vt.snapshot();
-        let prefer_latest = self.low_latency_requested.swap(false, Ordering::AcqRel);
-        renderer.render(&snapshot, &config, prefer_latest)
+        let immediate = self.low_latency_requested.swap(false, Ordering::AcqRel);
+        let target_generation = self.low_latency_generation_target.load(Ordering::Acquire);
+        let generation_ready =
+            target_generation != 0 && snapshot.generation >= target_generation;
+        let prefer_latest = immediate || generation_ready;
+        let outcome = renderer.render(&snapshot, &config, prefer_latest)?;
+        if generation_ready && !matches!(outcome, RenderOutcome::Pending) {
+            self.low_latency_generation_target.store(0, Ordering::Release);
+        }
+        Ok(outcome)
     }
 
     /// Apply a new physical-pixel size. Idempotent for same dimensions.
@@ -265,7 +279,7 @@ impl RenderSession {
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
     /// quirk (shell expects CR, not LF).
     pub fn write_input(&self, text: &str) {
-        self.request_low_latency_present();
+        self.request_low_latency_after_next_generation();
         let bytes: std::borrow::Cow<[u8]> = if text.as_bytes().contains(&b'\n') {
             std::borrow::Cow::Owned(text.replace('\n', "\r").into_bytes())
         } else {
@@ -277,7 +291,7 @@ impl RenderSession {
     /// Raw PTY write — no CR/LF normalization. Used for bracketed-paste
     /// wrappers (ESC [200~ / ESC [201~) whose bytes mustn't be touched.
     pub fn write_pty_raw(&self, data: &[u8]) {
-        self.request_low_latency_present();
+        self.request_low_latency_after_next_generation();
         let _ = self.conpty.write(data);
     }
 
@@ -290,11 +304,12 @@ impl RenderSession {
     /// alone. Shift+click with an existing selection extends from the
     /// original anchor (matches every other terminal).
     pub fn mouse_down(&self, col: u16, row: u16, mods: MouseEventMods) {
-        self.request_low_latency_present();
         if self.vt.mouse_tracking_active() && !mods.shift {
+            self.request_low_latency_after_next_generation();
             self.report_sgr_button(0, col, row, mods, true);
             return;
         }
+        self.request_low_latency_present();
         if mods.shift {
             let renderer = self.renderer.lock();
             let existing_anchor = renderer.selection().map(|s| s.anchor).unwrap_or((col, row));
@@ -318,12 +333,13 @@ impl RenderSession {
     /// (BUTTON / ANY mode), we emit an SGR motion report with the
     /// motion bit (+32) set. Otherwise we extend the local drag.
     pub fn mouse_drag(&self, col: u16, row: u16, mods: MouseEventMods) {
-        self.request_low_latency_present();
         if self.vt.mouse_tracking_active() && !mods.shift {
+            self.request_low_latency_after_next_generation();
             // Button 0 (LMB) + 32 = motion-with-button bit per SGR spec.
             self.report_sgr_button(32, col, row, mods, true);
             return;
         }
+        self.request_low_latency_present();
         let anchor = *self.drag_anchor.lock();
         if let Some(anchor) = anchor {
             self.renderer.lock().set_selection(Some(Selection {
@@ -340,11 +356,12 @@ impl RenderSession {
     /// selection — a click without drag shouldn't leave a lone cell
     /// highlighted.
     pub fn mouse_up(&self, col: u16, row: u16, mods: MouseEventMods) {
-        self.request_low_latency_present();
         if self.vt.mouse_tracking_active() && !mods.shift {
+            self.request_low_latency_after_next_generation();
             self.report_sgr_button(0, col, row, mods, false);
             return;
         }
+        self.request_low_latency_present();
         let anchor = self.drag_anchor.lock().take();
         if let Some(anchor) = anchor
             && anchor == (col, row)
@@ -390,7 +407,7 @@ impl RenderSession {
         if delta_y.abs() < f32::EPSILON {
             return;
         }
-        self.request_low_latency_present();
+        self.request_low_latency_after_next_generation();
         let mut button: u8 = if delta_y < 0.0 { 64 } else { 65 };
         if mods.alt {
             button |= 0x08;
@@ -426,6 +443,12 @@ impl RenderSession {
 
     fn request_low_latency_present(&self) {
         self.low_latency_requested.store(true, Ordering::Release);
+    }
+
+    fn request_low_latency_after_next_generation(&self) {
+        let target = self.vt.generation().wrapping_add(1).max(1);
+        self.low_latency_generation_target
+            .store(target, Ordering::Release);
     }
 }
 
