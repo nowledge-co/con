@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
@@ -570,12 +571,29 @@ fn zig_global_cache_dir(target_os: &str) -> Option<PathBuf> {
 
     let candidates = [PathBuf::from(r"C:\zc"), env::temp_dir().join("zc")];
     for candidate in candidates {
-        if fs::create_dir_all(&candidate).is_ok() {
+        if fs::create_dir_all(&candidate).is_ok() && writable_dir(&candidate) {
             return Some(candidate);
         }
     }
 
     None
+}
+
+fn writable_dir(path: &Path) -> bool {
+    let probe = path.join(".con_ghostty_write_test");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe);
+    match file {
+        Ok(mut file) => {
+            let write_ok = file.write_all(b"ok").is_ok();
+            drop(file);
+            let _ = fs::remove_file(&probe);
+            write_ok
+        }
+        Err(_) => false,
+    }
 }
 
 fn configure_zig_command(command: &mut Command, zig_global_cache_dir: Option<&std::path::Path>) {

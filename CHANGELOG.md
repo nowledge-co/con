@@ -48,6 +48,7 @@ Changes here are after `v0.1.0-beta.35`, the latest published beta release.
 **Terminal — Windows Backend (preview)**
 - Fixed Windows settings, theme, session, history, OAuth, conversation, and global skills paths so they no longer use `con` as a filesystem segment, avoiding Win32 reserved-device-name failures such as `os error 267`.
 - Fixed Windows `con-ghostty` builds that failed in Ghostty/uucode with `uucode_build_tables.exe: FileNotFound` by defaulting Zig's global cache to a short path when `ZIG_GLOBAL_CACHE_DIR` is unset.
+- Hardened Windows Zig cache selection so `con-ghostty` only auto-selects a short cache path when the chosen directory is actually writable, falling back cleanly instead of failing later inside Zig.
 - Fixed Windows fullscreen/maximize redraws in alt-screen apps such as Neovim by forcing a full VT snapshot after resize/full invalidation instead of trusting per-row dirty flags for newly exposed rows.
 - Fixed a Windows maximize/fullscreen hang where the first interactive redraw after a large resize could block the UI thread trying to rescue stale readback slots; the staging ring now uses mailbox semantics, stays non-blocking under true backlog, and still allows low-latency interactive presents when a clean slot is available.
 - Fixed Windows resize/render-state drift by snapshotting Ghostty's actual render-state rows/cols during asynchronous resize catch-up and by including snapshot geometry in the renderer invalidation key so the corrected frame is not skipped as "unchanged".
@@ -56,6 +57,7 @@ Changes here are after `v0.1.0-beta.35`, the latest published beta release.
 - Fixed a Windows typing-latency cadence issue where sustained local input could fall back to stale-frame presents mid-burst; interactive low-latency mode now stays armed across a short typing/paste burst instead of only a single echoed generation.
 - Fixed Windows terminal-pane bounds capture to measure a dedicated full-size wrapper during prepaint, avoiding zoom/maximize cases where sizing from image/layout children could stop the image quad short and hide the bottom command row.
 - Reduced Windows steady-state input latency by moving terminal image generation out of the prepaint callback and into the main render path, removing an extra frame where freshly rendered images previously only became visible on the following paint.
+- Reduced a Windows staging-ring latency edge where mailbox submission could miss an already-clean slot and unnecessarily disqualify the freshest-frame path during interactive typing.
 
 **Interface**
 - Fixed the macOS 12 fallback layering path. Monterey keeps an opaque top-level window to prevent desktop bleed-through, but the GPUI root above the embedded Ghostty `NSView` stays transparent so the terminal surface is not painted over by the fallback background.
