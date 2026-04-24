@@ -4,9 +4,11 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## [Unreleased]
+## [v0.1.0-beta.36] - 2026-04-24
 
-Changes here are after `v0.1.0-beta.35`, the latest published beta release.
+### Fixed
+
+- Windows con no longer be laggy!!!
 
 ## [v0.1.0-beta.35] - 2026-04-23
 
