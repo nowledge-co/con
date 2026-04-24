@@ -12,18 +12,31 @@ shipped beta.
 |---|---|---|
 | Toggle orientation | *Settings → Appearance → Tabs → Vertical Tabs* | Live; no restart. |
 | Collapsed icon rail | default in vertical mode | Smart icon per tab. |
-| Hover-peek overlay | cursor over rail | Slides in 160 ms; overlay floats over terminal pane (does NOT reflow). |
+| Floating hover card | cursor over rail icon | Anchored to cursor; shows name + subtitle + pane count + SSH/unread badges. **Does not displace** rail or terminal pane. |
 | Pinned panel | click sidebar-toggle in rail or header | Width tweens 220 ms; persists across restart. |
 | Activate tab | left-click row | |
-| Close tab | middle-click row, or hover-X | |
+| Close tab | middle-click row, or hover-X (pinned mode) | |
 | New tab | `+` in rail or panel header | |
 | Smart name | auto from OSC title / SSH host / cwd | Bare shells fall through to cwd basename. |
 | Smart icon | auto from process kind | terminal / globe / code / pulse / book-open / file-code |
 | Rename tab | double-click label, or context menu | Enter commits, Esc cancels. |
 | Reset name | context menu | Clears `user_label` so smart auto-naming resumes. |
-| Reorder tab | drag row, or context menu Move Up / Down | Drop indicator between rows. |
+| Reorder tab | drag (rail or pinned), or context menu Move Up / Down | Drop indicator: pinned-mode uses a 2-px line above the target row; rail mode uses a hover-bg pill. |
 | Duplicate tab | context menu | New tab in same cwd as source. |
 | Close other tabs | context menu | |
+
+## Why a hover card instead of an auto-expanding overlay
+
+The first vertical-tabs landing auto-expanded a full panel on hover (Microsoft Edge style). It read as aggressive — *passive intent* (just trying to remember what tab 3 is) was taking over the workspace. It also broke drag-from-collapsed: the user clicks an icon to drag, the cursor leaves the icon to start the drag, the overlay folds, the drop zones disappear.
+
+Apple's pattern (Finder sidebar item names, Safari tab thumbnails, Mail mailbox tooltips) is a **tooltip-style card** that appears next to the icon without taking over layout. We do that. The card is anchored vertically to the cursor (its row IS the icon under the cursor by construction), 240 px wide, opaque, with a 3-px primary-color stripe on its leading edge to anchor it visually to the rail.
+
+## Visual rules
+
+- **Single selection signal.** Active row uses the elevated pill bg + foreground text + medium font weight. **No accent bar.** A single unambiguous cue is enough; doubling it (pill + bar + bold + accent color) is decorative chrome.
+- **Quiet by default.** Action affordances (rename pencil, close X) are hover-only on every row, including the active one. Reveal on intent.
+- **Surface separation via opacity.** `surface_tone()` blends a desaturated extreme-luminance overlay into `theme.background` at 0.10 (rail), 0.18 (panel body), 0.22 (hover card), 0.32 (card edge stripe). No borders, no shadows.
+- **Mono font for technical detail only.** Tab names use `theme.font_family` (system) — tabs are named *things*. Subtitles (`~/proj/path`, `user@host`) use `theme.mono_font_family`.
 
 ## User-visible surface
 

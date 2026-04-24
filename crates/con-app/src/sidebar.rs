@@ -2,50 +2,43 @@
 //!
 //! Toggle in *Settings → Appearance → Tabs → Vertical Tabs*.
 //!
-//! Three runtime states (Chrome-style):
+//! Two runtime states (no auto-expand-on-hover anymore — see design
+//! note at the bottom of this docblock):
 //!
-//! - **Collapsed** — narrow icon rail (~44 px). One smart icon per tab
-//!   (terminal / globe / code / pulse / book-open / file-code) with
-//!   the active tab highlighted by an opaque pill.
-//! - **Hover-peek** — when collapsed, hovering the rail floats out the
-//!   full panel (~240 px) above the terminal area as an absolute
-//!   overlay. Mouse-leave returns to the rail. Does NOT reflow the
-//!   terminal pane.
-//! - **Pinned** — the panel sits in flow next to the terminal pane.
-//!   Persisted across restart via `session.vertical_tabs_pinned`.
+//! - **Collapsed (rail)** — narrow icon rail (~44 px). One smart icon
+//!   per tab. Hovering an icon pops a small floating **tab card**
+//!   anchored to the right of the icon (name, subtitle, pane count).
+//!   Card is purely informational — it never displaces the rail or
+//!   the terminal pane and dismisses the moment the cursor leaves
+//!   the icon. Drag an icon directly in collapsed mode to reorder.
 //!
-//! Row anatomy (panel mode):
+//! - **Pinned panel** — full panel (~240 px) with two-line rows
+//!   (name in system font, optional subtitle in mono). Persisted
+//!   across restart via `session.vertical_tabs_pinned`. Drag a row
+//!   to reorder; right-click a row for the context menu.
 //!
-//! ```text
-//! ┌─────────────────────────────────────────────┐
-//! │  ▎  ◉ vim README.md             ✎  ✕       │  ← active row
-//! │     ⌐ ~/proj                                │
-//! ├─────────────────────────────────────────────┤
-//! │     ◉ con-cli e2e               ✕           │
-//! │     ⌐ skills/con-cli-e2e                    │
-//! └─────────────────────────────────────────────┘
-//! ```
+//! Why a hover card instead of an auto-expanding overlay
+//! ---
+//! The first iteration of vertical tabs auto-expanded a full panel
+//! on hover. That's how Microsoft does Edge vertical tabs and it
+//! reads as aggressive — passive intent (just trying to remember
+//! what tab 3 is) takes over the workspace. It also makes drag-from-
+//! collapsed broken: the user clicks an icon to drag, the cursor
+//! leaves the icon to start the drag, the overlay dismisses, the
+//! drop zone disappears. Apple's pattern (Finder sidebar, Mail
+//! mailbox list) is a tooltip-style card that appears next to the
+//! icon without taking over the layout. We do that.
 //!
-//! Visual rules:
-//! - Name uses **system font** (`theme.font_family`) — tabs are named
-//!   things, not commands.
-//! - Subtitle uses **mono font** (`theme.mono_font_family`) — paths
-//!   and `user@host` are technical detail.
-//! - Active row gets a 3-px accent bar on the leading edge plus the
-//!   elevated pill background (Apple's "selection" gesture).
-//! - Close `X` is invisible until the row is hovered (or the row is
-//!   active). Pencil affordance for inline rename ditto.
-//!
-//! Interactions:
-//! - Click row → activate tab.
-//! - Middle-click → close tab.
-//! - Right-click → context menu (Rename / Duplicate / Move Up / Move
-//!   Down / Close / Close Other Tabs).
-//! - Double-click name → inline rename.
-//! - Click pencil → inline rename.
-//! - Click `X` → close tab.
-//! - Click sidebar-toggle (rail bottom or panel header right) → pin /
-//!   unpin.
+//! Visual rules
+//! ---
+//! - Active row: elevated pill bg + foreground text. **No accent
+//!   bar.** A single, unambiguous selection cue is enough; doubling
+//!   it (pill + bar + bold + accent color) is decorative chrome.
+//! - Action affordances (rename pencil, close X) are hover-only on
+//!   every row, including the active one. Quiet by default; reveal
+//!   on intent.
+//! - Surface separation comes from `surface_tone()` (foreground
+//!   blended into background at small intensities), not borders.
 
 use crate::motion::MotionValue;
 use gpui::{
@@ -60,18 +53,25 @@ use gpui_component::{
 };
 use std::time::Duration;
 
-/// Width of the always-visible icon rail in collapsed / hover-peek modes.
+/// Width of the always-visible icon rail in collapsed mode.
 pub const RAIL_WIDTH: f32 = 44.0;
-/// Width of the full panel in pinned mode and the hover-peek overlay.
+/// Width of the full panel in pinned mode.
 pub const PANEL_WIDTH: f32 = 240.0;
-/// Per-row height in pinned/peek mode (two-line layout — name + subtitle).
+/// Width of the floating hover card shown when the cursor is over a
+/// rail icon. Slightly wider than the panel so two-line rows are
+/// comfortable at this magnification.
+const HOVER_CARD_WIDTH: f32 = 240.0;
+/// Per-row height in pinned mode (two-line layout — name + subtitle).
 const ROW_HEIGHT: f32 = 44.0;
 const ROW_HEIGHT_NO_SUBTITLE: f32 = 32.0;
+/// Per-icon size in the rail.
+const RAIL_ICON_SIZE: f32 = 32.0;
+/// Vertical gap between rail icons. Used to compute the icon's
+/// y-center for hover-card anchoring.
+const RAIL_ICON_GAP: f32 = 2.0;
 
-/// Cubic bezier feel for the panel width animation.
+/// Cubic ease-out feel for the panel width animation.
 const PANEL_TWEEN: Duration = Duration::from_millis(220);
-/// Slightly faster for the peek slide-in.
-const PEEK_TWEEN: Duration = Duration::from_millis(160);
 
 /// One row in the vertical tabs panel.
 pub struct SessionEntry {
@@ -81,6 +81,10 @@ pub struct SessionEntry {
     pub needs_attention: bool,
     pub icon: &'static str,
     pub has_user_label: bool,
+    /// How many panes the tab contains (split count). Surfaced in
+    /// the rail's hover card so the user can see "this tab has 3
+    /// panes" without expanding.
+    pub pane_count: usize,
 }
 
 /// Visual state of the panel.
@@ -90,15 +94,13 @@ enum PanelMode {
     Pinned,
 }
 
-/// Per-tab transient state — currently just the inline-rename input
-/// state when the user is editing this row's label. Keyed by the
-/// session/tab index. Cleared on commit / cancel / sync.
+/// Per-tab transient state — the inline-rename input.
 struct RenameState {
     index: usize,
     input: Entity<InputState>,
 }
 
-/// What the user is currently dragging from the panel.
+/// What the user is currently dragging.
 #[derive(Clone)]
 pub struct DraggedTab {
     pub index: usize,
@@ -109,8 +111,6 @@ pub struct DraggedTab {
 impl Render for DraggedTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        // A tiny floating chip the cursor carries while dragging — same
-        // shape as a row but compact and elevated.
         div()
             .flex()
             .items_center()
@@ -135,20 +135,19 @@ impl Render for DraggedTab {
 /// Vertical tabs side panel.
 pub struct SessionSidebar {
     mode: PanelMode,
-    hover_peek: bool,
     sessions: Vec<SessionEntry>,
     active_session: usize,
     leading_top_pad: f32,
-    /// Smooth width animation as the panel collapses / expands /
-    /// peeks. Drives the rendered width via `MotionValue::value`.
-    /// 0.0 = rail-only, 1.0 = full pinned panel.
+    /// Smooth width animation between rail (0.0) and pinned (1.0).
     width_motion: MotionValue,
-    /// Same idea but for the peek overlay's slide-in.
-    peek_motion: MotionValue,
-    /// Inline rename — `Some` when the user is editing a label.
+    /// Inline rename state, `Some` while the user is editing a label.
     rename: Option<RenameState>,
-    /// Tab index the user is currently hovering as a drop target while
-    /// a `DraggedTab` is in flight. Resets once the drop fires.
+    /// The rail-icon index currently under the cursor. Drives the
+    /// floating hover card. Cleared on rail mouse-leave.
+    hovered_rail: Option<usize>,
+    /// Tab index the user is currently hovering as a drop target
+    /// while a `DraggedTab` is in flight. Resets once the drop
+    /// fires (or on the next render after the drag completes).
     drop_target: Option<usize>,
 }
 
@@ -187,13 +186,12 @@ impl SessionSidebar {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
             mode: PanelMode::Collapsed,
-            hover_peek: false,
             sessions: Vec::new(),
             active_session: 0,
             leading_top_pad: if cfg!(target_os = "macos") { 36.0 } else { 6.0 },
             width_motion: MotionValue::new(0.0),
-            peek_motion: MotionValue::new(0.0),
             rename: None,
+            hovered_rail: None,
             drop_target: None,
         }
     }
@@ -206,15 +204,10 @@ impl SessionSidebar {
         };
         if self.mode != new_mode {
             self.mode = new_mode;
-            self.hover_peek = false;
             self.cancel_rename(cx);
-            // Sync the animation target to the new mode. We don't
-            // animate the *initial* set_pinned (constructor seeding
-            // from session) because that would cause a visible
-            // expand-on-launch.
+            self.hovered_rail = None;
             let target = if pinned { 1.0 } else { 0.0 };
             self.width_motion.set_target(target, PANEL_TWEEN);
-            self.peek_motion.set_target(0.0, PEEK_TWEEN);
             cx.notify();
         }
     }
@@ -224,9 +217,9 @@ impl SessionSidebar {
     }
 
     /// Width the panel currently occupies in the workspace flex row.
-    /// During the pin / unpin tween this varies smoothly between
-    /// `RAIL_WIDTH` and `PANEL_WIDTH`. The hover-peek overlay does NOT
-    /// contribute to occupied width — it floats above the terminal.
+    /// Tweens between RAIL_WIDTH and PANEL_WIDTH during pin/unpin.
+    /// Hover cards float over the terminal area and never contribute
+    /// to occupied width.
     pub fn occupied_width(&self) -> f32 {
         let t = self.width_motion.current().clamp(0.0, 1.0);
         RAIL_WIDTH + (PANEL_WIDTH - RAIL_WIDTH) * t
@@ -237,21 +230,6 @@ impl SessionSidebar {
         self.set_pinned(now_pinned, cx);
     }
 
-    fn set_hover_peek(&mut self, peek: bool, cx: &mut Context<Self>) {
-        if matches!(self.mode, PanelMode::Pinned) {
-            return;
-        }
-        if self.hover_peek != peek {
-            self.hover_peek = peek;
-            self.peek_motion
-                .set_target(if peek { 1.0 } else { 0.0 }, PEEK_TWEEN);
-            if !peek {
-                self.cancel_rename(cx);
-            }
-            cx.notify();
-        }
-    }
-
     /// Update the session list from workspace state.
     pub fn sync_sessions(
         &mut self,
@@ -259,7 +237,6 @@ impl SessionSidebar {
         active: usize,
         cx: &mut Context<Self>,
     ) {
-        // If the renamed tab no longer exists, drop the rename state.
         if let Some(state) = &self.rename {
             if state.index >= sessions.len() {
                 self.rename = None;
@@ -270,8 +247,6 @@ impl SessionSidebar {
         cx.notify();
     }
 
-    /// Begin inline rename for the row at `index`. Workspace fires
-    /// this from menu and double-click handlers via `start_rename()`.
     fn begin_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.sessions.len() {
             return;
@@ -284,12 +259,6 @@ impl SessionSidebar {
             s
         });
 
-        // Enter commits, Esc cancels. Blur is a no-op intentionally:
-        // the menu dismiss cycle blurs the input before the user has
-        // a chance to type, and committing on first blur would eat
-        // every menu-driven rename. The active row's tab-click
-        // handler explicitly cancels the rename if the user clicks
-        // away to a different tab.
         cx.subscribe_in(&input, window, {
             move |this, input_entity, event: &InputEvent, _window, cx| match event {
                 InputEvent::PressEnter { .. } => {
@@ -309,14 +278,7 @@ impl SessionSidebar {
         })
         .detach();
 
-        // Focus the input. Selecting the existing text would be nice
-        // but `InputState::select_all` is `pub(super)` in the
-        // upstream — so for now the user just lands at the end of
-        // the existing label and can Cmd+A if they want.
-        input.update(cx, |state, cx| {
-            state.focus(window, cx);
-        });
-
+        input.update(cx, |state, cx| state.focus(window, cx));
         self.rename = Some(RenameState { index, input });
         cx.notify();
     }
@@ -327,12 +289,9 @@ impl SessionSidebar {
         }
     }
 
-    /// Workspace-facing helper: start inline rename for a given index.
-    /// Called from the workspace's Rename action wiring and from the
-    /// row's context menu. We defer one frame so the popup menu has
-    /// time to dismiss + return focus to the panel before we point
-    /// focus at the new InputState — otherwise the menu's
-    /// dismiss-on-confirm cycle eats the input's focus immediately.
+    /// Workspace-facing helper: start inline rename (deferred so the
+    /// triggering popup menu has a frame to dismiss before our input
+    /// claims focus).
     pub fn start_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.mode, PanelMode::Collapsed) {
             self.set_pinned(true, cx);
@@ -342,11 +301,12 @@ impl SessionSidebar {
         });
     }
 
-    fn render_rail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn render_rail(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
         let rail_bg = surface_tone(theme, 0.10);
         let mut rail = div()
             .id("vertical-tabs-rail")
+            .relative()
             .w(px(RAIL_WIDTH))
             .h_full()
             .flex_shrink_0()
@@ -355,10 +315,15 @@ impl SessionSidebar {
             .items_center()
             .pt(px(self.leading_top_pad))
             .pb(px(8.0))
-            .gap(px(2.0))
+            .gap(px(RAIL_ICON_GAP))
             .bg(rail_bg)
+            // Mouse-leave on the rail container clears the hover card
+            // even when the cursor exits via a fast diagonal motion
+            // that may skip the per-icon hover transitions.
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                this.set_hover_peek(*hovered, cx);
+                if !*hovered && this.hovered_rail.take().is_some() {
+                    cx.notify();
+                }
             }))
             .child(rail_icon_button(
                 "vertical-tabs-rail-new",
@@ -379,6 +344,12 @@ impl SessionSidebar {
             let is_active = i == self.active_session;
             let active_bg = surface_tone(theme, 0.22);
             let hover_bg = surface_tone(theme, 0.08);
+            let is_drop_target = self.drop_target == Some(i);
+            let dragged = DraggedTab {
+                index: i,
+                label: session.name.clone().into(),
+                icon: session.icon,
+            };
 
             let mut pill = div()
                 .id(SharedString::from(format!("rail-tab-{i}")))
@@ -386,27 +357,68 @@ impl SessionSidebar {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(32.0))
+                .size(px(RAIL_ICON_SIZE))
                 .rounded(px(8.0))
                 .cursor_pointer()
                 .bg(if is_active {
                     active_bg
+                } else if is_drop_target {
+                    hover_bg
                 } else {
                     gpui::transparent_black()
                 })
                 .hover(move |s| if is_active { s } else { s.bg(hover_bg) })
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |_this, _, _, cx| {
+                    cx.listener(move |this, _, _, cx| {
+                        if let Some(state) = &this.rename {
+                            if state.index != i {
+                                this.rename = None;
+                            }
+                        }
                         cx.emit(SidebarSelect { index: i });
                     }),
                 )
                 .on_mouse_down(
                     MouseButton::Middle,
-                    cx.listener(move |_this, _, _, cx| {
-                        cx.emit(SidebarCloseTab { index: i });
-                    }),
+                    cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { index: i })),
                 )
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    let want = if *hovered { Some(i) } else { None };
+                    if this.hovered_rail != want {
+                        this.hovered_rail = want;
+                        cx.notify();
+                    }
+                }))
+                .on_drag(dragged, |dragged, _offset, _window, cx| {
+                    cx.new(|_| dragged.clone())
+                })
+                .on_drag_move::<DraggedTab>(cx.listener(
+                    move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                        // GPUI fires drag_move on EVERY listener of a
+                        // matching type — filter by element bounds.
+                        if !point_in_bounds(&event.event.position, &event.bounds) {
+                            return;
+                        }
+                        if this.drop_target != Some(i) {
+                            this.drop_target = Some(i);
+                            // Hide the hover card while a drag is in
+                            // flight — it would just clutter the
+                            // drop-target indicator.
+                            this.hovered_rail = None;
+                            cx.notify();
+                        }
+                    },
+                ))
+                .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                    let from = dragged.index;
+                    let to = i;
+                    this.drop_target = None;
+                    if from != to {
+                        cx.emit(SidebarReorder { from, to });
+                    }
+                    cx.notify();
+                }))
                 .child(
                     svg()
                         .path(session.icon)
@@ -433,9 +445,7 @@ impl SessionSidebar {
             rail = rail.child(pill);
         }
 
-        let _ = window;
         rail = rail.child(div().flex_1());
-
         rail.child(rail_icon_button(
             "vertical-tabs-rail-expand",
             "phosphor/sidebar-simple.svg",
@@ -445,16 +455,134 @@ impl SessionSidebar {
         ))
     }
 
+    /// Floating hover card shown next to the hovered rail icon.
+    /// Composed in workspace coordinates so it renders OVER the
+    /// translucent terminal pane (instead of behind it).
+    ///
+    /// The card vertically tracks the cursor's current y so the user
+    /// always sees the card beside their finger. Anchoring it to the
+    /// icon's geometric center sounded cleaner but actually requires
+    /// computing the rail layout from this side, which is brittle —
+    /// the cursor IS the icon, and "follow the cursor" is the
+    /// established Apple tooltip pattern (Finder, Mail, Safari).
+    pub fn render_hover_card_overlay(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !matches!(self.mode, PanelMode::Collapsed) {
+            return None;
+        }
+        let i = self.hovered_rail?;
+        if self.drop_target.is_some() {
+            return None;
+        }
+        let session = self.sessions.get(i)?;
+        let theme = cx.theme();
+        let bg = surface_tone(theme, 0.22);
+        let edge = surface_tone(theme, 0.32);
+
+        // Anchor the card vertically on the cursor — its row IS the
+        // icon under the cursor by construction.
+        let cursor = window.mouse_position();
+        let card_height = if session.subtitle.is_some() { 64.0 } else { 44.0 };
+        let top = (f32::from(cursor.y) - card_height / 2.0).max(self.leading_top_pad);
+
+        let name_color = theme.foreground;
+        let sub_color = theme.muted_foreground.opacity(0.65);
+        let meta_color = theme.muted_foreground.opacity(0.50);
+        let mono_font = theme.mono_font_family.clone();
+        let sys_font = theme.font_family.clone();
+
+        let mut card_inner = div()
+            .px(px(12.0))
+            .py(px(8.0))
+            .child(
+                div()
+                    .text_size(px(12.5))
+                    .line_height(px(16.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(name_color)
+                    .font_family(sys_font)
+                    .truncate()
+                    .child(session.name.clone()),
+            );
+
+        if let Some(sub) = session.subtitle.as_ref() {
+            card_inner = card_inner.child(
+                div()
+                    .mt(px(2.0))
+                    .text_size(px(11.0))
+                    .line_height(px(14.0))
+                    .text_color(sub_color)
+                    .font_family(mono_font)
+                    .truncate()
+                    .child(sub.clone()),
+            );
+        }
+
+        let mut meta = div()
+            .mt(px(if session.subtitle.is_some() { 4.0 } else { 2.0 }))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .text_size(px(10.5))
+            .line_height(px(13.0))
+            .text_color(meta_color);
+
+        let pane_label = match session.pane_count {
+            0 | 1 => "1 pane".to_string(),
+            n => format!("{n} panes"),
+        };
+        meta = meta.child(div().child(pane_label));
+        if session.is_ssh {
+            meta = meta.child(div().child("·").text_color(meta_color));
+            meta = meta.child(div().child("SSH"));
+        }
+        if session.needs_attention {
+            meta = meta
+                .child(div().child("·").text_color(meta_color))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .child(div().size(px(6.0)).rounded_full().bg(theme.primary))
+                        .child(div().child("unread")),
+                );
+        }
+        card_inner = card_inner.child(meta);
+
+        let card = div()
+            .id("vertical-tabs-hover-card")
+            .absolute()
+            .top(px(top))
+            .left(px(RAIL_WIDTH + 6.0))
+            .w(px(HOVER_CARD_WIDTH))
+            .rounded(px(8.0))
+            .bg(bg)
+            .occlude()
+            .child(card_inner)
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(px(-3.0))
+                    .h_full()
+                    .w(px(3.0))
+                    .rounded(px(2.0))
+                    .bg(edge),
+            );
+
+        Some(card.into_any_element())
+    }
+
     fn render_panel_body(
         &mut self,
         is_overlay: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        // Clone every theme value we'll need *before* re-borrowing
-        // `cx` to render rows (each row may take `&mut Context` for
-        // `cx.listener`). Holding a `&Theme` across those calls is a
-        // borrow conflict.
         let body_bg;
         let header_color;
         let header_font;
@@ -463,7 +591,7 @@ impl SessionSidebar {
         {
             let theme = cx.theme();
             body_bg = surface_tone(theme, 0.18);
-            header_color = theme.muted_foreground.opacity(0.62);
+            header_color = theme.muted_foreground.opacity(0.55);
             header_font = theme.font_family.clone();
             new_btn = panel_icon_button(
                 "vertical-tabs-panel-new",
@@ -492,11 +620,11 @@ impl SessionSidebar {
             .pt(px(self.leading_top_pad.max(0.0)))
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(px(10.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(header_color)
                     .font_family(header_font)
-                    .child(format!("TABS · {}", self.sessions.len())),
+                    .child(format!("{} TABS", self.sessions.len())),
             )
             .child(div().flex().gap(px(2.0)).child(new_btn).child(toggle_btn));
 
@@ -522,6 +650,7 @@ impl SessionSidebar {
                 needs_attention: self.sessions[i].needs_attention,
                 icon: self.sessions[i].icon,
                 has_user_label: self.sessions[i].has_user_label,
+                pane_count: self.sessions[i].pane_count,
             };
             let row = self.render_panel_row(
                 i,
@@ -559,14 +688,9 @@ impl SessionSidebar {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // Snapshot every theme color we reference *before* taking any
-        // `cx.listener` borrows; we'll lean on these locals through
-        // the rest of the function.
-        let theme_clone: gpui_component::Theme;
-        {
-            theme_clone = cx.theme().clone();
-        }
+        let theme_clone = cx.theme().clone();
         let theme = &theme_clone;
+
         let is_active = i == self.active_session;
         let is_renaming = renaming_index == Some(i);
         let is_drop_target = drop_target == Some(i) && drop_target != Some(self.active_session);
@@ -577,18 +701,12 @@ impl SessionSidebar {
             ROW_HEIGHT_NO_SUBTITLE
         };
 
-        // Two-line title block: name (system font) + subtitle (mono).
-        // Or, when renaming, the InputState entity inline.
         let label_block: AnyElement = if is_renaming {
             if let Some(input) = rename_input {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(
-                        Input::new(&input)
-                            .small()
-                            .appearance(false),
-                    )
+                    .child(Input::new(&input).small().appearance(false))
                     .into_any_element()
             } else {
                 div().flex_1().min_w_0().into_any_element()
@@ -638,57 +756,25 @@ impl SessionSidebar {
 
         let row_group = SharedString::from(format!("panel-tab-row-{i}"));
 
-        // Right-cluster: rename pencil (inactive rows hidden until
-        // hover) + close X (ditto). On the active row, both are
-        // always visible so the user has affordances at hand.
-        let action_visible = is_active;
-        let mut rename_btn = panel_icon_button_small(
+        // Both action buttons hover-only on every row, including
+        // active. Apple-quiet: visible on intent, hidden by default.
+        let rename_btn = panel_icon_button_small(
             SharedString::from(format!("panel-tab-rename-{i}")),
-            if session.has_user_label {
-                "phosphor/pencil-simple.svg"
-            } else {
-                "phosphor/pencil-simple.svg"
-            },
+            "phosphor/pencil-simple.svg",
             theme,
-            cx.listener(move |this, _, window, cx| {
-                this.begin_rename(i, window, cx);
-            }),
-        );
-        if !action_visible {
-            rename_btn = rename_btn
-                .invisible()
-                .group_hover(row_group.clone(), |s| s.visible());
-        }
-        let mut close_btn = panel_icon_button_small(
+            cx.listener(move |this, _, window, cx| this.begin_rename(i, window, cx)),
+        )
+        .invisible()
+        .group_hover(row_group.clone(), |s| s.visible());
+        let close_btn = panel_icon_button_small(
             SharedString::from(format!("panel-tab-close-{i}")),
             "phosphor/x.svg",
             theme,
-            cx.listener(move |_this, _, _, cx| {
-                cx.emit(SidebarCloseTab { index: i });
-            }),
-        );
-        if !action_visible {
-            close_btn = close_btn
-                .invisible()
-                .group_hover(row_group.clone(), |s| s.visible());
-        }
+            cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { index: i })),
+        )
+        .invisible()
+        .group_hover(row_group.clone(), |s| s.visible());
 
-        // Active accent bar — Apple-style 3px leading rule.
-        let accent_bar = div()
-            .absolute()
-            .left(px(0.0))
-            .top(px(8.0))
-            .bottom(px(8.0))
-            .w(px(3.0))
-            .rounded(px(2.0))
-            .bg(if is_active {
-                theme.primary
-            } else {
-                gpui::transparent_black()
-            });
-
-        // Drop indicator — a 2-px line at the top edge when this row
-        // is the current drop target.
         let drop_line = div()
             .absolute()
             .left(px(8.0))
@@ -715,19 +801,16 @@ impl SessionSidebar {
             icon: session.icon,
         };
 
-        let mut icon_stack = div()
-            .relative()
-            .flex_shrink_0()
-            .child(
-                svg()
-                    .path(session.icon)
-                    .size(px(15.0))
-                    .text_color(if is_active {
-                        theme.foreground
-                    } else {
-                        theme.muted_foreground.opacity(0.78)
-                    }),
-            );
+        let mut icon_stack = div().relative().flex_shrink_0().child(
+            svg()
+                .path(session.icon)
+                .size(px(15.0))
+                .text_color(if is_active {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground.opacity(0.78)
+                }),
+        );
         if session.needs_attention && !is_active {
             icon_stack = icon_stack.child(
                 div()
@@ -762,8 +845,6 @@ impl SessionSidebar {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
-                    // Clicking a different row dismisses any pending
-                    // rename. Same row stays in rename mode.
                     if let Some(state) = &this.rename {
                         if state.index != i {
                             this.rename = None;
@@ -774,9 +855,7 @@ impl SessionSidebar {
             )
             .on_mouse_down(
                 MouseButton::Middle,
-                cx.listener(move |_this, _, _, cx| {
-                    cx.emit(SidebarCloseTab { index: i });
-                }),
+                cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { index: i })),
             )
             .on_double_click(cx.listener(move |this, _, window, cx| {
                 this.begin_rename(i, window, cx);
@@ -786,19 +865,7 @@ impl SessionSidebar {
             })
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                    // GPUI fires on_drag_move on EVERY element with a
-                    // matching listener whenever the cursor moves
-                    // anywhere — not only when the cursor is over
-                    // THIS element. Filter on the element's own
-                    // bounds so drop_target reflects the row the
-                    // cursor is actually over.
-                    let p = event.event.position;
-                    let b = event.bounds;
-                    if p.x < b.origin.x
-                        || p.x >= b.origin.x + b.size.width
-                        || p.y < b.origin.y
-                        || p.y >= b.origin.y + b.size.height
-                    {
+                    if !point_in_bounds(&event.event.position, &event.bounds) {
                         return;
                     }
                     if this.drop_target != Some(i) {
@@ -824,7 +891,6 @@ impl SessionSidebar {
                     build_row_context_menu(menu, weak.clone(), i, total, has_user_label)
                 }
             })
-            .child(accent_bar)
             .child(drop_line)
             .child(icon_stack)
             .child(label_block)
@@ -840,77 +906,18 @@ impl SessionSidebar {
     }
 }
 
-impl SessionSidebar {
-    /// Returns the absolute peek-overlay element when the panel is
-    /// collapsed and the cursor is hovering the rail.
-    pub fn render_peek_overlay(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if !matches!(self.mode, PanelMode::Collapsed) {
-            return None;
-        }
-        let progress = self.peek_motion.value(window);
-        if progress < 0.01 && !self.hover_peek {
-            return None;
-        }
-        let edge_color = surface_tone(cx.theme(), 0.20);
-        let body = self.render_panel_body(true, window, cx);
-        // Slide the overlay in from -8 px so the motion has a small
-        // horizontal offset, not just an opacity fade.
-        let slide = -8.0 * (1.0 - progress);
-        Some(
-            div()
-                .id("vertical-tabs-peek-overlay")
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(RAIL_WIDTH + slide))
-                .w(px(PANEL_WIDTH + 1.0))
-                .opacity(progress)
-                .occlude()
-                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                    this.set_hover_peek(*hovered, cx);
-                }))
-                .child(body)
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .right_0()
-                        .h_full()
-                        .w(px(1.0))
-                        .bg(edge_color),
-                )
-                .into_any_element(),
-        )
-    }
-}
-
 impl Render for SessionSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // GPUI doesn't expose an `on_drag_end` hook for the source
-        // element, so the only place we can robustly clear the drop
-        // indicator after a drag-cancel (drop-on-no-target) is the
-        // next render that observes `!cx.has_active_drag()`.
+        // Clear stale drop indicator after the drag completes — GPUI
+        // doesn't expose an on_drag_end hook for the source element.
         if self.drop_target.is_some() && !cx.has_active_drag() {
             self.drop_target = None;
         }
-
-        // Drive the width animation so the rail / pinned-panel widens
-        // smoothly when the user toggles. We always render the rail
-        // in flow; in pinned mode we additionally render the panel
-        // body inline beside it (so the terminal area gets pushed
-        // right by `occupied_width()` as the tween runs).
+        // Drive the width-tween animation frame.
         let _progress = self.width_motion.value(window);
 
         match self.mode {
             PanelMode::Pinned => {
-                // Width animation: while transitioning, the panel
-                // grows from RAIL_WIDTH to PANEL_WIDTH. We render
-                // the rail and clip the panel body to the current
-                // width via overflow_hidden.
                 let t = self.width_motion.current().clamp(0.0, 1.0);
                 let visible_w = RAIL_WIDTH + (PANEL_WIDTH - RAIL_WIDTH) * t;
                 let panel = self.render_panel_body(false, window, cx);
@@ -928,14 +935,23 @@ impl Render for SessionSidebar {
     }
 }
 
-/// Compose a surface color one perceptual step darker (light theme)
-/// or lighter (dark theme) than `theme.background`.
+/// Compose a surface color one perceptual step darker (light theme) or
+/// lighter (dark theme) than `theme.background`. Foreground is forced
+/// to a desaturated extreme-luminance overlay so the result reads
+/// against any palette author's choice of `theme.background`.
 fn surface_tone(theme: &gpui_component::Theme, intensity: f32) -> Hsla {
     let mut over = theme.foreground;
     over.s = 0.0;
     over.l = if theme.foreground.l < 0.5 { 0.0 } else { 1.0 };
     over.a = intensity.clamp(0.0, 1.0);
     theme.background.blend(over)
+}
+
+fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>) -> bool {
+    p.x >= b.origin.x
+        && p.x < b.origin.x + b.size.width
+        && p.y >= b.origin.y
+        && p.y < b.origin.y + b.size.height
 }
 
 fn rail_icon_button<F>(
