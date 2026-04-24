@@ -247,7 +247,10 @@ use con_core::session::{
     AgentModelOverrideState, AgentRoutingState, GlobalHistoryState, PaneLayoutState,
     PaneSplitDirection, Session,
 };
-use con_core::{SuggestionContext, SuggestionEngine};
+use con_core::{
+    SuggestionContext, SuggestionEngine, TabIconKind, TabSummary, TabSummaryEngine,
+    TabSummaryRequest,
+};
 
 struct Tab {
     pane_tree: PaneTree,
@@ -257,6 +260,20 @@ struct Tab {
     /// vertical panel) or context menu. `None` means "use smart
     /// auto-derived name".
     user_label: Option<String>,
+    /// AI-suggested label, when the suggestion model is enabled and
+    /// has produced one. Sits between `user_label` and the regex
+    /// heuristic in the naming priority — never overrides an
+    /// explicit user choice, but does override the heuristic when
+    /// available.
+    ai_label: Option<String>,
+    /// AI-suggested icon, paired with `ai_label`. When `None`, the
+    /// row falls back to the heuristic icon.
+    ai_icon: Option<TabIconKind>,
+    /// Stable identifier for this tab across the lifetime of the
+    /// window — used as the cache key in the `TabSummaryEngine` so
+    /// reorders, closes, and re-opens don't collide. Allocated from
+    /// `next_tab_summary_id` at tab construction time.
+    summary_id: u64,
     needs_attention: bool,
     session: AgentSession,
     agent_routing: AgentRoutingState,
@@ -358,6 +375,16 @@ pub struct ConWorkspace {
     pending_control_agent_requests: HashMap<usize, PendingControlAgentRequest>,
     shell_suggestion_rx: crossbeam_channel::Receiver<ShellSuggestionResult>,
     shell_suggestion_tx: crossbeam_channel::Sender<ShellSuggestionResult>,
+    /// Background AI engine that produces a label + icon for each
+    /// vertical-tabs row. Shares the harness's tokio runtime and the
+    /// user's `agent.suggestion_model` settings.
+    tab_summary_engine: TabSummaryEngine,
+    tab_summary_rx: crossbeam_channel::Receiver<TabSummary>,
+    tab_summary_tx: crossbeam_channel::Sender<TabSummary>,
+    /// Monotonic counter for [`Tab::summary_id`] — stable across the
+    /// window's lifetime so the summary engine's per-tab cache
+    /// survives reorders and tab close/reopen.
+    next_tab_summary_id: u64,
     /// Monotonic request id for control-plane agent asks so stale timeout tasks cannot
     /// cancel a newer request on the same tab.
     next_control_agent_request_id: u64,
@@ -628,9 +655,11 @@ impl ConWorkspace {
         });
         harness.prewarm_input_classification();
         let shell_suggestion_engine = harness.suggestion_engine(180);
+        let tab_summary_engine = harness.tab_summary_engine();
         let session_save_tx = spawn_session_save_worker();
         let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
         let (shell_suggestion_tx, shell_suggestion_rx) = crossbeam_channel::unbounded();
+        let (tab_summary_tx, tab_summary_rx) = crossbeam_channel::unbounded();
         let control_socket = match con_core::spawn_control_socket_server(
             harness.runtime_handle(),
             control_request_tx,
@@ -701,6 +730,9 @@ impl ConWorkspace {
                         tab_state.title.clone()
                     },
                     user_label: tab_state.user_label.clone(),
+                    ai_label: None,
+                    ai_icon: None,
+                    summary_id: i as u64,
                     needs_attention: false,
                     session: agent_session,
                     agent_routing: if tab_state.agent_routing.is_empty() {
@@ -721,6 +753,9 @@ impl ConWorkspace {
                 pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),
                 user_label: None,
+                ai_label: None,
+                ai_icon: None,
+                summary_id: 0,
                 needs_attention: false,
                 session: AgentSession::new(),
                 agent_routing: Self::default_agent_routing(&config.agent),
@@ -744,6 +779,8 @@ impl ConWorkspace {
                 .map(|(i, tab)| {
                     let presentation = smart_tab_presentation(
                         tab.user_label.as_deref(),
+                        tab.ai_label.as_deref(),
+                        tab.ai_icon.map(|k| k.svg_path()),
                         None,
                         Some(tab.title.as_str()),
                         None,
@@ -1008,6 +1045,11 @@ impl ConWorkspace {
                         workspace.apply_shell_suggestion(result, cx);
                     }
 
+                    while let Ok(summary) = workspace.tab_summary_rx.try_recv() {
+                        got_event = true;
+                        workspace.apply_tab_summary(summary, cx);
+                    }
+
                     if workspace.pump_ghostty_views(cx) {
                         got_event = true;
                         cx.notify();
@@ -1062,6 +1104,30 @@ impl ConWorkspace {
 
         let has_multiple_tabs = tabs.len() > 1;
         let last_ghostty_wake_generation = ghostty_app.wake_generation();
+        let next_tab_summary_id_init = tabs.len() as u64;
+
+        // Ask the AI summarizer for initial labels — many tabs will
+        // be SSH (instant short-circuit) and the rest will arrive
+        // when the shell starts producing output anyway, but kicking
+        // it off here lets non-shell signals (cwd from session
+        // restore) feed the model immediately.
+        if config.agent.suggestion_model.enabled {
+            let tx = tab_summary_tx.clone();
+            for (i, tab) in tabs.iter().enumerate() {
+                let req = TabSummaryRequest {
+                    tab_id: tab.summary_id,
+                    cwd: None,
+                    title: Some(tab.title.clone()).filter(|t| !t.is_empty()),
+                    ssh_host: None,
+                    recent_commands: vec![],
+                };
+                let _ = i;
+                let tx = tx.clone();
+                tab_summary_engine.request(req, move |summary| {
+                    let _ = tx.send(summary);
+                });
+            }
+        }
 
         Self {
             sidebar,
@@ -1113,6 +1179,10 @@ impl ConWorkspace {
             pending_control_agent_requests: HashMap::new(),
             shell_suggestion_rx,
             shell_suggestion_tx,
+            tab_summary_engine,
+            tab_summary_rx,
+            tab_summary_tx,
+            next_tab_summary_id: next_tab_summary_id_init,
             next_control_agent_request_id: 1,
             window_handle: window.window_handle(),
             workspace_handle: cx.weak_entity(),
@@ -3131,10 +3201,15 @@ impl ConWorkspace {
             .current_dir(cx);
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         let tab_number = self.tabs.len() + 1;
+        let summary_id = self.next_tab_summary_id;
+        self.next_tab_summary_id += 1;
         self.tabs.push(Tab {
             pane_tree: PaneTree::new(terminal),
             title: format!("Terminal {}", tab_number),
             user_label: self.tabs[event.index].user_label.clone(),
+            ai_label: None,
+            ai_icon: None,
+            summary_id,
             needs_attention: false,
             session: AgentSession::new(),
             agent_routing: self.tabs[event.index].agent_routing.clone(),
@@ -3217,6 +3292,8 @@ impl ConWorkspace {
                 let current_dir = terminal.current_dir(cx);
                 let presentation = smart_tab_presentation(
                     tab.user_label.as_deref(),
+                    tab.ai_label.as_deref(),
+                    tab.ai_icon.map(|k| k.svg_path()),
                     hostname.as_deref(),
                     title.as_deref(),
                     current_dir.as_deref(),
@@ -3331,6 +3408,11 @@ impl ConWorkspace {
         self.harness.update_config(new_config);
         self.shell_suggestion_engine = self.harness.suggestion_engine(180);
         self.shell_suggestion_engine.clear_cache();
+        // Same suggestion model drives the tab summarizer; rebuild
+        // it so the new credentials / model override take effect.
+        self.tab_summary_engine = self.harness.tab_summary_engine();
+        // Re-ask for fresh summaries with the new model.
+        self.request_tab_summaries(cx);
         let active_agent_config = self.active_tab_agent_config();
 
         // Sync auto-approve to agent panel UI
@@ -3827,6 +3909,7 @@ impl ConWorkspace {
         pane.write(cmd_with_newline.as_bytes(), cx);
         if let Some(pane_id) = self.tabs[tab_idx].pane_tree.pane_id_for_terminal(&pane) {
             self.record_shell_command(tab_idx, pane_id, &req.command, pane.current_dir(cx));
+            self.after_shell_command_recorded(cx);
         }
         self.record_runtime_event_for_terminal(
             tab_idx,
@@ -5154,11 +5237,16 @@ impl ConWorkspace {
         let terminal = self.create_terminal(None, window, cx);
         let tab_number = self.tabs.len() + 1;
         let old_active = self.active_tab;
+        let summary_id = self.next_tab_summary_id;
+        self.next_tab_summary_id += 1;
 
         self.tabs.push(Tab {
             pane_tree: PaneTree::new(terminal.clone()),
             title: format!("Terminal {}", tab_number),
             user_label: None,
+            ai_label: None,
+            ai_icon: None,
+            summary_id,
             needs_attention: false,
             session: AgentSession::new(),
             agent_routing: Self::default_agent_routing(self.harness.config()),
@@ -5285,7 +5373,11 @@ impl ConWorkspace {
         }
         let was_active = index == self.active_tab;
         self.reindex_pending_control_agent_requests_after_tab_close(index);
-        self.tabs.remove(index);
+        let removed = self.tabs.remove(index);
+        // Drop the closed tab's cached AI summary so a future tab
+        // assigned the same summary_id (which won't happen, since
+        // ids are monotonic) doesn't inherit stale state.
+        self.tab_summary_engine.forget(removed.summary_id);
         self.sync_tab_strip_motion();
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
@@ -5446,6 +5538,13 @@ impl ConWorkspace {
         while self.global_shell_history.len() > MAX_GLOBAL_SHELL_HISTORY {
             self.global_shell_history.pop_front();
         }
+    }
+
+    /// Public-ish hook so the workspace can re-ask the AI summarizer
+    /// after recording a new shell command. Separate from the
+    /// `&mut self` mutation above so the borrow checker is happy.
+    fn after_shell_command_recorded(&self, cx: &App) {
+        self.request_tab_summaries(cx);
     }
 
     fn record_input_history(&mut self, input: &str) {
@@ -5894,6 +5993,75 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    /// Result delivered by [`TabSummaryEngine`] — locate the tab by
+    /// `summary_id` (NOT index, since reorders / closes shift the
+    /// indexes), update its `ai_label` / `ai_icon`, and republish to
+    /// the sidebar.
+    fn apply_tab_summary(&mut self, summary: TabSummary, cx: &mut Context<Self>) {
+        let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.summary_id == summary.tab_id)
+        else {
+            // Tab was closed while the request was in flight.
+            return;
+        };
+        let label = summary.label.trim().to_string();
+        let icon = summary.icon;
+        let label_changed = tab.ai_label.as_deref() != Some(label.as_str());
+        let icon_changed = tab.ai_icon != Some(icon);
+        if !label_changed && !icon_changed {
+            return;
+        }
+        tab.ai_label = Some(label);
+        tab.ai_icon = Some(icon);
+        log::debug!(
+            target: "con::tab_summary",
+            "applied summary tab_id={} label={:?} icon={:?}",
+            summary.tab_id,
+            tab.ai_label,
+            tab.ai_icon,
+        );
+        self.sync_sidebar(cx);
+        cx.notify();
+    }
+
+    /// Fan out a [`TabSummaryRequest`] for every tab whose context
+    /// has changed enough to be worth re-summarizing. Cheap to call
+    /// repeatedly — the engine debounces, dedupes, and short-
+    /// circuits SSH tabs without an LLM round-trip.
+    ///
+    /// No-op when the user has disabled `agent.suggestion_model`.
+    /// Tabs with an explicit `user_label` still get an `ai_icon`
+    /// hint requested (the model's icon choice can still be useful
+    /// even when the user picked the name).
+    fn request_tab_summaries(&self, cx: &App) {
+        if !self.harness.config().suggestion_model.enabled {
+            return;
+        }
+        let tx = self.tab_summary_tx.clone();
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let terminal = tab.pane_tree.focused_terminal();
+            let req = TabSummaryRequest {
+                tab_id: tab.summary_id,
+                cwd: terminal.current_dir(cx),
+                title: terminal.title(cx),
+                ssh_host: self.effective_remote_host_for_tab(i, terminal, cx),
+                recent_commands: tab
+                    .shell_history
+                    .values()
+                    .flat_map(|q| q.iter().rev())
+                    .map(|entry| entry.command.clone())
+                    .take(8)
+                    .collect(),
+            };
+            let tx = tx.clone();
+            self.tab_summary_engine.request(req, move |summary| {
+                let _ = tx.send(summary);
+            });
+        }
+    }
+
     fn execute_shell(&mut self, cmd: &str, window: &mut Window, cx: &mut Context<Self>) {
         let target_ids = self.input_bar.read(cx).target_pane_ids();
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
@@ -5916,6 +6084,7 @@ impl ConWorkspace {
         for (pane_id, cwd) in history_records {
             self.record_shell_command(self.active_tab, pane_id, cmd, cwd);
         }
+        self.after_shell_command_recorded(cx);
 
         self.input_bar.update(cx, |bar, _cx| {
             bar.clear_completion_ui();
@@ -6136,6 +6305,10 @@ impl ConWorkspace {
         );
 
         self.sync_sidebar(cx);
+        // Activating a tab is a strong signal the user cares about
+        // it — refresh AI label/icon if context shifted since it was
+        // last summarized.
+        self.request_tab_summaries(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -6274,8 +6447,14 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Title changed — sync sidebar and tab bar
+        // Title changed — sync sidebar and tab bar.
         self.sync_sidebar(cx);
+        // The OSC title change is the most reliable signal that a
+        // tab's purpose just shifted (`vim` → `bash`, `bash` → `htop`).
+        // Re-ask the AI for an updated label/icon. The engine
+        // dedupes on cache key so this is cheap if context didn't
+        // actually change.
+        self.request_tab_summaries(cx);
         cx.notify();
     }
 
@@ -7793,39 +7972,64 @@ struct VerticalTabPresentation {
 /// 6. Fallback `Tab N` — terminal icon, no subtitle.
 fn smart_tab_presentation(
     user_label: Option<&str>,
+    ai_label: Option<&str>,
+    ai_icon: Option<&'static str>,
     hostname: Option<&str>,
     title: Option<&str>,
     current_dir: Option<&str>,
     tab_index: usize,
 ) -> VerticalTabPresentation {
-    if let Some(label) = user_label
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        // User label overrides the *name* but we still pick a smart
-        // icon from whatever signals are available — a tab labelled
-        // "Editor" deserves the editor icon, not a fallback terminal
-        // icon. Hostname > focused-process detection > terminal.
-        let icon = if let Some(host) = hostname.map(str::trim).filter(|s| !s.is_empty()) {
-            // Use globe for SSH-labelled tabs.
-            let _ = host;
-            "phosphor/globe.svg"
-        } else if let Some(raw) = title.map(str::trim).filter(|s| !s.is_empty()) {
+    let is_ssh_session = hostname.map(|h| !h.trim().is_empty()).unwrap_or(false);
+
+    // Helper: pick the heuristic icon (used when no AI / SSH signal).
+    let heuristic_icon = || {
+        if let Some(raw) = title.map(str::trim).filter(|s| !s.is_empty()) {
             parse_focused_process(raw)
                 .map(|(_, ic)| ic)
                 .unwrap_or("phosphor/terminal.svg")
         } else {
             "phosphor/terminal.svg"
+        }
+    };
+
+    // 1. User label always wins for the name.
+    if let Some(label) = user_label
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let icon = if is_ssh_session {
+            "phosphor/globe.svg"
+        } else {
+            // Prefer the AI-suggested icon for user-labelled tabs;
+            // fall back to the heuristic.
+            ai_icon.unwrap_or_else(heuristic_icon)
         };
-        let is_ssh = hostname.is_some();
         return VerticalTabPresentation {
             name: label.to_string(),
             subtitle: cwd_subtitle(current_dir),
             icon,
-            is_ssh,
+            is_ssh: is_ssh_session,
         };
     }
 
+    // 2. AI label sits between user label and heuristics — never
+    //    overrides an explicit user choice, but does override the
+    //    "vim README.md" / "htop" parse output.
+    if let Some(label) = ai_label.map(str::trim).filter(|s| !s.is_empty()) {
+        let icon = if is_ssh_session {
+            "phosphor/globe.svg"
+        } else {
+            ai_icon.unwrap_or_else(heuristic_icon)
+        };
+        return VerticalTabPresentation {
+            name: label.to_string(),
+            subtitle: cwd_subtitle(current_dir),
+            icon,
+            is_ssh: is_ssh_session,
+        };
+    }
+
+    // 3. SSH host short-name (no AI needed for this).
     if let Some(host) = hostname.map(str::trim).filter(|s| !s.is_empty()) {
         return VerticalTabPresentation {
             name: host.to_string(),
@@ -7835,6 +8039,7 @@ fn smart_tab_presentation(
         };
     }
 
+    // 4. Focused-process heuristic.
     if let Some(raw) = title.map(str::trim).filter(|s| !s.is_empty()) {
         if let Some((command, icon)) = parse_focused_process(raw) {
             return VerticalTabPresentation {

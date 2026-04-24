@@ -4,6 +4,7 @@ pub mod harness;
 pub mod release_channel;
 pub mod session;
 pub mod suggestions;
+pub mod tab_summary;
 
 pub use config::Config;
 pub use control::{
@@ -14,3 +15,4 @@ pub use control::{
 };
 pub use harness::{AgentHarness, AgentSession};
 pub use suggestions::{SuggestionContext, SuggestionEngine};
+pub use tab_summary::{TabIconKind, TabSummary, TabSummaryEngine, TabSummaryRequest};

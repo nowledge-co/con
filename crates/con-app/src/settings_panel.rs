@@ -2804,8 +2804,9 @@ impl SettingsPanel {
                     card(theme, card_opacity).child(toggle_row(
                         "Vertical Tabs",
                         "Move the tab strip from the top of the window into a collapsible \
-                         left-side panel. Hover the rail to peek at full titles, click the \
-                         sidebar icon to pin it open.",
+                         left-side panel. Hover the rail for a tab card; click the sidebar \
+                         icon to pin the panel open. When the AI suggestion model is enabled, \
+                         tab labels and icons are picked by the same model.",
                         Switch::new("vertical-tabs-toggle")
                             .checked(vertical_tabs_enabled)
                             .small()

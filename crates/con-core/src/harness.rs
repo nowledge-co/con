@@ -208,6 +208,18 @@ impl AgentHarness {
         )
     }
 
+    /// Create a TabSummaryEngine that shares the harness tokio
+    /// runtime. Uses the **same suggestion model** the inline shell
+    /// completions use — gated by the same `agent.suggestion_model`
+    /// toggle, so users who turned suggestions off don't get extra
+    /// LLM traffic for tab labels.
+    pub fn tab_summary_engine(&self) -> crate::tab_summary::TabSummaryEngine {
+        crate::tab_summary::TabSummaryEngine::new(
+            self.config.suggestion_agent_config(),
+            self.runtime.clone(),
+        )
+    }
+
     pub fn prewarm_input_classification(&self) {
         self.runtime.spawn(async move {
             let _ = tokio::task::spawn_blocking(|| {
