@@ -6,6 +6,25 @@ A Chrome-style vertical tab strip for the workspace, gated behind a
 single config flag so horizontal tabs remain the default for every
 shipped beta.
 
+## Feature surface
+
+| Capability | Trigger | Notes |
+|---|---|---|
+| Toggle orientation | *Settings → Appearance → Tabs → Vertical Tabs* | Live; no restart. |
+| Collapsed icon rail | default in vertical mode | Smart icon per tab. |
+| Hover-peek overlay | cursor over rail | Slides in 160 ms; overlay floats over terminal pane (does NOT reflow). |
+| Pinned panel | click sidebar-toggle in rail or header | Width tweens 220 ms; persists across restart. |
+| Activate tab | left-click row | |
+| Close tab | middle-click row, or hover-X | |
+| New tab | `+` in rail or panel header | |
+| Smart name | auto from OSC title / SSH host / cwd | Bare shells fall through to cwd basename. |
+| Smart icon | auto from process kind | terminal / globe / code / pulse / book-open / file-code |
+| Rename tab | double-click label, or context menu | Enter commits, Esc cancels. |
+| Reset name | context menu | Clears `user_label` so smart auto-naming resumes. |
+| Reorder tab | drag row, or context menu Move Up / Down | Drop indicator between rows. |
+| Duplicate tab | context menu | New tab in same cwd as source. |
+| Close other tabs | context menu | |
+
 ## User-visible surface
 
 - **Setting:** *Settings → Appearance → Tabs → Vertical Tabs*. Backed

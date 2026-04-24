@@ -222,7 +222,8 @@ use crate::motion::MotionValue;
 use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
 use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{
-    NewSession, SessionEntry, SessionSidebar, SidebarCloseTab, SidebarSelect,
+    NewSession, SessionEntry, SessionSidebar, SidebarCloseOthers, SidebarCloseTab,
+    SidebarDuplicate, SidebarRename, SidebarReorder, SidebarSelect,
 };
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
@@ -251,6 +252,11 @@ use con_core::{SuggestionContext, SuggestionEngine};
 struct Tab {
     pane_tree: PaneTree,
     title: String,
+    /// User-supplied label that overrides every auto-derived name in
+    /// the panel/strip. Set via inline rename (double-click in
+    /// vertical panel) or context menu. `None` means "use smart
+    /// auto-derived name".
+    user_label: Option<String>,
     needs_attention: bool,
     session: AgentSession,
     agent_routing: AgentRoutingState,
@@ -694,6 +700,7 @@ impl ConWorkspace {
                     } else {
                         tab_state.title.clone()
                     },
+                    user_label: tab_state.user_label.clone(),
                     needs_attention: false,
                     session: agent_session,
                     agent_routing: if tab_state.agent_routing.is_empty() {
@@ -713,6 +720,7 @@ impl ConWorkspace {
             tabs.push(Tab {
                 pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),
+                user_label: None,
                 needs_attention: false,
                 session: AgentSession::new(),
                 agent_routing: Self::default_agent_routing(&config.agent),
@@ -734,15 +742,20 @@ impl ConWorkspace {
                 .iter()
                 .enumerate()
                 .map(|(i, tab)| {
-                    let name = if tab.title.trim().is_empty() {
-                        format!("Tab {}", i + 1)
-                    } else {
-                        tab.title.clone()
-                    };
+                    let presentation = smart_tab_presentation(
+                        tab.user_label.as_deref(),
+                        None,
+                        Some(tab.title.as_str()),
+                        None,
+                        i,
+                    );
                     SessionEntry {
-                        name,
-                        is_ssh: false,
+                        name: presentation.name,
+                        subtitle: presentation.subtitle,
+                        is_ssh: presentation.is_ssh,
                         needs_attention: false,
+                        icon: presentation.icon,
+                        has_user_label: tab.user_label.is_some(),
                     }
                 })
                 .collect();
@@ -849,6 +862,14 @@ impl ConWorkspace {
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_close_tab)
+            .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_rename)
+            .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_duplicate)
+            .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_reorder)
+            .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_close_others)
             .detach();
         cx.observe(&sidebar, |this, _sidebar, cx| {
             // The sidebar's pin/peek state lives in the sidebar entity,
@@ -2534,6 +2555,7 @@ impl ConWorkspace {
                     shell_history,
                     conversation_id: Some(tab.session.conversation_id()),
                     agent_routing: tab.agent_routing.clone(),
+                    user_label: tab.user_label.clone(),
                 }
             })
             .collect();
@@ -3060,6 +3082,127 @@ impl ConWorkspace {
         self.close_tab_by_index(event.index, window, cx);
     }
 
+    fn on_sidebar_rename(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarRename,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.index >= self.tabs.len() {
+            return;
+        }
+        // Empty / whitespace-only labels reset to smart auto-naming.
+        let new_label = event
+            .label
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        if self.tabs[event.index].user_label == new_label {
+            return;
+        }
+        self.tabs[event.index].user_label = new_label;
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    fn on_sidebar_duplicate(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarDuplicate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.index >= self.tabs.len() {
+            return;
+        }
+        // For now, "duplicate" = open a new tab whose CWD matches the
+        // source tab's focused terminal cwd. The conversation, panel
+        // state, and history don't carry over — that's intentional;
+        // duplicate is for "open another shell here", not "fork
+        // session state".
+        let cwd = self.tabs[event.index]
+            .pane_tree
+            .focused_terminal()
+            .current_dir(cx);
+        let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+        let tab_number = self.tabs.len() + 1;
+        self.tabs.push(Tab {
+            pane_tree: PaneTree::new(terminal),
+            title: format!("Terminal {}", tab_number),
+            user_label: self.tabs[event.index].user_label.clone(),
+            needs_attention: false,
+            session: AgentSession::new(),
+            agent_routing: self.tabs[event.index].agent_routing.clone(),
+            panel_state: PanelState::new(),
+            runtime_trackers: RefCell::new(HashMap::new()),
+            runtime_cache: RefCell::new(HashMap::new()),
+            shell_history: HashMap::new(),
+        });
+        let new_index = self.tabs.len() - 1;
+        self.sync_tab_strip_motion();
+        self.activate_tab(new_index, window, cx);
+    }
+
+    fn on_sidebar_reorder(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarReorder,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let from = event.from;
+        let to = event.to;
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        // Keep the active tab pointer pointing at the same Tab entity
+        // through the swap — otherwise dragging the active row would
+        // appear to randomly shift the active selection.
+        self.active_tab = if self.active_tab == from {
+            to
+        } else if from < self.active_tab && to >= self.active_tab {
+            self.active_tab - 1
+        } else if from > self.active_tab && to <= self.active_tab {
+            self.active_tab + 1
+        } else {
+            self.active_tab
+        };
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    fn on_sidebar_close_others(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarCloseOthers,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let keep = event.index;
+        if keep >= self.tabs.len() {
+            return;
+        }
+        // Iterate from the end so indices stay stable as we close
+        // tabs to the right of `keep`. After that, close everything
+        // left of `keep` from the highest index downwards.
+        let mut i = self.tabs.len();
+        while i > keep + 1 {
+            i -= 1;
+            self.close_tab_by_index(i, window, cx);
+        }
+        let mut j = keep;
+        while j > 0 {
+            j -= 1;
+            self.close_tab_by_index(j, window, cx);
+        }
+    }
+
     fn sync_sidebar(&self, cx: &mut Context<Self>) {
         let sessions: Vec<SessionEntry> = self
             .tabs
@@ -3068,14 +3211,22 @@ impl ConWorkspace {
             .map(|(i, tab)| {
                 let terminal = tab.pane_tree.focused_terminal();
                 let hostname = self.effective_remote_host_for_tab(i, terminal, cx);
-                let is_ssh = hostname.is_some();
                 let title = terminal.title(cx);
                 let current_dir = terminal.current_dir(cx);
-                let name = pane_display_name(&hostname, &title, &current_dir, i);
+                let presentation = smart_tab_presentation(
+                    tab.user_label.as_deref(),
+                    hostname.as_deref(),
+                    title.as_deref(),
+                    current_dir.as_deref(),
+                    i,
+                );
                 SessionEntry {
-                    name,
-                    is_ssh,
+                    name: presentation.name,
+                    subtitle: presentation.subtitle,
+                    is_ssh: presentation.is_ssh,
                     needs_attention: tab.needs_attention,
+                    icon: presentation.icon,
+                    has_user_label: tab.user_label.is_some(),
                 }
             })
             .collect();
@@ -5003,6 +5154,7 @@ impl ConWorkspace {
         self.tabs.push(Tab {
             pane_tree: PaneTree::new(terminal.clone()),
             title: format!("Terminal {}", tab_number),
+            user_label: None,
             needs_attention: false,
             session: AgentSession::new(),
             agent_routing: Self::default_agent_routing(self.harness.config()),
@@ -6362,7 +6514,7 @@ impl Render for ConWorkspace {
         // immutable cx borrow that the rest of `render` relies on.
         let vertical_tabs_overlay = if self.vertical_tabs_active() {
             self.sidebar
-                .update(cx, |sidebar, cx| sidebar.render_peek_overlay(cx))
+                .update(cx, |sidebar, cx| sidebar.render_peek_overlay(window, cx))
         } else {
             None
         };
@@ -7610,6 +7762,195 @@ fn pane_display_name(
     format!("Pane {}", pane_id + 1)
 }
 
+/// One row's worth of presentation data for the vertical-tabs panel.
+/// Computed by the workspace from the live tab state and pushed to
+/// the panel via `sync_sessions`.
+struct VerticalTabPresentation {
+    name: String,
+    subtitle: Option<String>,
+    icon: &'static str,
+    is_ssh: bool,
+}
+
+/// Smart-name + smart-icon for a vertical-tabs row.
+///
+/// Priority:
+/// 1. **User-supplied label** (set via inline rename or context menu)
+///    — terminal-icon, no subtitle.
+/// 2. **SSH host** (e.g. `prod-1.example.com`) — globe icon, subtitle
+///    is `user@host` if available.
+/// 3. **Focused process** parsed out of the OSC-set terminal title
+///    (e.g. `vim README.md`, `htop`, `less log.txt`) — icon picked by
+///    process kind (editor / monitor / pager / shell), subtitle is the
+///    cwd basename.
+/// 4. **CWD basename** — terminal icon, no subtitle.
+/// 5. **Shell name** (`bash`, `zsh`, `fish`) — terminal icon, no
+///    subtitle.
+/// 6. Fallback `Tab N` — terminal icon, no subtitle.
+fn smart_tab_presentation(
+    user_label: Option<&str>,
+    hostname: Option<&str>,
+    title: Option<&str>,
+    current_dir: Option<&str>,
+    tab_index: usize,
+) -> VerticalTabPresentation {
+    if let Some(label) = user_label
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return VerticalTabPresentation {
+            name: label.to_string(),
+            subtitle: cwd_subtitle(current_dir),
+            icon: "phosphor/terminal.svg",
+            is_ssh: false,
+        };
+    }
+
+    if let Some(host) = hostname.map(str::trim).filter(|s| !s.is_empty()) {
+        return VerticalTabPresentation {
+            name: host.to_string(),
+            subtitle: cwd_subtitle(current_dir),
+            icon: "phosphor/globe.svg",
+            is_ssh: true,
+        };
+    }
+
+    if let Some(raw) = title.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some((command, icon)) = parse_focused_process(raw) {
+            return VerticalTabPresentation {
+                name: command,
+                subtitle: cwd_subtitle(current_dir),
+                icon,
+                is_ssh: false,
+            };
+        }
+    }
+
+    if let Some(dir) = current_dir {
+        let path = std::path::Path::new(dir);
+        let is_bare_home = matches!(
+            path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
+            Some(ref name) if name == "home" || name == "Users"
+        ) && path
+            .parent()
+            .and_then(|p| p.parent())
+            .map_or(false, |pp| pp.parent().is_none());
+        if !is_bare_home {
+            if let Some(base) = path.file_name() {
+                return VerticalTabPresentation {
+                    name: base.to_string_lossy().into_owned(),
+                    subtitle: None,
+                    icon: "phosphor/terminal.svg",
+                    is_ssh: false,
+                };
+            }
+        }
+    }
+
+    if let Some(raw) = title.map(str::trim).filter(|s| !s.is_empty()) {
+        return VerticalTabPresentation {
+            name: raw.to_string(),
+            subtitle: None,
+            icon: "phosphor/terminal.svg",
+            is_ssh: false,
+        };
+    }
+
+    VerticalTabPresentation {
+        name: format!("Tab {}", tab_index + 1),
+        subtitle: None,
+        icon: "phosphor/terminal.svg",
+        is_ssh: false,
+    }
+}
+
+fn cwd_subtitle(current_dir: Option<&str>) -> Option<String> {
+    let dir = current_dir?;
+    let home = std::env::var("HOME").ok();
+    if let Some(home) = home.as_deref() {
+        if dir == home {
+            return Some("~".to_string());
+        }
+        if let Some(rest) = dir.strip_prefix(home) {
+            if rest.starts_with('/') {
+                let trimmed = format!("~{rest}");
+                return Some(shorten_path(&trimmed));
+            }
+        }
+    }
+    Some(shorten_path(dir))
+}
+
+fn shorten_path(path: &str) -> String {
+    const MAX_LEN: usize = 32;
+    if path.chars().count() <= MAX_LEN {
+        return path.to_string();
+    }
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.len() <= 2 {
+        return path.to_string();
+    }
+    let last = parts.last().copied().unwrap_or("");
+    let parent = parts.get(parts.len() - 2).copied().unwrap_or("");
+    let prefix = if path.starts_with('/') { "/" } else { "" };
+    format!("{prefix}…/{parent}/{last}")
+}
+
+/// Parse a terminal title to extract the focused command and pick an
+/// icon for it. Heuristic — terminals OSC-set their title to things
+/// like `"vim README.md - ~/proj"` or `"htop"`. We strip trailing
+/// `" — cwd"` suffixes, take the first word, and bucket it.
+///
+/// Returns `None` if the title looks like a bare shell name; the
+/// caller falls through to cwd / shell naming so the row reads as a
+/// shell session, not as a `bash`-named process.
+fn parse_focused_process(title: &str) -> Option<(String, &'static str)> {
+    let trimmed = title
+        .split(" — ")
+        .next()
+        .or_else(|| title.split(" - ").next())
+        .unwrap_or(title)
+        .trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let first_word = trimmed
+        .split(|c: char| c.is_whitespace() || c == ':')
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('/');
+    let basename = first_word.rsplit('/').next().unwrap_or(first_word);
+    let lower = basename.to_ascii_lowercase();
+    match lower.as_str() {
+        // Bare shells aren't an interesting "process" — fall through
+        // so the row gets named by cwd or user label instead.
+        "bash" | "sh" | "zsh" | "fish" | "dash" | "ksh" | "ion" | "nu" | "pwsh"
+        | "powershell" | "cmd" | "tmux" | "screen" => None,
+
+        "vim" | "nvim" | "vi" | "neovim" | "nano" | "emacs" | "ed" | "helix" | "hx"
+        | "kakoune" | "kak" | "micro" | "code" | "codium" | "subl" => {
+            Some((trimmed.to_string(), "phosphor/code.svg"))
+        }
+
+        "htop" | "top" | "btop" | "btm" | "atop" | "iotop" | "glances" | "nvtop"
+        | "bashtop" | "ctop" | "k9s" => {
+            Some((trimmed.to_string(), "phosphor/pulse.svg"))
+        }
+
+        "less" | "more" | "most" | "bat" | "cat" | "tail" | "head" | "view" | "man" => {
+            Some((trimmed.to_string(), "phosphor/book-open.svg"))
+        }
+
+        "ssh" | "mosh" => Some((trimmed.to_string(), "phosphor/globe.svg")),
+
+        "git" | "lazygit" | "tig" | "gh" => {
+            Some((trimmed.to_string(), "phosphor/file-code.svg"))
+        }
+
+        _ => Some((trimmed.to_string(), "phosphor/terminal.svg")),
+    }
+}
+
 fn longest_common_prefix<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
     let mut iter = values.into_iter();
     let Some(first) = iter.next() else {
@@ -7629,3 +7970,4 @@ fn longest_common_prefix<'a>(values: impl IntoIterator<Item = &'a str>) -> Strin
     }
     prefix
 }
+

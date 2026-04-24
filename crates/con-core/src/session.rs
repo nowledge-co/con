@@ -59,6 +59,13 @@ pub struct TabState {
     /// and shared behavior; tabs only persist the selected provider and model choices.
     #[serde(default)]
     pub agent_routing: AgentRoutingState,
+    /// Optional user-supplied label that overrides every auto-derived name
+    /// (focused-process, cwd basename, shell name) shown in the vertical
+    /// tabs panel and horizontal tab strip. Set via the inline rename
+    /// affordance (double-click a row in the vertical panel) or the
+    /// context menu's "Rename" entry.
+    #[serde(default)]
+    pub user_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -134,6 +141,7 @@ impl Default for Session {
                 shell_history: Vec::new(),
                 conversation_id: None,
                 agent_routing: AgentRoutingState::default(),
+                user_label: None,
             }],
             active_tab: 0,
             agent_panel_open: false,
