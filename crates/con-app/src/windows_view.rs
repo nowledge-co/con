@@ -585,6 +585,24 @@ impl GhosttyView {
 
         false
     }
+
+    fn placeholder_background(&self) -> Option<Hsla> {
+        let config = self.app.renderer_config();
+        let opacity = config.background_opacity.clamp(0.0, 1.0);
+        if opacity <= f32::EPSILON {
+            return None;
+        }
+
+        Some(
+            Rgba {
+                r: config.clear_color[0].clamp(0.0, 1.0),
+                g: config.clear_color[1].clamp(0.0, 1.0),
+                b: config.clear_color[2].clamp(0.0, 1.0),
+                a: opacity,
+            }
+            .into(),
+        )
+    }
 }
 
 /// Wrap a BGRA readback buffer as a `RenderImage`. `RenderImage`
@@ -718,6 +736,7 @@ impl Render for GhosttyView {
         }
 
         let theme = cx.theme();
+        let placeholder_background = self.placeholder_background();
         let entity = cx.entity().downgrade();
         // `ObjectFit::Fill` keeps the image quad exactly equal to the
         // element's bounds. The default `Contain` applies aspect-ratio
@@ -740,7 +759,7 @@ impl Render for GhosttyView {
             .min_w_0()
             .min_h_0()
             .track_focus(&self.focus_handle)
-            .bg(theme.background.opacity(0.0))
+            .bg(placeholder_background.unwrap_or_else(|| theme.background.opacity(0.0)))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;

@@ -11,6 +11,9 @@ con is still pre-release, so entries may group related beta work while the produ
 **Interface**
 - Completed pane-close keyboard handling instead of only showing dead UI. `Close Pane` is now a real configurable shortcut in Settings, and Windows/Linux pane split defaults now use `Alt+D` / `Alt+Shift+D` instead of fragile symbol-based bindings.
 
+**Terminal — Windows Backend (preview)**
+- Reduced the first-frame flash when splitting a new pane on Windows. Brand-new panes now paint their configured terminal background while the first renderer image is still warming up, instead of briefly showing a transparent hole.
+
 ## [v0.1.0-beta.37] - 2026-04-24
 
 ### Improved
