@@ -28,6 +28,8 @@ mod font_loader;
 mod pipeline;
 
 use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use windows::Win32::Graphics::Direct3D::{
@@ -343,6 +345,7 @@ impl Renderer {
         config: &RendererConfig,
         prefer_latest: bool,
     ) -> Result<RenderOutcome> {
+        let prof_started = perf_trace_enabled().then(Instant::now);
         let selection = *self
             .selection
             .lock()
@@ -379,15 +382,22 @@ impl Renderer {
         let in_flight_before_submit = ring.in_flight_count();
         let drain_target = ring.oldest_in_flight();
 
+        let drain_started = perf_trace_enabled().then(Instant::now);
         let drained: Option<Vec<u8>> = if let Some(idx) = drain_target {
             ring.try_drain(&self.context, idx)?
         } else {
             None
         };
+        let drain_ms = drain_started
+            .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
         let backlog = drain_target.is_some() && drained.is_none();
 
         let mut submitted: Option<SubmittedCopy> = None;
+        let mut draw_ms = 0.0;
+        let mut submit_ms = 0.0;
         if needs_draw {
+            let draw_started = perf_trace_enabled().then(Instant::now);
             let vp = D3D11_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,
@@ -419,26 +429,59 @@ impl Renderer {
             if !snapshot.cells.is_empty() {
                 self.draw_cells(snapshot, config)?;
             }
+            draw_ms = draw_started
+                .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+                .unwrap_or(0.0);
 
             // Submit GPU CopyResource into the ring's next slot. The
             // command joins the same context queue as the draws above,
             // so by the next prepaint the GPU will have run them all
             // and the staging texture will be ready to Map().
+            let submit_started = perf_trace_enabled().then(Instant::now);
             submitted = Some(ring.submit_copy_mailbox(&self.context, &self.rt_texture));
+            submit_ms = submit_started
+                .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+                .unwrap_or(0.0);
         }
 
+        let mut block_drain_ms = 0.0;
         if prefer_latest
             && needs_draw
             && can_block_for_latest(in_flight_before_submit, backlog, submitted)
             && let Some(submitted) = submitted
             && !submitted.replaced_in_flight
-            && let Some(bytes) = ring.block_drain(&self.context, submitted.idx)?
+            && let Some(bytes) = {
+                let block_started = perf_trace_enabled().then(Instant::now);
+                let bytes = ring.block_drain(&self.context, submitted.idx)?;
+                block_drain_ms = block_started
+                    .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                bytes
+            }
         {
-            return Ok(RenderOutcome::Rendered(FrameBgra {
+            let outcome = RenderOutcome::Rendered(FrameBgra {
                 bytes,
                 width: self.width_px,
                 height: self.height_px,
-            }));
+            });
+            log_render_profile(
+                prof_started,
+                snapshot,
+                prefer_latest,
+                needs_draw,
+                in_flight_before_submit,
+                drain_target,
+                drained.is_some(),
+                backlog,
+                Some(submitted),
+                draw_ms,
+                submit_ms,
+                drain_ms,
+                block_drain_ms,
+                "rendered",
+                "blocked_latest",
+            );
+            return Ok(outcome);
         }
 
         if needs_draw {
@@ -450,25 +493,97 @@ impl Renderer {
             // slideshow of historical snapshots. Keep the previous
             // on-screen image and let the next prepaint pick up the
             // freshest completed frame instead.
-            return Ok(RenderOutcome::Pending);
+            let outcome = RenderOutcome::Pending;
+            log_render_profile(
+                prof_started,
+                snapshot,
+                prefer_latest,
+                needs_draw,
+                in_flight_before_submit,
+                drain_target,
+                drained.is_some(),
+                backlog,
+                submitted,
+                draw_ms,
+                submit_ms,
+                drain_ms,
+                block_drain_ms,
+                "pending",
+                "fresh_submitted_waiting",
+            );
+            return Ok(outcome);
         }
 
         if let Some(bytes) = drained {
-            return Ok(RenderOutcome::Rendered(FrameBgra {
+            let outcome = RenderOutcome::Rendered(FrameBgra {
                 bytes,
                 width: self.width_px,
                 height: self.height_px,
-            }));
+            });
+            log_render_profile(
+                prof_started,
+                snapshot,
+                prefer_latest,
+                needs_draw,
+                in_flight_before_submit,
+                drain_target,
+                true,
+                backlog,
+                submitted,
+                draw_ms,
+                submit_ms,
+                drain_ms,
+                block_drain_ms,
+                "rendered",
+                "drained_oldest",
+            );
+            return Ok(outcome);
         }
 
         // No new draw and nothing was ready yet, but there is still GPU
         // work outstanding. Ask the caller for another prepaint instead
         // of blocking the UI thread on Map().
         if ring.oldest_in_flight().is_some() {
-            return Ok(RenderOutcome::Pending);
+            let outcome = RenderOutcome::Pending;
+            log_render_profile(
+                prof_started,
+                snapshot,
+                prefer_latest,
+                needs_draw,
+                in_flight_before_submit,
+                drain_target,
+                false,
+                backlog,
+                submitted,
+                draw_ms,
+                submit_ms,
+                drain_ms,
+                block_drain_ms,
+                "pending",
+                "waiting_in_flight",
+            );
+            return Ok(outcome);
         }
 
-        Ok(RenderOutcome::Unchanged)
+        let outcome = RenderOutcome::Unchanged;
+        log_render_profile(
+            prof_started,
+            snapshot,
+            prefer_latest,
+            needs_draw,
+            in_flight_before_submit,
+            drain_target,
+            false,
+            backlog,
+            submitted,
+            draw_ms,
+            submit_ms,
+            drain_ms,
+            block_drain_ms,
+            "unchanged",
+            "unchanged",
+        );
+        Ok(outcome)
     }
 
     fn draw_cells(&self, snapshot: &ScreenSnapshot, config: &RendererConfig) -> Result<()> {
@@ -702,6 +817,58 @@ impl Renderer {
         drop(pipeline);
         Ok(())
     }
+}
+
+fn perf_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn log_render_profile(
+    started: Option<Instant>,
+    snapshot: &ScreenSnapshot,
+    prefer_latest: bool,
+    needs_draw: bool,
+    in_flight_before_submit: usize,
+    drain_target: Option<usize>,
+    drained_ready: bool,
+    backlog: bool,
+    submitted: Option<SubmittedCopy>,
+    draw_ms: f64,
+    submit_ms: f64,
+    drain_ms: f64,
+    block_drain_ms: f64,
+    outcome: &str,
+    outcome_source: &str,
+) {
+    let Some(started) = started else {
+        return;
+    };
+    log::info!(
+        target: "con::perf",
+        "win_renderer generation={} rows={} cols={} prefer_latest={} needs_draw={} in_flight_before={} drain_target={:?} drained_ready={} backlog={} submitted_idx={:?} replaced_in_flight={} draw_ms={:.3} submit_ms={:.3} drain_ms={:.3} block_drain_ms={:.3} outcome={} source={} total_ms={:.3}",
+        snapshot.generation,
+        snapshot.rows,
+        snapshot.cols,
+        prefer_latest,
+        needs_draw,
+        in_flight_before_submit,
+        drain_target,
+        drained_ready,
+        backlog,
+        submitted.map(|s| s.idx),
+        submitted.is_some_and(|s| s.replaced_in_flight),
+        draw_ms,
+        submit_ms,
+        drain_ms,
+        block_drain_ms,
+        outcome,
+        outcome_source,
+        started.elapsed().as_secs_f64() * 1000.0,
+    );
 }
 
 fn is_default_blank_cell(cell: &Cell, effective_attrs: u8, config: &RendererConfig) -> bool {
