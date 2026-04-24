@@ -20,7 +20,7 @@ use con_ghostty::{
     GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize, VtCell, VtCursor,
 };
 use futures::StreamExt;
-use futures::channel::mpsc::{UnboundedSender, unbounded};
+use futures::channel::mpsc::unbounded;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
@@ -84,7 +84,6 @@ pub struct GhosttyView {
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
     last_surface_size: Option<(u32, u32, u16, u16)>,
-    wake_tx: UnboundedSender<()>,
 }
 
 pub fn init(_cx: &mut App) {}
@@ -149,7 +148,6 @@ impl GhosttyView {
             pane_bounds: None,
             scale_factor: 1.0,
             last_surface_size: None,
-            wake_tx,
         }
     }
 
