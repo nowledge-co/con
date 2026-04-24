@@ -100,11 +100,10 @@ impl Default for AppearanceConfig {
 // with anything the terminal expects. On Windows/Linux `secondary-`
 // resolves to `Ctrl`, and bare Ctrl+<letter> often has shell meaning
 // (Ctrl+L = clear, Ctrl+C = SIGINT, Ctrl+I = Tab, ...), so most app
-// actions avoid that space. Pane split/close is the one explicit
-// exception here: those shortcuts are window-management commands in Con
-// itself, not shell editing commands, and issue #67 calls out that the
-// Windows/Linux defaults need to be deliberate and user-visible rather
-// than half-wired placeholders.
+// actions avoid that space. Pane-management shortcuts therefore stay in
+// app-level modifier space instead of borrowing terminal control
+// characters like Ctrl+D, which terminals consume as EOF before Con's
+// keybindings ever see them.
 #[cfg(target_os = "macos")]
 fn default_toggle_agent() -> String {
     "secondary-l".into()
@@ -146,8 +145,13 @@ fn default_close_tab() -> String {
     "ctrl-shift-w".into()
 }
 
+#[cfg(target_os = "macos")]
 fn default_close_pane() -> String {
-    "ctrl-d".into()
+    "secondary-alt-w".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_close_pane() -> String {
+    "alt-shift-w".into()
 }
 
 fn default_next_tab() -> String {
