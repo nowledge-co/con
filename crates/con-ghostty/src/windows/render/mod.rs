@@ -441,16 +441,24 @@ impl Renderer {
             }));
         }
 
+        if needs_draw {
+            // Mailbox semantics: once we've submitted a fresher frame
+            // for the current VT snapshot, do not regress to an older
+            // already-drained readback just because it happens to be
+            // ready first. Returning that stale frame is what makes
+            // bursty command output (`ls`, `dir`, `clear`) feel like a
+            // slideshow of historical snapshots. Keep the previous
+            // on-screen image and let the next prepaint pick up the
+            // freshest completed frame instead.
+            return Ok(RenderOutcome::Pending);
+        }
+
         if let Some(bytes) = drained {
             return Ok(RenderOutcome::Rendered(FrameBgra {
                 bytes,
                 width: self.width_px,
                 height: self.height_px,
             }));
-        }
-
-        if needs_draw {
-            return Ok(RenderOutcome::Pending);
         }
 
         // No new draw and nothing was ready yet, but there is still GPU
