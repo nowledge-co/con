@@ -736,7 +736,11 @@ impl Render for GhosttyView {
         }
 
         let theme = cx.theme();
-        let placeholder_background = self.placeholder_background();
+        let placeholder_background = if self.cached_image.is_none() {
+            self.placeholder_background()
+        } else {
+            None
+        };
         let entity = cx.entity().downgrade();
         // `ObjectFit::Fill` keeps the image quad exactly equal to the
         // element's bounds. The default `Contain` applies aspect-ratio
