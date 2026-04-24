@@ -17,8 +17,9 @@ shipped beta.
 | Activate tab | left-click row | |
 | Close tab | middle-click row, or hover-X (pinned mode) | |
 | New tab | `+` in rail or panel header | |
-| Smart name | auto from OSC title / SSH host / cwd | Bare shells fall through to cwd basename. |
-| Smart icon | auto from process kind | terminal / globe / code / pulse / book-open / file-code |
+| AI label + icon | auto when `agent.suggestion_model.enabled` | Same model the inline shell completions use. SSH tabs short-circuit (no LLM). Per-tab cache + 5 s budget. Bad output is dropped; heuristic takes over. |
+| Smart name (heuristic / fallback) | auto from OSC title / SSH host / cwd | Bare shells fall through to cwd basename. |
+| Smart icon (heuristic / fallback) | auto from process kind | terminal / globe / code / pulse / book-open / file-code |
 | Rename tab | double-click label, or context menu | Enter commits, Esc cancels. |
 | Reset name | context menu | Clears `user_label` so smart auto-naming resumes. |
 | Reorder tab | drag (rail or pinned), or context menu Move Up / Down | Drop indicator: pinned-mode uses a 2-px line above the target row; rail mode uses a hover-bg pill. |
@@ -30,6 +31,32 @@ shipped beta.
 The first vertical-tabs landing auto-expanded a full panel on hover (Microsoft Edge style). It read as aggressive — *passive intent* (just trying to remember what tab 3 is) was taking over the workspace. It also broke drag-from-collapsed: the user clicks an icon to drag, the cursor leaves the icon to start the drag, the overlay folds, the drop zones disappear.
 
 Apple's pattern (Finder sidebar item names, Safari tab thumbnails, Mail mailbox tooltips) is a **tooltip-style card** that appears next to the icon without taking over layout. We do that. The card is anchored vertically to the cursor (its row IS the icon under the cursor by construction), 240 px wide, opaque, with a 3-px primary-color stripe on its leading edge to anchor it visually to the rail.
+
+## AI tab summarization
+
+Naming priority becomes:
+
+1. `user_label` — explicit override; user always wins.
+2. `ai_label` + `ai_icon` — when the suggestion model is enabled and has produced one.
+3. SSH host short name (no LLM needed; engine short-circuits).
+4. `parse_focused_process()` heuristic.
+5. cwd basename.
+6. shell name / `Tab N`.
+
+The engine lives in `con-core::tab_summary` and is constructed via `AgentHarness::tab_summary_engine()` — same `suggestion_agent_config()` the inline shell completions use, gated by the same `agent.suggestion_model.enabled` toggle. Users who turned suggestions off get **no extra LLM traffic** for tab labels.
+
+**Prompt contract.** The model is told to return one line `LABEL|ICON` where `LABEL` is 1–3 words Title Case (no emoji, no quotes, no "tab" in the name) and `ICON` is one of the six closed-set keywords: `terminal | code | pulse | book | file | globe`. Anything that doesn't parse cleanly is dropped — the row falls back to the heuristic name and we never silently render garbage.
+
+**Throttling.** Per-tab cache keyed on `(cwd, top-3-recent-commands, title)` so we don't re-ask while context hasn't moved. At most one in-flight request per tab. At most one request per 5 s per tab as a budget guard against chatty PROMPT_COMMAND cwd updates.
+
+**Triggers.** A summary request fans out from:
+- `from_session` (initial seed from restored tab titles).
+- `on_terminal_title_changed` (OSC title change — strongest signal a tab's purpose just shifted).
+- `activate_tab` (the user is paying attention to this one — catch up if context moved).
+- `record_shell_command` (new command in history).
+- `on_settings_saved` (model changed — clear cache, re-ask).
+
+**Closure.** When a tab closes, the workspace calls `engine.forget(summary_id)` so future tabs can reuse cache slots without inheriting stale state.
 
 ## Visual rules
 
