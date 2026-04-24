@@ -16,8 +16,8 @@
 use std::sync::Arc;
 
 use con_ghostty::{
-    GhosttyApp, GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize, VtCell,
-    ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE,
+    Cursor, GhosttyApp, GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize,
+    VtCell, ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE,
 };
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -67,6 +67,11 @@ pub struct GhosttyView {
     last_title: Option<String>,
     pending_write: Option<Vec<u8>>,
     snapshot: Option<ScreenSnapshot>,
+    row_cache: Vec<CachedTerminalRow>,
+    row_cache_generation: Option<u64>,
+    row_cache_cursor: Option<Cursor>,
+    row_cache_style: Option<RowCacheStyleKey>,
+    row_cache_shape: Option<(u16, u16)>,
     /// Latched after the first PTY snapshot that contained any
     /// printable content. Used to gate the "Waiting for shell
     /// prompt…" placeholder so it disappears the moment bash echoes
@@ -99,6 +104,11 @@ impl GhosttyView {
             last_title: None,
             pending_write: None,
             snapshot: None,
+            row_cache: Vec::new(),
+            row_cache_generation: None,
+            row_cache_cursor: None,
+            row_cache_style: None,
+            row_cache_shape: None,
             seen_any_output: false,
             pane_bounds: None,
             scale_factor: 1.0,
@@ -158,6 +168,11 @@ impl GhosttyView {
         self.last_title = None;
         self.pending_write = None;
         self.snapshot = None;
+        self.row_cache.clear();
+        self.row_cache_generation = None;
+        self.row_cache_cursor = None;
+        self.row_cache_style = None;
+        self.row_cache_shape = None;
         self.seen_any_output = false;
         self.last_surface_size = None;
     }
@@ -444,6 +459,67 @@ impl GhosttyView {
 
         false
     }
+
+    fn sync_row_cache(
+        &mut self,
+        default_fg: Hsla,
+        default_bg: Hsla,
+        base_font: &Font,
+        font_size: Pixels,
+        line_height: Pixels,
+    ) {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            self.row_cache.clear();
+            self.row_cache_generation = None;
+            self.row_cache_cursor = None;
+            self.row_cache_style = None;
+            self.row_cache_shape = None;
+            return;
+        };
+
+        let style = RowCacheStyleKey {
+            font_family: base_font.family.clone(),
+            default_fg,
+            default_bg,
+            font_size,
+            line_height,
+        };
+        let shape = (snapshot.cols, snapshot.rows);
+        let force_full_rebuild = self.row_cache_style.as_ref() != Some(&style)
+            || self.row_cache_shape != Some(shape)
+            || self.row_cache.len() != usize::from(snapshot.rows);
+
+        if force_full_rebuild {
+            self.row_cache
+                .resize_with(usize::from(snapshot.rows), CachedTerminalRow::default);
+        }
+
+        let mut rows_to_refresh =
+            if force_full_rebuild || self.row_cache_generation != Some(snapshot.generation) {
+                rows_needing_refresh(snapshot, self.row_cache_cursor, force_full_rebuild)
+            } else {
+                Vec::new()
+            };
+
+        rows_to_refresh.sort_unstable();
+        rows_to_refresh.dedup();
+
+        for row_idx in rows_to_refresh {
+            let row_start = row_idx * usize::from(snapshot.cols);
+            let row_end = row_start + usize::from(snapshot.cols);
+            let Some(cells) = snapshot.cells.get(row_start..row_end) else {
+                break;
+            };
+            let cursor_for_row = cursor_col_for_row(snapshot.cursor, row_idx);
+            self.row_cache[row_idx] =
+                build_terminal_row(cells, default_fg, default_bg, base_font, cursor_for_row);
+        }
+
+        self.row_cache_generation = Some(snapshot.generation);
+        self.row_cache_cursor = Some(snapshot.cursor);
+        self.row_cache_style = Some(style);
+        self.row_cache_shape = Some(shape);
+    }
 }
 
 impl Focusable for GhosttyView {
@@ -484,8 +560,18 @@ impl Render for GhosttyView {
 
         let foreground = theme.foreground;
         let status_color = foreground.opacity(0.5);
+        self.sync_row_cache(
+            foreground,
+            theme.background,
+            &mono_font,
+            px(font_size_px),
+            px(line_height_px),
+        );
 
-        let mut rows: Vec<AnyElement> = Vec::new();
+        let mut rows: Vec<AnyElement> = Vec::with_capacity(
+            usize::from(self.snapshot.as_ref().map_or(0, |snapshot| snapshot.rows))
+                + if status_message.is_some() { 1 } else { 0 },
+        );
         if let Some(message) = status_message {
             rows.push(
                 div()
@@ -499,34 +585,14 @@ impl Render for GhosttyView {
         }
 
         if let Some(snapshot) = self.snapshot.as_ref() {
-            let cursor_col = if snapshot.cursor.visible {
-                Some(usize::from(snapshot.cursor.col))
-            } else {
-                None
-            };
             for row_idx in 0..usize::from(snapshot.rows) {
-                let row_start = row_idx * usize::from(snapshot.cols);
-                let row_end = row_start + usize::from(snapshot.cols);
-                let Some(cells) = snapshot.cells.get(row_start..row_end) else {
-                    break;
-                };
-                let cursor_for_row = if cursor_col.is_some()
-                    && usize::from(snapshot.cursor.row) == row_idx
-                {
-                    cursor_col
-                } else {
-                    None
-                };
-                let row = render_terminal_row(
-                    cells,
-                    foreground,
-                    theme.background,
-                    &mono_font,
-                    px(font_size_px),
-                    px(line_height_px),
-                    cursor_for_row,
-                );
-                rows.push(row);
+                if let Some(row) = self.row_cache.get(row_idx) {
+                    rows.push(render_cached_terminal_row(
+                        row,
+                        px(font_size_px),
+                        px(line_height_px),
+                    ));
+                }
             }
         }
 
@@ -622,20 +688,82 @@ impl Drop for GhosttyView {
     }
 }
 
+#[derive(Clone, Default)]
+struct CachedTerminalRow {
+    text: SharedString,
+    runs: Vec<TextRun>,
+}
+
+#[derive(Clone, PartialEq)]
+struct RowCacheStyleKey {
+    font_family: SharedString,
+    default_fg: Hsla,
+    default_bg: Hsla,
+    font_size: Pixels,
+    line_height: Pixels,
+}
+
+fn cursor_col_for_row(cursor: Cursor, row_idx: usize) -> Option<usize> {
+    if cursor.visible && usize::from(cursor.row) == row_idx {
+        Some(usize::from(cursor.col))
+    } else {
+        None
+    }
+}
+
+fn rows_needing_refresh(
+    snapshot: &ScreenSnapshot,
+    previous_cursor: Option<Cursor>,
+    force_full_rebuild: bool,
+) -> Vec<usize> {
+    if force_full_rebuild {
+        return (0..usize::from(snapshot.rows)).collect();
+    }
+
+    let mut rows = snapshot
+        .dirty_rows
+        .iter()
+        .copied()
+        .filter(|row| *row < snapshot.rows)
+        .map(usize::from)
+        .collect::<Vec<_>>();
+
+    if let Some(previous) = previous_cursor {
+        if previous.visible && previous.row < snapshot.rows {
+            rows.push(usize::from(previous.row));
+        }
+    }
+    if snapshot.cursor.visible && snapshot.cursor.row < snapshot.rows {
+        rows.push(usize::from(snapshot.cursor.row));
+    }
+
+    rows
+}
+
+fn render_cached_terminal_row(
+    row: &CachedTerminalRow,
+    font_size: Pixels,
+    line_height: Pixels,
+) -> AnyElement {
+    div()
+        .text_size(font_size)
+        .line_height(line_height)
+        .child(StyledText::new(row.text.clone()).with_runs(row.runs.clone()))
+        .into_any_element()
+}
+
 /// Build a single GPUI row element from a slice of `VtCell`s. We
 /// collapse runs of cells that share `(fg, bg, attrs)` into one
 /// `TextRun` so each row is a single `StyledText` element. That keeps
 /// allocations bounded by the number of *style changes*, not the cell
 /// count, while still preserving every SGR transition.
-fn render_terminal_row(
+fn build_terminal_row(
     cells: &[VtCell],
     default_fg: Hsla,
     default_bg: Hsla,
     base_font: &Font,
-    font_size: Pixels,
-    line_height: Pixels,
     cursor_col: Option<usize>,
-) -> AnyElement {
+) -> CachedTerminalRow {
     // First pass: find the last column we have to keep. A column
     // matters if it has a real glyph, OR if it carries a non-default
     // background / underline / strikethrough / inverse style, OR if
@@ -649,12 +777,10 @@ fn render_terminal_row(
         .iter()
         .enumerate()
         .rposition(|(col_idx, cell)| {
-            let glyph_present = cell.codepoint != 0
-                && char::from_u32(cell.codepoint).is_some_and(|ch| ch != ' ');
+            let glyph_present =
+                cell.codepoint != 0 && char::from_u32(cell.codepoint).is_some_and(|ch| ch != ' ');
             let styled_blank = (cell.bg & 0xFF) != 0
-                || (cell.attrs
-                    & (ATTR_INVERSE | ATTR_UNDERLINE | ATTR_STRIKE))
-                    != 0;
+                || (cell.attrs & (ATTR_INVERSE | ATTR_UNDERLINE | ATTR_STRIKE)) != 0;
             let cursor_here = cursor_col == Some(col_idx);
             glyph_present || styled_blank || cursor_here
         })
@@ -714,8 +840,9 @@ fn render_terminal_row(
 
     flush_run(&mut runs, &mut active_style, &mut active_run_len);
 
-    if text.is_empty() {
-        text.push('\u{00A0}');
+    let text = if text.is_empty() {
+        let mut fallback = String::with_capacity(1);
+        fallback.push('\u{00A0}');
         runs.push(TextRun {
             len: '\u{00A0}'.len_utf8(),
             font: base_font.clone(),
@@ -724,13 +851,15 @@ fn render_terminal_row(
             underline: None,
             strikethrough: None,
         });
-    }
+        fallback
+    } else {
+        text
+    };
 
-    div()
-        .text_size(font_size)
-        .line_height(line_height)
-        .child(StyledText::new(text).with_runs(runs))
-        .into_any_element()
+    CachedTerminalRow {
+        text: text.into(),
+        runs,
+    }
 }
 
 /// Resolved per-cell style ready to emit as a `TextRun`.
@@ -831,7 +960,11 @@ fn xterm_modifier_param(modifiers: &Modifiers) -> Option<u8> {
     let mask = u8::from(modifiers.shift)
         | (u8::from(modifiers.alt) << 1)
         | (u8::from(modifiers.control) << 2);
-    if mask == 0 { None } else { Some(1 + mask) }
+    if mask == 0 {
+        None
+    } else {
+        Some(1 + mask)
+    }
 }
 
 fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<String> {
@@ -886,9 +1019,9 @@ fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use super::{render_terminal_row, vt_color_to_hsla};
-    use con_ghostty::{VtCell, ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE};
-    use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, Rgba};
+    use super::{build_terminal_row, rows_needing_refresh, vt_color_to_hsla};
+    use con_ghostty::{Cursor, ScreenSnapshot, VtCell, ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE};
+    use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, Rgba};
 
     fn base_font() -> Font {
         Font {
@@ -944,23 +1077,38 @@ mod tests {
             make_cell(' ', 0, 0, 0),
             make_cell('!', ATTR_INVERSE, 0, 0),
         ];
-        let _no_cursor = render_terminal_row(
-            &cells,
-            fg(),
-            bg(),
-            &base_font(),
-            Pixels::from(14.0),
-            Pixels::from(20.0),
-            None,
+        let _no_cursor = build_terminal_row(&cells, fg(), bg(), &base_font(), None);
+        let _with_cursor = build_terminal_row(&cells, fg(), bg(), &base_font(), Some(2));
+    }
+
+    #[test]
+    fn refresh_rows_include_old_and_new_cursor_rows() {
+        let snapshot = ScreenSnapshot {
+            cols: 4,
+            rows: 3,
+            cells: vec![Default::default(); 12],
+            dirty_rows: vec![1],
+            cursor: Cursor {
+                col: 2,
+                row: 2,
+                visible: true,
+            },
+            title: None,
+            generation: 7,
+        };
+
+        let mut rows = rows_needing_refresh(
+            &snapshot,
+            Some(Cursor {
+                col: 1,
+                row: 0,
+                visible: true,
+            }),
+            false,
         );
-        let _with_cursor = render_terminal_row(
-            &cells,
-            fg(),
-            bg(),
-            &base_font(),
-            Pixels::from(14.0),
-            Pixels::from(20.0),
-            Some(2),
-        );
+        rows.sort_unstable();
+        rows.dedup();
+
+        assert_eq!(rows, vec![0, 1, 2]);
     }
 }

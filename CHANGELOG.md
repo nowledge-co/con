@@ -4,6 +4,14 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## [Unreleased]
+
+### Improved
+
+**Terminal — Linux Backend (preview)**
+- Reduced Linux preview renderer CPU cost by caching per-row `StyledText` text/runs in `linux_view` and only rebuilding rows marked dirty by the VT snapshot, plus cursor-affected rows.
+- Documented the remaining Linux performance constraint explicitly: after the row-cache change, the main latency floor is the workspace's 8 ms PTY wake poll and the longer-term fix remains the planned glyph-atlas grid renderer.
+
 ## [v0.1.0-beta.36] - 2026-04-24
 
 ### Fixed
