@@ -131,16 +131,15 @@ impl GhosttyView {
         let terminal = Arc::new(GhosttyTerminal::new());
         let (wake_tx, mut wake_rx) = unbounded::<()>();
 
-        // Coalescer: the reader thread can fire many wake signals per
-        // frame (one per ConPTY read). Drain whatever is queued before
-        // each `cx.notify()` so we do at most one notify per await
-        // cycle, regardless of how many bytes arrived. GPUI itself
-        // collapses repeat notifies into one prepaint, but draining
-        // here also keeps the channel from growing under sustained
-        // output bursts.
+        // Output wake path: each ConPTY read posts one wake signal.
+        // Preserve those wakes instead of draining them into a single
+        // notify so command output can keep advancing across successive
+        // prepaints rather than appearing in larger collapsed batches.
+        // GPUI already coalesces notifies within one frame boundary, so
+        // the important thing here is to avoid throwing later output
+        // wakes away before the next prepaint has had a chance to run.
         cx.spawn(async move |this, cx| {
             while wake_rx.next().await.is_some() {
-                while wake_rx.try_recv().is_ok() {}
                 if this.update(cx, |_, cx| cx.notify()).is_err() {
                     return;
                 }
