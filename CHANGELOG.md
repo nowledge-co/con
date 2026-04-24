@@ -12,6 +12,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Completed pane-close keyboard handling instead of only showing dead UI. `Close Pane` is now a real configurable shortcut in Settings, with app-level defaults that do not collide with terminal EOF (`Cmd+Opt+W` on macOS, `Alt+Shift+W` on Windows/Linux). Windows/Linux pane split defaults now use `Alt+D` / `Alt+Shift+D` instead of fragile symbol-based bindings.
 - `Close Pane` now escalates cleanly when nothing smaller remains to close: last pane closes the tab, and the last tab quits the app.
 - Fixed the last-pane quit path so quitting through `Close Pane` or terminal-exit escalation uses the same session save and surface teardown path as the normal app quit action.
+- Fixed the command palette scroll behavior on all platforms. Mouse-wheel scrolling and scrollbar dragging no longer snap back to the selected row on every repaint.
 
 **Terminal — Windows Backend (preview)**
 - Reduced the first-frame flash when splitting a new pane on Windows. Brand-new panes now paint their configured terminal background while the first renderer image is still warming up, instead of briefly showing a transparent hole.

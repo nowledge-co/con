@@ -118,6 +118,7 @@ pub struct CommandPalette {
     query: Entity<InputState>,
     query_text: String,
     selected_index: usize,
+    reveal_selected: bool,
     focus_handle: FocusHandle,
     scroll_handle: ScrollHandle,
     ui_opacity: f32,
@@ -148,6 +149,7 @@ impl CommandPalette {
             query,
             query_text: String::new(),
             selected_index: 0,
+            reveal_selected: false,
             focus_handle: cx.focus_handle(),
             scroll_handle: ScrollHandle::new(),
             ui_opacity: 0.90,
@@ -162,6 +164,7 @@ impl CommandPalette {
                 .set_target(1.0, std::time::Duration::from_millis(180));
             self.query_text.clear();
             self.selected_index = 0;
+            self.reveal_selected = true;
             self.query.update(cx, |s, cx| {
                 s.set_value("", window, cx);
                 // Focus the input directly so the user can type immediately
@@ -235,7 +238,12 @@ impl Render for CommandPalette {
         }
 
         // Read current query text from input state
+        let previous_query = self.query_text.clone();
         self.query_text = self.query.read(cx).value().to_string();
+        if self.query_text != previous_query {
+            self.selected_index = 0;
+            self.reveal_selected = true;
+        }
         let actions = self.filtered_actions();
         let selected = if !actions.is_empty() {
             self.selected_index.min(actions.len().saturating_sub(1))
@@ -347,8 +355,10 @@ impl Render for CommandPalette {
             );
         }
 
-        // Scroll selected item into view
-        self.scroll_handle.scroll_to_item(selected);
+        if self.reveal_selected && !actions.is_empty() {
+            self.scroll_handle.scroll_to_item(selected);
+            self.reveal_selected = false;
+        }
 
         let backdrop = div()
             .id("palette-backdrop")
@@ -396,12 +406,14 @@ impl Render for CommandPalette {
                             } else {
                                 this.selected_index - 1
                             };
+                            this.reveal_selected = true;
                             cx.notify();
                         }
                     }
                     "down" => {
                         if count > 0 {
                             this.selected_index = (this.selected_index + 1) % count;
+                            this.reveal_selected = true;
                             cx.notify();
                         }
                     }
