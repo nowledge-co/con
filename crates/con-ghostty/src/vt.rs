@@ -30,9 +30,18 @@
 
 use std::os::raw::{c_int, c_void};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
+use std::time::Instant;
 
 use parking_lot::Mutex;
+
+fn perf_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
 
 // ── Opaque types ───────────────────────────────────────────────────────
 
@@ -858,6 +867,7 @@ impl VtScreen {
     }
 
     pub fn snapshot(&self) -> ScreenSnapshot {
+        let snapshot_started = perf_trace_enabled().then(Instant::now);
         let mut inner = self.inner.lock();
 
         let fallback_cols = inner.cols;
@@ -1064,10 +1074,14 @@ impl VtScreen {
             );
         }
 
-        ScreenSnapshot {
+        let clone_started = perf_trace_enabled().then(Instant::now);
+        let cells = inner.scratch.clone();
+        let clone_elapsed_ms =
+            clone_started.map(|started| started.elapsed().as_secs_f64() * 1000.0);
+        let snapshot = ScreenSnapshot {
             cols,
             rows,
-            cells: inner.scratch.clone(),
+            cells,
             dirty_rows,
             cursor: Cursor {
                 col: col_u16,
@@ -1076,7 +1090,23 @@ impl VtScreen {
             },
             title: None,
             generation: inner.generation,
+        };
+
+        if let Some(started) = snapshot_started {
+            log::info!(
+                target: "con::perf",
+                "vt_snapshot rows={} cols={} dirty_rows={} full_redraw={} cells={} clone_ms={:.3} total_ms={:.3}",
+                rows,
+                cols,
+                snapshot.dirty_rows.len(),
+                full_redraw,
+                snapshot.cells.len(),
+                clone_elapsed_ms.unwrap_or_default(),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
         }
+
+        snapshot
     }
 
     pub fn size(&self) -> (u16, u16) {

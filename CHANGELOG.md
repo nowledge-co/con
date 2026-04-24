@@ -23,7 +23,9 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Terminal — Linux Backend (preview)**
 - Reduced Linux preview renderer CPU cost by caching per-row `StyledText` text/runs in `linux_view` and only rebuilding rows marked dirty by the VT snapshot, plus cursor-affected rows.
-- Documented the remaining Linux performance constraint explicitly: after the row-cache change, the main latency floor is the workspace's 8 ms PTY wake poll and the longer-term fix remains the planned glyph-atlas grid renderer.
+- Reduced Linux command-to-paint latency by waking the terminal view directly from PTY output instead of waiting for the workspace idle poll loop to discover new output.
+- Added shared VT snapshot timing instrumentation behind `CON_GHOSTTY_PROFILE` so large command-start redraw costs on Windows/Linux can be measured directly.
+- Documented the remaining Linux performance constraint explicitly: after the row-cache and direct-wake changes, the longer-term fix remains the planned glyph-atlas grid renderer and a lighter-weight shared VT snapshot contract.
 
 ### Fixed
 

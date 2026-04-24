@@ -16,9 +16,11 @@
 use std::sync::Arc;
 
 use con_ghostty::{
-    GhosttyApp, GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize, VtCell,
-    VtCursor, ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE,
+    ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, GhosttyApp,
+    GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize, VtCell, VtCursor,
 };
+use futures::StreamExt;
+use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui::*;
 use gpui_component::ActiveTheme;
 
@@ -82,6 +84,7 @@ pub struct GhosttyView {
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
     last_surface_size: Option<(u32, u32, u16, u16)>,
+    wake_tx: UnboundedSender<()>,
 }
 
 pub fn init(_cx: &mut App) {}
@@ -93,9 +96,42 @@ impl GhosttyView {
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
+        let terminal = Arc::new(GhosttyTerminal::new());
+        let (wake_tx, mut wake_rx) = unbounded::<()>();
+        let wake_for_pty: Arc<dyn Fn() + Send + Sync> = {
+            let wake_tx = wake_tx.clone();
+            Arc::new(move || {
+                let _ = wake_tx.unbounded_send(());
+            })
+        };
+        terminal.set_wake_callback(Some(wake_for_pty));
+
+        cx.spawn(async move |this, cx| {
+            while wake_rx.next().await.is_some() {
+                while wake_rx.try_recv().is_ok() {}
+                if this
+                    .update(cx, |view, cx| {
+                        let mut changed = false;
+                        if let Some(terminal) = view.terminal.as_ref() {
+                            if terminal.take_needs_render() {
+                                changed |= view.refresh_snapshot();
+                            }
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+
         Self {
             app,
-            terminal: Some(Arc::new(GhosttyTerminal::new())),
+            terminal: Some(terminal),
             focus_handle: cx.focus_handle(),
             initial_cwd: cwd,
             initial_font_size: font_size,
@@ -113,6 +149,7 @@ impl GhosttyView {
             pane_bounds: None,
             scale_factor: 1.0,
             last_surface_size: None,
+            wake_tx,
         }
     }
 
@@ -960,11 +997,7 @@ fn xterm_modifier_param(modifiers: &Modifiers) -> Option<u8> {
     let mask = u8::from(modifiers.shift)
         | (u8::from(modifiers.alt) << 1)
         | (u8::from(modifiers.control) << 2);
-    if mask == 0 {
-        None
-    } else {
-        Some(1 + mask)
-    }
+    if mask == 0 { None } else { Some(1 + mask) }
 }
 
 fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<String> {
@@ -1020,7 +1053,7 @@ fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<
 #[cfg(test)]
 mod tests {
     use super::{build_terminal_row, rows_needing_refresh, vt_color_to_hsla};
-    use con_ghostty::{ScreenSnapshot, VtCell, VtCursor, ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE};
+    use con_ghostty::{ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE, ScreenSnapshot, VtCell, VtCursor};
     use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, Rgba};
 
     fn base_font() -> Font {
