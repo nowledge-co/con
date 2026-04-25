@@ -29,3 +29,14 @@ dist
 .env
 .sparkle
 .claude
+
+# Documentation screenshots are working artifacts, not committed source.
+# The legitimate shipped images (app icons in crates/con-app/resources/,
+# theme previews in assets/) are explicitly NOT covered by these globs.
+docs/**/*.png
+docs/**/*.jpg
+docs/**/*.jpeg
+docs/**/*.gif
+docs/**/*.webp
+docs/**/*.mp4
+docs/**/*.mov

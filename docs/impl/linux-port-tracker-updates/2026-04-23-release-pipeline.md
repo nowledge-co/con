@@ -110,11 +110,11 @@ software Vulkan via llvmpipe):
   with the appcast-pinned version. The installed binary's sha
   matched the appcast-pointed tarball byte-for-byte.
 
-Five screenshots in the repo at
-`docs/impl/linux-port-tracker-updates/screenshots/`:
-fresh launch, styled output, rounded transparent window over
-wallpaper + xterm, htop alt-screen blank moment, htop fully
-painted.
+Five screenshots were captured during validation (fresh launch,
+styled output, rounded transparent window over wallpaper + xterm,
+htop alt-screen blank moment, htop fully painted) and posted to
+the related GitHub issue / PR — they're not committed to the repo
+since `docs/**/*.png` is gitignored.
 
 Honest caveats
 --------------

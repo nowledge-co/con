@@ -352,26 +352,52 @@ async fn request_summary(
     );
 
     let provider = AgentProvider::new(config.clone());
-    log::debug!(
+    log::info!(
         target: "con_core::tab_summary",
-        "request tab summary tab_id={} provider={:?} model={}",
+        "tab_summary request tab_id={} provider={:?} model={} cwd={:?} title={:?}",
         req.tab_id,
         config.provider,
         config.effective_model(&config.provider),
+        req.cwd.as_deref().unwrap_or(""),
+        req.title.as_deref().unwrap_or(""),
     );
     let raw = match provider.complete(&prompt).await {
         Ok(s) => s,
         Err(e) => {
-            log::debug!(
+            log::warn!(
                 target: "con_core::tab_summary",
-                "tab summary completion failed tab_id={}: {}",
+                "tab_summary completion failed tab_id={}: {}",
                 req.tab_id,
                 e
             );
             return None;
         }
     };
-    parse_response(&raw)
+    let trimmed = raw.trim();
+    log::info!(
+        target: "con_core::tab_summary",
+        "tab_summary response tab_id={} raw={:?}",
+        req.tab_id,
+        trimmed,
+    );
+    let parsed = parse_response(&raw);
+    if parsed.is_none() {
+        log::warn!(
+            target: "con_core::tab_summary",
+            "tab_summary parse rejected tab_id={} raw={:?} — keeping heuristic name",
+            req.tab_id,
+            trimmed,
+        );
+    } else if let Some((label, icon)) = &parsed {
+        log::info!(
+            target: "con_core::tab_summary",
+            "tab_summary parsed tab_id={} label={:?} icon={:?}",
+            req.tab_id,
+            label,
+            icon,
+        );
+    }
+    parsed
 }
 
 /// Parse a `LABEL|ICON` response. Tolerates leading whitespace, code

@@ -304,6 +304,7 @@ impl SessionSidebar {
     fn render_rail(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
         let rail_bg = surface_tone(theme, 0.10);
+        let session_count = self.sessions.len();
         let mut rail = div()
             .id("vertical-tabs-rail")
             .relative()
@@ -325,6 +326,48 @@ impl SessionSidebar {
                     cx.notify();
                 }
             }))
+            // Container-level drag-move so the drop-target indicator
+            // tracks the cursor even when it drifts off the 32px
+            // pill into the 2-px gap between pills (or just brushes
+            // the pill's rounded corner). The per-pill on_drag_move
+            // handlers below give the same feedback while the cursor
+            // is squarely on a pill; this fallback covers the gaps.
+            .on_drag_move::<DraggedTab>(cx.listener(
+                move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    if let Some(target) =
+                        rail_row_for_cursor(event, session_count, this.leading_top_pad)
+                    {
+                        if this.drop_target != Some(target) {
+                            this.drop_target = Some(target);
+                            this.hovered_rail = None;
+                            cx.notify();
+                        }
+                    }
+                },
+            ))
+            // Container-level on_drop fires when the cursor is
+            // anywhere inside the rail's bounds at mouseup —
+            // including the gaps between pills. Without this the
+            // user has to land the cursor precisely on a 32×32 pill
+            // to reorder, which is unforgiving on a 44-px rail.
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                let from = dragged.index;
+                let to = this
+                    .drop_target
+                    .or_else(|| {
+                        rail_row_for_cursor_position(
+                            window.mouse_position(),
+                            session_count,
+                            this.leading_top_pad,
+                        )
+                    })
+                    .unwrap_or(from);
+                this.drop_target = None;
+                if from != to {
+                    cx.emit(SidebarReorder { from, to });
+                }
+                cx.notify();
+            }))
             .child(rail_icon_button(
                 "vertical-tabs-rail-new",
                 "phosphor/plus.svg",
@@ -344,7 +387,9 @@ impl SessionSidebar {
             let is_active = i == self.active_session;
             let active_bg = surface_tone(theme, 0.22);
             let hover_bg = surface_tone(theme, 0.08);
-            let is_drop_target = self.drop_target == Some(i);
+            let drop_bg = surface_tone(theme, 0.18);
+            let is_drop_target =
+                self.drop_target == Some(i) && cx.has_active_drag();
             let dragged = DraggedTab {
                 index: i,
                 label: session.name.clone().into(),
@@ -360,10 +405,10 @@ impl SessionSidebar {
                 .size(px(RAIL_ICON_SIZE))
                 .rounded(px(8.0))
                 .cursor_pointer()
-                .bg(if is_active {
+                .bg(if is_drop_target {
+                    drop_bg
+                } else if is_active {
                     active_bg
-                } else if is_drop_target {
-                    hover_bg
                 } else {
                     gpui::transparent_black()
                 })
@@ -438,6 +483,22 @@ impl SessionSidebar {
                         .right(px(3.0))
                         .size(px(6.0))
                         .rounded_full()
+                        .bg(theme.primary),
+                );
+            }
+            if is_drop_target {
+                // Primary-color tick on the leading edge so the drop
+                // target is unambiguous during a drag (the rail is
+                // too narrow for a horizontal indicator line of the
+                // kind the pinned panel uses).
+                pill = pill.child(
+                    div()
+                        .absolute()
+                        .left(px(-6.0))
+                        .top(px(8.0))
+                        .bottom(px(8.0))
+                        .w(px(3.0))
+                        .rounded(px(2.0))
                         .bg(theme.primary),
                 );
             }
@@ -952,6 +1013,82 @@ fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>
         && p.x < b.origin.x + b.size.width
         && p.y >= b.origin.y
         && p.y < b.origin.y + b.size.height
+}
+
+/// Map the cursor's current y-position (during a rail drag) to the
+/// 0-based row index of the closest pill. Used so the user can drop
+/// anywhere in the rail's vertical column — including the 2-px gaps
+/// between pills — without losing the drop target.
+fn rail_row_for_cursor(
+    event: &gpui::DragMoveEvent<DraggedTab>,
+    session_count: usize,
+    leading_top_pad: f32,
+) -> Option<usize> {
+    if !point_in_bounds(&event.event.position, &event.bounds) {
+        return None;
+    }
+    rail_row_for_cursor_position_in_bounds(
+        event.event.position,
+        event.bounds,
+        session_count,
+        leading_top_pad,
+    )
+}
+
+/// Same idea, but called from `on_drop` where we don't get a
+/// `DragMoveEvent` — just the cursor position. The bounds aren't
+/// available there either, so we have to reconstruct the rail's row
+/// y-positions arithmetically. Returns `None` if the cursor isn't
+/// inside any plausible row band.
+fn rail_row_for_cursor_position(
+    cursor: gpui::Point<gpui::Pixels>,
+    session_count: usize,
+    leading_top_pad: f32,
+) -> Option<usize> {
+    if session_count == 0 {
+        return None;
+    }
+    // Mirror the rail layout in render_rail:
+    //   pt(leading_top_pad)
+    //   + new-tab button (28 px) + RAIL_ICON_GAP
+    //   + separator h(1) + my(2)*2 = 5 px + RAIL_ICON_GAP
+    //   + i * (RAIL_ICON_SIZE + RAIL_ICON_GAP)
+    let header = leading_top_pad + 28.0 + RAIL_ICON_GAP + 5.0 + RAIL_ICON_GAP;
+    let stride = RAIL_ICON_SIZE + RAIL_ICON_GAP;
+    let y = f32::from(cursor.y);
+    if y < header {
+        return Some(0);
+    }
+    let raw = ((y - header) / stride).floor() as i64;
+    if raw < 0 {
+        return Some(0);
+    }
+    let idx = (raw as usize).min(session_count.saturating_sub(1));
+    Some(idx)
+}
+
+fn rail_row_for_cursor_position_in_bounds(
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    session_count: usize,
+    leading_top_pad: f32,
+) -> Option<usize> {
+    if session_count == 0 {
+        return None;
+    }
+    // Coordinate of the cursor relative to the rail's top edge.
+    let local_y = f32::from(cursor.y - bounds.origin.y);
+    let header = leading_top_pad + 28.0 + RAIL_ICON_GAP + 5.0 + RAIL_ICON_GAP;
+    let stride = RAIL_ICON_SIZE + RAIL_ICON_GAP;
+    if local_y < header {
+        return Some(0);
+    }
+    let raw = ((local_y - header) / stride).floor() as i64;
+    if raw < 0 {
+        return Some(0);
+    }
+    let idx = (raw as usize).min(session_count.saturating_sub(1));
+    Some(idx)
 }
 
 fn rail_icon_button<F>(
