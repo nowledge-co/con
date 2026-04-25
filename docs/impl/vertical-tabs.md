@@ -175,13 +175,12 @@ Follows `docs/design/con-design-language.md` and `CLAUDE.md`:
 
 - `cargo check --workspace --all-targets` clean (including
   `RUSTFLAGS="-D warnings"`).
-- `cargo test --workspace`: 119 tests pass, 0 fail.
-- Visual proof on Linux (XFCE / X11 / `llvmpipe` Vulkan):
-  - `docs/impl/vertical-tabs-shots/01-rail.png` — collapsed rail
-  - `docs/impl/vertical-tabs-shots/02-peek.png` — hover-peek overlay
-  - `docs/impl/vertical-tabs-shots/03-pinned.png` — pinned panel
-  - `docs/impl/vertical-tabs-shots/04-horizontal-comparison.png`
-    — horizontal strip (default) for regression comparison
+- `cargo test --workspace`: 127 tests pass, 0 fail (119 baseline +
+  8 in `con-core::tab_summary::tests`).
+- Visual proof on Linux (XFCE / X11 / `llvmpipe` Vulkan): captured
+  during development but not committed — `docs/**/*.png` is
+  gitignored. Screenshots live in PR comments instead so they don't
+  bloat the repo.
 - macOS / Windows: not yet smoke-tested in this PR. The render path
   is identical across platforms (panel is plain GPUI), so behavior
   should match. The macOS top bar still reserves 78 px for traffic

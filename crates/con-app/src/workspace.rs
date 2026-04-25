@@ -3237,24 +3237,34 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         let from = event.from;
-        let to = event.to;
-        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+        let target = event.to;
+        if from == target || from >= self.tabs.len() || target >= self.tabs.len() {
             return;
         }
+        let active_id = self.tabs[self.active_tab].summary_id;
+
+        // Semantics: `target` is the row index the user dropped ON
+        // (the row the cursor was hovering at mouseup). The dragged
+        // tab takes that row's slot, pushing it (and rows below)
+        // down. With Vec::remove + Vec::insert, the naive
+        // `insert(target, ...)` is wrong when `from < target`
+        // because removing the source first shifted every index
+        // above it down by one — so the dragged tab ends up one
+        // slot lower than the user expected. Correct by clamping:
+        //   from < target → insert at target - 1
+        //   from > target → insert at target
+        let insert_at = if from < target { target - 1 } else { target };
         let tab = self.tabs.remove(from);
-        self.tabs.insert(to, tab);
-        // Keep the active tab pointer pointing at the same Tab entity
-        // through the swap — otherwise dragging the active row would
-        // appear to randomly shift the active selection.
-        self.active_tab = if self.active_tab == from {
-            to
-        } else if from < self.active_tab && to >= self.active_tab {
-            self.active_tab - 1
-        } else if from > self.active_tab && to <= self.active_tab {
-            self.active_tab + 1
-        } else {
-            self.active_tab
-        };
+        self.tabs.insert(insert_at, tab);
+
+        // Keep the active tab pointer pointing at the same `Tab`
+        // entity through the swap by re-locating it via the stable
+        // summary_id rather than fiddling with index arithmetic
+        // (which had its own off-by-one in the previous version).
+        if let Some(new_active) = self.tabs.iter().position(|t| t.summary_id == active_id) {
+            self.active_tab = new_active;
+        }
+
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
@@ -6021,9 +6031,9 @@ impl ConWorkspace {
         }
         tab.ai_label = Some(label);
         tab.ai_icon = Some(icon);
-        log::debug!(
+        log::info!(
             target: "con::tab_summary",
-            "applied summary tab_id={} label={:?} icon={:?}",
+            "tab_summary applied tab_id={} label={:?} icon={:?}",
             summary.tab_id,
             tab.ai_label,
             tab.ai_icon,
