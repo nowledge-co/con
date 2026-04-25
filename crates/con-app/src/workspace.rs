@@ -1052,6 +1052,11 @@ impl ConWorkspace {
 
                     if workspace.pump_ghostty_views(cx) {
                         got_event = true;
+                        // Output flowed — ask the AI summarizer to
+                        // re-check. The engine's per-tab 5 s budget
+                        // and context-hash dedupe keep this from
+                        // firing more than once per real change.
+                        workspace.request_tab_summaries(cx);
                         cx.notify();
                     }
                 })
@@ -1120,6 +1125,7 @@ impl ConWorkspace {
                     title: Some(tab.title.clone()).filter(|t| !t.is_empty()),
                     ssh_host: None,
                     recent_commands: vec![],
+                    recent_output: vec![],
                 };
                 let _ = i;
                 let tx = tx.clone();
@@ -6042,6 +6048,12 @@ impl ConWorkspace {
         let tx = self.tab_summary_tx.clone();
         for (i, tab) in self.tabs.iter().enumerate() {
             let terminal = tab.pane_tree.focused_terminal();
+            // The terminal's recent scrollback is the only signal we
+            // get for commands the user typed *directly* into the
+            // pane (Con doesn't intercept those into shell_history).
+            // Pull a small tail and pass it to the model — same lines
+            // the user can see right now.
+            let recent_output = terminal.recent_lines(24, cx);
             let req = TabSummaryRequest {
                 tab_id: tab.summary_id,
                 cwd: terminal.current_dir(cx),
@@ -6054,6 +6066,7 @@ impl ConWorkspace {
                     .map(|entry| entry.command.clone())
                     .take(8)
                     .collect(),
+                recent_output,
             };
             let tx = tx.clone();
             self.tab_summary_engine.request(req, move |summary| {

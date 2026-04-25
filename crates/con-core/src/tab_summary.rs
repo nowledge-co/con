@@ -106,9 +106,18 @@ pub struct TabSummaryRequest {
     /// monotonic counter so reorders don't confuse the cache).
     pub tab_id: u64,
     pub cwd: Option<String>,
-    /// Most recent shell commands in the tab's focused pane, newest
-    /// first. Truncated to 3 by the engine.
+    /// Most recent shell commands the user explicitly executed via
+    /// the input bar / control socket. Empty when the user types
+    /// directly into the terminal pane (we don't intercept those).
+    /// Truncated to 3 by the engine.
     pub recent_commands: Vec<String>,
+    /// Tail of the visible terminal scrollback — the same lines the
+    /// user can see right now in the pane. This is the strongest
+    /// signal we have for "what is this tab actually doing", because
+    /// it works the same whether commands came from the input bar,
+    /// the agent, the control socket, or the user typing directly.
+    /// Truncated to 12 lines by the engine.
+    pub recent_output: Vec<String>,
     /// Live OSC title of the focused terminal.
     pub title: Option<String>,
     /// SSH hostname if known. Pre-empts the LLM call: SSH tabs are
@@ -242,6 +251,13 @@ fn context_hash(req: &TabSummaryRequest) -> u64 {
     for cmd in req.recent_commands.iter().take(3) {
         cmd.hash(&mut h);
     }
+    // Hash only the last few output lines — that's where new content
+    // appears. Hashing the entire scrollback would re-fire every time
+    // any line scrolled out, even for stable workloads (`htop`,
+    // `tail -f`).
+    for line in req.recent_output.iter().rev().take(5) {
+        line.hash(&mut h);
+    }
     h.finish()
 }
 
@@ -265,8 +281,8 @@ async fn request_summary(
 ) -> Option<(String, TabIconKind)> {
     use con_agent::AgentProvider;
 
-    let recent = if req.recent_commands.is_empty() {
-        "(no recent commands)".to_string()
+    let recent_cmds = if req.recent_commands.is_empty() {
+        "(none captured by Con — user may have typed directly)".to_string()
     } else {
         req.recent_commands
             .iter()
@@ -276,33 +292,63 @@ async fn request_summary(
             .join("\n")
     };
 
+    let recent_output = if req.recent_output.is_empty() {
+        "(empty)".to_string()
+    } else {
+        req.recent_output
+            .iter()
+            .rev()
+            .take(12)
+            .rev()
+            .map(|line| {
+                // Trim each line so the model isn't distracted by
+                // trailing whitespace or huge ANSI-stripped runs.
+                let line = line.trim_end();
+                if line.chars().count() > 200 {
+                    let mut s: String = line.chars().take(200).collect();
+                    s.push('…');
+                    s
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
     let prompt = format!(
         "You name terminal tabs for a developer's vertical-tabs panel.\n\
-         Given the tab's recent context, pick a short, professional label and one icon.\n\
+         Given the tab's live context, pick a short, professional label and one icon.\n\
          \n\
          Rules:\n\
-         - Output exactly one line in the format LABEL|ICON.\n\
+         - Output EXACTLY one line in the format LABEL|ICON. Nothing else.\n\
          - LABEL: 1–3 words, ≤24 chars, Title Case. Describe what the tab is FOR\n\
-           (e.g. \"Build watch\", \"DB shell\", \"Test run\", \"Logs\", \"Editor\").\n\
+           (e.g. \"Build watch\", \"DB shell\", \"Test run\", \"Logs\", \"Editor\",\n\
+           \"Twosum\", \"Study\", \"API tests\").\n\
            Do NOT use emoji. Do NOT quote. Do NOT include the word \"tab\".\n\
            Do NOT just echo the shell name (\"bash\", \"zsh\").\n\
+           If the only signal is the cwd, use a Title-Case version of the cwd's\n\
+           basename (e.g. cwd /home/u/proj/study → \"Study\").\n\
          - ICON: pick ONE keyword from this fixed set, exact spelling:\n\
            terminal | code | pulse | book | file | globe\n\
-           - terminal — generic shell session, build, test, ad-hoc commands\n\
-           - code — editor (vim/nvim/emacs/nano/helix/code)\n\
-           - pulse — process monitor (htop/top/btop/k9s)\n\
+           - terminal — generic shell, build, test, ad-hoc commands, scripts\n\
+           - code — editor (vim/nvim/emacs/nano/helix/code) currently in use\n\
+           - pulse — long-running monitor (htop/top/btop/k9s/tail -f)\n\
            - book — pager / docs viewer (less/more/man/bat)\n\
            - file — version control / file ops (git/lazygit/tig)\n\
-           - globe — remote session / network tool (ssh/curl)\n\
-         - If you cannot decide, output: Shell|terminal\n\
+           - globe — remote session / network tool (ssh/curl/http)\n\
+         - Read the recent output bottom-up — the most recent lines are\n\
+           usually the most informative.\n\
          \n\
          Context:\n\
          cwd: {cwd}\n\
          title: {title}\n\
-         recent commands:\n{recent}",
+         commands captured by Con:\n{recent_cmds}\n\
+         recent terminal output (oldest first):\n{recent_output}",
         cwd = req.cwd.as_deref().unwrap_or("(unknown)"),
         title = req.title.as_deref().unwrap_or("(unknown)"),
-        recent = recent,
+        recent_cmds = recent_cmds,
+        recent_output = recent_output,
     );
 
     let provider = AgentProvider::new(config.clone());

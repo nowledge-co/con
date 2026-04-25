@@ -53,8 +53,11 @@ The engine lives in `con-core::tab_summary` and is constructed via `AgentHarness
 - `from_session` (initial seed from restored tab titles).
 - `on_terminal_title_changed` (OSC title change — strongest signal a tab's purpose just shifted).
 - `activate_tab` (the user is paying attention to this one — catch up if context moved).
-- `record_shell_command` (new command in history).
+- `record_shell_command` (new command in history captured by Con).
 - `on_settings_saved` (model changed — clear cache, re-ask).
+- `pump_ghostty_views` returning `true` (any output churn on any pane). The engine's per-tab 5 s budget + context-hash dedupe makes this safe to fire on every frame; in steady state it drops 100% of these calls.
+
+**Why use `recent_output` instead of just `recent_commands`.** Earlier versions only fed the model commands explicitly captured by Con (via the input bar or control socket). That missed the most common case: the user typing directly in the terminal pane. Now the request also includes the last ~24 lines of visible scrollback (via `TerminalPane::recent_lines`), which is the strongest signal we have for "what is this tab actually doing", and works regardless of input source.
 
 **Closure.** When a tab closes, the workspace calls `engine.forget(summary_id)` so future tabs can reuse cache slots without inheriting stale state.
 
