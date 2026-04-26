@@ -2,16 +2,18 @@
 
 ## What happened
 
-Fast dragging the edge between the terminal and agent panel could expose a thin transparent gap. With a light macOS window backdrop and a dark terminal theme, that gap appeared as a white flash. The bottom input bar transition had the same class of issue.
+Fast dragging the edge between the terminal and agent panel could expose a thin transparent gap. With a light macOS window backdrop and a dark terminal theme, that gap appeared as a white flash. Bottom input-bar and vertical-tab sidebar transitions had the same class of issue.
 
 ## Root cause
 
-The workspace already had seam covers for some chrome transitions, but they were translucent UI-colored surfaces and only covered agent-panel open/close animation. They did not cover active agent-panel resize dragging, and translucent covers can still reveal the macOS transparent window backdrop during compositor timing gaps.
+Terminal pane dividers did not show the same failure mode because they sit inside the pane tree between adjacent terminal surfaces. The problematic seams are chrome-to-terminal seams: GPUI chrome moves while the embedded Ghostty `NSView` is composed by AppKit underneath it. A one-frame or subpixel mismatch can expose the transparent macOS window backdrop before GPUI chrome or the native terminal catches up.
+
+The first attempted fix painted GPUI seam mattes during specific transitions. That was not sufficient because the exposed gap is below the GPUI layer in the native AppKit composition path, and it also missed vertical-tab sidebar transitions.
 
 ## Fix applied
 
-During macOS agent-panel drag/open-close and bottom input-bar transitions, con now paints a temporary seam matte using the active terminal background color at full opacity. The normal transparent/borderless design remains unchanged outside those moving seams. Non-macOS behavior keeps the previous translucent seam cover.
+Each macOS Ghostty wrapper now owns four tiny native sibling `NSView` seam guards around the embedded terminal view. They are positioned below GPUI chrome and colored from the active terminal background plus terminal opacity, so fast-moving agent-panel, input-bar, and vertical-tab seams have a stable native underlay. The terminal view's logical size, grid size, transparency settings, blur settings, and all non-macOS paths remain unchanged.
 
 ## What we learned
 
-For embedded native terminal surfaces on macOS, moving seams need an opaque underlay that matches the adjacent terminal surface. A translucent chrome-colored cover can still leak the window backdrop and reads as flicker when the terminal theme is dark.
+For embedded native terminal surfaces on macOS, moving seams need to be fixed in the same native compositing layer as the embedded view. GPUI-only overlays are useful for normal chrome polish, but they are not a reliable mask for AppKit child-view timing gaps.

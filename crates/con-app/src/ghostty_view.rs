@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use con_ghostty::ffi;
 use con_ghostty::{
     GhosttyApp, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton,
+    TerminalColors,
 };
 use gpui::*;
 
@@ -45,6 +46,29 @@ const NS_VIEW_WIDTH_SIZABLE: usize = 1 << 1;
 const NS_VIEW_HEIGHT_SIZABLE: usize = 1 << 4;
 #[cfg(target_os = "macos")]
 const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
+#[cfg(target_os = "macos")]
+const NATIVE_SEAM_COVER_PT: f64 = 3.0;
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct NativeSeamBackground {
+    r: f64,
+    g: f64,
+    b: f64,
+    a: f64,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeSeamBackground {
+    fn from_terminal(colors: &TerminalColors, background_opacity: f32) -> Self {
+        Self {
+            r: f64::from(colors.background[0]) / 255.0,
+            g: f64::from(colors.background[1]) / 255.0,
+            b: f64::from(colors.background[2]) / 255.0,
+            a: f64::from(background_opacity.clamp(0.25, 1.0)),
+        }
+    }
+}
 
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -83,6 +107,10 @@ pub struct GhosttyView {
     document_view: Option<id>,
     #[cfg(target_os = "macos")]
     nsview: Option<id>,
+    #[cfg(target_os = "macos")]
+    seam_views: [id; 4],
+    #[cfg(target_os = "macos")]
+    seam_background: NativeSeamBackground,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -134,6 +162,15 @@ impl GhosttyView {
             document_view: None,
             #[cfg(target_os = "macos")]
             nsview: None,
+            #[cfg(target_os = "macos")]
+            seam_views: [std::ptr::null_mut(); 4],
+            #[cfg(target_os = "macos")]
+            seam_background: NativeSeamBackground {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
@@ -259,6 +296,17 @@ impl GhosttyView {
                 }
             }
         }
+        for seam_view in self.seam_views.iter_mut() {
+            if !seam_view.is_null() {
+                unsafe {
+                    let superview: id = msg_send![*seam_view, superview];
+                    if !superview.is_null() {
+                        let _: () = msg_send![*seam_view, removeFromSuperview];
+                    }
+                }
+                *seam_view = std::ptr::null_mut();
+            }
+        }
         self.document_view = None;
         self.nsview = None;
     }
@@ -294,6 +342,100 @@ impl GhosttyView {
         if let Some(ref terminal) = self.terminal {
             terminal.set_focus(focused);
             terminal.refresh();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn set_native_seam_background(&mut self, colors: &TerminalColors, background_opacity: f32) {
+        self.seam_background = NativeSeamBackground::from_terminal(colors, background_opacity);
+        self.apply_native_seam_background();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn create_native_seam_views(parent_nsview: id, gpui_nsview: id) -> [id; 4] {
+        let mut seam_views = [std::ptr::null_mut(); 4];
+        unsafe {
+            let zero = NSRect::new(
+                cocoa::foundation::NSPoint::new(0.0, 0.0),
+                cocoa::foundation::NSSize::new(0.0, 0.0),
+            );
+            for seam_view in &mut seam_views {
+                let view: id = msg_send![class!(NSView), alloc];
+                let view: id = msg_send![view, initWithFrame:zero];
+                let _: () = msg_send![view, setWantsLayer:YES];
+                let _: () = msg_send![view, setHidden:YES];
+                let _: () = msg_send![
+                    parent_nsview,
+                    addSubview: view
+                    positioned: NSWindowOrderingMode::NSWindowBelow
+                    relativeTo: gpui_nsview
+                ];
+                *seam_view = view;
+            }
+        }
+        seam_views
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_native_seam_background(&self) {
+        let bg = self.seam_background;
+        unsafe {
+            let color: id = msg_send![
+                class!(NSColor),
+                colorWithSRGBRed:bg.r
+                green:bg.g
+                blue:bg.b
+                alpha:bg.a
+            ];
+            let cg_color: id = msg_send![color, CGColor];
+            for seam_view in self.seam_views {
+                if seam_view.is_null() {
+                    continue;
+                }
+                let layer: id = msg_send![seam_view, layer];
+                if !layer.is_null() {
+                    let _: () = msg_send![layer, setBackgroundColor:cg_color];
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn update_native_seam_frames(&self, terminal_frame: NSRect) {
+        let [left, right, top, bottom] = self.seam_views;
+        if left.is_null() || right.is_null() || top.is_null() || bottom.is_null() {
+            return;
+        }
+
+        let seam = NATIVE_SEAM_COVER_PT;
+        let x = terminal_frame.origin.x;
+        let y = terminal_frame.origin.y;
+        let width = terminal_frame.size.width.max(1.0);
+        let height = terminal_frame.size.height.max(1.0);
+
+        let frames = [
+            NSRect::new(
+                cocoa::foundation::NSPoint::new(x - seam, y - seam),
+                cocoa::foundation::NSSize::new(seam, height + (seam * 2.0)),
+            ),
+            NSRect::new(
+                cocoa::foundation::NSPoint::new(x + width, y - seam),
+                cocoa::foundation::NSSize::new(seam, height + (seam * 2.0)),
+            ),
+            NSRect::new(
+                cocoa::foundation::NSPoint::new(x, y + height),
+                cocoa::foundation::NSSize::new(width, seam),
+            ),
+            NSRect::new(
+                cocoa::foundation::NSPoint::new(x, y - seam),
+                cocoa::foundation::NSSize::new(width, seam),
+            ),
+        ];
+
+        unsafe {
+            for (seam_view, frame) in self.seam_views.iter().zip(frames) {
+                let _: () = msg_send![*seam_view, setFrame:frame];
+            }
         }
     }
 
@@ -338,6 +480,8 @@ impl GhosttyView {
 
         // Create with a zero-origin frame — update_frame() will set the
         // correct flipped position immediately after initialization.
+        let seam_views = Self::create_native_seam_views(parent_nsview, gpui_nsview);
+
         let (host_view, document_view, nsview): (id, id, id) = unsafe {
             let frame = NSRect::new(
                 cocoa::foundation::NSPoint::new(0.0, 0.0),
@@ -405,6 +549,8 @@ impl GhosttyView {
                 self.host_view = Some(host_view);
                 self.document_view = Some(document_view);
                 self.nsview = Some(nsview);
+                self.seam_views = seam_views;
+                self.apply_native_seam_background();
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
                 self.set_visible(
@@ -435,6 +581,7 @@ impl GhosttyView {
                 self.host_view = Some(host_view);
                 self.document_view = Some(document_view);
                 self.nsview = Some(nsview);
+                self.seam_views = seam_views;
                 self.detach_host_view();
             }
         }
@@ -483,6 +630,7 @@ impl GhosttyView {
                     ),
                 );
                 let _: () = msg_send![host_view, setFrame:frame];
+                self.update_native_seam_frames(frame);
             }
         }
 
@@ -672,6 +820,11 @@ impl GhosttyView {
                 let effective_visible = visible && !self.awaiting_first_layout_visibility;
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![host_view, setHidden:hidden];
+                for seam_view in self.seam_views {
+                    if !seam_view.is_null() {
+                        let _: () = msg_send![seam_view, setHidden:hidden];
+                    }
+                }
             }
         }
     }

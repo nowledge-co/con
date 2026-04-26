@@ -83,24 +83,29 @@ impl TerminalPane {
         cx: &mut App,
     ) {
         let is_dark = theme.name.to_lowercase().contains("dark");
-        if let Some(terminal) = self.entity.read(cx).terminal() {
-            if let Err(err) = terminal.update_appearance(
-                colors,
-                font_family,
-                font_size,
-                background_opacity,
-                background_blur,
-                cursor_style,
-                background_image,
-                background_image_opacity,
-                background_image_position,
-                background_image_fit,
-                background_image_repeat,
-            ) {
-                log::error!("Failed to update Ghostty surface appearance: {}", err);
+        self.entity.update(cx, |view, _| {
+            #[cfg(target_os = "macos")]
+            view.set_native_seam_background(colors, background_opacity);
+
+            if let Some(terminal) = view.terminal() {
+                if let Err(err) = terminal.update_appearance(
+                    colors,
+                    font_family,
+                    font_size,
+                    background_opacity,
+                    background_blur,
+                    cursor_style,
+                    background_image,
+                    background_image_opacity,
+                    background_image_position,
+                    background_image_fit,
+                    background_image_repeat,
+                ) {
+                    log::error!("Failed to update Ghostty surface appearance: {}", err);
+                }
+                terminal.set_color_scheme(is_dark);
             }
-            terminal.set_color_scheme(is_dark);
-        }
+        });
     }
 
     pub fn clear_scrollback(&self, cx: &mut App) {

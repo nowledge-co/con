@@ -21,7 +21,6 @@ const TERMINAL_MIN_CONTENT_WIDTH: f32 = 360.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
-const MACOS_MOVING_CHROME_SEAM: f32 = 6.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
@@ -518,12 +517,18 @@ fn make_ghostty_terminal(
     app: &std::sync::Arc<con_ghostty::GhosttyApp>,
     cwd: Option<&str>,
     font_size: f32,
+    colors: &con_ghostty::TerminalColors,
+    background_opacity: f32,
     window: &mut Window,
     cx: &mut Context<ConWorkspace>,
 ) -> TerminalPane {
     let app = app.clone();
     let cwd = cwd.map(str::to_string);
     let view = cx.new(|cx| crate::ghostty_view::GhosttyView::new(app, cwd, font_size, cx));
+    #[cfg(target_os = "macos")]
+    view.update(cx, |view, _| {
+        view.set_native_seam_background(colors, background_opacity);
+    });
     let pane = TerminalPane::new(view);
     subscribe_terminal_pane(&pane, window, cx);
     pane
@@ -604,17 +609,6 @@ impl ConWorkspace {
 
     fn elevated_ui_surface_opacity(&self) -> f32 {
         (self.ui_surface_opacity() + 0.02).min(0.98)
-    }
-
-    fn terminal_background_hsla(&self) -> Hsla {
-        let background = self.terminal_theme.background;
-        Rgba {
-            r: background.r as f32 / 255.0,
-            g: background.g as f32 / 255.0,
-            b: background.b as f32 / 255.0,
-            a: 1.0,
-        }
-        .into()
     }
 
     pub fn from_session(
@@ -699,7 +693,15 @@ impl ConWorkspace {
 
         let make_terminal =
             |cwd: Option<&str>, window: &mut Window, cx: &mut Context<Self>| -> TerminalPane {
-                make_ghostty_terminal(&ghostty_app, cwd, font_size, window, cx)
+                make_ghostty_terminal(
+                    &ghostty_app,
+                    cwd,
+                    font_size,
+                    &colors,
+                    terminal_opacity,
+                    window,
+                    cx,
+                )
             };
 
         let mut tabs: Vec<Tab> = session
@@ -1270,7 +1272,16 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TerminalPane {
-        make_ghostty_terminal(&self.ghostty_app, cwd, self.font_size, window, cx)
+        let colors = theme_to_ghostty_colors(&self.terminal_theme);
+        make_ghostty_terminal(
+            &self.ghostty_app,
+            cwd,
+            self.font_size,
+            &colors,
+            self.terminal_opacity,
+            window,
+            cx,
+        )
     }
 
     fn horizontal_tabs_visible(&self) -> bool {
@@ -6979,7 +6990,6 @@ impl Render for ConWorkspace {
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
-        let macos_compositor_seam_matte = self.terminal_background_hsla();
         let agent_panel_content_progress = ((agent_panel_progress - 0.16) / 0.84)
             .clamp(0.0, 1.0)
             .powf(0.9);
@@ -6991,36 +7001,6 @@ impl Render for ConWorkspace {
             .agent_panel_width
             .min(max_agent_panel_width(window.bounds().size.width.as_f32()));
         let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
-        let macos_agent_panel_seam_active = cfg!(target_os = "macos")
-            && (agent_panel_transitioning || self.agent_panel_drag.is_some());
-        let macos_input_bar_seam_active = cfg!(target_os = "macos") && input_bar_transitioning;
-        let agent_panel_divider_color = if macos_agent_panel_seam_active {
-            macos_compositor_seam_matte
-        } else {
-            theme.title_bar_border
-        };
-        let agent_panel_handle_color = if macos_agent_panel_seam_active {
-            macos_compositor_seam_matte
-        } else {
-            theme.background.opacity(elevated_ui_surface_opacity)
-        };
-        let agent_panel_handle_hover_color = if macos_agent_panel_seam_active {
-            macos_compositor_seam_matte
-        } else {
-            theme
-                .background
-                .opacity((elevated_ui_surface_opacity + 0.08).min(1.0))
-        };
-        let input_bar_top_seam_height = if macos_input_bar_seam_active {
-            MACOS_MOVING_CHROME_SEAM
-        } else {
-            1.0
-        };
-        let input_bar_top_seam_color = if macos_input_bar_seam_active {
-            macos_compositor_seam_matte
-        } else {
-            theme.title_bar_border
-        };
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -7052,30 +7032,15 @@ impl Render for ConWorkspace {
         main_area = main_area.child(terminal_area);
 
         if agent_panel_progress > 0.01 {
-            let mut agent_panel_shell = div()
-                .relative()
-                .w(px(animated_panel_width + 1.0))
-                .h_full()
-                .overflow_hidden()
-                .flex_shrink_0()
-                .flex()
-                .flex_row()
-                .bg(theme.background.opacity(elevated_ui_surface_opacity));
-
-            if macos_agent_panel_seam_active {
-                agent_panel_shell = agent_panel_shell.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(MACOS_MOVING_CHROME_SEAM))
-                        .bg(macos_compositor_seam_matte),
-                );
-            }
-
             main_area = main_area.child(
-                agent_panel_shell
+                div()
+                    .w(px(animated_panel_width + 1.0))
+                    .h_full()
+                    .overflow_hidden()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_row()
+                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
                     .child(
                         div()
                             .id("agent-panel-divider")
@@ -7083,7 +7048,7 @@ impl Render for ConWorkspace {
                             .w(px(1.0))
                             .h_full()
                             .flex_shrink_0()
-                            .bg(agent_panel_divider_color)
+                            .bg(theme.title_bar_border)
                             .child(
                                 div()
                                     .absolute()
@@ -7092,8 +7057,12 @@ impl Render for ConWorkspace {
                                     .left(px(-2.0))
                                     .w(px(5.0))
                                     .cursor_col_resize()
-                                    .bg(agent_panel_handle_color)
-                                    .hover(move |s| s.bg(agent_panel_handle_hover_color))
+                                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                                    .hover(|s| {
+                                        s.bg(theme
+                                            .background
+                                            .opacity((elevated_ui_surface_opacity + 0.08).min(1.0)))
+                                    })
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(
@@ -7734,11 +7703,7 @@ impl Render for ConWorkspace {
                     .overflow_hidden()
                     .h(px(43.0 * input_bar_progress))
                     .bg(theme.title_bar.opacity(ui_surface_opacity))
-                    .child(
-                        div()
-                            .h(px(input_bar_top_seam_height))
-                            .bg(input_bar_top_seam_color),
-                    )
+                    .child(div().h(px(1.0)).bg(theme.title_bar_border))
                     .child(
                         div()
                             .h(px(42.0))
