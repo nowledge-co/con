@@ -48,7 +48,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, InteractiveElementExt, Sizable,
-    input::{Input, InputEvent, InputState},
+    input::{Escape as InputEscape, Input, InputEvent, InputState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
 };
 use std::time::Duration;
@@ -846,6 +846,9 @@ impl SessionSidebar {
                 div()
                     .flex_1()
                     .min_w_0()
+                    .on_action(cx.listener(|this, _: &InputEscape, _, cx| {
+                        this.cancel_rename(cx);
+                    }))
                     .child(Input::new(&input).small().appearance(false))
                     .into_any_element()
             } else {

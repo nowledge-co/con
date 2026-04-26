@@ -526,7 +526,10 @@ fn parse_summary_json(raw: &str) -> Option<TabSummaryJson> {
                 _ => {}
             }
         }
-        let end = end?;
+        let Some(end) = end else {
+            cursor = start + 1;
+            continue;
+        };
         let json = &raw[start..end];
         if let Ok(parsed) = serde_json::from_str(json) {
             return Some(parsed);
@@ -579,6 +582,15 @@ mod tests {
         let v = parse_summary_json(raw).unwrap();
         assert_eq!(v.label, "Build");
         assert_eq!(v.icon, "terminal");
+    }
+
+    #[test]
+    fn parse_json_skips_unbalanced_brace_before_answer() {
+        let raw =
+            "Reasoning started { but never closed.\n{\"label\": \"Deploy\", \"icon\": \"globe\"}";
+        let v = parse_summary_json(raw).unwrap();
+        assert_eq!(v.label, "Deploy");
+        assert_eq!(v.icon, "globe");
     }
 
     #[test]
