@@ -72,7 +72,8 @@ smallvec = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 http = "1"
 rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
-pulldown-cmark = "0.13"
+mermaid-rs-renderer = { version = "0.2.2", default-features = false }
+mathjax-svg-rs = "0.4.0"
 
 [workspace.lints.clippy]
 # Inherited by gpui-component crates
