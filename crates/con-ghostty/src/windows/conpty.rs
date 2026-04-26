@@ -187,6 +187,7 @@ impl ConPty {
         // redirected logs (`*> con-profile.log`): inheriting those
         // handles lets PowerShell write its banner/prompt to the log
         // instead of through ConPTY, leaving the pane blank.
+        log::info!("ConPTY CreateProcess: inherit_handles=false shell={command_line}");
         let create_result = unsafe {
             CreateProcessW(
                 None,
