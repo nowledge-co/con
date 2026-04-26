@@ -400,7 +400,8 @@ target\release\con-app.exe
 ```
 
 The window comes up with the full chrome and a live terminal pane.
-ConPTY spawns `pwsh.exe`/`cmd.exe`, libghostty-vt parses the VT
+ConPTY spawns the Windows Terminal default profile shell when its
+settings are readable, libghostty-vt parses the VT
 stream, and the D3D11/DirectWrite atlas renderer draws the grid at
 native refresh rate — IoskeleyMono ASCII, box-drawing, Powerline
 separators, and the Nerd-Font icon set (folder, git, status, …) all
@@ -415,8 +416,10 @@ Caveats:
   <https://ziglang.org/download/>) for `cargo build` to compile
   `libghostty-vt`. `cargo check` works without Zig (compile-only, no
   link); set `CON_SKIP_GHOSTTY_VT=1` to skip the build entirely.
-- The shell is `$env:COMSPEC` if set, else `pwsh.exe`/`powershell.exe`
-  if on PATH, else `cmd.exe`. User-overridable via config (Phase 4).
+- The shell is `CON_SHELL` if set, else the configured Windows Terminal
+  default profile command when `%LOCALAPPDATA%` settings are readable,
+  else `pwsh.exe`/`powershell.exe` if on `PATH`, else `$env:COMSPEC`,
+  else `cmd.exe`. A first-class config field is still Phase 4 work.
 - The terminal still pays a GPU→CPU readback and GPUI image upload on
   dirty frames. Recent fixes made small updates row-local and removed
   avoidable extra-frame latency plus several backlog stalls, but Windows

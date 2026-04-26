@@ -1222,6 +1222,7 @@ dependencies = [
  "parking_lot",
  "portable-pty",
  "raw-window-handle",
+ "serde_json",
  "windows 0.61.3",
  "windows-numerics 0.2.0",
 ]
