@@ -125,6 +125,7 @@ Performance rule:
 - cache parsed/flattened text-run transforms at the markdown data layer before trying view-level caching
 - isolate expensive message documents behind their own entities before reaching for whole-document cached views
 - if the parent chat surface still rerenders too broadly, isolate the full assistant row behind its own entity so live streaming only repaints the active row
+- do not keep the entire transcript on one `overflow_y_scroll()` flex column once replies become rich or long; move the conversation surface to GPUI `ListState` so visibility, remeasurement, and follow-tail behavior happen at the list layer
 - use GPUI cached child views only for size-stable subtrees; intrinsic-height rich text is not a safe first cache boundary
 
 ## Migration path
