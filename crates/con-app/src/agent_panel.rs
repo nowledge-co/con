@@ -488,7 +488,7 @@ impl PanelMessage {
         Self {
             role: role.to_string(),
             content: content.to_string(),
-            content_markdown: (!content.is_empty()).then(|| ParsedChatMarkdown::parse(content)),
+            content_markdown: None,
             thinking: None,
             thinking_markdown: None,
             thinking_collapsed: true,
@@ -510,14 +510,11 @@ impl PanelMessage {
 
     fn replace_content(&mut self, content: &str) {
         self.content = content.to_string();
-        self.content_markdown = (!content.is_empty()).then(|| ParsedChatMarkdown::parse(content));
+        self.content_markdown = None;
     }
 
     fn set_thinking(&mut self, thinking: Option<String>) {
-        self.thinking_markdown = thinking
-            .as_deref()
-            .filter(|text| !text.is_empty())
-            .map(ParsedChatMarkdown::parse);
+        self.thinking_markdown = None;
         self.thinking = thinking;
     }
 
