@@ -1141,18 +1141,36 @@ impl ConWorkspace {
         // when the shell starts producing output anyway, but kicking
         // it off here lets non-shell signals (cwd from session
         // restore) feed the model immediately.
-        if config.agent.suggestion_model.enabled {
+        if config.agent.suggestion_model.enabled
+            && matches!(
+                config.appearance.tabs_orientation,
+                TabsOrientation::Vertical
+            )
+        {
             let tx = tab_summary_tx.clone();
-            for (i, tab) in tabs.iter().enumerate() {
+            for (i, tab) in tabs.iter_mut().enumerate() {
+                let terminal = tab.pane_tree.focused_terminal();
+                let cwd = terminal
+                    .current_dir(cx)
+                    .or_else(|| session.tabs.get(i).and_then(|tab_state| tab_state.cwd.clone()));
+                let title = Some(tab.title.clone()).filter(|t| !t.is_empty());
+                let pane_id = tab
+                    .pane_tree
+                    .pane_id_for_terminal(terminal)
+                    .unwrap_or(usize::MAX);
+                let observation = terminal.observation_frame(12, cx);
+                let runtime = {
+                    let mut trackers = tab.runtime_trackers.borrow_mut();
+                    trackers.entry(pane_id).or_default().observe(observation)
+                };
+                tab.runtime_cache
+                    .borrow_mut()
+                    .insert(pane_id, runtime.clone());
                 let req = TabSummaryRequest {
                     tab_id: tab.summary_id,
-                    cwd: tab
-                        .pane_tree
-                        .focused_terminal()
-                        .current_dir(cx)
-                        .or_else(|| session.tabs.get(i).and_then(|tab_state| tab_state.cwd.clone())),
-                    title: Some(tab.title.clone()).filter(|t| !t.is_empty()),
-                    ssh_host: None,
+                    cwd,
+                    title,
+                    ssh_host: runtime.remote_host,
                     recent_commands: vec![],
                     recent_output: vec![],
                 };
