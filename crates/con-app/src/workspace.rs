@@ -21,7 +21,7 @@ const TERMINAL_MIN_CONTENT_WIDTH: f32 = 360.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
-const MACOS_COMPOSITOR_SEAM_COVER: f32 = 6.0;
+const MACOS_MOVING_CHROME_SEAM: f32 = 6.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
@@ -6991,6 +6991,36 @@ impl Render for ConWorkspace {
             .agent_panel_width
             .min(max_agent_panel_width(window.bounds().size.width.as_f32()));
         let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
+        let macos_agent_panel_seam_active = cfg!(target_os = "macos")
+            && (agent_panel_transitioning || self.agent_panel_drag.is_some());
+        let macos_input_bar_seam_active = cfg!(target_os = "macos") && input_bar_transitioning;
+        let agent_panel_divider_color = if macos_agent_panel_seam_active {
+            macos_compositor_seam_matte
+        } else {
+            theme.title_bar_border
+        };
+        let agent_panel_handle_color = if macos_agent_panel_seam_active {
+            macos_compositor_seam_matte
+        } else {
+            theme.background.opacity(elevated_ui_surface_opacity)
+        };
+        let agent_panel_handle_hover_color = if macos_agent_panel_seam_active {
+            macos_compositor_seam_matte
+        } else {
+            theme
+                .background
+                .opacity((elevated_ui_surface_opacity + 0.08).min(1.0))
+        };
+        let input_bar_top_seam_height = if macos_input_bar_seam_active {
+            MACOS_MOVING_CHROME_SEAM
+        } else {
+            1.0
+        };
+        let input_bar_top_seam_color = if macos_input_bar_seam_active {
+            macos_compositor_seam_matte
+        } else {
+            theme.title_bar_border
+        };
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -7022,15 +7052,30 @@ impl Render for ConWorkspace {
         main_area = main_area.child(terminal_area);
 
         if agent_panel_progress > 0.01 {
+            let mut agent_panel_shell = div()
+                .relative()
+                .w(px(animated_panel_width + 1.0))
+                .h_full()
+                .overflow_hidden()
+                .flex_shrink_0()
+                .flex()
+                .flex_row()
+                .bg(theme.background.opacity(elevated_ui_surface_opacity));
+
+            if macos_agent_panel_seam_active {
+                agent_panel_shell = agent_panel_shell.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(MACOS_MOVING_CHROME_SEAM))
+                        .bg(macos_compositor_seam_matte),
+                );
+            }
+
             main_area = main_area.child(
-                div()
-                    .w(px(animated_panel_width + 1.0))
-                    .h_full()
-                    .overflow_hidden()
-                    .flex_shrink_0()
-                    .flex()
-                    .flex_row()
-                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                agent_panel_shell
                     .child(
                         div()
                             .id("agent-panel-divider")
@@ -7038,7 +7083,7 @@ impl Render for ConWorkspace {
                             .w(px(1.0))
                             .h_full()
                             .flex_shrink_0()
-                            .bg(theme.title_bar_border)
+                            .bg(agent_panel_divider_color)
                             .child(
                                 div()
                                     .absolute()
@@ -7047,12 +7092,8 @@ impl Render for ConWorkspace {
                                     .left(px(-2.0))
                                     .w(px(5.0))
                                     .cursor_col_resize()
-                                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
-                                    .hover(|s| {
-                                        s.bg(theme
-                                            .background
-                                            .opacity((elevated_ui_surface_opacity + 0.08).min(1.0)))
-                                    })
+                                    .bg(agent_panel_handle_color)
+                                    .hover(move |s| s.bg(agent_panel_handle_hover_color))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(
@@ -7663,51 +7704,27 @@ impl Render for ConWorkspace {
             .child(top_bar)
             .child(main_area);
 
-        if agent_panel_progress > 0.01
-            && (agent_panel_transitioning
-                || (cfg!(target_os = "macos") && self.agent_panel_drag.is_some()))
-        {
-            let (cover_width, cover_color, cover_right) = if cfg!(target_os = "macos") {
-                (
-                    MACOS_COMPOSITOR_SEAM_COVER,
-                    macos_compositor_seam_matte,
-                    (animated_panel_width - 1.0).max(0.0),
-                )
-            } else {
-                (
-                    CHROME_TRANSITION_SEAM_COVER,
-                    theme.background.opacity(elevated_ui_surface_opacity),
-                    animated_panel_width,
-                )
-            };
+        if agent_panel_transitioning && agent_panel_progress > 0.01 {
             root = root.child(
                 div()
                     .absolute()
                     .top(px(top_bar_height))
                     .bottom(px(43.0 * input_bar_progress))
-                    .right(px(cover_right))
-                    .w(px(cover_width))
-                    .bg(cover_color),
+                    .right(px(animated_panel_width))
+                    .w(px(CHROME_TRANSITION_SEAM_COVER))
+                    .bg(theme.background.opacity(elevated_ui_surface_opacity)),
             );
         }
 
         if input_bar_transitioning && input_bar_progress > 0.01 {
-            let (cover_height, cover_color) = if cfg!(target_os = "macos") {
-                (MACOS_COMPOSITOR_SEAM_COVER, macos_compositor_seam_matte)
-            } else {
-                (
-                    CHROME_TRANSITION_SEAM_COVER,
-                    theme.title_bar.opacity(ui_surface_opacity),
-                )
-            };
             root = root.child(
                 div()
                     .absolute()
                     .left_0()
                     .right_0()
                     .bottom(px(43.0 * input_bar_progress))
-                    .h(px(cover_height))
-                    .bg(cover_color),
+                    .h(px(CHROME_TRANSITION_SEAM_COVER))
+                    .bg(theme.title_bar.opacity(ui_surface_opacity)),
             );
         }
 
@@ -7717,7 +7734,11 @@ impl Render for ConWorkspace {
                     .overflow_hidden()
                     .h(px(43.0 * input_bar_progress))
                     .bg(theme.title_bar.opacity(ui_surface_opacity))
-                    .child(div().h(px(1.0)).bg(theme.title_bar_border))
+                    .child(
+                        div()
+                            .h(px(input_bar_top_seam_height))
+                            .bg(input_bar_top_seam_color),
+                    )
                     .child(
                         div()
                             .h(px(42.0))
