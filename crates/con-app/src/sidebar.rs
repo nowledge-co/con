@@ -303,10 +303,7 @@ impl SessionSidebar {
                     } else {
                         Some(value.to_string())
                     };
-                    cx.emit(SidebarRename {
-                        session_id,
-                        label,
-                    });
+                    cx.emit(SidebarRename { session_id, label });
                     this.rename = None;
                     cx.notify();
                 }
@@ -490,11 +487,7 @@ impl SessionSidebar {
                 )
                 .on_mouse_down(
                     MouseButton::Middle,
-                    cx.listener(move |_this, _, _, cx| {
-                        cx.emit(SidebarCloseTab {
-                            session_id,
-                        })
-                    }),
+                    cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { session_id })),
                 )
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     let want = if *hovered { Some(i) } else { None };
@@ -574,7 +567,11 @@ impl SessionSidebar {
         // Anchor the card vertically on the cursor — its row IS the
         // icon under the cursor by construction.
         let cursor = window.mouse_position();
-        let card_height = if session.subtitle.is_some() { 64.0 } else { 44.0 };
+        let card_height = if session.subtitle.is_some() {
+            64.0
+        } else {
+            44.0
+        };
         let min_top = self.leading_top_pad + RAIL_TOP_CONTROLS_HEIGHT + 8.0;
         let top = (f32::from(cursor.y) - card_height / 2.0).max(min_top);
 
@@ -584,19 +581,16 @@ impl SessionSidebar {
         let mono_font = theme.mono_font_family.clone();
         let sys_font = theme.font_family.clone();
 
-        let mut card_inner = div()
-            .px(px(12.0))
-            .py(px(8.0))
-            .child(
-                div()
-                    .text_size(px(12.5))
-                    .line_height(px(16.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(name_color)
-                    .font_family(sys_font)
-                    .truncate()
-                    .child(session.name.clone()),
-            );
+        let mut card_inner = div().px(px(12.0)).py(px(8.0)).child(
+            div()
+                .text_size(px(12.5))
+                .line_height(px(16.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(name_color)
+                .font_family(sys_font)
+                .truncate()
+                .child(session.name.clone()),
+        );
 
         if let Some(sub) = session.subtitle.as_ref() {
             card_inner = card_inner.child(
@@ -630,16 +624,14 @@ impl SessionSidebar {
             meta = meta.child(div().child("SSH"));
         }
         if session.needs_attention {
-            meta = meta
-                .child(div().child("·").text_color(meta_color))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(4.0))
-                        .child(div().size(px(6.0)).rounded_full().bg(theme.primary))
-                        .child(div().child("unread")),
-                );
+            meta = meta.child(div().child("·").text_color(meta_color)).child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(div().size(px(6.0)).rounded_full().bg(theme.primary))
+                    .child(div().child("unread")),
+            );
         }
         card_inner = card_inner.child(meta);
 
@@ -765,8 +757,8 @@ impl SessionSidebar {
                     // `total * ROW_HEIGHT + gaps` from the top of
                     // the list bounds.
                     let approx_row_h = ROW_HEIGHT;
-                    let last_row_bottom_estimate = f32::from(event.bounds.origin.y)
-                        + (total as f32) * (approx_row_h + 2.0);
+                    let last_row_bottom_estimate =
+                        f32::from(event.bounds.origin.y) + (total as f32) * (approx_row_h + 2.0);
                     if f32::from(event.event.position.y) >= last_row_bottom_estimate
                         && this.drop_slot != Some(total)
                     {
@@ -853,8 +845,7 @@ impl SessionSidebar {
         // semantics: K means "insert at index K"; slot N means "at
         // the bottom".
         let drop_above = drop_slot == Some(i) && cx.has_active_drag();
-        let drop_below =
-            i + 1 == total && drop_slot == Some(total) && cx.has_active_drag();
+        let drop_below = i + 1 == total && drop_slot == Some(total) && cx.has_active_drag();
 
         let row_h = if session.subtitle.is_some() {
             ROW_HEIGHT
@@ -935,11 +926,7 @@ impl SessionSidebar {
             SharedString::from(format!("panel-tab-close-{i}")),
             "phosphor/x.svg",
             theme,
-            cx.listener(move |_this, _, _, cx| {
-                cx.emit(SidebarCloseTab {
-                    session_id,
-                })
-            }),
+            cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { session_id })),
         )
         .invisible()
         .group_hover(row_group.clone(), |s| s.visible());
@@ -1036,11 +1023,7 @@ impl SessionSidebar {
             )
             .on_mouse_down(
                 MouseButton::Middle,
-                cx.listener(move |_this, _, _, cx| {
-                    cx.emit(SidebarCloseTab {
-                        session_id,
-                    })
-                }),
+                cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { session_id })),
             )
             .on_double_click(cx.listener(move |this, _, window, cx| {
                 this.begin_rename(i, window, cx);
@@ -1216,7 +1199,11 @@ fn rail_slot_for_cursor_position(
     rail_slot_from_local_y(local_y, session_count, leading_top_pad)
 }
 
-fn rail_slot_from_local_y(local_y: f32, session_count: usize, leading_top_pad: f32) -> Option<usize> {
+fn rail_slot_from_local_y(
+    local_y: f32,
+    session_count: usize,
+    leading_top_pad: f32,
+) -> Option<usize> {
     if session_count == 0 {
         return None;
     }
@@ -1319,9 +1306,7 @@ fn build_row_context_menu(
             let weak = weak.clone();
             move |_, _, cx| {
                 if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| {
-                        cx.emit(SidebarDuplicate { session_id })
-                    });
+                    entity.update(cx, |_, cx| cx.emit(SidebarDuplicate { session_id }));
                 }
             }
         }));
@@ -1379,9 +1364,7 @@ fn build_row_context_menu(
             let weak = weak.clone();
             move |_, _, cx| {
                 if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| {
-                        cx.emit(SidebarCloseTab { session_id })
-                    });
+                    entity.update(cx, |_, cx| cx.emit(SidebarCloseTab { session_id }));
                 }
             }
         }));
@@ -1390,9 +1373,7 @@ fn build_row_context_menu(
             let weak = weak.clone();
             move |_, _, cx| {
                 if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| {
-                        cx.emit(SidebarCloseOthers { session_id })
-                    });
+                    entity.update(cx, |_, cx| cx.emit(SidebarCloseOthers { session_id }));
                 }
             }
         }));

@@ -40,7 +40,10 @@ fn update_registration(keybindings: &KeybindingConfig) {
     let Some(keystroke) = parse_global_hotkey(binding) else {
         unsafe { con_unregister_global_hotkey() };
         if !binding.trim().is_empty() {
-            log::warn!("global hotkey: unsupported binding {:?}, disabling", binding);
+            log::warn!(
+                "global hotkey: unsupported binding {:?}, disabling",
+                binding
+            );
         }
         return;
     };
@@ -78,10 +81,7 @@ fn parse_global_hotkey(binding: &str) -> Option<Keystroke> {
     }
 
     let keystroke = Keystroke::parse(binding).ok()?;
-    if keystroke.key.is_empty()
-        || !keystroke.modifiers.modified()
-        || keystroke.modifiers.function
-    {
+    if keystroke.key.is_empty() || !keystroke.modifiers.modified() || keystroke.modifiers.function {
         return None;
     }
 

@@ -226,8 +226,7 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMSBT_TRANSIENTWINDOW,
-        DWMWA_SYSTEMBACKDROP_TYPE,
+        DWMSBT_MAINWINDOW, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DwmSetWindowAttribute,
     };
 
     let handle = HasWindowHandle::window_handle(window).ok()?;
@@ -433,7 +432,9 @@ fn fresh_window_session_with_history() -> Session {
 }
 
 pub(crate) fn toggle_global_summon(cx: &mut App) {
-    let frontmost_window = cx.window_stack().and_then(|windows| windows.last().cloned());
+    let frontmost_window = cx
+        .window_stack()
+        .and_then(|windows| windows.last().cloned());
     let has_windows = frontmost_window.is_some();
 
     #[cfg(target_os = "macos")]
@@ -511,8 +512,8 @@ pub(crate) fn app_display_version() -> String {
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn app_build_number() -> String {
     #[cfg(target_os = "macos")]
-    let build =
-        bundle_info_value(b"CFBundleVersion\0").unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    let build = bundle_info_value(b"CFBundleVersion\0")
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
     #[cfg(not(target_os = "macos"))]
     let build = option_env!("CON_RELEASE_VERSION")
         .map(str::to_owned)
@@ -627,14 +628,11 @@ impl Render for AboutView {
                     .justify_center()
                     .gap(px(14.0))
                     .child(
-                        div()
-                            .size(px(88.0))
-                            .p(px(2.0))
-                            .child(
-                                img("Con-macOS-Dark-256x256@2x.png")
-                                    .size_full()
-                                    .object_fit(ObjectFit::Contain),
-                            ),
+                        div().size(px(88.0)).p(px(2.0)).child(
+                            img("Con-macOS-Dark-256x256@2x.png")
+                                .size_full()
+                                .object_fit(ObjectFit::Contain),
+                        ),
                     )
                     .child(
                         div()
@@ -671,18 +669,13 @@ impl Render for AboutView {
                             .child(format!("{} • {}", self.version, self.version_detail)),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(6.0))
-                            .child(
-                                Link::new("about-repo")
-                                    .href(repo_url)
-                                    .text_size(px(12.5))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .child(repo_url),
-                            ),
+                        div().flex().flex_col().items_center().gap(px(6.0)).child(
+                            Link::new("about-repo")
+                                .href(repo_url)
+                                .text_size(px(12.5))
+                                .font_family(theme.mono_font_family.clone())
+                                .child(repo_url),
+                        ),
                     )
                     .child(
                         div()
@@ -892,7 +885,7 @@ fn install_seh_filter() {
             | 0xC000001D  // ILLEGAL_INSTRUCTION
             | 0xC0000094  // INT_DIVIDE_BY_ZERO
             | 0xC0000096  // PRIV_INSTRUCTION
-            | 0xC000013A  // CONTROL_C_EXIT
+            | 0xC000013A // CONTROL_C_EXIT
         );
 
         if interesting {

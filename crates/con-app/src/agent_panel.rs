@@ -656,9 +656,8 @@ impl AssistantMessageView {
                 || self.rendered_markdown_blocks == 0
                 || self.rendered_markdown_blocks > self.state_key.content_markdown_blocks
             {
-                self.rendered_markdown_blocks = Self::initial_markdown_block_limit(
-                    self.state_key.content_markdown_blocks,
-                );
+                self.rendered_markdown_blocks =
+                    Self::initial_markdown_block_limit(self.state_key.content_markdown_blocks);
                 self.markdown_hydration_pending = false;
                 self.markdown_block_views.clear();
                 self.markdown_block_view_len = self.state_key.content_markdown_len;
@@ -703,8 +702,7 @@ impl AssistantMessageView {
                     return;
                 }
                 view.rendered_markdown_blocks =
-                    (view.rendered_markdown_blocks + LONG_MARKDOWN_BATCH_BLOCKS)
-                        .min(total_blocks);
+                    (view.rendered_markdown_blocks + LONG_MARKDOWN_BATCH_BLOCKS).min(total_blocks);
                 if view.rendered_markdown_blocks < total_blocks {
                     view.schedule_markdown_hydration(cx);
                 }
@@ -854,13 +852,22 @@ impl AgentPanel {
 
         let has_meaningful_config = |kind: &ProviderKind| {
             config.providers.get(kind).is_some_and(|provider| {
-                provider.model.as_ref().is_some_and(|v| !v.trim().is_empty())
-                    || provider.api_key.as_ref().is_some_and(|v| !v.trim().is_empty())
+                provider
+                    .model
+                    .as_ref()
+                    .is_some_and(|v| !v.trim().is_empty())
+                    || provider
+                        .api_key
+                        .as_ref()
+                        .is_some_and(|v| !v.trim().is_empty())
                     || provider
                         .api_key_env
                         .as_ref()
                         .is_some_and(|v| !v.trim().is_empty())
-                    || provider.base_url.as_ref().is_some_and(|v| !v.trim().is_empty())
+                    || provider
+                        .base_url
+                        .as_ref()
+                        .is_some_and(|v| !v.trim().is_empty())
                     || provider.max_tokens.is_some()
             })
         };
@@ -1044,7 +1051,8 @@ impl AgentPanel {
 
     pub fn clear_messages(&mut self, cx: &mut Context<Self>) {
         self.state.clear();
-        self.message_list_state.splice(0..self.message_list_state.item_count(), 0);
+        self.message_list_state
+            .splice(0..self.message_list_state.item_count(), 0);
         self.assistant_message_views.clear();
         self.showing_history = false;
         cx.notify();
@@ -1246,13 +1254,9 @@ impl AgentPanel {
 
     pub fn set_skills(&mut self, skills: Vec<SkillEntry>, cx: &mut Context<Self>) {
         if self.skills.len() == skills.len()
-            && self
-                .skills
-                .iter()
-                .zip(skills.iter())
-                .all(|(left, right)| {
-                    left.name == right.name && left.description == right.description
-                })
+            && self.skills.iter().zip(skills.iter()).all(|(left, right)| {
+                left.name == right.name && left.description == right.description
+            })
         {
             return;
         }
@@ -1304,10 +1308,9 @@ impl AgentPanel {
             } else {
                 let query = &trimmed[1..].to_lowercase();
                 !query.contains(' ')
-                    && self
-                        .skills
-                        .iter()
-                        .any(|skill| query.is_empty() || skill.name.to_lowercase().starts_with(query))
+                    && self.skills.iter().any(|skill| {
+                        query.is_empty() || skill.name.to_lowercase().starts_with(query)
+                    })
             }
         };
 
@@ -1418,12 +1421,9 @@ impl AgentPanel {
     }
 
     pub fn inline_input_is_focused(&self, window: &Window, cx: &App) -> bool {
-        self.inline_input_state.as_ref().is_some_and(|input| {
-            input
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window)
-        })
+        self.inline_input_state
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window))
     }
 
     fn should_fallback_handle_inline_history_key(event: &KeystrokeEvent) -> bool {
@@ -1545,7 +1545,8 @@ impl AgentPanel {
 
     fn remeasure_message(&self, msg_idx: usize) {
         if msg_idx < self.message_list_state.item_count() {
-            self.message_list_state.remeasure_items(msg_idx..msg_idx + 1);
+            self.message_list_state
+                .remeasure_items(msg_idx..msg_idx + 1);
         }
     }
 
@@ -1717,10 +1718,9 @@ impl AgentPanel {
 
         cx.spawn(async move |this, cx| {
             let parsed = Arc::new(
-                cx
-                .background_executor()
-                .spawn(async move { ParsedChatMarkdown::parse(&parse_content) })
-                .await,
+                cx.background_executor()
+                    .spawn(async move { ParsedChatMarkdown::parse(&parse_content) })
+                    .await,
             );
             let _ = this.update(cx, |panel, cx| {
                 let mut needs_follow_up = false;
@@ -1763,7 +1763,8 @@ impl AgentPanel {
         }
 
         if self.assistant_message_views.len() <= msg_idx {
-            self.assistant_message_views.resize_with(msg_idx + 1, || None);
+            self.assistant_message_views
+                .resize_with(msg_idx + 1, || None);
         }
 
         let state_key = AssistantMessageStateKey {
@@ -1798,7 +1799,13 @@ impl AgentPanel {
             let snapshot = message.clone();
             let panel = cx.weak_entity();
             let view = cx.new(|_| {
-                AssistantMessageView::new(panel, msg_idx, snapshot, state_key, is_streaming_assistant)
+                AssistantMessageView::new(
+                    panel,
+                    msg_idx,
+                    snapshot,
+                    state_key,
+                    is_streaming_assistant,
+                )
             });
             self.assistant_message_views[msg_idx] = Some(view.clone());
             Some(view)
@@ -3134,11 +3141,7 @@ fn render_assistant_message(
                     theme,
                 ));
             } else {
-                thinking_el = thinking_el.child(
-                    div()
-                        .whitespace_normal()
-                        .child(thinking.clone()),
-                );
+                thinking_el = thinking_el.child(div().whitespace_normal().child(thinking.clone()));
             }
             msg_el = msg_el.child(thinking_el);
         }
@@ -3166,65 +3169,59 @@ fn render_assistant_message(
                 ));
             }
             if let Some(suffix) = unparsed_markdown_suffix(msg) {
-                content_el = content_el.child(
-                    div()
-                        .mt(px(6.0))
-                        .child(render_plain_multiline_text(
-                            suffix,
-                            theme.mono_font_family.clone(),
-                            px(14.0),
-                            px(23.0),
-                            theme.foreground.opacity(0.78),
-                        )),
-                );
+                content_el =
+                    content_el.child(div().mt(px(6.0)).child(render_plain_multiline_text(
+                        suffix,
+                        theme.mono_font_family.clone(),
+                        px(14.0),
+                        px(23.0),
+                        theme.foreground.opacity(0.78),
+                    )));
             }
             if visible_blocks < markdown.block_count() {
                 let remaining = markdown.block_count().saturating_sub(visible_blocks);
                 let more_view = view.clone();
                 content_el = content_el.child(
-                    div()
-                        .mt(px(8.0))
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("assistant-more-{msg_idx}")))
-                                .flex()
-                                .items_center()
-                                .gap(px(6.0))
-                                .px(px(8.0))
-                                .py(px(4.0))
-                                .rounded(px(7.0))
-                                .cursor_pointer()
-                                .bg(theme.muted.opacity(0.05))
-                                .hover(|s| s.bg(theme.muted.opacity(0.09)))
-                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                    let _ = more_view.update(cx, |view, cx| {
-                                        view.rendered_markdown_blocks =
-                                            (view.rendered_markdown_blocks
-                                                + LONG_MARKDOWN_BATCH_BLOCKS * 2)
-                                                .min(view.state_key.content_markdown_blocks);
-                                        let msg_idx = view.msg_idx;
-                                        let panel = view.panel.clone();
-                                        let _ = panel.update(cx, |panel, cx| {
-                                            panel.remeasure_message(msg_idx);
-                                            cx.notify();
-                                        });
+                    div().mt(px(8.0)).child(
+                        div()
+                            .id(SharedString::from(format!("assistant-more-{msg_idx}")))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .px(px(8.0))
+                            .py(px(4.0))
+                            .rounded(px(7.0))
+                            .cursor_pointer()
+                            .bg(theme.muted.opacity(0.05))
+                            .hover(|s| s.bg(theme.muted.opacity(0.09)))
+                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                let _ = more_view.update(cx, |view, cx| {
+                                    view.rendered_markdown_blocks = (view.rendered_markdown_blocks
+                                        + LONG_MARKDOWN_BATCH_BLOCKS * 2)
+                                        .min(view.state_key.content_markdown_blocks);
+                                    let msg_idx = view.msg_idx;
+                                    let panel = view.panel.clone();
+                                    let _ = panel.update(cx, |panel, cx| {
+                                        panel.remeasure_message(msg_idx);
                                         cx.notify();
                                     });
-                                })
-                                .child(
-                                    svg()
-                                        .path("phosphor/caret-down.svg")
-                                        .size(px(10.0))
-                                        .text_color(theme.muted_foreground.opacity(0.55)),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.5))
-                                        .font_family(theme.mono_font_family.clone())
-                                        .text_color(theme.muted_foreground.opacity(0.58))
-                                        .child(format!("Show more · {remaining} blocks left")),
-                                ),
-                        ),
+                                    cx.notify();
+                                });
+                            })
+                            .child(
+                                svg()
+                                    .path("phosphor/caret-down.svg")
+                                    .size(px(10.0))
+                                    .text_color(theme.muted_foreground.opacity(0.55)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground.opacity(0.58))
+                                    .child(format!("Show more · {remaining} blocks left")),
+                            ),
+                    ),
                 );
             }
         } else {
@@ -3487,7 +3484,9 @@ fn render_assistant_message(
                     let step_panel = panel.clone();
                     step_shell = step_shell.child(
                         step_header_shell
-                            .id(SharedString::from(format!("step-detail-{msg_idx}-{step_idx}")))
+                            .id(SharedString::from(format!(
+                                "step-detail-{msg_idx}-{step_idx}"
+                            )))
                             .cursor_pointer()
                             .hover(|s| s.bg(trace_step_header_hover_surface(theme)))
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -3528,9 +3527,7 @@ fn render_assistant_message(
                         ));
                     step_shell = step_shell.child(
                         detail_block.with_animation(
-                            SharedString::from(format!(
-                                "step-detail-reveal-{msg_idx}-{step_idx}"
-                            )),
+                            SharedString::from(format!("step-detail-reveal-{msg_idx}-{step_idx}")),
                             Animation::new(std::time::Duration::from_millis(170))
                                 .with_easing(ease_out_quint()),
                             |this, delta| this.opacity(delta).pt(px((1.0 - delta) * 6.0)),
@@ -3551,12 +3548,11 @@ fn render_assistant_message(
                                         "step-detail-expand-{msg_idx}-{step_idx}"
                                     )))
                                     .cursor_pointer()
-                                    .hover(|s| {
-                                        s.bg(theme.muted.opacity(0.03)).rounded(px(6.0))
-                                    })
+                                    .hover(|s| s.bg(theme.muted.opacity(0.03)).rounded(px(6.0)))
                                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                         let _ = detail_toggle_panel.update(cx, |this, cx| {
-                                            if let Some(message) = this.state.messages.get_mut(msg_idx)
+                                            if let Some(message) =
+                                                this.state.messages.get_mut(msg_idx)
                                                 && let Some(step) = message.steps.get_mut(step_idx)
                                             {
                                                 step.detail_expanded = !step.detail_expanded;
@@ -3566,15 +3562,9 @@ fn render_assistant_message(
                                             cx.notify();
                                         });
                                     })
-                                    .child(
-                                        div().px(px(2.0)).py(px(2.0)).child(
-                                            render_result_toggle_chrome(
-                                                expanded,
-                                                button_label,
-                                                theme,
-                                            ),
-                                        ),
-                                    ),
+                                    .child(div().px(px(2.0)).py(px(2.0)).child(
+                                        render_result_toggle_chrome(expanded, button_label, theme),
+                                    )),
                             );
                         step_shell = step_shell.child(
                             detail_toggle.with_animation(
@@ -3583,9 +3573,7 @@ fn render_assistant_message(
                                 )),
                                 Animation::new(std::time::Duration::from_millis(185))
                                     .with_easing(ease_out_quint()),
-                                |this, delta| {
-                                    this.opacity(delta).pt(px((1.0 - delta) * 4.0))
-                                },
+                                |this, delta| this.opacity(delta).pt(px((1.0 - delta) * 4.0)),
                             ),
                         );
                     } else {
@@ -3601,14 +3589,11 @@ fn render_assistant_message(
                 steps_el = steps_el.child(step_shell);
             }
 
-            run_card = run_card.child(
-                steps_el.with_animation(
-                    SharedString::from(format!("steps-reveal-{msg_idx}")),
-                    Animation::new(std::time::Duration::from_millis(190))
-                        .with_easing(ease_out_quint()),
-                    |this, delta| this.opacity(delta).pt(px((1.0 - delta) * 8.0)),
-                ),
-            );
+            run_card = run_card.child(steps_el.with_animation(
+                SharedString::from(format!("steps-reveal-{msg_idx}")),
+                Animation::new(std::time::Duration::from_millis(190)).with_easing(ease_out_quint()),
+                |this, delta| this.opacity(delta).pt(px((1.0 - delta) * 8.0)),
+            ));
         }
 
         msg_el = msg_el.child(run_card);
@@ -3713,7 +3698,7 @@ impl AgentPanel {
                                         Input::new(edit_input)
                                             .appearance(false)
                                             .cleanable(false)
-                                            .font_family(theme.mono_font_family.clone())
+                                            .font_family(theme.mono_font_family.clone()),
                                     ),
                             )
                             .child(
@@ -3863,7 +3848,8 @@ impl AgentPanel {
                 );
             }
         } else {
-            let is_streaming_assistant = self.state.streaming && msg_idx + 1 == self.state.messages.len();
+            let is_streaming_assistant =
+                self.state.streaming && msg_idx + 1 == self.state.messages.len();
             if !msg.content.is_empty()
                 && !msg.content_markdown_pending
                 && msg.content_markdown_len < msg.content.len()
@@ -3871,7 +3857,9 @@ impl AgentPanel {
                 self.ensure_content_markdown_async(msg_idx, cx);
             }
 
-            if let Some(view) = self.sync_assistant_message_view(msg_idx, is_streaming_assistant, cx) {
+            if let Some(view) =
+                self.sync_assistant_message_view(msg_idx, is_streaming_assistant, cx)
+            {
                 msg_el = msg_el.child(view);
             }
         }
@@ -4748,23 +4736,18 @@ impl Render for AgentPanel {
                     .vertical_scrollbar(&self.history_scroll_handle),
             );
         } else {
-            let show_jump_to_latest =
-                self.follow_output == FollowOutputState::Detached && !self.is_scrolled_near_bottom();
+            let show_jump_to_latest = self.follow_output == FollowOutputState::Detached
+                && !self.is_scrolled_near_bottom();
             let transcript_surface = div()
                 .relative()
                 .flex_1()
                 .min_h_0()
                 .child(
-                    div()
-                        .size_full()
-                        .min_h_0()
-                        .pl(px(14.0))
-                        .pr(px(34.0))
-                        .child(
-                            messages_content
-                                .opacity(content_reveal)
-                                .pt(vertical_reveal_offset(content_reveal, 10.0)),
-                        ),
+                    div().size_full().min_h_0().pl(px(14.0)).pr(px(34.0)).child(
+                        messages_content
+                            .opacity(content_reveal)
+                            .pt(vertical_reveal_offset(content_reveal, 10.0)),
+                    ),
                 )
                 .vertical_scrollbar(&self.message_list_state);
 
@@ -4832,12 +4815,7 @@ impl Render for AgentPanel {
                                         cx.notify();
                                     }),
                                 )
-                                .child(
-                                    div()
-                                        .w(px(10.0))
-                                        .h(px(10.0))
-                                        .flex_shrink_0(),
-                                )
+                                .child(div().w(px(10.0)).h(px(10.0)).flex_shrink_0())
                                 .child(
                                     div()
                                         .text_size(px(10.5))
@@ -4972,10 +4950,7 @@ impl Render for AgentPanel {
                                 MouseButton::Left,
                                 cx.listener(|this, _, window, cx| {
                                     if let Some(ref input) = this.inline_input_state {
-                                        input
-                                            .read(cx)
-                                            .focus_handle(cx)
-                                            .focus(window, cx);
+                                        input.read(cx).focus_handle(cx).focus(window, cx);
                                     }
                                 }),
                             )
@@ -4987,12 +4962,14 @@ impl Render for AgentPanel {
                                     .min_w(px(120.0))
                                     .font_family(theme.mono_font_family.clone())
                                     .text_size(px(13.0))
-                                    .child(div().w_full().child(
-                                        Input::new(&inline_input)
-                                            .appearance(false)
-                                            .cleanable(false)
-                                            .font_family(theme.mono_font_family.clone())
-                                    )),
+                                    .child(
+                                        div().w_full().child(
+                                            Input::new(&inline_input)
+                                                .appearance(false)
+                                                .cleanable(false)
+                                                .font_family(theme.mono_font_family.clone()),
+                                        ),
+                                    ),
                             )
                             .child(send_button),
                     ),

@@ -49,8 +49,7 @@ const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var_os("CON_GHOSTTY_PROFILE")
-            .is_some_and(|v| !v.is_empty() && v != "0")
+        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
     })
 }
 
@@ -354,7 +353,8 @@ impl GhosttyView {
             let _: () = msg_send![host, setHasHorizontalScroller:NO];
             let _: () = msg_send![host, setAutohidesScrollers:NO];
             let _: () = msg_send![host, setUsesPredominantAxisScrolling:YES];
-            let _: () = msg_send![host, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
+            let _: () =
+                msg_send![host, setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE];
             let _: () = msg_send![host, setAutoresizesSubviews:YES];
             let _: () = msg_send![
                 host,
@@ -621,8 +621,12 @@ impl GhosttyView {
         }
 
         (
-            (logical_size.width * f64::from(self.scale_factor)).max(1.0).round() as u32,
-            (logical_size.height * f64::from(self.scale_factor)).max(1.0).round() as u32,
+            (logical_size.width * f64::from(self.scale_factor))
+                .max(1.0)
+                .round() as u32,
+            (logical_size.height * f64::from(self.scale_factor))
+                .max(1.0)
+                .round() as u32,
         )
     }
 
@@ -1226,7 +1230,9 @@ impl Render for GhosttyView {
                         move |_bounds, _state, window, cx| {
                             window.handle_input(
                                 &focus,
-                                GhosttyInputHandler { view: entity.clone() },
+                                GhosttyInputHandler {
+                                    view: entity.clone(),
+                                },
                                 cx,
                             );
                         }

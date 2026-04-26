@@ -1,6 +1,6 @@
+use con_core::session::{PaneLayoutState, PaneSplitDirection};
 use gpui::*;
 use gpui_component::ActiveTheme;
-use con_core::session::{PaneLayoutState, PaneSplitDirection};
 
 use crate::terminal_pane::TerminalPane;
 
@@ -570,7 +570,7 @@ impl PaneTree {
                                         cb_divider(sid, f32::from(event.position.y));
                                     },
                                 ),
-                        )
+                        ),
                 };
 
                 let make_pane = |child: AnyElement, basis: f32| -> Div {

@@ -1,8 +1,8 @@
-use con_agent::{
-    AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind,
-    SuggestionModelConfig, authorize_oauth_provider, oauth_token_dir,
-};
 use con_agent::provider::{AgentPurpose, ProviderTransport};
+use con_agent::{
+    AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind, SuggestionModelConfig,
+    authorize_oauth_provider, oauth_token_dir,
+};
 use con_core::{
     Config,
     config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE},
@@ -23,7 +23,15 @@ use crate::motion::{MotionValue, vertical_reveal_offset};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-actions!(settings, [ToggleSettings, SaveSettings, DismissSettings, TabsOrientationChanged]);
+actions!(
+    settings,
+    [
+        ToggleSettings,
+        SaveSettings,
+        DismissSettings,
+        TabsOrientationChanged
+    ]
+);
 
 /// Emitted when the user selects a different terminal theme for live preview.
 pub struct ThemePreview(pub String);
@@ -262,9 +270,7 @@ impl SettingsPanel {
 
     fn provider_api_key_placeholder(provider: &ProviderKind) -> &'static str {
         match provider {
-            ProviderKind::ChatGPT | ProviderKind::GitHubCopilot => {
-                "Override for advanced setups"
-            }
+            ProviderKind::ChatGPT | ProviderKind::GitHubCopilot => "Override for advanced setups",
             _ => "sk-.. or OPENAI_API_KEY",
         }
     }
@@ -279,12 +285,8 @@ impl SettingsPanel {
 
     fn provider_api_key_hint(provider: &ProviderKind) -> &'static str {
         match provider {
-            ProviderKind::ChatGPT => {
-                "Leave blank for ChatGPT OAuth."
-            }
-            ProviderKind::GitHubCopilot => {
-                "Leave blank for GitHub OAuth."
-            }
+            ProviderKind::ChatGPT => "Leave blank for ChatGPT OAuth.",
+            ProviderKind::GitHubCopilot => "Leave blank for GitHub OAuth.",
             _ => "Key or env var name",
         }
     }
@@ -346,8 +348,7 @@ impl SettingsPanel {
     }
 
     fn protocol_switch_hint(provider: &ProviderKind) -> Option<&'static str> {
-        Self::protocol_pair(provider)
-            .map(|_| "OpenAI or Anthropic API compatible")
+        Self::protocol_pair(provider).map(|_| "OpenAI or Anthropic API compatible")
     }
 
     fn provider_icon_path(provider: &ProviderKind) -> &'static str {
@@ -376,12 +377,18 @@ impl SettingsPanel {
 
     fn provider_config_is_meaningful(config: &ProviderConfig) -> bool {
         config.model.as_ref().is_some_and(|v| !v.trim().is_empty())
-            || config.api_key.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || config
+                .api_key
+                .as_ref()
+                .is_some_and(|v| !v.trim().is_empty())
             || config
                 .api_key_env
                 .as_ref()
                 .is_some_and(|v| !v.trim().is_empty())
-            || config.base_url.as_ref().is_some_and(|v| !v.trim().is_empty())
+            || config
+                .base_url
+                .as_ref()
+                .is_some_and(|v| !v.trim().is_empty())
             || config.max_tokens.is_some()
     }
 
@@ -459,11 +466,17 @@ impl SettingsPanel {
         })
     }
 
-    fn preferred_sidebar_provider(config: &Config, clicked_provider: &ProviderKind) -> ProviderKind {
+    fn preferred_sidebar_provider(
+        config: &Config,
+        clicked_provider: &ProviderKind,
+    ) -> ProviderKind {
         let sidebar_provider = Self::sidebar_provider_kind(clicked_provider);
         let transport = config.agent.provider_transport_for(&sidebar_provider);
-        Self::provider_for_transport(&sidebar_provider, transport.unwrap_or(ProviderTransport::OpenAI))
-            .unwrap_or(sidebar_provider)
+        Self::provider_for_transport(
+            &sidebar_provider,
+            transport.unwrap_or(ProviderTransport::OpenAI),
+        )
+        .unwrap_or(sidebar_provider)
     }
 
     fn oauth_state(&self, provider: &ProviderKind) -> Option<&ProviderOAuthState> {
@@ -740,9 +753,16 @@ impl SettingsPanel {
         if seeded.max_tokens.is_none() {
             seeded.max_tokens = source.max_tokens;
         }
-        if seeded.base_url.as_deref().is_none_or(|value| value.trim().is_empty()) {
-            seeded.base_url =
-                Self::mapped_protocol_base_url(source_provider, target_provider, source.base_url.as_deref());
+        if seeded
+            .base_url
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            seeded.base_url = Self::mapped_protocol_base_url(
+                source_provider,
+                target_provider,
+                source.base_url.as_deref(),
+            );
         }
 
         seeded
@@ -777,10 +797,9 @@ impl SettingsPanel {
                     }
                     ENDPOINT_CUSTOM_LABEL => {}
                     _ => {
-                        if let Some((target_provider, preset)) = Self::endpoint_preset_for_label(
-                            &this.selected_provider,
-                            value.as_str(),
-                        ) {
+                        if let Some((target_provider, preset)) =
+                            Self::endpoint_preset_for_label(&this.selected_provider, value.as_str())
+                        {
                             if target_provider != this.selected_provider {
                                 let source_provider = this.selected_provider.clone();
                                 let source_config = this.read_provider_inputs(cx);
@@ -1361,13 +1380,20 @@ impl SettingsPanel {
             });
             self.active_model_select = Self::make_model_select(
                 &agent.provider,
-                &agent.providers.get(&agent.provider).and_then(|pc| pc.model.clone()),
+                &agent
+                    .providers
+                    .get(&agent.provider)
+                    .and_then(|pc| pc.model.clone()),
                 &self.registry,
                 window,
                 cx,
             );
             self.ai_purpose_select.update(cx, |select, cx| {
-                select.set_selected_value(&Self::ai_purpose_label(agent.purpose).to_string(), window, cx);
+                select.set_selected_value(
+                    &Self::ai_purpose_label(agent.purpose).to_string(),
+                    window,
+                    cx,
+                );
             });
             self.suggestion_enabled = agent.suggestion_model.enabled;
             self.suggestion_provider_select.update(cx, |select, cx| {
@@ -1904,7 +1930,9 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) {
         let provider = if Self::protocol_pair(&provider).is_some() {
-            if Self::sidebar_provider_kind(&self.selected_provider) == Self::sidebar_provider_kind(&provider) {
+            if Self::sidebar_provider_kind(&self.selected_provider)
+                == Self::sidebar_provider_kind(&provider)
+            {
                 self.selected_provider.clone()
             } else {
                 Self::preferred_sidebar_provider(&self.config, &provider)
@@ -2740,14 +2768,12 @@ impl SettingsPanel {
                 .gap(px(8.0))
                 .child(group_label("Cursor", &theme))
                 .child(
-                    card(theme, card_opacity).child(
-                        div().px(px(16.0)).child(select_row(
-                            "Cursor Style",
-                            "Choose how the terminal insertion point is drawn.",
-                            &self.cursor_style_select,
-                            theme,
-                        )),
-                    ),
+                    card(theme, card_opacity).child(div().px(px(16.0)).child(select_row(
+                        "Cursor Style",
+                        "Choose how the terminal insertion point is drawn.",
+                        &self.cursor_style_select,
+                        theme,
+                    ))),
                 ),
         );
 
@@ -2821,9 +2847,7 @@ impl SettingsPanel {
                                     con_core::config::TabsOrientation::Horizontal
                                 };
                                 if let Err(err) = this.persist_config() {
-                                    log::warn!(
-                                        "settings: persist tabs_orientation failed: {err}"
-                                    );
+                                    log::warn!("settings: persist tabs_orientation failed: {err}");
                                     this.save_error = Some(err.to_string());
                                     cx.notify();
                                     return;
@@ -3302,12 +3326,8 @@ impl SettingsPanel {
             .child(routing_card)
             .child(behavior_card);
 
-        section_content(
-            "AI",
-            "Model selection and AI harness configuration.",
-            theme,
-        )
-        .child(ai_layout)
+        section_content("AI", "Model selection and AI harness configuration.", theme)
+            .child(ai_layout)
     }
 
     fn render_providers(&mut self, cx: &mut Context<Self>) -> Div {
@@ -3544,19 +3564,27 @@ impl SettingsPanel {
                                                     div()
                                                         .text_size(px(11.0))
                                                         .text_color(theme.muted_foreground)
-                                                        .child(protocol_switch_hint.unwrap_or("Choose the provider transport.")),
+                                                        .child(protocol_switch_hint.unwrap_or(
+                                                            "Choose the provider transport.",
+                                                        )),
                                                 ),
                                         )
                                         .child(
                                             Switch::new(format!(
                                                 "provider-protocol-{}",
-                                                provider_label(&Self::sidebar_provider_kind(&self.selected_provider))
+                                                provider_label(&Self::sidebar_provider_kind(
+                                                    &self.selected_provider
+                                                ))
                                             ))
                                             .checked(anthropic_protocol_enabled)
                                             .label(switch_label)
-                                            .on_click(cx.listener(|this, checked: &bool, window, cx| {
-                                                this.toggle_selected_provider_protocol(*checked, window, cx);
-                                            })),
+                                            .on_click(cx.listener(
+                                                |this, checked: &bool, window, cx| {
+                                                    this.toggle_selected_provider_protocol(
+                                                        *checked, window, cx,
+                                                    );
+                                                },
+                                            )),
                                         ),
                                 )
                                 .into_any_element()
@@ -3566,130 +3594,161 @@ impl SettingsPanel {
                         } else {
                             None
                         })
-                        .children(Self::provider_oauth_label(&self.selected_provider).map(|provider_name| {
-                            let oauth = oauth_state.clone().unwrap_or_default();
-                            let provider_for_click = self.selected_provider.clone();
-                            let prompt = oauth.prompt.clone();
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(10.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .gap(px(12.0))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .gap(px(2.0))
-                                                .child(div().text_sm().child(format!("{provider_name} OAuth")))
-                                                .child(
-                                                    div()
-                                                        .text_size(px(11.0))
-                                                        .text_color(theme.muted_foreground)
-                                                        .child("Device login"),
-                                                ),
-                                        )
-                                        .child(
-                                            Button::new(format!("oauth-connect-{}", provider_label(&self.selected_provider)))
-                                                .label(
-                                                    if oauth.connected {
-                                                        "Reconnect"
-                                                    } else {
-                                                        Self::provider_oauth_button_label(&self.selected_provider).unwrap_or("Sign In")
-                                                    }
-                                                )
+                        .children(Self::provider_oauth_label(&self.selected_provider).map(
+                            |provider_name| {
+                                let oauth = oauth_state.clone().unwrap_or_default();
+                                let provider_for_click = self.selected_provider.clone();
+                                let prompt = oauth.prompt.clone();
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(10.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap(px(12.0))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(2.0))
+                                                    .child(
+                                                        div().text_sm().child(format!(
+                                                            "{provider_name} OAuth"
+                                                        )),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(11.0))
+                                                            .text_color(theme.muted_foreground)
+                                                            .child("Device login"),
+                                                    ),
+                                            )
+                                            .child(
+                                                Button::new(format!(
+                                                    "oauth-connect-{}",
+                                                    provider_label(&self.selected_provider)
+                                                ))
+                                                .label(if oauth.connected {
+                                                    "Reconnect"
+                                                } else {
+                                                    Self::provider_oauth_button_label(
+                                                        &self.selected_provider,
+                                                    )
+                                                    .unwrap_or("Sign In")
+                                                })
                                                 .small()
                                                 .primary()
                                                 .loading(oauth.in_progress)
                                                 .disabled(oauth.in_progress)
-                                                .on_click(cx.listener(move |this, _, window, cx| {
-                                                    this.start_provider_oauth(provider_for_click.clone(), window, cx);
-                                                })),
-                                        ),
-                                )
-                                .children(oauth.status_message.as_ref().map(|message| {
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(theme.muted_foreground)
-                                        .child(message.clone())
-                                }))
-                                .children(oauth.error_message.as_ref().map(|message| {
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(theme.danger)
-                                        .child(message.clone())
-                                }))
-                                .children(prompt.map(|prompt| {
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(8.0))
-                                        .p(px(10.0))
-                                        .rounded(px(8.0))
-                                        .bg(theme.muted.opacity(0.05))
-                                        .child(
-                                            div()
-                                                .text_size(px(11.0))
-                                                .text_color(theme.muted_foreground)
-                                                .child("Browser authorization"),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .justify_between()
-                                                .gap(px(8.0))
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .flex_col()
-                                                        .gap(px(2.0))
-                                                        .child(div().text_size(px(11.0)).text_color(theme.muted_foreground).child("Code"))
-                                                        .child(
-                                                            div()
-                                                                .font_weight(FontWeight::SEMIBOLD)
-                                                                .child(prompt.user_code.clone()),
-                                                        ),
-                                                )
-                                                .child(Clipboard::new(format!(
-                                                    "oauth-code-{}",
-                                                    provider_label(&self.selected_provider)
-                                                ))
-                                                .value(SharedString::from(prompt.user_code.clone()))),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .justify_between()
-                                                .gap(px(8.0))
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .text_size(px(11.0))
-                                                        .text_color(theme.muted_foreground)
-                                                        .child(prompt.verification_uri.clone()),
-                                                )
-                                                .child(
-                                                    Button::new(format!(
-                                                        "oauth-open-{}",
-                                                        provider_label(&self.selected_provider)
-                                                    ))
-                                                    .label("Open Browser")
-                                                    .small()
-                                                    .ghost()
-                                                    .on_click(move |_, _, cx| {
-                                                        cx.open_url(&prompt.verification_uri);
-                                                    }),
-                                                ),
-                                        )
-                                }))
-                                .into_any_element()
-                        }))
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.start_provider_oauth(
+                                                            provider_for_click.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                            ),
+                                    )
+                                    .children(oauth.status_message.as_ref().map(|message| {
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(theme.muted_foreground)
+                                            .child(message.clone())
+                                    }))
+                                    .children(oauth.error_message.as_ref().map(|message| {
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(theme.danger)
+                                            .child(message.clone())
+                                    }))
+                                    .children(prompt.map(|prompt| {
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(8.0))
+                                            .p(px(10.0))
+                                            .rounded(px(8.0))
+                                            .bg(theme.muted.opacity(0.05))
+                                            .child(
+                                                div()
+                                                    .text_size(px(11.0))
+                                                    .text_color(theme.muted_foreground)
+                                                    .child("Browser authorization"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .gap(px(8.0))
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .flex_col()
+                                                            .gap(px(2.0))
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(11.0))
+                                                                    .text_color(
+                                                                        theme.muted_foreground,
+                                                                    )
+                                                                    .child("Code"),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .font_weight(
+                                                                        FontWeight::SEMIBOLD,
+                                                                    )
+                                                                    .child(
+                                                                        prompt.user_code.clone(),
+                                                                    ),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        Clipboard::new(format!(
+                                                            "oauth-code-{}",
+                                                            provider_label(&self.selected_provider)
+                                                        ))
+                                                        .value(SharedString::from(
+                                                            prompt.user_code.clone(),
+                                                        )),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .gap(px(8.0))
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .text_size(px(11.0))
+                                                            .text_color(theme.muted_foreground)
+                                                            .child(prompt.verification_uri.clone()),
+                                                    )
+                                                    .child(
+                                                        Button::new(format!(
+                                                            "oauth-open-{}",
+                                                            provider_label(&self.selected_provider)
+                                                        ))
+                                                        .label("Open Browser")
+                                                        .small()
+                                                        .ghost()
+                                                        .on_click(move |_, _, cx| {
+                                                            cx.open_url(&prompt.verification_uri);
+                                                        }),
+                                                    ),
+                                            )
+                                    }))
+                                    .into_any_element()
+                            },
+                        ))
                         .children(if Self::provider_has_oauth(&self.selected_provider) {
                             Some(div().child(row_separator(theme)))
                         } else {
@@ -3710,14 +3769,12 @@ impl SettingsPanel {
                         .children(if endpoint_presets.is_empty() {
                             None
                         } else {
-                            Some(
-                                div().child(select_row(
-                                    "Endpoint Preset",
-                                    "Switch region or protocol",
-                                    &endpoint_preset_select,
-                                    theme,
-                                )),
-                            )
+                            Some(div().child(select_row(
+                                "Endpoint Preset",
+                                "Switch region or protocol",
+                                &endpoint_preset_select,
+                                theme,
+                            )))
                         }),
                 ),
             )
@@ -4060,13 +4117,21 @@ impl SettingsPanel {
                         // Ctrl-only on Windows, so we branch explicitly.
                         .child(key_row(
                             "Copy",
-                            if cfg!(target_os = "macos") { "cmd-c" } else { "ctrl-shift-c" },
+                            if cfg!(target_os = "macos") {
+                                "cmd-c"
+                            } else {
+                                "ctrl-shift-c"
+                            },
                             theme,
                         ))
                         .child(row_separator(theme))
                         .child(key_row(
                             "Paste",
-                            if cfg!(target_os = "macos") { "cmd-v" } else { "ctrl-shift-v" },
+                            if cfg!(target_os = "macos") {
+                                "cmd-v"
+                            } else {
+                                "ctrl-shift-v"
+                            },
                             theme,
                         ))
                         .child(row_separator(theme))
@@ -4413,10 +4478,7 @@ fn update_summary_and_detail(
                 crate::app_display_version()
             ),
         ),
-        CheckState::Error(e) => (
-            "Update check failed".to_string(),
-            e.clone(),
-        ),
+        CheckState::Error(e) => ("Update check failed".to_string(), e.clone()),
         CheckState::Idle => (status.summary().to_string(), status.detail().to_string()),
     }
 }
@@ -4594,14 +4656,11 @@ fn searchable_select_row(
                 ),
         )
         .child(
-            div()
-                .w(px(236.0))
-                .flex_shrink_0()
-                .child(
-                    Select::new(select)
-                        .placeholder(placeholder.to_string())
-                        .small(),
-                ),
+            div().w(px(236.0)).flex_shrink_0().child(
+                Select::new(select)
+                    .placeholder(placeholder.to_string())
+                    .small(),
+            ),
         )
 }
 
