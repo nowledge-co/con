@@ -3484,7 +3484,10 @@ impl ConWorkspace {
         self.shell_suggestion_engine.clear_cache();
         // Same suggestion model drives the tab summarizer; rebuild
         // it so the new credentials / model override take effect.
-        self.tab_summary_engine = self.harness.tab_summary_engine();
+        self.tab_summary_engine = self
+            .harness
+            .tab_summary_engine()
+            .with_state_from(&self.tab_summary_engine);
         if self.harness.config().suggestion_model.enabled {
             // Re-ask for fresh summaries with the new model.
             self.request_tab_summaries(cx);
