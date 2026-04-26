@@ -104,7 +104,7 @@ impl GhosttyView {
 
         cx.spawn(async move |this, cx| {
             while wake_rx.next().await.is_some() {
-                while let Ok(Some(_)) = wake_rx.try_next() {}
+                while wake_rx.try_recv().is_ok() {}
                 if this
                     .update(cx, |view, cx| {
                         let mut changed = false;
