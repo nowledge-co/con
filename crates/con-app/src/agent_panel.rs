@@ -11,7 +11,6 @@ use gpui_component::{ActiveTheme, Disableable, Icon, Sizable as _, Theme};
 
 /// Max lines to show for tool result previews in collapsed steps
 const TOOL_RESULT_PREVIEW_LINES: usize = 6;
-const RESTORED_MESSAGE_PREVIEW_LINES: usize = 12;
 const LONG_MARKDOWN_PROGRESSIVE_THRESHOLD_BLOCKS: usize = 14;
 const LONG_MARKDOWN_INITIAL_BLOCKS: usize = 8;
 const LONG_MARKDOWN_BATCH_BLOCKS: usize = 6;
@@ -474,7 +473,6 @@ struct PanelMessage {
     content_markdown: Option<Arc<ParsedChatMarkdown>>,
     content_markdown_len: usize,
     content_markdown_pending: bool,
-    content_collapsed: bool,
     /// Extended thinking/reasoning text from the model (collapsible)
     thinking: Option<String>,
     thinking_markdown: Option<Arc<ParsedChatMarkdown>>,
@@ -520,7 +518,6 @@ impl PanelMessage {
             content_markdown: None,
             content_markdown_len: 0,
             content_markdown_pending: false,
-            content_collapsed: false,
             thinking: None,
             thinking_markdown: None,
             thinking_collapsed: true,
@@ -1534,6 +1531,10 @@ impl AgentPanel {
 
     pub fn add_step(&mut self, step: &str, cx: &mut Context<Self>) {
         self.state.add_step(step);
+        if let Some(last_idx) = self.state.messages.len().checked_sub(1) {
+            self.remeasure_message(last_idx);
+        }
+        self.follow_output_after_change();
         cx.notify();
     }
 
@@ -1667,7 +1668,6 @@ impl AgentPanel {
             return;
         };
         if message.content.is_empty()
-            || message.content_collapsed
             || message.content_markdown_pending
             || message.content_markdown_len == message.content.len()
         {
@@ -1700,8 +1700,7 @@ impl AgentPanel {
                     } else if message.content.starts_with(&content) {
                         message.content_markdown = Some(parsed.clone());
                         message.content_markdown_len = parse_len;
-                        needs_follow_up =
-                            !message.content_collapsed && message.content_markdown_len < message.content.len();
+                        needs_follow_up = message.content_markdown_len < message.content.len();
                     }
                     message.content_markdown_pending = false;
                     message.touch();
@@ -3112,12 +3111,6 @@ fn render_assistant_message(
     }
 
     if !msg.content.is_empty() {
-        let content_collapsed = msg.content_collapsed;
-        let visible_content = if content_collapsed {
-            result_preview(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES)
-        } else {
-            msg.content.clone()
-        };
         let mut content_el = div()
             .ml(px(19.0))
             .pr(px(4.0))
@@ -3125,15 +3118,7 @@ fn render_assistant_message(
             .line_height(px(23.0))
             .text_color(theme.foreground.opacity(0.88));
 
-        if content_collapsed {
-            content_el = content_el.child(render_plain_multiline_text(
-                &visible_content,
-                theme.mono_font_family.clone(),
-                px(14.0),
-                px(23.0),
-                theme.foreground.opacity(0.88),
-            ));
-        } else if let Some(markdown) = msg.content_markdown.as_ref() {
+        if let Some(markdown) = msg.content_markdown.as_ref() {
             let visible_blocks =
                 visible_markdown_block_count(rendered_markdown_blocks, markdown.block_count());
             if let Some(rendered_markdown) = rendered_markdown {
@@ -3210,7 +3195,7 @@ fn render_assistant_message(
             }
         } else {
             content_el = content_el.child(render_plain_multiline_text(
-                &visible_content,
+                &msg.content,
                 theme.mono_font_family.clone(),
                 px(14.0),
                 px(23.0),
@@ -3219,46 +3204,6 @@ fn render_assistant_message(
         }
 
         msg_el = msg_el.child(content_el);
-
-        if msg.content_collapsed {
-            let hidden = hidden_result_line_count(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES);
-            let button_label = if hidden > 0 {
-                format!("Open full reply · {} more lines", hidden)
-            } else {
-                "Open full reply".to_string()
-            };
-            let expand_panel = panel.clone();
-            msg_el = msg_el.child(
-                div()
-                    .ml(px(19.0))
-                    .mt(px(4.0))
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("assistant-expand-{msg_idx}")))
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.muted.opacity(0.04)).rounded(px(6.0)))
-                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                let _ = expand_panel.update(cx, |this, cx| {
-                                    if let Some(message) = this.state.messages.get_mut(msg_idx) {
-                                        message.content_collapsed = false;
-                                        message.touch();
-                                    }
-                                    this.remeasure_message(msg_idx);
-                                    this.ensure_content_markdown_async(msg_idx, cx);
-                                    cx.notify();
-                                });
-                            })
-                            .child(
-                                div().px(px(4.0)).py(px(3.0)).child(
-                                    render_result_toggle_chrome(false, button_label, theme),
-                                ),
-                            ),
-                    ),
-            );
-        }
 
         msg_el = msg_el.child(
             div().ml(px(19.0)).mt(px(2.0)).child(
@@ -3887,7 +3832,6 @@ impl AgentPanel {
             let is_streaming_assistant = self.state.streaming && msg_idx + 1 == self.state.messages.len();
             if !msg.content.is_empty()
                 && !msg.content_markdown_pending
-                && !msg.content_collapsed
                 && msg.content_markdown_len < msg.content.len()
             {
                 self.ensure_content_markdown_async(msg_idx, cx);
