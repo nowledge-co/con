@@ -348,7 +348,7 @@ impl SettingsPanel {
     }
 
     fn protocol_switch_hint(provider: &ProviderKind) -> Option<&'static str> {
-        Self::protocol_pair(provider).map(|_| "OpenAI or Anthropic API compatible")
+        Self::protocol_pair(provider).map(|_| "OpenAI- or Anthropic-compatible API")
     }
 
     fn provider_icon_path(provider: &ProviderKind) -> &'static str {
