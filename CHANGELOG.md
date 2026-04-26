@@ -10,6 +10,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Agent Panel**
 - Added first-class rich Markdown blocks for Mermaid diagrams and LaTeX-style math. Mermaid code fences and display math now render off the UI thread into cached GPUI images with source fallbacks, while inline math uses dedicated math typography instead of being flattened into generic code.
+- Mermaid and display math now use the same cached renderer inside nested Markdown containers such as blockquotes and lists, avoiding source-only fallbacks and repeated source-string allocations during repaint.
 
 **Keyboard**
 - Changed the input focus shortcut into a true Input / Terminal toggle. On macOS, Cmd+I now switches from the terminal to the input surface, then back to the first terminal pane when pressed from the input bar or agent-panel input.

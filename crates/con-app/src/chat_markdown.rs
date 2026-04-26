@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use gpui::{
@@ -38,11 +40,11 @@ enum MarkdownBlock {
         highlight_cache: RefCell<Option<CachedCodeHighlightRuns>>,
     },
     Mermaid {
-        code: String,
+        code: SharedString,
         scale: u32,
     },
     MathBlock {
-        math: String,
+        math: SharedString,
         inline_cache: RefCell<Option<CachedInlineRender>>,
     },
     BlockQuote(Vec<MarkdownBlock>),
@@ -226,17 +228,23 @@ struct CachedInlineRender {
     runs: Vec<TextRun>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum RichSvgRenderKind {
     Mermaid,
     Math,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RichSvgRenderKey {
     kind: RichSvgRenderKind,
     source: SharedString,
     metric: u32,
+}
+
+struct RichSvgRenderEntry {
+    image: Option<Result<Arc<RenderImage>, SharedString>>,
+    pending: bool,
+    task: Option<Task<()>>,
 }
 
 struct ChatMarkdownStyle<'a> {
@@ -455,10 +463,7 @@ pub struct ChatMarkdownBlockView {
     block_index: usize,
     tone: ChatMarkdownTone,
     table_scroll_handle: ScrollHandle,
-    rich_svg_key: Option<RichSvgRenderKey>,
-    rich_svg_image: Option<Result<Arc<RenderImage>, SharedString>>,
-    rich_svg_pending: bool,
-    rich_svg_task: Option<Task<()>>,
+    rich_svg_renders: HashMap<RichSvgRenderKey, RichSvgRenderEntry>,
 }
 
 impl ChatMarkdownBlockView {
@@ -472,10 +477,7 @@ impl ChatMarkdownBlockView {
             block_index,
             tone,
             table_scroll_handle: ScrollHandle::new(),
-            rich_svg_key: None,
-            rich_svg_image: None,
-            rich_svg_pending: false,
-            rich_svg_task: None,
+            rich_svg_renders: HashMap::new(),
         }
     }
 
@@ -494,43 +496,26 @@ impl ChatMarkdownBlockView {
             self.block_index = block_index;
             self.tone = tone;
             self.table_scroll_handle = ScrollHandle::new();
-            self.rich_svg_key = None;
-            self.rich_svg_image = None;
-            self.rich_svg_pending = false;
-            self.rich_svg_task = None;
+            self.rich_svg_renders.clear();
             cx.notify();
         }
     }
 
     fn ensure_rich_svg_render(
         &mut self,
-        kind: RichSvgRenderKind,
-        source: &str,
-        metric: u32,
+        key: RichSvgRenderKey,
         cx: &mut gpui::Context<Self>,
-    ) {
-        let key = RichSvgRenderKey {
-            kind,
-            source: SharedString::from(source.to_string()),
-            metric,
-        };
-
-        if self.rich_svg_key.as_ref() != Some(&key) {
-            self.rich_svg_key = Some(key.clone());
-            self.rich_svg_image = None;
-            self.rich_svg_pending = false;
-            self.rich_svg_task = None;
+    ) -> (bool, Option<Result<Arc<RenderImage>, SharedString>>) {
+        if let Some(entry) = self.rich_svg_renders.get(&key) {
+            if entry.image.is_some() || entry.pending {
+                return (entry.pending, entry.image.clone());
+            }
         }
 
-        if self.rich_svg_image.is_some() || self.rich_svg_pending {
-            return;
-        }
-
-        self.rich_svg_pending = true;
         let render_key = key.clone();
         let background_key = key.clone();
         let svg_renderer = cx.svg_renderer();
-        self.rich_svg_task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let result: Result<Arc<RenderImage>, SharedString> = cx
                 .background_spawn(async move {
                     let result: anyhow::Result<Arc<RenderImage>> = (|| {
@@ -560,14 +545,190 @@ impl ChatMarkdownBlockView {
                 .map_err(|error| SharedString::from(error.to_string()));
 
             this.update(cx, |view, cx| {
-                if view.rich_svg_key.as_ref() == Some(&render_key) {
-                    view.rich_svg_image = Some(result);
-                    view.rich_svg_pending = false;
+                if let Some(entry) = view.rich_svg_renders.get_mut(&render_key) {
+                    entry.image = Some(result);
+                    entry.pending = false;
+                    entry.task = None;
                     cx.notify();
                 }
             })
             .ok();
-        }));
+        });
+
+        self.rich_svg_renders.insert(
+            key,
+            RichSvgRenderEntry {
+                image: None,
+                pending: true,
+                task: Some(task),
+            },
+        );
+
+        (true, None)
+    }
+
+    fn render_rich_svg_block(
+        &mut self,
+        index: usize,
+        block: &MarkdownBlock,
+        style: &ChatMarkdownStyle<'_>,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        let key = rich_svg_key_for_block(block, style)?;
+        let render_id = rich_svg_render_id(index, &key);
+        let (pending, image) = self.ensure_rich_svg_render(key, cx);
+        match block {
+            MarkdownBlock::Mermaid { code, scale } => Some(render_mermaid_block(
+                render_id,
+                code.as_ref(),
+                *scale,
+                pending,
+                image.as_ref(),
+                style,
+            )),
+            MarkdownBlock::MathBlock { math, .. } => Some(render_math_svg_block(
+                render_id,
+                math.as_ref(),
+                pending,
+                image.as_ref(),
+                style,
+            )),
+            _ => None,
+        }
+    }
+
+    fn render_block(
+        &mut self,
+        block: &MarkdownBlock,
+        index: usize,
+        style: &ChatMarkdownStyle<'_>,
+        table_scroll_handle: Option<&ScrollHandle>,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        match block {
+            MarkdownBlock::Mermaid { .. } | MarkdownBlock::MathBlock { .. } => self
+                .render_rich_svg_block(index, block, style, cx)
+                .unwrap_or_else(|| render_block(block, index, style, table_scroll_handle)),
+            MarkdownBlock::BlockQuote(blocks) => {
+                let children = blocks
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, block)| self.render_block(block, idx, style, None, cx))
+                    .collect::<Vec<_>>();
+
+                div()
+                    .w_full()
+                    .px(px(10.0))
+                    .py(px(10.0))
+                    .rounded(px(8.0))
+                    .bg(style.quote_background)
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(9.0))
+                            .child(
+                                div()
+                                    .w(px(3.0))
+                                    .h_full()
+                                    .min_h(px(18.0))
+                                    .bg(style.quote_tint),
+                            )
+                            .child(div().flex().flex_col().gap(style.inner_gap).children(children)),
+                    )
+                    .into_any_element()
+            }
+            MarkdownBlock::List {
+                ordered,
+                start,
+                items,
+            } => {
+                let marker_lane_width = if *ordered {
+                    ordered_list_marker_lane_width(start + items.len().saturating_sub(1))
+                } else {
+                    px(14.0)
+                };
+                let children = items
+                    .iter()
+                    .enumerate()
+                    .map(|(item_idx, item_blocks)| {
+                        let marker = if *ordered {
+                            format!("{}.", start + item_idx)
+                        } else {
+                            "\u{2022}".to_string()
+                        };
+                        let nested_children = item_blocks
+                            .iter()
+                            .enumerate()
+                            .map(|(nested_idx, nested_block)| {
+                                self.render_block(nested_block, nested_idx, style, None, cx)
+                            })
+                            .collect::<Vec<_>>();
+
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_start()
+                            .gap(px(9.0))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .pt(px(1.0))
+                                    .w(marker_lane_width)
+                                    .text_right()
+                                    .font_family(style.theme.mono_font_family.clone())
+                                    .text_size(style.base_font_size)
+                                    .line_height(style.base_line_height)
+                                    .text_color(style.muted_text_color)
+                                    .child(marker),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(7.0))
+                                    .flex_1()
+                                    .children(nested_children),
+                            )
+                            .into_any_element()
+                    })
+                    .collect::<Vec<_>>();
+
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(7.0))
+                    .children(children)
+                    .into_any_element()
+            }
+            _ => render_block(block, index, style, table_scroll_handle),
+        }
+    }
+
+    fn render_block_with_width(
+        &mut self,
+        block: &MarkdownBlock,
+        index: usize,
+        style: &ChatMarkdownStyle<'_>,
+        table_scroll_handle: Option<&ScrollHandle>,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let mut wrapper = div().w_full();
+        if !matches!(
+            block,
+            MarkdownBlock::CodeBlock { .. }
+                | MarkdownBlock::Mermaid { .. }
+                | MarkdownBlock::Table { .. }
+        ) {
+            wrapper = wrapper.max_w(style.content_width);
+        }
+
+        wrapper
+            .child(self.render_block(block, index, style, table_scroll_handle, cx))
+            .into_any_element()
     }
 }
 
@@ -575,52 +736,20 @@ impl Render for ChatMarkdownBlockView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let style = ChatMarkdownStyle::new(&theme, self.tone);
-        let rich_svg_block = self
-            .document
-            .blocks
-            .get(self.block_index)
-            .and_then(|block| {
-                if let MarkdownBlock::Mermaid { code, scale } = block {
-                    Some((RichSvgRenderKind::Mermaid, code.clone(), *scale))
-                } else if let MarkdownBlock::MathBlock { math, .. } = block {
-                    Some((
-                        RichSvgRenderKind::Math,
-                        math.clone(),
-                        math_font_size_metric(&style),
-                    ))
-                } else {
-                    None
-                }
-            });
-
-        if let Some((kind, source, metric)) = rich_svg_block {
-            self.ensure_rich_svg_render(kind, &source, metric, cx);
-            return match kind {
-                RichSvgRenderKind::Mermaid => render_mermaid_block(
-                    self.block_index,
-                    &source,
-                    metric,
-                    self.rich_svg_pending,
-                    self.rich_svg_image.as_ref(),
-                    &style,
-                ),
-                RichSvgRenderKind::Math => render_math_svg_block(
-                    self.block_index,
-                    &source,
-                    self.rich_svg_pending,
-                    self.rich_svg_image.as_ref(),
-                    &style,
-                ),
-            };
-        }
-
-        self.document
+        let document = self.document.clone();
+        document
             .blocks
             .get(self.block_index)
             .map(|block| {
                 let table_scroll_handle = matches!(block, MarkdownBlock::Table { .. })
-                    .then_some(&self.table_scroll_handle);
-                render_block_with_width(block, self.block_index, &style, table_scroll_handle)
+                    .then_some(self.table_scroll_handle.clone());
+                self.render_block_with_width(
+                    block,
+                    self.block_index,
+                    &style,
+                    table_scroll_handle.as_ref(),
+                    cx,
+                )
             })
             .unwrap_or_else(|| div().into_any_element())
     }
@@ -657,7 +786,7 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
         }),
         mdast::Node::Code(raw) => parse_mermaid_scale(raw.lang.as_deref(), raw.meta.as_deref())
             .map(|scale| MarkdownBlock::Mermaid {
-                code: raw.value.clone(),
+                code: SharedString::from(raw.value.clone()),
                 scale,
             })
             .or_else(|| {
@@ -733,7 +862,7 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
             highlight_cache: RefCell::new(None),
         }),
         mdast::Node::Math(val) => Some(MarkdownBlock::MathBlock {
-            math: val.value.clone(),
+            math: SharedString::from(val.value.clone()),
             inline_cache: RefCell::new(None),
         }),
         mdast::Node::FootnoteDefinition(def) => Some(MarkdownBlock::Paragraph {
@@ -1303,17 +1432,17 @@ fn render_code_block(
 }
 
 fn render_mermaid_block(
-    index: usize,
+    id: SharedString,
     code: &str,
     scale: u32,
     pending: bool,
     image: Option<&Result<Arc<RenderImage>, SharedString>>,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
-    let header = render_mermaid_header(index, code, scale, style);
+    let header = render_mermaid_header(id.clone(), code, scale, style);
     let body = match image {
         Some(Ok(image)) => div()
-            .id(("chat-md-mermaid-scroll", index))
+            .id(id)
             .w_full()
             .overflow_x_scroll()
             .child(
@@ -1382,7 +1511,7 @@ fn render_mermaid_block(
 }
 
 fn render_math_svg_block(
-    index: usize,
+    id: SharedString,
     math: &str,
     pending: bool,
     image: Option<&Result<Arc<RenderImage>, SharedString>>,
@@ -1390,7 +1519,7 @@ fn render_math_svg_block(
 ) -> AnyElement {
     let body = match image {
         Some(Ok(image)) => div()
-            .id(("chat-md-math-scroll", index))
+            .id(id)
             .w_full()
             .overflow_x_scroll()
             .child(
@@ -1465,7 +1594,12 @@ fn render_mermaid_code_fallback(
         .rounded(px(13.0))
         .bg(style.code_block_background.opacity(0.98))
         .p(px(1.0))
-        .child(render_mermaid_header(index, code, scale, style))
+        .child(render_mermaid_header(
+            SharedString::from(format!("chat-md-mermaid-fallback-{index}")),
+            code,
+            scale,
+            style,
+        ))
         .child(
             div()
                 .mx(px(10.0))
@@ -1479,7 +1613,7 @@ fn render_mermaid_code_fallback(
 }
 
 fn render_mermaid_header(
-    index: usize,
+    id: SharedString,
     code: &str,
     scale: u32,
     style: &ChatMarkdownStyle<'_>,
@@ -1514,7 +1648,7 @@ fn render_mermaid_header(
                 )
                 .child(div().h(px(1.0)).flex_1().bg(style.rule_color.opacity(0.36)))
                 .child(
-                    Clipboard::new(format!("copy-mermaid-block-{index}"))
+                    Clipboard::new(format!("{}-copy", id.as_ref()))
                         .value(SharedString::from(code.to_string())),
                 ),
         )
@@ -1574,6 +1708,35 @@ fn render_math_source_text(math: &str, style: &ChatMarkdownStyle<'_>) -> AnyElem
 fn math_font_size_metric(style: &ChatMarkdownStyle<'_>) -> u32 {
     let font_size: f32 = (style.code_font_size + px(3.0)).into();
     (font_size * 1000.0).round().max(1.0) as u32
+}
+
+fn rich_svg_key_for_block(
+    block: &MarkdownBlock,
+    style: &ChatMarkdownStyle<'_>,
+) -> Option<RichSvgRenderKey> {
+    match block {
+        MarkdownBlock::Mermaid { code, scale } => Some(RichSvgRenderKey {
+            kind: RichSvgRenderKind::Mermaid,
+            source: code.clone(),
+            metric: *scale,
+        }),
+        MarkdownBlock::MathBlock { math, .. } => Some(RichSvgRenderKey {
+            kind: RichSvgRenderKind::Math,
+            source: math.clone(),
+            metric: math_font_size_metric(style),
+        }),
+        _ => None,
+    }
+}
+
+fn rich_svg_render_id(index: usize, key: &RichSvgRenderKey) -> SharedString {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    let kind = match key.kind {
+        RichSvgRenderKind::Mermaid => "mermaid",
+        RichSvgRenderKind::Math => "math",
+    };
+    SharedString::from(format!("chat-md-{kind}-{index}-{:x}", hasher.finish()))
 }
 
 fn rich_svg_render_scale(key: &RichSvgRenderKey) -> f32 {
@@ -2062,6 +2225,28 @@ mod tests {
         assert!(matches!(
             blocks.get(1),
             Some(MarkdownBlock::MathBlock { math, .. }) if math.contains("e^{i\\pi}")
+        ));
+    }
+
+    #[test]
+    fn parses_nested_mermaid_and_math_blocks() {
+        let blocks = parse_markdown(
+            "> ```mermaid\n> flowchart TD\n>   A-->B\n> ```\n\n- $$\n  x^2\n  $$",
+        );
+        let Some(MarkdownBlock::BlockQuote(quote_blocks)) = blocks.first() else {
+            panic!("expected blockquote");
+        };
+        assert!(matches!(
+            quote_blocks.first(),
+            Some(MarkdownBlock::Mermaid { code, .. }) if code.contains("A-->B")
+        ));
+
+        let Some(MarkdownBlock::List { items, .. }) = blocks.get(1) else {
+            panic!("expected list");
+        };
+        assert!(matches!(
+            items.first().and_then(|item| item.first()),
+            Some(MarkdownBlock::MathBlock { math, .. }) if math.contains("x^2")
         ));
     }
 
