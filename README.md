@@ -38,7 +38,7 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 - **macOS** fully supported, beta.
 - **Windows** early beta. Tracker: [#34](https://github.com/nowledge-co/con-terminal/issues/34).
-- **Linux** preview. The same `con` binary runs on Linux now, with a real PTY pane fed through `libghostty-vt`, styled cell paint (SGR colors / bold / italic / underline / inverse + block cursor), client-side decorations, transparent rounded window, and KWin-backdrop blur where the compositor exposes it. Tracker: [#18](https://github.com/nowledge-co/con-terminal/issues/18).
+- **Linux** preview. Tracker: [#18](https://github.com/nowledge-co/con-terminal/issues/18).
 
 ## Screenshot
 
