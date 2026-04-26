@@ -366,9 +366,20 @@ async fn request_summary(
     // the LABEL|ICON instruction in our user prompt and made every
     // Moonshot/OpenAI-style provider return empty text. A short,
     // task-aligned preamble fixes that.
+    //
+    // The token budget is generous (512) because thinking models
+    // like Kimi K2 (Moonshot k2p6), GPT-5, and Claude Sonnet
+    // 4.5/4.7 reasoning consume reasoning tokens BEFORE the
+    // visible response. A 64-token cap was burning the entire
+    // budget on chain-of-thought and surfacing as
+    // "ResponseError: Response contained no message or tool call
+    // (empty)" — Moonshot k2p6 was hitting this every time. The
+    // visible response is at most ~30 chars, so a 512-token cap
+    // costs nothing on non-thinking providers and unblocks the
+    // thinking ones.
     let preamble = "You label terminal tabs in a developer's IDE-style sidebar. \
                     Output exactly one line in the format LABEL|ICON. Nothing else.";
-    let raw = match provider.complete_with_options(&prompt, preamble, 64).await {
+    let raw = match provider.complete_with_options(&prompt, preamble, 512).await {
         Ok(s) => s,
         Err(e) => {
             log::warn!(

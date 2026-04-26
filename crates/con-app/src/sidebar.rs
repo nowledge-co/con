@@ -659,20 +659,74 @@ impl SessionSidebar {
             )
             .child(div().flex().gap(px(2.0)).child(new_btn).child(toggle_btn));
 
+        let total = self.sessions.len();
+        // Body-level drag fallback: per-row drag_move + on_drop only
+        // fire when the cursor is squarely inside a row's bounds. If
+        // the user releases the mouse just below the last row (a
+        // common gesture when targeting the "after the last row"
+        // slot) the row's on_drop never fires — and without this
+        // fallback the reorder is silently dropped. This handler
+        // catches every drop inside the list area, including the
+        // empty space below the last row, and maps it to a slot
+        // using the same top-half / bottom-half rule as the per-row
+        // handlers.
         let mut list = div()
+            .id("vertical-tabs-panel-list")
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
             .px(px(6.0))
             .pt(px(2.0))
-            .gap(px(2.0));
+            .gap(px(2.0))
+            // Body-level drag_move ONLY runs the "below last row"
+            // detection — the per-row handlers handle every cursor
+            // position that's actually over a row. We fire the
+            // fallback only when the cursor is below the last row
+            // (i.e. the last row's bounds end above the cursor),
+            // setting drop_slot = total so the indicator below the
+            // last row lights up.
+            .on_drag_move::<DraggedTab>(cx.listener(
+                move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    if total == 0 {
+                        return;
+                    }
+                    // Conservative estimate so we don't flicker
+                    // between drop_slot=N-1 and drop_slot=N for a
+                    // cursor still on the last row. We promote to
+                    // slot=N only when the cursor is well below
+                    // where the last row could plausibly be —
+                    // `total * ROW_HEIGHT + gaps` from the top of
+                    // the list bounds.
+                    let approx_row_h = ROW_HEIGHT_NO_SUBTITLE;
+                    let last_row_bottom_estimate = f32::from(event.bounds.origin.y)
+                        + (total as f32) * (approx_row_h + 2.0);
+                    if f32::from(event.event.position.y) >= last_row_bottom_estimate
+                        && this.drop_slot != Some(total)
+                    {
+                        this.drop_slot = Some(total);
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                // Body-level drop fallback. The per-row on_drop only
+                // fires when mouseup is squarely inside a row's
+                // bounds. If the user released just below the last
+                // row (the "after the last row" gesture) no per-row
+                // handler fires and the drag is silently dropped —
+                // hence this fallback.
+                let from = dragged.index;
+                let to = this.drop_slot.unwrap_or(total);
+                this.drop_slot = None;
+                cx.emit(SidebarReorder { from, to });
+                cx.notify();
+            }));
 
         let renaming_index = self.rename.as_ref().map(|r| r.index);
         let rename_input = self.rename.as_ref().map(|r| r.input.clone());
         let drop_slot = self.drop_slot;
 
-        let total = self.sessions.len();
         for i in 0..total {
             let session_clone = SessionEntry {
                 name: self.sessions[i].name.clone(),
