@@ -107,13 +107,6 @@ GhosttyResult ghostty_render_state_get(
     return 0;
 }
 
-GhosttyResult ghostty_render_state_set(
-    GhosttyRenderState state, int key, const void* value
-) {
-    (void)state; (void)key; (void)value;
-    return 0;
-}
-
 GhosttyResult ghostty_render_state_row_iterator_new(
     const void* allocator, GhosttyRowIterator* out_iter
 ) {
@@ -129,13 +122,6 @@ GhosttyResult ghostty_render_state_row_get(
 ) {
     (void)iter; (void)key;
     if (out) { *(uint8_t*)out = 0; }
-    return 0;
-}
-
-GhosttyResult ghostty_render_state_row_set(
-    GhosttyRowIterator iter, int key, const void* value
-) {
-    (void)iter; (void)key; (void)value;
     return 0;
 }
 
