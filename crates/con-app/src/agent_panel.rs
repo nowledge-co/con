@@ -1589,7 +1589,8 @@ impl AgentPanel {
                 Some("User denied tool execution".to_string())
             },
         });
-        if let Some(last) = self.state.messages.last_mut() {
+        if let Some(last_idx) = self.state.messages.len().checked_sub(1) {
+            let last = &mut self.state.messages[last_idx];
             let human_name = humanize_tool_name(&approval.tool_name);
             let (status, label) = if allowed {
                 (StepStatus::Complete, format!("Allowed {}", human_name))
@@ -1609,6 +1610,8 @@ impl AgentPanel {
                 detail_expanded: false,
                 duration: None,
             });
+            last.touch();
+            self.remeasure_message(last_idx);
         }
         cx.notify();
     }
