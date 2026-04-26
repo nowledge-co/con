@@ -191,7 +191,7 @@ impl PanelState {
         let mut message = PanelMessage::new(role, content);
         message.model = model.map(ToOwned::to_owned);
         message.duration_ms = duration_ms;
-        if role == "assistant" && should_collapse_restored_message(content) {
+        if role == "assistant" && should_collapse_message_body(content) {
             message.content_collapsed = true;
         }
         self.messages.push(message);
@@ -305,6 +305,9 @@ impl PanelState {
                 if last.role == "assistant" {
                     last.model = model.map(|s| s.to_string());
                     last.duration_ms = duration_ms;
+                    if should_collapse_message_body(&last.content) {
+                        last.content_collapsed = true;
+                    }
                 }
             }
             self.streaming = false;
@@ -312,6 +315,9 @@ impl PanelState {
             let mut msg = PanelMessage::new("assistant", final_content);
             msg.model = model.map(|s| s.to_string());
             msg.duration_ms = duration_ms;
+            if should_collapse_message_body(final_content) {
+                msg.content_collapsed = true;
+            }
             self.messages.push(msg);
         }
         // Ensure a message exists for tool call steps even when no text was produced.
@@ -2068,9 +2074,19 @@ fn hidden_result_line_count(content: &str, max_lines: usize) -> usize {
     content.lines().count().saturating_sub(max_lines)
 }
 
-fn should_collapse_restored_message(content: &str) -> bool {
+fn should_collapse_message_body(content: &str) -> bool {
     content.len() > RESTORED_MESSAGE_COLLAPSE_CHAR_THRESHOLD
         || content.lines().count() > RESTORED_MESSAGE_PREVIEW_LINES
+}
+
+fn tail_preview(formatted: &str, max_lines: usize) -> String {
+    let lines: Vec<&str> = formatted.lines().collect();
+    if lines.len() <= max_lines {
+        formatted.to_string()
+    } else {
+        let preview: String = lines[lines.len() - max_lines..].join("\n");
+        format!("… {} earlier lines\n{}", lines.len() - max_lines, preview)
+    }
 }
 
 fn parse_key_value_rows(content: &str) -> Option<Vec<(String, String)>> {
@@ -2547,6 +2563,7 @@ impl Render for AgentPanel {
             .pb(px(64.0))
             .gap(px(16.0));
 
+        let total_messages = self.state.messages.len();
         for (msg_idx, msg) in self.state.messages.iter_mut().enumerate() {
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
@@ -2860,8 +2877,14 @@ impl Render for AgentPanel {
 
                 // Message content — render as markdown
                 if !msg.content.is_empty() {
-                    let content_collapsed = msg.content_collapsed;
-                    let visible_content = if content_collapsed {
+                    let is_streaming_assistant =
+                        self.state.streaming
+                            && msg.role == "assistant"
+                            && msg_idx + 1 == total_messages;
+                    let content_collapsed = msg.content_collapsed || is_streaming_assistant;
+                    let visible_content = if is_streaming_assistant {
+                        tail_preview(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES)
+                    } else if content_collapsed {
                         result_preview(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES)
                     } else {
                         msg.content.clone()
@@ -2897,7 +2920,7 @@ impl Render for AgentPanel {
                     }
                     msg_el = msg_el.child(content_el);
 
-                    if content_collapsed {
+                    if msg.content_collapsed && !is_streaming_assistant {
                         let hidden = hidden_result_line_count(
                             &msg.content,
                             RESTORED_MESSAGE_PREVIEW_LINES,
