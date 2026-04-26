@@ -43,12 +43,19 @@ a full reconstructed frame:
 - resize, selection, and other unsafe cases still fall back to full
   readback.
 
-`windows_view` keeps a full base `RenderImage` and layers dirty-row strip
-images over it. Replacing a one-row prompt now creates/uploads a
-row-strip image instead of rebuilding and uploading the entire terminal
-surface. Replaced base and patch images are still explicitly dropped via
-`Window::drop_image` on the next prepaint so GPUI's sprite atlas does not
-grow unbounded.
+`windows_view` originally kept a full base `RenderImage` and layered
+dirty-row strip images over it. That reduced uploads, but it was
+semantically wrong for Con's translucent terminal background: GPUI
+alpha-composited row strips over the old base, so a strip could not erase
+stale glyph pixels underneath it. The visible failure was command output
+or log rows that looked missing or faint until mouse selection forced a
+broader repaint.
+
+The corrected handoff keeps a CPU-side BGRA backing frame. Full redraws
+replace the backing frame; dirty-row readbacks replace byte ranges inside
+that backing frame; then `windows_view` publishes one `RenderImage`.
+This keeps the D3D partial-readback win while preserving true replacement
+semantics for transparent pixels.
 
 ## What We Learned
 
@@ -57,7 +64,10 @@ grow unbounded.
 - Profiling needs to include both sides of the bridge: renderer stages
   and app image handoff. The useful signal was the gap between tiny
   `draw_ms` / reduced `readback_rows` and the remaining total frame time.
-- The patch-image approach is a tactical bridge, not the end state. The
-  clean long-term fix remains direct composition of the terminal swap
-  chain into GPUI's DirectComposition tree, which removes GPU→CPU→GPU
-  entirely.
+- Dirty rectangles must preserve replacement semantics. With translucent
+  images, "draw a patch on top" is not the same operation as "replace the
+  dirty rectangle."
+- The CPU backing-frame approach is still a tactical bridge, not the end
+  state. The clean long-term fix remains direct composition of the
+  terminal swap chain into GPUI's DirectComposition tree, which removes
+  GPU→CPU→GPU entirely.
