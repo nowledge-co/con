@@ -867,9 +867,13 @@ impl InputHandler for GhosttyInputHandler {
             return;
         }
         let _ = self.view.update(cx, |view, _| {
-            view.ime_marked_text = None;
+            let had_marked_text = view.ime_marked_text.take().is_some();
             if let Some(terminal) = &view.terminal {
-                terminal.send_text(text);
+                if !had_marked_text && should_send_ime_insert_as_key_event(text) {
+                    terminal.send_text_as_key_event(text);
+                } else {
+                    terminal.send_text(text);
+                }
                 terminal.refresh();
             }
         });
@@ -942,6 +946,10 @@ impl InputHandler for GhosttyInputHandler {
     fn prefers_ime_for_printable_keys(&mut self, _window: &mut Window, _cx: &mut App) -> bool {
         true
     }
+}
+
+fn should_send_ime_insert_as_key_event(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|ch| ch.is_ascii() && !ch.is_control())
 }
 
 // ── GPUI → ghostty modifier mapping ─────────────────────────
@@ -1226,5 +1234,19 @@ impl Render for GhosttyView {
                 )
                 .size_full(),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_send_ime_insert_as_key_event;
+
+    #[test]
+    fn direct_ascii_ime_commits_use_key_event_path() {
+        assert!(should_send_ime_insert_as_key_event("abc"));
+        assert!(should_send_ime_insert_as_key_event("A quick test."));
+        assert!(!should_send_ime_insert_as_key_event(""));
+        assert!(!should_send_ime_insert_as_key_event("hello\n"));
+        assert!(!should_send_ime_insert_as_key_event("你好"));
     }
 }

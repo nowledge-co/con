@@ -853,7 +853,7 @@ impl GhosttyTerminal {
     /// Unlike `send_text()` which uses `ghostty_surface_text` (triggers bracketed
     /// paste wrapping in mode 2004), this sends via `ghostty_surface_key` with the
     /// `text` field set. Ghostty writes the UTF-8 directly to the PTY.
-    fn send_text_as_key_event(&self, text: &str) {
+    pub fn send_text_as_key_event(&self, text: &str) {
         if let Ok(cstr) = CString::new(text) {
             let key_event = ffi::ghostty_input_key_s {
                 action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
