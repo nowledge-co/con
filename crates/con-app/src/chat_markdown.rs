@@ -1030,6 +1030,10 @@ fn looks_like_inline_math(value: &str) -> bool {
         return true;
     }
 
+    if value.chars().all(|ch| ch.is_alphanumeric() || ch == '-') && value.contains('-') {
+        return false;
+    }
+
     let words = value
         .split_whitespace()
         .map(|word| word.trim_matches(|ch: char| !ch.is_alphanumeric()))
@@ -1043,7 +1047,7 @@ fn looks_like_inline_math(value: &str) -> bool {
         return false;
     }
 
-    value.chars().count() <= 3 && value.chars().any(char::is_alphabetic)
+    words.len() == 1 && value.chars().any(char::is_alphabetic)
 }
 
 fn render_block(
@@ -2489,6 +2493,25 @@ mod tests {
             inlines
                 .iter()
                 .any(|inline| matches!(inline, MarkdownInline::Math(math) if math == "x"))
+        );
+    }
+
+    #[test]
+    fn identifier_inline_math_is_supported() {
+        let blocks = parse_markdown("Use $theta$ and $velocity$ in the formula.");
+        let MarkdownBlock::Paragraph { inlines, .. } = &blocks[0] else {
+            panic!("expected paragraph");
+        };
+
+        assert!(
+            inlines
+                .iter()
+                .any(|inline| matches!(inline, MarkdownInline::Math(math) if math == "theta"))
+        );
+        assert!(
+            inlines
+                .iter()
+                .any(|inline| matches!(inline, MarkdownInline::Math(math) if math == "velocity"))
         );
     }
 
