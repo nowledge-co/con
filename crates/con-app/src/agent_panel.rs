@@ -444,6 +444,8 @@ pub struct AgentPanel {
     recent_inputs: Vec<String>,
     inline_history_nav_index: Option<usize>,
     inline_history_nav_draft: Option<String>,
+    inline_input_has_text: bool,
+    inline_input_has_skills: bool,
     follow_output: FollowOutputState,
     /// Currently highlighted skill in inline autocomplete
     inline_skill_selection: usize,
@@ -673,6 +675,12 @@ impl AssistantMessageView {
                 if view.rendered_markdown_blocks < total_blocks {
                     view.schedule_markdown_hydration(cx);
                 }
+                let msg_idx = view.msg_idx;
+                let panel = view.panel.clone();
+                let _ = panel.update(cx, |panel, cx| {
+                    panel.remeasure_message(msg_idx);
+                    cx.notify();
+                });
                 cx.notify();
             });
         })
@@ -848,6 +856,8 @@ impl AgentPanel {
             recent_inputs: Vec::new(),
             inline_history_nav_index: None,
             inline_history_nav_draft: None,
+            inline_input_has_text: false,
+            inline_input_has_skills: false,
             follow_output: FollowOutputState::Auto,
             inline_skill_selection: 0,
             inline_shift_enter: false,
@@ -928,6 +938,8 @@ impl AgentPanel {
             recent_inputs: Vec::new(),
             inline_history_nav_index: None,
             inline_history_nav_draft: None,
+            inline_input_has_text: false,
+            inline_input_has_skills: false,
             follow_output: FollowOutputState::Auto,
             inline_skill_selection: 0,
             inline_shift_enter: false,
@@ -1072,6 +1084,7 @@ impl AgentPanel {
             window,
             |this: &mut Self, _, ev: &InputEvent, window, cx| match ev {
                 InputEvent::Change => {
+                    let mut needs_notify = this.sync_inline_input_visual_state(cx);
                     if let Some(history_ix) = this.inline_history_nav_index {
                         let current_value = this
                             .inline_input_state
@@ -1085,6 +1098,7 @@ impl AgentPanel {
                         if !matches_current {
                             this.inline_history_nav_index = None;
                             this.inline_history_nav_draft = None;
+                            needs_notify = true;
                         }
                     }
                     let skills = this.filtered_inline_skills(cx);
@@ -1096,7 +1110,9 @@ impl AgentPanel {
                             .min(skills.len().saturating_sub(1));
                     }
                     cx.emit(InlineSkillAutocompleteChanged);
-                    cx.notify();
+                    if needs_notify {
+                        cx.notify();
+                    }
                 }
                 InputEvent::PressEnter { .. } => {
                     if this.inline_shift_enter {
@@ -1139,6 +1155,7 @@ impl AgentPanel {
         )
         .detach();
         self.inline_input_state = Some(state);
+        self.sync_inline_input_visual_state(cx);
     }
 
     pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
@@ -1152,6 +1169,37 @@ impl AgentPanel {
         self.recent_inputs = inputs;
         self.inline_history_nav_index = None;
         self.inline_history_nav_draft = None;
+    }
+
+    fn sync_inline_input_visual_state(&mut self, cx: &App) -> bool {
+        let Some(ref input) = self.inline_input_state else {
+            let changed = self.inline_input_has_text || self.inline_input_has_skills;
+            self.inline_input_has_text = false;
+            self.inline_input_has_skills = false;
+            return changed;
+        };
+
+        let text = input.read(cx).value().to_string();
+        let has_text = !text.trim().is_empty();
+        let has_skills = {
+            let trimmed = text.trim();
+            if !trimmed.starts_with('/') {
+                false
+            } else {
+                let query = &trimmed[1..].to_lowercase();
+                !query.contains(' ')
+                    && self
+                        .skills
+                        .iter()
+                        .any(|skill| query.is_empty() || skill.name.to_lowercase().starts_with(query))
+            }
+        };
+
+        let changed =
+            self.inline_input_has_text != has_text || self.inline_input_has_skills != has_skills;
+        self.inline_input_has_text = has_text;
+        self.inline_input_has_skills = has_skills;
+        changed
     }
 
     pub fn focus_inline_input(&self, window: &mut Window, cx: &mut App) -> bool {
@@ -1506,6 +1554,7 @@ impl AgentPanel {
         if self.state.messages.len() > old_count || !self.state.messages.is_empty() {
             self.remeasure_message(msg_idx);
         }
+        self.ensure_content_markdown_async(msg_idx, cx);
         self.follow_output_after_change();
         cx.notify();
     }
@@ -1592,7 +1641,6 @@ impl AgentPanel {
             self.assistant_message_views.resize_with(msg_idx + 1, || None);
         }
 
-        let snapshot = message.clone();
         let state_key = AssistantMessageStateKey {
             revision: message.revision,
             content_len: message.content.len(),
@@ -1606,11 +1654,23 @@ impl AgentPanel {
         };
         if let Some(view) = self.assistant_message_views[msg_idx].as_ref() {
             let view = view.clone();
+            let unchanged = {
+                let existing = view.read(cx);
+                existing.msg_idx == msg_idx
+                    && existing.is_streaming_assistant == is_streaming_assistant
+                    && existing.state_key == state_key
+            };
+            if unchanged {
+                return Some(view);
+            }
+
+            let snapshot = message.clone();
             view.update(cx, |view, cx| {
                 view.update_state(msg_idx, snapshot, state_key, is_streaming_assistant, cx);
             });
             Some(view)
         } else {
+            let snapshot = message.clone();
             let panel = cx.weak_entity();
             let view = cx.new(|_| {
                 AssistantMessageView::new(panel, msg_idx, snapshot, state_key, is_streaming_assistant)
@@ -2831,8 +2891,9 @@ fn render_plain_multiline_text(
 fn render_assistant_message(
     msg: &PanelMessage,
     panel: WeakEntity<AgentPanel>,
+    view: WeakEntity<AssistantMessageView>,
     msg_idx: usize,
-    is_streaming_assistant: bool,
+    _is_streaming_assistant: bool,
     rendered_markdown_blocks: usize,
     theme: &gpui_component::Theme,
 ) -> AnyElement {
@@ -2974,33 +3035,53 @@ fn render_assistant_message(
                 visible_blocks,
             ));
             if visible_blocks < markdown.block_count() {
+                let remaining = markdown.block_count().saturating_sub(visible_blocks);
+                let more_view = view.clone();
                 content_el = content_el.child(
                     div()
-                        .mt(px(6.0))
-                        .text_size(px(10.5))
-                        .font_family(theme.mono_font_family.clone())
-                        .text_color(theme.muted_foreground.opacity(0.42))
-                        .child(format!(
-                            "Rendering full reply… {} blocks left",
-                            markdown.block_count().saturating_sub(visible_blocks)
-                        )),
+                        .mt(px(8.0))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("assistant-more-{msg_idx}")))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .rounded(px(7.0))
+                                .cursor_pointer()
+                                .bg(theme.muted.opacity(0.05))
+                                .hover(|s| s.bg(theme.muted.opacity(0.09)))
+                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                    let _ = more_view.update(cx, |view, cx| {
+                                        view.rendered_markdown_blocks =
+                                            (view.rendered_markdown_blocks
+                                                + LONG_MARKDOWN_BATCH_BLOCKS * 2)
+                                                .min(view.state_key.content_markdown_blocks);
+                                        let msg_idx = view.msg_idx;
+                                        let panel = view.panel.clone();
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            panel.remeasure_message(msg_idx);
+                                            cx.notify();
+                                        });
+                                        cx.notify();
+                                    });
+                                })
+                                .child(
+                                    svg()
+                                        .path("phosphor/caret-down.svg")
+                                        .size(px(10.0))
+                                        .text_color(theme.muted_foreground.opacity(0.55)),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_color(theme.muted_foreground.opacity(0.58))
+                                        .child(format!("Show more · {remaining} blocks left")),
+                                ),
+                        ),
                 );
-            }
-            if is_streaming_assistant && msg.content_markdown_len < msg.content.len() {
-                let suffix = &msg.content[msg.content_markdown_len..];
-                if !suffix.is_empty() {
-                    content_el = content_el.child(
-                        div()
-                            .mt(px(4.0))
-                            .child(render_plain_multiline_text(
-                                suffix,
-                                theme.mono_font_family.clone(),
-                                px(14.0),
-                                px(23.0),
-                                theme.foreground.opacity(0.78),
-                            )),
-                    );
-                }
             }
         } else {
             content_el = content_el.child(render_plain_multiline_text(
@@ -3438,15 +3519,19 @@ impl Render for AssistantMessageView {
         let theme = &theme;
         let msg_idx = self.msg_idx;
         let panel = self.panel.clone();
+        let view = cx.weak_entity();
         let rendered_markdown_blocks = self.rendered_markdown_blocks;
 
-        if self.state_key.content_markdown_blocks > self.rendered_markdown_blocks {
+        if self.is_streaming_assistant
+            && self.state_key.content_markdown_blocks > self.rendered_markdown_blocks
+        {
             self.schedule_markdown_hydration(cx);
         }
 
         render_assistant_message(
             &self.message,
             panel,
+            view,
             msg_idx,
             self.is_streaming_assistant,
             rendered_markdown_blocks,
@@ -3508,7 +3593,8 @@ impl AgentPanel {
                                     .child(
                                         Input::new(edit_input)
                                             .appearance(false)
-                                            .cleanable(false),
+                                            .cleanable(false)
+                                            .font_family(theme.mono_font_family.clone())
                                     ),
                             )
                             .child(
@@ -4642,8 +4728,8 @@ impl Render for AgentPanel {
             // State was pre-created above before the theme borrow
             let inline_input = self.inline_input_state.clone().unwrap();
 
-            let has_text = !inline_input.read(cx).value().trim().is_empty();
-            let has_skills = !self.filtered_inline_skills(cx).is_empty();
+            let has_text = self.inline_input_has_text;
+            let has_skills = self.inline_input_has_skills;
 
             // Send button — circular, matches main input bar
             let send_button = div()
@@ -4762,12 +4848,13 @@ impl Render for AgentPanel {
                                     .flex_1()
                                     .w_full()
                                     .min_w(px(120.0))
-                                    .font_family(theme.font_family.clone())
+                                    .font_family(theme.mono_font_family.clone())
                                     .text_size(px(13.0))
                                     .child(div().w_full().child(
                                         Input::new(&inline_input)
                                             .appearance(false)
-                                            .cleanable(false),
+                                            .cleanable(false)
+                                            .font_family(theme.mono_font_family.clone())
                                     )),
                             )
                             .child(send_button),

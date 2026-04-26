@@ -1313,11 +1313,8 @@ impl Render for InputBar {
                     }),
             );
 
-        // Font: mono for shell/smart, system for agent
-        let input_font = match self.mode {
-            InputMode::Agent => theme.font_family.clone(),
-            _ => theme.mono_font_family.clone(),
-        };
+        // Keep all terminal-adjacent inputs in the mono family for consistency.
+        let input_font = theme.mono_font_family.clone();
         let input_text_size = match self.mode {
             InputMode::Agent => px(14.0),
             _ => px(13.0),
