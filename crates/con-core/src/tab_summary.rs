@@ -36,7 +36,10 @@ use con_agent::AgentConfig;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
@@ -167,6 +170,7 @@ struct PerTabState {
 /// arrive on a `crossbeam` channel that the caller drains).
 pub struct TabSummaryEngine {
     state: Arc<Mutex<HashMap<u64, PerTabState>>>,
+    cache_generation: Arc<AtomicU64>,
     config: AgentConfig,
     runtime: Arc<Runtime>,
 }
@@ -175,6 +179,7 @@ impl TabSummaryEngine {
     pub fn new(config: AgentConfig, runtime: Arc<Runtime>) -> Self {
         Self {
             state: Arc::new(Mutex::new(HashMap::new())),
+            cache_generation: Arc::new(AtomicU64::new(0)),
             config,
             runtime,
         }
@@ -186,13 +191,28 @@ impl TabSummaryEngine {
     /// previous request is still in flight.
     pub fn with_state_from(mut self, previous: &Self) -> Self {
         self.state = previous.state.clone();
+        self.cache_generation = previous.cache_generation.clone();
         self
     }
 
     /// Drop cached state — called when settings change so a new
     /// model gets a clean slate.
     pub fn clear(&self) {
+        self.cache_generation.fetch_add(1, Ordering::Relaxed);
         self.state.lock().clear();
+    }
+
+    /// Keep in-flight bookkeeping but force successful summaries to
+    /// be recomputed. Used when the suggestion model/provider
+    /// changes; outstanding requests are still allowed to complete,
+    /// but unchanged tab contexts should not be served from the old
+    /// model's cache.
+    pub fn clear_success_cache(&self) {
+        self.cache_generation.fetch_add(1, Ordering::Relaxed);
+        for state in self.state.lock().values_mut() {
+            state.last_was_success = false;
+            state.last_success_key = None;
+        }
     }
 
     /// Forget a single tab's cache (e.g. after the tab is closed).
@@ -317,13 +337,17 @@ impl TabSummaryEngine {
 
         let config = self.config.clone();
         let state = self.state.clone();
+        let cache_generation = self.cache_generation.clone();
+        let request_generation = cache_generation.load(Ordering::Relaxed);
         self.runtime.spawn(async move {
             let result = request_summary(&config, &req).await;
 
             if let Some(entry) = state.lock().get_mut(&tab_id) {
                 entry.in_flight = false;
-                entry.last_was_success = result.is_some();
-                if result.is_some() {
+                let cache_is_current =
+                    cache_generation.load(Ordering::Relaxed) == request_generation;
+                entry.last_was_success = cache_is_current && result.is_some();
+                if cache_is_current && result.is_some() {
                     entry.last_success_key = Some(key);
                 }
             }
@@ -776,6 +800,32 @@ mod tests {
             ..Default::default()
         };
         assert!(should_dispatch(&s, 2));
+    }
+
+    #[test]
+    fn clear_success_cache_preserves_in_flight_guard() {
+        let engine = TabSummaryEngine::new(
+            AgentConfig::default(),
+            Arc::new(Runtime::new().expect("test runtime")),
+        );
+        engine.state.lock().insert(
+            7,
+            PerTabState {
+                in_flight: true,
+                last_success_key: Some(42),
+                last_was_success: true,
+                last_dispatch: Some(Instant::now()),
+            },
+        );
+
+        engine.clear_success_cache();
+
+        let state = engine.state.lock();
+        let state = state.get(&7).expect("tab state");
+        assert!(state.in_flight);
+        assert_eq!(state.last_success_key, None);
+        assert!(!state.last_was_success);
+        assert!(state.last_dispatch.is_some());
     }
 
     /// Tab reorder math (mirrors `on_sidebar_reorder` in workspace.rs).

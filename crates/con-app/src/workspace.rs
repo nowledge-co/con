@@ -379,8 +379,11 @@ pub struct ConWorkspace {
     /// vertical-tabs row. Shares the harness's tokio runtime and the
     /// user's `agent.suggestion_model` settings.
     tab_summary_engine: TabSummaryEngine,
-    tab_summary_rx: crossbeam_channel::Receiver<TabSummary>,
-    tab_summary_tx: crossbeam_channel::Sender<TabSummary>,
+    tab_summary_rx: crossbeam_channel::Receiver<(u64, TabSummary)>,
+    tab_summary_tx: crossbeam_channel::Sender<(u64, TabSummary)>,
+    /// Bumped whenever summary-model settings change so late async
+    /// responses from the old configuration are ignored.
+    tab_summary_generation: u64,
     last_sidebar_pinned: bool,
     /// Monotonic counter for [`Tab::summary_id`] — stable across the
     /// window's lifetime so the summary engine's per-tab cache
@@ -1059,9 +1062,9 @@ impl ConWorkspace {
                         workspace.apply_shell_suggestion(result, cx);
                     }
 
-                    while let Ok(summary) = workspace.tab_summary_rx.try_recv() {
+                    while let Ok((generation, summary)) = workspace.tab_summary_rx.try_recv() {
                         got_event = true;
-                        workspace.apply_tab_summary(summary, cx);
+                        workspace.apply_tab_summary(generation, summary, cx);
                     }
 
                     if workspace.pump_ghostty_views(cx) {
@@ -1176,7 +1179,7 @@ impl ConWorkspace {
                 };
                 let tx = tx.clone();
                 tab_summary_engine.request(req, move |summary| {
-                    let _ = tx.send(summary);
+                    let _ = tx.send((0, summary));
                 });
             }
         }
@@ -1234,6 +1237,7 @@ impl ConWorkspace {
             tab_summary_engine,
             tab_summary_rx,
             tab_summary_tx,
+            tab_summary_generation: 0,
             last_sidebar_pinned: initial_vertical_pinned,
             next_tab_summary_id: next_tab_summary_id_init,
             next_control_agent_request_id: 1,
@@ -3206,7 +3210,14 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.close_tab_by_index(event.index, window, cx);
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.summary_id == event.session_id)
+        else {
+            return;
+        };
+        self.close_tab_by_index(index, window, cx);
     }
 
     fn on_sidebar_rename(
@@ -3216,9 +3227,6 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.index >= self.tabs.len() {
-            return;
-        }
         // Empty / whitespace-only labels reset to smart auto-naming.
         let new_label = event
             .label
@@ -3249,15 +3257,19 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.index >= self.tabs.len() {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.summary_id == event.session_id)
+        else {
             return;
-        }
+        };
         // For now, "duplicate" = open a new tab whose CWD matches the
         // source tab's focused terminal cwd. The conversation, panel
         // state, and history don't carry over — that's intentional;
         // duplicate is for "open another shell here", not "fork
         // session state".
-        let cwd = self.tabs[event.index]
+        let cwd = self.tabs[index]
             .pane_tree
             .focused_terminal()
             .current_dir(cx);
@@ -3268,13 +3280,13 @@ impl ConWorkspace {
         self.tabs.push(Tab {
             pane_tree: PaneTree::new(terminal),
             title: format!("Terminal {}", tab_number),
-            user_label: self.tabs[event.index].user_label.clone(),
+            user_label: self.tabs[index].user_label.clone(),
             ai_label: None,
             ai_icon: None,
             summary_id,
             needs_attention: false,
             session: AgentSession::new(),
-            agent_routing: self.tabs[event.index].agent_routing.clone(),
+            agent_routing: self.tabs[index].agent_routing.clone(),
             panel_state: PanelState::new(),
             runtime_trackers: RefCell::new(HashMap::new()),
             runtime_cache: RefCell::new(HashMap::new()),
@@ -3292,7 +3304,13 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let from = event.from;
+        let Some(from) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.summary_id == event.session_id)
+        else {
+            return;
+        };
         // Sidebar emits `to` as a *slot* in `0..=tabs.len()`:
         //   slot K with K < tabs.len() == "insert before row K"
         //   slot tabs.len()             == "after the last row"
@@ -3302,7 +3320,11 @@ impl ConWorkspace {
         //   from > to → to     (the slot was above the source)
         //   from == to or from + 1 == to → no-op (drop on the same
         //     row's top half, or the slot just below — same place).
-        let to = event.to;
+        let to = match event.move_delta {
+            Some(delta) if delta < 0 => from.saturating_sub(1),
+            Some(delta) if delta > 0 => (from + 2).min(self.tabs.len()),
+            _ => event.to,
+        };
         if from >= self.tabs.len() || to > self.tabs.len() {
             return;
         }
@@ -3352,10 +3374,13 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let keep = event.index;
-        if keep >= self.tabs.len() {
+        let Some(keep) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.summary_id == event.session_id)
+        else {
             return;
-        }
+        };
         // Iterate from the end so indices stay stable as we close
         // tabs to the right of `keep`. After that, close everything
         // left of `keep` from the highest index downwards.
@@ -3506,6 +3531,13 @@ impl ConWorkspace {
             .harness
             .tab_summary_engine()
             .with_state_from(&self.tab_summary_engine);
+        self.tab_summary_generation = self.tab_summary_generation.wrapping_add(1);
+        self.tab_summary_engine.clear_success_cache();
+        for tab in &mut self.tabs {
+            tab.ai_label = None;
+            tab.ai_icon = None;
+        }
+        self.sync_sidebar(cx);
         if self.harness.config().suggestion_model.enabled {
             // Re-ask for fresh summaries with the new model.
             self.request_tab_summaries(cx);
@@ -6132,7 +6164,18 @@ impl ConWorkspace {
     /// `summary_id` (NOT index, since reorders / closes shift the
     /// indexes), update its `ai_label` / `ai_icon`, and republish to
     /// the sidebar.
-    fn apply_tab_summary(&mut self, summary: TabSummary, cx: &mut Context<Self>) {
+    fn apply_tab_summary(
+        &mut self,
+        generation: u64,
+        summary: TabSummary,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.tab_summary_generation
+            || !self.vertical_tabs_active()
+            || !self.harness.config().suggestion_model.enabled
+        {
+            return;
+        }
         let Some(tab) = self
             .tabs
             .iter_mut()
@@ -6176,6 +6219,7 @@ impl ConWorkspace {
             return;
         }
         let tx = self.tab_summary_tx.clone();
+        let generation = self.tab_summary_generation;
         for (i, tab) in self.tabs.iter().enumerate() {
             let terminal = tab.pane_tree.focused_terminal();
             // The terminal's recent scrollback is the only signal we
@@ -6203,7 +6247,7 @@ impl ConWorkspace {
             };
             let tx = tx.clone();
             self.tab_summary_engine.request(req, move |summary| {
-                let _ = tx.send(summary);
+                let _ = tx.send((generation, summary));
             });
         }
     }
