@@ -495,6 +495,11 @@ impl ChatMarkdownBlockView {
         tone: ChatMarkdownTone,
         cx: &mut gpui::Context<Self>,
     ) {
+        let old_block = self.document.blocks.get(self.block_index);
+        let new_block = document.blocks.get(block_index);
+        let block_changed =
+            self.block_index != block_index || self.tone != tone || old_block != new_block;
+
         if self.block_index != block_index
             || self.tone != tone
             || !Arc::ptr_eq(&self.document, &document)
@@ -502,8 +507,10 @@ impl ChatMarkdownBlockView {
             self.document = document;
             self.block_index = block_index;
             self.tone = tone;
-            self.table_scroll_handle = ScrollHandle::new();
-            self.rich_svg_renders.clear();
+            if block_changed {
+                self.table_scroll_handle = ScrollHandle::new();
+                self.rich_svg_renders.clear();
+            }
             cx.notify();
         }
     }
@@ -542,8 +549,13 @@ impl ChatMarkdownBlockView {
                                     font_size: background_key.metric as f64 / 1000.0,
                                     horizontal_align: mathjax_svg_rs::HorizontalAlign::Center,
                                 };
-                                mathjax_svg_rs::render_tex(background_key.source.as_ref(), &options)
-                                    .map_err(anyhow::Error::msg)?
+                                let svg =
+                                    mathjax_svg_rs::render_tex(
+                                        background_key.source.as_ref(),
+                                        &options,
+                                    )
+                                    .map_err(anyhow::Error::msg)?;
+                                math_svg_for_theme(svg, background_key.theme_mode)
                             }
                         };
                         svg_renderer
@@ -1681,6 +1693,31 @@ fn math_font_size_metric(style: &ChatMarkdownStyle<'_>) -> u32 {
     (font_size * 1000.0).round().max(1.0) as u32
 }
 
+fn math_svg_for_theme(svg: String, theme_mode: RichSvgThemeMode) -> String {
+    let color = match theme_mode {
+        RichSvgThemeMode::Light => "#0F172A",
+        RichSvgThemeMode::Dark => "#F8FAFC",
+    };
+    apply_svg_root_color(svg, color)
+}
+
+fn apply_svg_root_color(mut svg: String, color: &str) -> String {
+    let Some(svg_start) = svg.find("<svg") else {
+        return svg;
+    };
+    let Some(tag_end_offset) = svg[svg_start..].find('>') else {
+        return svg;
+    };
+    let tag_end = svg_start + tag_end_offset;
+    let root_tag = &svg[svg_start..tag_end];
+    if root_tag.contains(" color=") || root_tag.contains(" fill=") {
+        return svg;
+    }
+
+    svg.insert_str(tag_end, &format!(" color=\"{color}\" fill=\"{color}\""));
+    svg
+}
+
 fn rich_svg_theme_mode(style: &ChatMarkdownStyle<'_>) -> RichSvgThemeMode {
     if style.theme.is_dark() {
         RichSvgThemeMode::Dark
@@ -1831,7 +1868,7 @@ fn rich_svg_key_for_block(
             kind: RichSvgRenderKind::Math,
             source: math.clone(),
             metric: math_font_size_metric(style),
-            theme_mode: RichSvgThemeMode::Light,
+            theme_mode: rich_svg_theme_mode(style),
         }),
         _ => None,
     }
@@ -2417,6 +2454,10 @@ mod tests {
         )
         .unwrap();
         assert!(math.contains("<svg"));
+
+        let dark_math = math_svg_for_theme(math, RichSvgThemeMode::Dark);
+        assert!(dark_math.contains("color=\"#F8FAFC\""));
+        assert!(dark_math.contains("fill=\"#F8FAFC\""));
     }
 
     #[test]
