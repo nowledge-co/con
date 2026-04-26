@@ -107,7 +107,7 @@ struct RenameState {
 /// What the user is currently dragging.
 #[derive(Clone)]
 pub struct DraggedTab {
-    pub index: usize,
+    pub session_id: u64,
     pub label: SharedString,
     pub icon: &'static str,
 }
@@ -171,23 +171,25 @@ pub struct SidebarSelect {
 }
 pub struct NewSession;
 pub struct SidebarCloseTab {
-    pub index: usize,
+    pub session_id: u64,
 }
 pub struct SidebarRename {
-    pub index: usize,
     pub session_id: u64,
     /// `None` clears the user override and falls back to smart naming.
     pub label: Option<String>,
 }
 pub struct SidebarDuplicate {
-    pub index: usize,
+    pub session_id: u64,
 }
 pub struct SidebarReorder {
-    pub from: usize,
+    pub session_id: u64,
     pub to: usize,
+    /// Context-menu move actions are relative to the current tab
+    /// position. Drag/drop emits an absolute destination slot.
+    pub move_delta: Option<isize>,
 }
 pub struct SidebarCloseOthers {
-    pub index: usize,
+    pub session_id: u64,
 }
 
 impl EventEmitter<SidebarSelect> for SessionSidebar {}
@@ -302,7 +304,6 @@ impl SessionSidebar {
                         Some(value.to_string())
                     };
                     cx.emit(SidebarRename {
-                        index,
                         session_id,
                         label,
                     });
@@ -329,14 +330,23 @@ impl SessionSidebar {
         }
     }
 
-    /// Workspace-facing helper: start inline rename (deferred so the
-    /// triggering popup menu has a frame to dismiss before our input
-    /// claims focus).
-    pub fn start_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn start_rename_by_id(
+        &mut self,
+        session_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if matches!(self.mode, PanelMode::Collapsed) {
             self.set_pinned(true, cx);
         }
         cx.defer_in(window, move |this, window, cx| {
+            let Some(index) = this
+                .sessions
+                .iter()
+                .position(|session| session.id == session_id)
+            else {
+                return;
+            };
             this.begin_rename(index, window, cx);
         });
     }
@@ -392,7 +402,6 @@ impl SessionSidebar {
             // user has to land the cursor precisely on a 32×32 pill
             // to reorder, which is unforgiving on a 44-px rail.
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                let from = dragged.index;
                 let to = this.drop_slot.or_else(|| {
                     rail_slot_for_cursor_position(
                         window.mouse_position(),
@@ -404,7 +413,11 @@ impl SessionSidebar {
                 this.drop_slot = None;
                 this.rail_drag_origin_y = None;
                 if let Some(to) = to {
-                    cx.emit(SidebarReorder { from, to });
+                    cx.emit(SidebarReorder {
+                        session_id: dragged.session_id,
+                        to,
+                        move_delta: None,
+                    });
                 }
                 cx.notify();
             }))
@@ -442,8 +455,9 @@ impl SessionSidebar {
             let show_indicator_below = i + 1 == session_count
                 && self.drop_slot == Some(session_count)
                 && cx.has_active_drag();
+            let session_id = session.id;
             let dragged = DraggedTab {
-                index: i,
+                session_id,
                 label: session.name.clone().into(),
                 icon: session.icon,
             };
@@ -476,7 +490,11 @@ impl SessionSidebar {
                 )
                 .on_mouse_down(
                     MouseButton::Middle,
-                    cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { index: i })),
+                    cx.listener(move |_this, _, _, cx| {
+                        cx.emit(SidebarCloseTab {
+                            session_id,
+                        })
+                    }),
                 )
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     let want = if *hovered { Some(i) } else { None };
@@ -764,10 +782,13 @@ impl SessionSidebar {
                 // row (the "after the last row" gesture) no per-row
                 // handler fires and the drag is silently dropped —
                 // hence this fallback.
-                let from = dragged.index;
                 let to = this.drop_slot.unwrap_or(total);
                 this.drop_slot = None;
-                cx.emit(SidebarReorder { from, to });
+                cx.emit(SidebarReorder {
+                    session_id: dragged.session_id,
+                    to,
+                    move_delta: None,
+                });
                 cx.notify();
             }));
 
@@ -898,6 +919,7 @@ impl SessionSidebar {
         };
 
         let row_group = SharedString::from(format!("panel-tab-row-{i}"));
+        let session_id = session.id;
 
         // Both action buttons hover-only on every row, including
         // active. Apple-quiet: visible on intent, hidden by default.
@@ -913,7 +935,11 @@ impl SessionSidebar {
             SharedString::from(format!("panel-tab-close-{i}")),
             "phosphor/x.svg",
             theme,
-            cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { index: i })),
+            cx.listener(move |_this, _, _, cx| {
+                cx.emit(SidebarCloseTab {
+                    session_id,
+                })
+            }),
         )
         .invisible()
         .group_hover(row_group.clone(), |s| s.visible());
@@ -951,7 +977,7 @@ impl SessionSidebar {
         let hover_bg = sidebar_surface(theme, self.ui_opacity, 0.075);
 
         let dragged = DraggedTab {
-            index: i,
+            session_id,
             label: session.name.clone().into(),
             icon: session.icon,
         };
@@ -1010,7 +1036,11 @@ impl SessionSidebar {
             )
             .on_mouse_down(
                 MouseButton::Middle,
-                cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { index: i })),
+                cx.listener(move |_this, _, _, cx| {
+                    cx.emit(SidebarCloseTab {
+                        session_id,
+                    })
+                }),
             )
             .on_double_click(cx.listener(move |this, _, window, cx| {
                 this.begin_rename(i, window, cx);
@@ -1039,10 +1069,13 @@ impl SessionSidebar {
                 },
             ))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
-                let from = dragged.index;
                 let to = this.drop_slot.unwrap_or(i);
                 this.drop_slot = None;
-                cx.emit(SidebarReorder { from, to });
+                cx.emit(SidebarReorder {
+                    session_id: dragged.session_id,
+                    to,
+                    move_delta: None,
+                });
                 cx.notify();
             }))
             .context_menu({
@@ -1276,7 +1309,9 @@ fn build_row_context_menu(
             let weak = weak.clone();
             move |_, window, cx| {
                 if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |this, cx| this.start_rename(index, window, cx));
+                    entity.update(cx, |this, cx| {
+                        this.start_rename_by_id(session_id, window, cx)
+                    });
                 }
             }
         }))
@@ -1284,7 +1319,9 @@ fn build_row_context_menu(
             let weak = weak.clone();
             move |_, _, cx| {
                 if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| cx.emit(SidebarDuplicate { index }));
+                    entity.update(cx, |_, cx| {
+                        cx.emit(SidebarDuplicate { session_id })
+                    });
                 }
             }
         }));
@@ -1295,7 +1332,6 @@ fn build_row_context_menu(
                 if let Some(entity) = weak.upgrade() {
                     entity.update(cx, |_, cx| {
                         cx.emit(SidebarRename {
-                            index,
                             session_id,
                             label: None,
                         })
@@ -1312,8 +1348,9 @@ fn build_row_context_menu(
                 if let Some(entity) = weak.upgrade() {
                     entity.update(cx, |_, cx| {
                         cx.emit(SidebarReorder {
-                            from: index,
+                            session_id,
                             to: index - 1,
+                            move_delta: Some(-1),
                         })
                     });
                 }
@@ -1327,8 +1364,9 @@ fn build_row_context_menu(
                 if let Some(entity) = weak.upgrade() {
                     entity.update(cx, |_, cx| {
                         cx.emit(SidebarReorder {
-                            from: index,
+                            session_id,
                             to: index + 2,
+                            move_delta: Some(1),
                         })
                     });
                 }
@@ -1341,7 +1379,9 @@ fn build_row_context_menu(
             let weak = weak.clone();
             move |_, _, cx| {
                 if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| cx.emit(SidebarCloseTab { index }));
+                    entity.update(cx, |_, cx| {
+                        cx.emit(SidebarCloseTab { session_id })
+                    });
                 }
             }
         }));
@@ -1350,7 +1390,9 @@ fn build_row_context_menu(
             let weak = weak.clone();
             move |_, _, cx| {
                 if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| cx.emit(SidebarCloseOthers { index }));
+                    entity.update(cx, |_, cx| {
+                        cx.emit(SidebarCloseOthers { session_id })
+                    });
                 }
             }
         }));
