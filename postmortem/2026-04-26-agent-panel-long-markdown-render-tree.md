@@ -35,10 +35,7 @@ In short:
   - medium weight
   - background color
   - adjusted foreground color
-- Added a second renderer mode for large markdown bodies. Once a parsed reply crosses a cost threshold, Con switches from the richer small-message markdown surfaces to a document-optimized layout:
-  - headings and paragraphs stay text-first
-  - code blocks render without per-line syntax-highlight rebuild work
-  - tables render as compact monospace text grids instead of nested cell chrome
+- Expanded assistant bodies are now mounted as cached child `MarkdownDocumentView`s inside the agent panel, so GPUI can reuse their layout/paint across unrelated panel rerenders until the markdown content actually changes.
 
 This keeps the semantic styling while collapsing the render tree back down to one text layout per paragraph/list cell/table cell instead of many small child elements.
 
@@ -46,6 +43,7 @@ This keeps the semantic styling while collapsing the render tree back down to on
 
 - UI-thread parsing and render-tree cardinality are separate performance layers. Fixing one does not automatically fix the other.
 - “Pretty” inline chips are not free. For long-form assistant output, they are the wrong primitive if they require many independently laid out elements.
+- Even a cheaper document tree is still too expensive if the parent panel forces it to rerender on every unrelated state change. Large document content needs its own cached view boundary.
 - In chat surfaces, dense markdown should prefer:
   - parsed IR caching
   - async parse for large bodies
