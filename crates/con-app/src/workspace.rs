@@ -5318,12 +5318,67 @@ impl ConWorkspace {
     }
 
     fn focus_input(&mut self, _: &FocusInput, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_modal_open(cx) {
+            return;
+        }
+
+        if self.is_input_surface_focused(window, cx) {
+            self.focus_first_terminal(window, cx);
+            return;
+        }
+
+        self.focus_preferred_input_surface(window, cx);
+    }
+
+    fn is_input_surface_focused(&self, window: &Window, cx: &App) -> bool {
+        let input_bar_focused =
+            self.input_bar_visible && self.input_bar.focus_handle(cx).is_focused(window);
+        let agent_inline_focused = self.agent_panel_open
+            && self
+                .agent_panel
+                .read(cx)
+                .inline_input_is_focused(window, cx);
+
+        input_bar_focused || agent_inline_focused
+    }
+
+    fn focus_preferred_input_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.input_bar_visible {
+            if self.agent_panel_open {
+                let focused_inline = self
+                    .agent_panel
+                    .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
+                if !focused_inline {
+                    self.focus_agent_inline_input_next_frame(window, cx);
+                }
+                return;
+            }
+
             self.input_bar_visible = true;
             self.save_session(cx);
-            cx.notify();
         }
         self.input_bar.focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    fn focus_first_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        self.pane_scope_picker_open = false;
+        let Some((pane_id, terminal)) = self.tabs[self.active_tab]
+            .pane_tree
+            .pane_terminals()
+            .into_iter()
+            .next()
+        else {
+            return;
+        };
+        self.tabs[self.active_tab].pane_tree.focus(pane_id);
+        terminal.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
+        cx.notify();
     }
 
     fn cycle_input_mode(

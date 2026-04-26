@@ -1152,7 +1152,7 @@ impl AgentPanel {
         cx.observe_keystrokes(|this, event, window, cx| {
             if !Self::should_fallback_handle_inline_history_key(event)
                 || !this.show_inline_input
-                || !this.is_inline_input_focused(window, cx)
+                || !this.inline_input_is_focused(window, cx)
             {
                 return;
             }
@@ -1417,7 +1417,7 @@ impl AgentPanel {
         true
     }
 
-    fn is_inline_input_focused(&self, window: &Window, cx: &App) -> bool {
+    pub fn inline_input_is_focused(&self, window: &Window, cx: &App) -> bool {
         self.inline_input_state.as_ref().is_some_and(|input| {
             input
                 .read(cx)

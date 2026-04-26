@@ -1113,7 +1113,7 @@ fn main() {
                     MenuItem::action("Toggle Input Bar", ToggleInputBar),
                     MenuItem::action("Command Palette", command_palette::ToggleCommandPalette),
                     MenuItem::separator(),
-                    MenuItem::action("Focus Input", FocusInput),
+                    MenuItem::action("Toggle Input / Terminal", FocusInput),
                     MenuItem::action("Cycle Input Mode", CycleInputMode),
                 ],
                 disabled: false,
