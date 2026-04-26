@@ -1574,34 +1574,21 @@ impl AgentProvider {
 
         let kind = &self.config.provider;
 
-        // Drive completion via the streaming API, NOT the
-        // non-streaming `Prompt::prompt` path. Reason:
-        // rig's openai-compatible non-streaming response parser
-        // (providers/openai/completion/mod.rs:791) only reads
-        // `choices[0].message.content` and ignores
-        // `reasoning_content`. Reasoning models like Kimi K2.6 emit
-        // their final answer into `reasoning_content` and leave
-        // `content` empty — so the non-streaming path errors out
-        // with "Response contained no message or tool call (empty)"
-        // even though the model produced a perfectly valid answer.
-        // The streaming path (providers/openai/completion/streaming.rs)
-        // does parse `reasoning_content`, and the multi-turn stream's
-        // `FinalResponse` already concatenates the visible text for
-        // us. Same protocol, different parser; we pick the one that
-        // works on every model class the user might pick (regular,
-        // reasoning, structured-output).
+        // Drive completion via the streaming API, not the
+        // non-streaming `Prompt::prompt` path: rig's openai-
+        // compatible non-streaming parser only reads
+        // `choices[0].message.content` and ignores `reasoning_content`,
+        // so reasoning models that emit their answer into
+        // `reasoning_content` (Kimi K2.6, DeepSeek-R1, …) come back
+        // empty. The streaming path parses both channels.
         macro_rules! do_complete {
             ($client:expr) => {{
                 let mut builder = $client.agent(self.config.effective_model(kind));
                 builder = builder.preamble(preamble);
                 builder = builder.max_tokens(max_tokens);
-                // Temperature is provider-specific and there is no
-                // defensible cross-provider default we can guess at —
-                // models.dev exposes `temperature = true` only as a
-                // capability flag, not a default. So we apply a
-                // temperature ONLY when the user explicitly set one
-                // in `agent.temperature`; otherwise we omit the
-                // parameter and let the provider decide.
+                // Apply temperature only when the user explicitly
+                // set one — there's no defensible cross-provider
+                // default to guess.
                 if let Some(temp) = self.config.temperature {
                     builder = builder.temperature(temp);
                 }
@@ -1620,16 +1607,11 @@ impl AgentProvider {
             P: rig::agent::PromptHook<M> + 'static,
         {
             let mut stream = agent.stream_prompt(prompt.to_owned()).await;
-            // Accumulate visible content + reasoning content
-            // separately. Most models emit their answer to
-            // `content`; some reasoning models — Kimi K2.6 / k2-
-            // thinking, DeepSeek-R1 via openai-compatible — emit
-            // EVERYTHING (including the final answer) into
-            // `reasoning_content` and leave `content` empty. For
-            // short structured prompts like ours (LABEL|ICON, ≤30
-            // chars total), the right policy is: prefer `content`
-            // when present, fall back to `reasoning_content` when
-            // it's the only thing the model produced.
+            // Most models emit answers to `content`; some reasoning
+            // models (Kimi K2.6, DeepSeek-R1 via openai-compatible)
+            // emit everything to `reasoning_content` and leave
+            // `content` empty. Prefer `content`; fall back to
+            // `reasoning_content` only when it's the only output.
             let mut visible_text = String::new();
             let mut reasoning_text = String::new();
             let mut final_response_text: Option<String> = None;
@@ -1640,17 +1622,13 @@ impl AgentProvider {
                             visible_text.push_str(&text.text);
                         }
                         StreamedAssistantContent::Reasoning(reasoning) => {
-                            // Full reasoning block — drain its
-                            // text payload into our reasoning
-                            // backstop.
                             reasoning_text.push_str(&reasoning.display_text());
                         }
                         StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
                             reasoning_text.push_str(&reasoning);
                         }
-                        // Tool deltas / tool calls / user items
-                        // are irrelevant for these single-turn
-                        // structured prompts.
+                        // Tool calls / user items aren't relevant
+                        // for single-turn structured prompts.
                         _ => {}
                     },
                     Ok(MultiTurnStreamItem::FinalResponse(fin)) => {
@@ -1673,10 +1651,9 @@ impl AgentProvider {
                 return Ok(visible_text);
             }
             if !reasoning_text.is_empty() {
-                // Reasoning-only models (Kimi K2.6 etc.) put their
-                // visible answer here. Caller's parser will reject
-                // anything that isn't well-formed, so this is safe
-                // even when the model genuinely thought out loud.
+                // Fallback for reasoning-only models (Kimi K2.6
+                // etc.). Caller is expected to validate output —
+                // genuine chain-of-thought will fail to parse.
                 log::debug!(
                     target: "con_agent::provider",
                     "complete_with_options: using reasoning_content as final answer ({} chars) — content was empty",
