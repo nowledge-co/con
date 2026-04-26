@@ -57,6 +57,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Reduced another major markdown-render cost for long agent replies. Assistant message bodies now live behind their own markdown-document entities, and fenced code blocks render as one highlighted text layout per block instead of one GPUI row per line.
 - Reduced agent-panel rerender churn further by isolating whole assistant rows behind their own entities. Old restored sessions and live token streaming no longer force the parent panel loop to rebuild every assistant message row on each update.
 - Moved the main agent transcript off a single flex-column scroll surface and onto GPUI's variable-height `ListState` path, so old long sessions no longer require the whole conversation tree to be measured and repainted as one document during scroll.
+- Reduced restored-session interaction lag by stopping ordinary composer keystrokes from notifying the whole agent panel, keeping long restored markdown from hydrating in the background, and rendering agent-panel inputs with the terminal mono font.
 
 **Terminal — Windows Backend (preview)**
 - Reduced the first-frame flash when splitting a new pane on Windows. Brand-new panes now paint their configured terminal background while the first renderer image is still warming up, instead of briefly showing a transparent hole.
