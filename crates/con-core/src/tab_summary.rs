@@ -230,44 +230,41 @@ impl TabSummaryEngine {
             let entry = guard.entry(tab_id).or_default();
 
             if entry.in_flight {
-                log::debug!(
+                log::trace!(
                     target: "con_core::tab_summary",
                     "tab_summary skip tab_id={} reason=in_flight",
                     tab_id
                 );
                 return;
             }
-            // Cache hit: only short-circuit when the LAST SUCCESSFUL
-            // request used the same context. A failed request must
-            // not poison this slot — otherwise a single empty
-            // response from the model permanently locks the tab
-            // until the user types something new.
+            // Cache hit only short-circuits on the last *successful*
+            // context — a failed request must not poison the slot,
+            // or a single empty model response would permanently
+            // lock the tab until the user typed something new.
             if entry.last_success_key == Some(key) {
-                log::debug!(
+                log::trace!(
                     target: "con_core::tab_summary",
                     "tab_summary skip tab_id={} reason=cache_hit",
                     tab_id
                 );
                 return;
             }
-            // Budget gate: success path uses the long budget, failure
-            // path uses the short retry budget.
             let budget = if entry.last_was_success {
                 PER_TAB_REQUEST_BUDGET
             } else {
                 PER_TAB_RETRY_BUDGET
             };
-            if let Some(t) = entry.last_dispatch {
-                if t.elapsed() < budget {
-                    log::debug!(
-                        target: "con_core::tab_summary",
-                        "tab_summary skip tab_id={} reason=budget elapsed={:?} budget={:?}",
-                        tab_id,
-                        t.elapsed(),
-                        budget,
-                    );
-                    return;
-                }
+            if let Some(t) = entry.last_dispatch
+                && t.elapsed() < budget
+            {
+                log::trace!(
+                    target: "con_core::tab_summary",
+                    "tab_summary skip tab_id={} reason=budget elapsed={:?} budget={:?}",
+                    tab_id,
+                    t.elapsed(),
+                    budget,
+                );
+                return;
             }
             entry.in_flight = true;
             entry.last_dispatch = Some(Instant::now());
@@ -405,7 +402,7 @@ async fn request_summary(
     );
 
     let provider = AgentProvider::new(config.clone());
-    log::info!(
+    log::debug!(
         target: "con_core::tab_summary",
         "tab_summary request tab_id={} provider={:?} model={} cwd={:?} title={:?}",
         req.tab_id,
@@ -414,28 +411,13 @@ async fn request_summary(
         req.cwd.as_deref().unwrap_or(""),
         req.title.as_deref().unwrap_or(""),
     );
-    // We ask the model for a JSON object — `{"label": "...", "icon":
-    // "..."}` — but route through the regular streaming completion
-    // path instead of rig's `prompt_typed` because:
-    //
-    // - Several providers (rig logs `WARN moonshot: Structured
-    //   outputs currently not supported for Moonshot`) ignore the
-    //   `response_format` field rig sends. So `prompt_typed`'s
-    //   schema doesn't actually constrain the model on those
-    //   providers.
-    //
-    // - Even when JSON is requested via the system prompt, models
-    //   commonly wrap their response in markdown code fences
-    //   (```json … ```). `serde_json::from_str` chokes on the
-    //   fences. rig's `prompt_typed::send` parses straight without
-    //   stripping fences, so it fails on the very output the model
-    //   actually produces.
-    //
-    // Solution: use the streaming text path (which already handles
-    // reasoning_content correctly for K2.6 etc.), then strip
-    // markdown code fences and parse JSON ourselves. JSON is
-    // robust to extra whitespace / trailing text — we walk through
-    // candidate substrings and accept the first valid one.
+    // Ask for JSON, parse JSON ourselves (with fence-stripping). We
+    // do NOT use rig's `prompt_typed` because it's a no-op on
+    // providers that don't support `response_format` (Moonshot
+    // logs "Structured outputs currently not supported"), and even
+    // when honored, models routinely wrap responses in ```json …```
+    // fences which `TypedPromptRequest::send` can't strip.
+    // See postmortem/2026-04-26-tab-summary-json-shape.md.
     let preamble = "You label terminal tabs in a developer's IDE-style sidebar. \
                     Respond with a JSON object only: \
                     {\"label\": \"...\", \"icon\": \"...\"}. \
@@ -443,7 +425,7 @@ async fn request_summary(
     let raw = match provider.complete_with_options(&prompt, preamble, 2048).await {
         Ok(s) => s,
         Err(e) => {
-            log::warn!(
+            log::debug!(
                 target: "con_core::tab_summary",
                 "tab_summary completion failed tab_id={}: {}",
                 req.tab_id,
@@ -453,28 +435,24 @@ async fn request_summary(
         }
     };
     let trimmed = raw.trim();
-    log::info!(
+    log::trace!(
         target: "con_core::tab_summary",
         "tab_summary response tab_id={} raw={:?}",
         req.tab_id,
         trimmed,
     );
-    let parsed = parse_summary_json(trimmed);
-    let typed = match parsed {
-        Some(v) => v,
-        None => {
-            log::warn!(
-                target: "con_core::tab_summary",
-                "tab_summary parse rejected tab_id={} reason=no_valid_json raw={:?}",
-                req.tab_id,
-                trimmed,
-            );
-            return None;
-        }
-    };
+    let typed = parse_summary_json(trimmed).or_else(|| {
+        log::debug!(
+            target: "con_core::tab_summary",
+            "tab_summary parse rejected tab_id={} reason=no_valid_json raw={:?}",
+            req.tab_id,
+            trimmed,
+        );
+        None
+    })?;
     let label = typed.label.trim().to_string();
     if label.is_empty() {
-        log::warn!(
+        log::debug!(
             target: "con_core::tab_summary",
             "tab_summary parse rejected tab_id={} reason=empty_label",
             req.tab_id,
@@ -483,7 +461,7 @@ async fn request_summary(
     }
     let lower = label.to_ascii_lowercase();
     if lower == "tab" || lower.contains(" tab") || lower.starts_with("tab ") {
-        log::warn!(
+        log::debug!(
             target: "con_core::tab_summary",
             "tab_summary parse rejected tab_id={} reason=label_contains_tab raw={:?}",
             req.tab_id,
@@ -491,20 +469,17 @@ async fn request_summary(
         );
         return None;
     }
-    let icon = match TabIconKind::from_keyword(&typed.icon) {
-        Some(i) => i,
-        None => {
-            log::warn!(
-                target: "con_core::tab_summary",
-                "tab_summary parse rejected tab_id={} reason=unknown_icon raw_icon={:?}",
-                req.tab_id,
-                typed.icon,
-            );
-            return None;
-        }
+    let Some(icon) = TabIconKind::from_keyword(&typed.icon) else {
+        log::debug!(
+            target: "con_core::tab_summary",
+            "tab_summary parse rejected tab_id={} reason=unknown_icon raw_icon={:?}",
+            req.tab_id,
+            typed.icon,
+        );
+        return None;
     };
     let label = truncate_label(&label);
-    log::info!(
+    log::debug!(
         target: "con_core::tab_summary",
         "tab_summary parsed tab_id={} label={:?} icon={:?}",
         req.tab_id,
@@ -514,20 +489,12 @@ async fn request_summary(
     Some((label, icon))
 }
 
-/// Tolerant JSON extractor for LLM output. Models commonly wrap
-/// their JSON in markdown code fences (```json … ```), prepend
-/// reasoning preamble, or append commentary. We:
-///
-/// 1. Strip the outermost code fence if present.
-/// 2. Walk the remaining text for the first `{` and try to parse
-///    JSON from there to the matching `}`. If that fails, try
-///    progressively wider windows.
+/// Tolerant JSON extractor for LLM output. Walks the response with
+/// a string-aware bracket-balance scanner and parses the first
+/// `{...}` object it finds. This naturally skips markdown code
+/// fences (```json … ```), reasoning preamble, and trailing
+/// commentary that models commonly emit around the JSON answer.
 fn parse_summary_json(raw: &str) -> Option<TabSummaryJson> {
-    // No need to explicitly strip code fences — the bracket-
-    // balance scanner skips over everything outside the first
-    // `{...}` it encounters anyway. Markdown fences (```json,
-    // ```), reasoning preamble, and trailing commentary all sit
-    // outside the JSON object.
     let bytes = raw.as_bytes();
     let start = raw.find('{')?;
     let mut depth = 0i32;
@@ -649,20 +616,22 @@ mod tests {
         } else {
             PER_TAB_RETRY_BUDGET
         };
-        if let Some(t) = state.last_dispatch {
-            if t.elapsed() < budget {
-                return false;
-            }
+        if let Some(t) = state.last_dispatch
+            && t.elapsed() < budget
+        {
+            return false;
         }
         true
     }
 
     #[test]
     fn cache_blocks_resend_for_same_context_after_success() {
-        let mut s = PerTabState::default();
-        s.last_success_key = Some(42);
-        s.last_was_success = true;
-        s.last_dispatch = Some(Instant::now());
+        let s = PerTabState {
+            last_success_key: Some(42),
+            last_was_success: true,
+            last_dispatch: Some(Instant::now()),
+            ..Default::default()
+        };
         assert!(!should_dispatch(&s, 42), "same context after success → skip");
     }
 
@@ -672,13 +641,15 @@ mod tests {
         // `last_key` BEFORE the LLM call, so a failed call locked
         // the tab out forever for that context. Verify the new
         // success-keyed cache lets the next call through.
-        let mut s = PerTabState::default();
-        s.last_success_key = None;
-        s.last_was_success = false;
-        // Pretend the last dispatch was 1 s ago — beyond the
-        // failure-retry budget (750 ms) but well under the success
-        // budget (5 s). Failure path should let it through.
-        s.last_dispatch = Some(Instant::now() - Duration::from_secs(1));
+        //
+        // Last dispatch is 1 s ago: beyond the failure-retry budget
+        // (750 ms) but well under the success budget (5 s).
+        let s = PerTabState {
+            last_success_key: None,
+            last_was_success: false,
+            last_dispatch: Some(Instant::now() - Duration::from_secs(1)),
+            ..Default::default()
+        };
         assert!(
             should_dispatch(&s, 99),
             "failure → context unchanged → next call must retry"
@@ -687,10 +658,11 @@ mod tests {
 
     #[test]
     fn retry_budget_holds_inside_750ms() {
-        let mut s = PerTabState::default();
-        s.last_dispatch = Some(Instant::now());
-        s.last_was_success = false;
-        // Just under the retry budget — should still hold.
+        let s = PerTabState {
+            last_dispatch: Some(Instant::now()),
+            last_was_success: false,
+            ..Default::default()
+        };
         assert!(
             !should_dispatch(&s, 99),
             "retry budget should hold for the first 750 ms"
@@ -699,18 +671,21 @@ mod tests {
 
     #[test]
     fn in_flight_blocks_everything() {
-        let mut s = PerTabState::default();
-        s.in_flight = true;
+        let s = PerTabState {
+            in_flight: true,
+            ..Default::default()
+        };
         assert!(!should_dispatch(&s, 0));
     }
 
     #[test]
     fn new_context_after_success_dispatches() {
-        let mut s = PerTabState::default();
-        s.last_success_key = Some(1);
-        s.last_was_success = true;
-        s.last_dispatch = Some(Instant::now() - Duration::from_secs(10));
-        // Different key, both budgets satisfied.
+        let s = PerTabState {
+            last_success_key: Some(1),
+            last_was_success: true,
+            last_dispatch: Some(Instant::now() - Duration::from_secs(10)),
+            ..Default::default()
+        };
         assert!(should_dispatch(&s, 2));
     }
 
