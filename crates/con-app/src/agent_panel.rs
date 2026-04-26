@@ -460,6 +460,7 @@ struct PanelMessage {
     role: String,
     content: String,
     content_markdown: Option<ParsedChatMarkdown>,
+    content_markdown_pending: bool,
     content_collapsed: bool,
     /// Extended thinking/reasoning text from the model (collapsible)
     thinking: Option<String>,
@@ -501,6 +502,7 @@ impl PanelMessage {
             role: role.to_string(),
             content: content.to_string(),
             content_markdown: None,
+            content_markdown_pending: false,
             content_collapsed: false,
             thinking: None,
             thinking_markdown: None,
@@ -519,11 +521,13 @@ impl PanelMessage {
     fn append_content(&mut self, token: &str) {
         self.content.push_str(token);
         self.content_markdown = None;
+        self.content_markdown_pending = false;
     }
 
     fn replace_content(&mut self, content: &str) {
         self.content = content.to_string();
         self.content_markdown = None;
+        self.content_markdown_pending = false;
     }
 
     fn set_thinking(&mut self, thinking: Option<String>) {
@@ -535,16 +539,6 @@ impl PanelMessage {
         let thinking = self.thinking.get_or_insert_with(String::new);
         thinking.push_str(text);
         self.thinking_markdown = None;
-    }
-
-    fn content_markdown(&mut self) -> Option<&ParsedChatMarkdown> {
-        if self.content.is_empty() {
-            return None;
-        }
-        if self.content_markdown.is_none() {
-            self.content_markdown = Some(ParsedChatMarkdown::parse(&self.content));
-        }
-        self.content_markdown.as_ref()
     }
 
     fn thinking_markdown(&mut self) -> Option<&ParsedChatMarkdown> {
@@ -1343,8 +1337,46 @@ impl AgentPanel {
     pub fn complete_response(&mut self, msg: &con_agent::Message, cx: &mut Context<Self>) {
         self.state
             .complete_response(&msg.content, msg.model.as_deref(), msg.duration_ms);
+        if let Some(last_idx) = self.state.messages.len().checked_sub(1) {
+            self.ensure_content_markdown_async(last_idx, cx);
+        }
         self.follow_output_after_change();
         cx.notify();
+    }
+
+    fn ensure_content_markdown_async(&mut self, msg_idx: usize, cx: &mut Context<Self>) {
+        let Some(message) = self.state.messages.get_mut(msg_idx) else {
+            return;
+        };
+        if message.content.is_empty()
+            || message.content_collapsed
+            || message.content_markdown.is_some()
+            || message.content_markdown_pending
+        {
+            return;
+        }
+
+        let content = message.content.clone();
+        let parse_content = content.clone();
+        message.content_markdown_pending = true;
+
+        cx.spawn(async move |this, cx| {
+            let parsed = cx
+                .background_executor()
+                .spawn(async move { ParsedChatMarkdown::parse(&parse_content) })
+                .await;
+            let _ = this.update(cx, |panel, cx| {
+                let Some(message) = panel.state.messages.get_mut(msg_idx) else {
+                    return;
+                };
+                if message.content == content {
+                    message.content_markdown = Some(parsed);
+                }
+                message.content_markdown_pending = false;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Derive a human-readable status line from current panel state.
@@ -2547,7 +2579,8 @@ impl Render for AgentPanel {
         self.ensure_inline_input_state(window, cx);
         self.sync_follow_output_state(cx);
 
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
+        let theme = &theme;
         let content_reveal = self.content_reveal.value(window);
 
         // ── Messages ──────────────────────────────────────────────
@@ -2564,6 +2597,7 @@ impl Render for AgentPanel {
             .gap(px(16.0));
 
         let total_messages = self.state.messages.len();
+        let mut content_parse_requests = Vec::new();
         for (msg_idx, msg) in self.state.messages.iter_mut().enumerate() {
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
@@ -2911,12 +2945,29 @@ impl Render for AgentPanel {
                         content_el = content_el.child(
                             preview_lines,
                         );
-                    } else if let Some(markdown) = msg.content_markdown() {
+                    } else if let Some(markdown) = msg.content_markdown.as_ref() {
                         content_el = content_el.child(render_parsed_chat_markdown(
                             markdown,
                             ChatMarkdownTone::Message,
-                            theme,
+                            &theme,
                         ));
+                    } else {
+                        if !msg.content_markdown_pending {
+                            content_parse_requests.push(msg_idx);
+                        }
+                        let mut preview_lines = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .font_family(theme.mono_font_family.clone());
+                        for line in visible_content.lines() {
+                            preview_lines = preview_lines.child(
+                                div()
+                                    .whitespace_normal()
+                                    .child(if line.is_empty() { " " } else { line }.to_string()),
+                            );
+                        }
+                        content_el = content_el.child(preview_lines);
                     }
                     msg_el = msg_el.child(content_el);
 
@@ -2954,6 +3005,7 @@ impl Render for AgentPanel {
                                                 {
                                                     message.content_collapsed = false;
                                                 }
+                                                this.ensure_content_markdown_async(msg_idx, cx);
                                                 cx.notify();
                                             }),
                                         )
@@ -2961,7 +3013,7 @@ impl Render for AgentPanel {
                                             render_result_toggle_chrome(
                                                 false,
                                                 button_label,
-                                                theme,
+                                                &theme,
                                             ),
                                         )),
                                 ),
@@ -3364,6 +3416,10 @@ impl Render for AgentPanel {
             }
 
             messages_content = messages_content.child(msg_el);
+        }
+
+        for msg_idx in content_parse_requests {
+            self.ensure_content_markdown_async(msg_idx, cx);
         }
 
         // ── Active tool calls (skip if awaiting approval — the card shows it) ──
