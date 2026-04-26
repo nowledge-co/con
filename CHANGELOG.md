@@ -9,6 +9,7 @@ con is still pre-release, so entries may group related beta work while the produ
 ### Improved
 
 **Terminal — Windows Backend (preview)**
+- Made Windows command rendering feel substantially closer to native terminals by closing the full PTY-to-paint loop: ConPTY output wakes are preserved, stale readbacks are discarded with mailbox semantics, row-local D3D readbacks stay row-local through GPUI image handoff, and delayed command-start output remains latency-critical long enough to present fresh frames.
 - Aligned the default Windows shell choice with Windows Terminal when possible by reading its configured default profile before falling back to `pwsh.exe`, `powershell.exe`, `%COMSPEC%`, and `cmd.exe`; `CON_SHELL` remains the explicit override.
 - Added `CON_LOG_FILE` so Windows terminal profiling can write con's own logs directly to a file without PowerShell `*>` redirection, avoiding redirected standard handles that can steal shell output away from the ConPTY pane.
 - Fixed Windows ConPTY child process creation so shells do not inherit con's redirected stdout/stderr handles during profiling, which could send the PowerShell banner/prompt into `con-profile.log` instead of the terminal pane.
