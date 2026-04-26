@@ -20,6 +20,8 @@ con is still pre-release, so entries may group related beta work while the produ
 **Agent Panel**
 - Fixed Mermaid and display math inside nested Markdown containers such as blockquotes and lists so they use the same cached rich renderer as top-level blocks instead of falling back to source text.
 - Fixed dark-theme Mermaid diagrams with custom light node fills so missing Mermaid `color:` styles are inferred from fill luminance instead of leaving white text on light shapes.
+- Fixed display math SVGs in dark mode so formulas use theme-aware foreground colors and re-render correctly after theme switches.
+- Fixed rich Mermaid and math render caching during streaming so replacing a parsed Markdown document with equivalent block content no longer discards already-rendered SVG images.
 - Fixed repeated rich-render source-string allocation during ordinary repaint, reducing avoidable memory churn when scrolling chats with diagrams or formulas.
 - Fixed display-math fallback styling so it uses the neutral block math style instead of inline-math chips inside an already styled block.
 - Consolidated blockquote and list layout rendering for cached rich blocks and fallback Markdown blocks so future spacing and typography changes cannot drift between the two paths.
