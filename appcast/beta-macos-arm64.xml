@@ -8,6 +8,14 @@
     <item>
       <title>Version 0.1.0</title>
       <pubDate/>
+      <sparkle:version>44</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.40/con-Beta-0.1.0-beta.40-macos-arm64.dmg" length="49025492" type="application/octet-stream" sparkle:edSignature="l5inuk2hEjYxe3EBaEs+64ty5soN+jopRjnEJoFhpakE+DKuY+vqbF/nqfGKc7Y9MIno2n10XkXghhtQbeZhBw=="/>
+    </item>
+    <item>
+      <title>Version 0.1.0</title>
+      <pubDate/>
       <sparkle:version>43</sparkle:version>
       <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
@@ -156,14 +164,6 @@
       <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
       <enclosure url="https://github.com/nowledge-co/con/releases/download/v0.1.0-beta.3/con-Beta-0.1.0-beta.3-macos-arm64.dmg" length="41323669" type="application/octet-stream" sparkle:edSignature="gB51yYwlLvhhiEPpa72SOgCzLwNw7JosQKEX6siDQBsr/szQjp8hKVE3Fr3/oZZHWIBWBqmRBuOUtxFebJzAAQ=="/>
-    </item>
-    <item>
-      <title>Version 0.1.0</title>
-      <pubDate/>
-      <sparkle:version>12</sparkle:version>
-      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/nowledge-co/con/releases/download/v0.1.0-beta.2/con-Beta-0.1.0-beta.2-macos-arm64.dmg" length="41291721" type="application/octet-stream" sparkle:edSignature="u7Bxgt5E54BAJB1cN3f4FPyNwX4n8w1D75moFr8z4EieXngRZkEEuEpvwfmEb2EqUSUryGHliPSRhytj5HP8Bw=="/>
     </item>
   </channel>
 </rss>
