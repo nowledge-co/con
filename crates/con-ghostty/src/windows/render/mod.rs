@@ -388,12 +388,19 @@ impl Renderer {
             .lock()
             .expect("staging_ring mutex poisoned in render()");
 
-        // Snapshot which slot is the oldest in-flight BEFORE we submit a
-        // new one. That slot is the one whose GPU CopyResource has had
-        // the longest coast time — i.e., the only one we should try to
-        // drain non-blocking.
         let in_flight_before_submit = ring.in_flight_count();
-        let drain_target = ring.oldest_in_flight();
+
+        // A completed readback is only useful when we have no fresher VT
+        // snapshot to submit. If `needs_draw` is true, mapping the older
+        // slot just burns UI-thread time and cannot be presented because
+        // it would regress the pane to stale pixels. If no new draw is
+        // needed but more than one slot is still in flight, discard the
+        // oldest cache entry first so command bursts present the newest
+        // completed frame instead of replaying intermediate snapshots.
+        if !needs_draw && in_flight_before_submit > 1 {
+            ring.discard_oldest_in_flight();
+        }
+        let drain_target = (!needs_draw).then(|| ring.oldest_in_flight()).flatten();
 
         let drain_started = perf_trace_enabled().then(Instant::now);
         let drained: Option<Readback> = if let Some(idx) = drain_target {
@@ -1254,6 +1261,13 @@ impl StagingRing {
             }
         }
         best.map(|(i, _)| i)
+    }
+
+    fn discard_oldest_in_flight(&mut self) -> Option<usize> {
+        let idx = self.oldest_in_flight()?;
+        let slot = &mut self.slots[idx];
+        slot.in_flight = false;
+        Some(idx)
     }
 
     /// Non-blocking drain: returns `Ok(Some(readback))` if the slot is
