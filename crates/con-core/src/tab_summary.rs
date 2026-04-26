@@ -472,14 +472,31 @@ async fn request_summary(
 }
 
 /// Parse a `LABEL|ICON` response. Tolerates leading whitespace, code
-/// fences, surrounding quotes, and case variations on the icon
-/// keyword. Returns `None` for anything we can't safely use.
+/// fences, surrounding quotes, multi-line reasoning preambles, and
+/// case variations on the icon keyword. Returns `None` for anything
+/// we can't safely use.
 fn parse_response(raw: &str) -> Option<(String, TabIconKind)> {
-    let line = raw
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty() && !l.starts_with("```"))?;
+    // Reasoning models (Kimi K2.6, DeepSeek-R1, …) often emit a
+    // multi-line answer like:
+    //   Let me think about this tab.
+    //   The user is auditing disk usage.
+    //   Disk audit|terminal
+    // …so we walk every line and pick the first one that parses
+    // to a valid LABEL|ICON pair, instead of demanding the answer
+    // be on the first non-empty non-fence line.
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("```") {
+            continue;
+        }
+        if let Some(parsed) = parse_label_icon_line(line) {
+            return Some(parsed);
+        }
+    }
+    None
+}
 
+fn parse_label_icon_line(line: &str) -> Option<(String, TabIconKind)> {
     let (label_part, icon_part) = line.split_once('|')?;
 
     let label = label_part
@@ -487,19 +504,18 @@ fn parse_response(raw: &str) -> Option<(String, TabIconKind)> {
         .trim_matches(|c: char| c == '"' || c == '\'')
         .trim()
         .to_string();
-    if label.is_empty() {
+    if label.is_empty() || label.contains('\n') {
         return None;
     }
-    if label.contains('\n') {
-        return None;
-    }
-    // Reject obviously bad labels.
+    // "Shell|terminal" was the previous prompt's "I don't know"
+    // sentinel. The current prompt no longer asks for it, but
+    // older cached responses or prompt variants might still hit
+    // this — keep the rejection so we fall back to the heuristic
+    // instead of literally rendering "Shell".
     let lower = label.to_ascii_lowercase();
-    if lower == "tab" || lower == "shell" && icon_part.trim().eq_ignore_ascii_case("terminal") {
-        // "Shell|terminal" is the model's "I don't know" fallback
-        // per the prompt; treat that as no-result so we keep the
-        // heuristic name (which knows the cwd basename, etc.)
-        // instead of literally rendering "Shell".
+    if lower == "tab"
+        || (lower == "shell" && icon_part.trim().eq_ignore_ascii_case("terminal"))
+    {
         return None;
     }
 
@@ -531,6 +547,27 @@ mod tests {
         let (label, icon) = parse_response(raw).unwrap();
         assert_eq!(label, "Logs");
         assert_eq!(icon, TabIconKind::BookOpen);
+    }
+
+    #[test]
+    fn parse_skips_reasoning_preamble() {
+        // Reasoning models emit a multi-line answer where the
+        // useful LABEL|ICON line isn't the first one. Verify the
+        // parser walks past the preamble.
+        let raw = "Let me think about this tab.\nThe user is auditing disk usage.\nDisk audit|terminal";
+        let (label, icon) = parse_response(raw).unwrap();
+        assert_eq!(label, "Disk audit");
+        assert_eq!(icon, TabIconKind::Terminal);
+    }
+
+    #[test]
+    fn parse_skips_reasoning_with_pipe_in_preamble() {
+        // Preamble contains a '|' that doesn't validate — the
+        // parser should keep walking instead of erroring.
+        let raw = "Step 1 | inspect title.\nStep 2 | inspect cwd.\nMonitor|pulse";
+        let (label, icon) = parse_response(raw).unwrap();
+        assert_eq!(label, "Monitor");
+        assert_eq!(icon, TabIconKind::Pulse);
     }
 
     #[test]
