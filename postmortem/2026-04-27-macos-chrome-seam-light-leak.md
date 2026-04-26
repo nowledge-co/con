@@ -12,7 +12,7 @@ The first attempted fix painted GPUI seam mattes during specific transitions. Th
 
 ## Fix applied
 
-Each macOS Ghostty wrapper now owns four tiny native sibling `NSView` seam guards around the embedded terminal view. They are positioned below GPUI chrome and colored from the active terminal background plus terminal opacity, so fast-moving agent-panel, input-bar, and vertical-tab seams have a stable native underlay. The terminal view's logical size, grid size, transparency settings, blur settings, and all non-macOS paths remain unchanged.
+Each macOS Ghostty wrapper now owns four native sibling `NSView` seam guards around the embedded terminal view. They are positioned below GPUI chrome and colored from the active terminal background plus terminal opacity, so fast-moving agent-panel, input-bar, and vertical-tab seams have a stable native underlay. The guards are hidden in the steady state and only expand while chrome is moving, avoiding permanent hard borders. The terminal view's logical size, grid size, transparency settings, blur settings, and all non-macOS paths remain unchanged.
 
 ## What we learned
 

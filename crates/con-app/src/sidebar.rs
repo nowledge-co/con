@@ -249,6 +249,10 @@ impl SessionSidebar {
         matches!(self.mode, PanelMode::Pinned)
     }
 
+    pub fn is_width_animating(&self) -> bool {
+        self.width_motion.is_animating()
+    }
+
     /// Width the panel currently occupies in the workspace flex row.
     /// Tweens between RAIL_WIDTH and PANEL_WIDTH during pin/unpin.
     /// Hover cards float over the terminal area and never contribute

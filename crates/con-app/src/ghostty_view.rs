@@ -47,7 +47,7 @@ const NS_VIEW_HEIGHT_SIZABLE: usize = 1 << 4;
 #[cfg(target_os = "macos")]
 const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
 #[cfg(target_os = "macos")]
-const NATIVE_SEAM_COVER_PT: f64 = 3.0;
+const MIN_VISIBLE_NATIVE_SEAM_COVER_PT: f64 = 0.5;
 
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
@@ -111,6 +111,8 @@ pub struct GhosttyView {
     seam_views: [id; 4],
     #[cfg(target_os = "macos")]
     seam_background: NativeSeamBackground,
+    #[cfg(target_os = "macos")]
+    native_seam_cover_width: f64,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -171,6 +173,8 @@ impl GhosttyView {
                 b: 0.0,
                 a: 1.0,
             },
+            #[cfg(target_os = "macos")]
+            native_seam_cover_width: 0.0,
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
@@ -352,6 +356,23 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
+    pub fn set_native_seam_cover_width(&mut self, cover_width: f64) {
+        let cover_width = cover_width.max(0.0);
+        if (self.native_seam_cover_width - cover_width).abs() <= f64::EPSILON {
+            return;
+        }
+        self.native_seam_cover_width = cover_width;
+        if let Some(host_view) = self.host_view {
+            unsafe {
+                let frame: NSRect = msg_send![host_view, frame];
+                self.update_native_seam_frames(frame);
+            }
+        } else {
+            self.sync_native_seam_visibility();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     fn create_native_seam_views(parent_nsview: id, gpui_nsview: id) -> [id; 4] {
         let mut seam_views = [std::ptr::null_mut(); 4];
         unsafe {
@@ -407,7 +428,7 @@ impl GhosttyView {
             return;
         }
 
-        let seam = NATIVE_SEAM_COVER_PT;
+        let seam = self.native_seam_cover_width;
         let x = terminal_frame.origin.x;
         let y = terminal_frame.origin.y;
         let width = terminal_frame.size.width.max(1.0);
@@ -435,6 +456,22 @@ impl GhosttyView {
         unsafe {
             for (seam_view, frame) in self.seam_views.iter().zip(frames) {
                 let _: () = msg_send![*seam_view, setFrame:frame];
+            }
+        }
+        self.sync_native_seam_visibility();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_native_seam_visibility(&self) {
+        let visible = self.native_view_visible.get()
+            && !self.awaiting_first_layout_visibility
+            && self.native_seam_cover_width > MIN_VISIBLE_NATIVE_SEAM_COVER_PT;
+        let hidden = if visible { NO } else { YES };
+        unsafe {
+            for seam_view in self.seam_views {
+                if !seam_view.is_null() {
+                    let _: () = msg_send![seam_view, setHidden:hidden];
+                }
             }
         }
     }
@@ -820,11 +857,7 @@ impl GhosttyView {
                 let effective_visible = visible && !self.awaiting_first_layout_visibility;
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![host_view, setHidden:hidden];
-                for seam_view in self.seam_views {
-                    if !seam_view.is_null() {
-                        let _: () = msg_send![seam_view, setHidden:hidden];
-                    }
-                }
+                self.sync_native_seam_visibility();
             }
         }
     }

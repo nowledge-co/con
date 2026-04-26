@@ -10,7 +10,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Interface, macOS**
 
-- Reduced light-background flashes at fast macOS chrome seams by adding tiny native seam guards around embedded terminal views, covering agent-panel, input-bar, and vertical-tab sidebar transitions without changing Windows/Linux rendering.
+- Reduced light-background flashes at fast macOS chrome seams with transient native seam guards around embedded terminal views, covering agent-panel, input-bar, and vertical-tab sidebar motion without adding visible steady-state borders or changing Windows/Linux rendering.
 
 ------
 

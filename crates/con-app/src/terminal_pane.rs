@@ -124,6 +124,15 @@ impl TerminalPane {
         self.entity.read(cx).set_visible(visible);
     }
 
+    pub fn set_native_seam_cover_width(&self, width: f64, cx: &mut App) {
+        #[cfg(target_os = "macos")]
+        self.entity
+            .update(cx, |view, _| view.set_native_seam_cover_width(width));
+
+        #[cfg(not(target_os = "macos"))]
+        let _ = (width, cx);
+    }
+
     pub fn shutdown_surface(&self, cx: &mut App) {
         self.entity.update(cx, |view, _| view.shutdown_surface());
     }

@@ -21,6 +21,8 @@ const TERMINAL_MIN_CONTENT_WIDTH: f32 = 360.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
+#[cfg(target_os = "macos")]
+const MACOS_ACTIVE_NATIVE_SEAM_COVER_PT: f64 = 28.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
@@ -363,6 +365,8 @@ pub struct ConWorkspace {
     /// Last macOS content-resize increment applied to the window, in 1/1000th points.
     #[cfg(target_os = "macos")]
     last_window_resize_increment_millipoints: Option<(u32, u32)>,
+    #[cfg(target_os = "macos")]
+    active_native_seam_cover_width: f64,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -1244,6 +1248,8 @@ impl ConWorkspace {
             last_ghostty_wake_generation,
             #[cfg(target_os = "macos")]
             last_window_resize_increment_millipoints: None,
+            #[cfg(target_os = "macos")]
+            active_native_seam_cover_width: 0.0,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             control_request_rx,
@@ -1283,6 +1289,22 @@ impl ConWorkspace {
             cx,
         )
     }
+
+    #[cfg(target_os = "macos")]
+    fn sync_active_native_seam_cover_width(&mut self, width: f64, cx: &mut Context<Self>) {
+        if (self.active_native_seam_cover_width - width).abs() <= f64::EPSILON {
+            return;
+        }
+        self.active_native_seam_cover_width = width;
+        for tab in &self.tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                terminal.set_native_seam_cover_width(width, cx);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn sync_active_native_seam_cover_width(&mut self, _width: f64, _cx: &mut Context<Self>) {}
 
     fn horizontal_tabs_visible(&self) -> bool {
         matches!(self.tabs_orientation, TabsOrientation::Horizontal) && self.tabs.len() > 1
@@ -6975,6 +6997,21 @@ impl Render for ConWorkspace {
         let tab_strip_progress = self.tab_strip_motion.value(window);
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
+        let sidebar_transitioning =
+            self.vertical_tabs_active() && self.sidebar.read(cx).is_width_animating();
+        let chrome_seam_moving =
+            agent_panel_transitioning || input_bar_transitioning || sidebar_transitioning;
+        #[cfg(target_os = "macos")]
+        self.sync_active_native_seam_cover_width(
+            if chrome_seam_moving || self.agent_panel_drag.is_some() {
+                MACOS_ACTIVE_NATIVE_SEAM_COVER_PT
+            } else {
+                0.0
+            },
+            cx,
+        );
+        #[cfg(not(target_os = "macos"))]
+        let _ = chrome_seam_moving;
 
         // Render the vertical-tabs hover-card overlay up front so it
         // takes the (re-entrant) sidebar borrow before `theme` claims
