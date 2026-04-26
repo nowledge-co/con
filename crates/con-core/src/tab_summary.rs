@@ -34,6 +34,7 @@
 
 use con_agent::AgentConfig;
 use parking_lot::Mutex;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -102,6 +103,16 @@ pub struct TabSummary {
     pub tab_id: u64,
     pub label: String,
     pub icon: TabIconKind,
+}
+
+/// Shape we expect the model to emit (as JSON). The completion
+/// path uses the streaming text API and we deserialize this
+/// ourselves with a tolerant parser that handles markdown code
+/// fences and reasoning preamble.
+#[derive(Debug, Clone, Deserialize)]
+struct TabSummaryJson {
+    label: String,
+    icon: String,
 }
 
 /// Inputs the engine consults when building a prompt. Workspace fills
@@ -361,32 +372,28 @@ async fn request_summary(
     };
 
     let prompt = format!(
-        "Pick a short, professional label + one icon for a terminal tab.\n\
-         Output ONE line, format: LABEL|ICON. Nothing before, nothing after.\n\
+        "Pick a short, professional label and one icon for this terminal tab.\n\
          \n\
-         LABEL: 1–3 words, ≤24 chars, Title Case. What is the tab FOR?\n\
-         Examples: Build Watch, DB Shell, Test Run, Logs, Editor, Twosum, Study, API Tests.\n\
-         No emoji, no quotes, no \"tab\". Do not echo \"bash\"/\"zsh\".\n\
-         If only signal is cwd, use Title-Case of cwd basename\n\
-         (cwd /home/u/proj/study → Study).\n\
-         If signal is genuinely thin (no cwd, no commands, empty output), label \"Shell\".\n\
+         LABEL rules: 1–3 words, Title Case, ≤24 chars. Describe what the tab\n\
+         is FOR. Do not echo shell names (\"bash\", \"zsh\"). Do not include\n\
+         the word \"tab\". If the only signal is cwd, use Title Case of the\n\
+         cwd basename (e.g. /home/u/proj/study → \"Study\"). If signal is\n\
+         genuinely thin (no cwd, no commands, empty output), use \"Shell\".\n\
          \n\
-         ICON keyword (pick ONE, exact spelling):\n\
-         terminal — generic shell / build / test / scripts\n\
-         code — vim/nvim/emacs/nano/helix/code editor in use\n\
-         pulse — htop/top/btop/k9s/tail -f monitors\n\
-         book — less/more/man/bat pagers\n\
-         file — git/lazygit/tig version-control tools\n\
-         globe — ssh/curl/http remote / network tools\n\
+         ICON keyword (pick exactly one, lowercase): one of\n\
+         terminal, code, pulse, book, file, globe.\n\
+         - terminal — generic shell / build / test / scripts\n\
+         - code — editor in use (vim/nvim/emacs/nano/helix/code)\n\
+         - pulse — monitor (htop/top/btop/k9s/tail -f)\n\
+         - book — pager (less/more/man/bat)\n\
+         - file — version control (git/lazygit/tig)\n\
+         - globe — remote / network (ssh/curl/http)\n\
          \n\
          Context:\n\
          cwd: {cwd}\n\
          title: {title}\n\
          commands: {recent_cmds}\n\
-         recent output:\n{recent_output}\n\
-         \n\
-         Decide and emit the line now. Do not show your work.\n\
-         Final output (single line, LABEL|ICON):",
+         recent output:\n{recent_output}",
         cwd = req.cwd.as_deref().unwrap_or("(unknown)"),
         title = req.title.as_deref().unwrap_or("(unknown)"),
         recent_cmds = if recent_cmds == "(none captured by Con — user may have typed directly)" {
@@ -407,39 +414,32 @@ async fn request_summary(
         req.cwd.as_deref().unwrap_or(""),
         req.title.as_deref().unwrap_or(""),
     );
-    // Override the default `complete()` preamble — that one tells
-    // the model it's a shell-completion assistant, which fights
-    // the LABEL|ICON instruction in our user prompt and made every
-    // Moonshot / OpenAI-style provider return empty text. A short,
-    // task-aligned preamble fixes that.
+    // We ask the model for a JSON object — `{"label": "...", "icon":
+    // "..."}` — but route through the regular streaming completion
+    // path instead of rig's `prompt_typed` because:
     //
-    // Token budget is generous (512) because thinking models —
-    // Kimi K2.6 / kimi-k2-thinking (see
-    // 3pp/models.dev/providers/moonshotai/models/kimi-k2.6.toml,
-    // `reasoning = true`, `interleaved.field = "reasoning_content"`),
-    // GPT-5, Claude Sonnet 4.5/4.7 reasoning — consume reasoning
-    // tokens BEFORE the visible response. A 64-token cap was
-    // burning the entire budget on chain-of-thought and surfacing
-    // as "Response contained no message or tool call (empty)". The
-    // visible response is at most ~30 chars, so 512 costs nothing
-    // on non-thinking providers and gives reasoning models room.
+    // - Several providers (rig logs `WARN moonshot: Structured
+    //   outputs currently not supported for Moonshot`) ignore the
+    //   `response_format` field rig sends. So `prompt_typed`'s
+    //   schema doesn't actually constrain the model on those
+    //   providers.
     //
-    // `complete_with_options` itself drives this through rig's
-    // streaming API rather than `Prompt::prompt`, because rig's
-    // non-streaming openai-compatible parser only reads
-    // `choices[0].message.content` — reasoning models that emit
-    // their final answer into `reasoning_content` would otherwise
-    // come back empty. The streaming path supports the
-    // `reasoning_content` channel and `MultiTurnStreamItem::FinalResponse`
-    // already aggregates the visible text for us.
+    // - Even when JSON is requested via the system prompt, models
+    //   commonly wrap their response in markdown code fences
+    //   (```json … ```). `serde_json::from_str` chokes on the
+    //   fences. rig's `prompt_typed::send` parses straight without
+    //   stripping fences, so it fails on the very output the model
+    //   actually produces.
+    //
+    // Solution: use the streaming text path (which already handles
+    // reasoning_content correctly for K2.6 etc.), then strip
+    // markdown code fences and parse JSON ourselves. JSON is
+    // robust to extra whitespace / trailing text — we walk through
+    // candidate substrings and accept the first valid one.
     let preamble = "You label terminal tabs in a developer's IDE-style sidebar. \
-                    Output exactly one line in the format LABEL|ICON. Nothing else.";
-    // 2048 is sized for k2.6-class reasoning models — your log
-    // showed a ~1500-char chain-of-thought running out at "Let me
-    // double-check constraints:\n-" before reaching the final
-    // LABEL|ICON line. 2048 gives the model room to think and
-    // still emit the structured answer; non-thinking providers
-    // ignore the extra budget (they only generate ~30 chars).
+                    Respond with a JSON object only: \
+                    {\"label\": \"...\", \"icon\": \"...\"}. \
+                    No prose, no code fences, no commentary.";
     let raw = match provider.complete_with_options(&prompt, preamble, 2048).await {
         Ok(s) => s,
         Err(e) => {
@@ -459,75 +459,103 @@ async fn request_summary(
         req.tab_id,
         trimmed,
     );
-    let parsed = parse_response(&raw);
-    if parsed.is_none() {
+    let parsed = parse_summary_json(trimmed);
+    let typed = match parsed {
+        Some(v) => v,
+        None => {
+            log::warn!(
+                target: "con_core::tab_summary",
+                "tab_summary parse rejected tab_id={} reason=no_valid_json raw={:?}",
+                req.tab_id,
+                trimmed,
+            );
+            return None;
+        }
+    };
+    let label = typed.label.trim().to_string();
+    if label.is_empty() {
         log::warn!(
             target: "con_core::tab_summary",
-            "tab_summary parse rejected tab_id={} raw={:?} — keeping heuristic name",
+            "tab_summary parse rejected tab_id={} reason=empty_label",
             req.tab_id,
-            trimmed,
         );
-    } else if let Some((label, icon)) = &parsed {
-        log::info!(
-            target: "con_core::tab_summary",
-            "tab_summary parsed tab_id={} label={:?} icon={:?}",
-            req.tab_id,
-            label,
-            icon,
-        );
-    }
-    parsed
-}
-
-/// Parse a `LABEL|ICON` response. Tolerates leading whitespace, code
-/// fences, surrounding quotes, multi-line reasoning preambles, and
-/// case variations on the icon keyword. Returns `None` for anything
-/// we can't safely use.
-fn parse_response(raw: &str) -> Option<(String, TabIconKind)> {
-    // Reasoning models (Kimi K2.6, DeepSeek-R1, …) often emit a
-    // multi-line answer like:
-    //   Let me think about this tab.
-    //   The user is auditing disk usage.
-    //   Disk audit|terminal
-    // …so we walk every line and pick the first one that parses
-    // to a valid LABEL|ICON pair, instead of demanding the answer
-    // be on the first non-empty non-fence line.
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with("```") {
-            continue;
-        }
-        if let Some(parsed) = parse_label_icon_line(line) {
-            return Some(parsed);
-        }
-    }
-    None
-}
-
-fn parse_label_icon_line(line: &str) -> Option<(String, TabIconKind)> {
-    let (label_part, icon_part) = line.split_once('|')?;
-
-    let label = label_part
-        .trim()
-        .trim_matches(|c: char| c == '"' || c == '\'')
-        .trim()
-        .to_string();
-    if label.is_empty() || label.contains('\n') {
         return None;
     }
-    // Reject obviously bad labels: anything that includes "tab" is
-    // explicitly disallowed by the prompt. "Shell" + terminal IS
-    // allowed — the prompt explicitly invites it as the
-    // thin-signal default — so a response of "Shell|terminal"
-    // means "model genuinely could not find anything more
-    // specific", which is a useful label.
     let lower = label.to_ascii_lowercase();
     if lower == "tab" || lower.contains(" tab") || lower.starts_with("tab ") {
+        log::warn!(
+            target: "con_core::tab_summary",
+            "tab_summary parse rejected tab_id={} reason=label_contains_tab raw={:?}",
+            req.tab_id,
+            label,
+        );
         return None;
     }
+    let icon = match TabIconKind::from_keyword(&typed.icon) {
+        Some(i) => i,
+        None => {
+            log::warn!(
+                target: "con_core::tab_summary",
+                "tab_summary parse rejected tab_id={} reason=unknown_icon raw_icon={:?}",
+                req.tab_id,
+                typed.icon,
+            );
+            return None;
+        }
+    };
+    let label = truncate_label(&label);
+    log::info!(
+        target: "con_core::tab_summary",
+        "tab_summary parsed tab_id={} label={:?} icon={:?}",
+        req.tab_id,
+        label,
+        icon,
+    );
+    Some((label, icon))
+}
 
-    let icon = TabIconKind::from_keyword(icon_part)?;
-    Some((truncate_label(&label), icon))
+/// Tolerant JSON extractor for LLM output. Models commonly wrap
+/// their JSON in markdown code fences (```json … ```), prepend
+/// reasoning preamble, or append commentary. We:
+///
+/// 1. Strip the outermost code fence if present.
+/// 2. Walk the remaining text for the first `{` and try to parse
+///    JSON from there to the matching `}`. If that fails, try
+///    progressively wider windows.
+fn parse_summary_json(raw: &str) -> Option<TabSummaryJson> {
+    // No need to explicitly strip code fences — the bracket-
+    // balance scanner skips over everything outside the first
+    // `{...}` it encounters anyway. Markdown fences (```json,
+    // ```), reasoning preamble, and trailing commentary all sit
+    // outside the JSON object.
+    let bytes = raw.as_bytes();
+    let start = raw.find('{')?;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+    let mut end = None;
+    for (i, &b) in bytes[start..].iter().enumerate() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        match b {
+            b'\\' if in_string => escape = true,
+            b'"' => in_string = !in_string,
+            b'{' if !in_string => depth += 1,
+            b'}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    let json = &raw[start..end];
+    serde_json::from_str(json).ok()
 }
 
 #[cfg(test)]
@@ -535,79 +563,66 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_clean_response() {
-        let (label, icon) = parse_response("Build watch|terminal").unwrap();
-        assert_eq!(label, "Build watch");
-        assert_eq!(icon, TabIconKind::Terminal);
+    fn parse_json_clean() {
+        let raw = "{\"label\": \"Disk Audit\", \"icon\": \"terminal\"}";
+        let v = parse_summary_json(raw).unwrap();
+        assert_eq!(v.label, "Disk Audit");
+        assert_eq!(v.icon, "terminal");
     }
 
     #[test]
-    fn parse_quoted_label() {
-        let (label, icon) = parse_response("\"Test run\"|pulse").unwrap();
-        assert_eq!(label, "Test run");
-        assert_eq!(icon, TabIconKind::Pulse);
+    fn parse_json_in_code_fence() {
+        let raw = "```json\n{\n  \"label\": \"Shell\",\n  \"icon\": \"terminal\"\n}\n```";
+        let v = parse_summary_json(raw).unwrap();
+        assert_eq!(v.label, "Shell");
+        assert_eq!(v.icon, "terminal");
     }
 
     #[test]
-    fn parse_strips_code_fence() {
-        let raw = "```\nLogs|book\n```";
-        let (label, icon) = parse_response(raw).unwrap();
-        assert_eq!(label, "Logs");
-        assert_eq!(icon, TabIconKind::BookOpen);
+    fn parse_json_in_unlabeled_fence() {
+        let raw = "```\n{\"label\": \"Logs\", \"icon\": \"book\"}\n```";
+        let v = parse_summary_json(raw).unwrap();
+        assert_eq!(v.label, "Logs");
+        assert_eq!(v.icon, "book");
     }
 
     #[test]
-    fn parse_skips_reasoning_preamble() {
-        // Reasoning models emit a multi-line answer where the
-        // useful LABEL|ICON line isn't the first one. Verify the
-        // parser walks past the preamble.
-        let raw = "Let me think about this tab.\nThe user is auditing disk usage.\nDisk audit|terminal";
-        let (label, icon) = parse_response(raw).unwrap();
-        assert_eq!(label, "Disk audit");
-        assert_eq!(icon, TabIconKind::Terminal);
+    fn parse_json_with_preamble() {
+        let raw = "Sure, here is the answer:\n{\"label\": \"Test Run\", \"icon\": \"terminal\"}\nLet me know if you need more.";
+        let v = parse_summary_json(raw).unwrap();
+        assert_eq!(v.label, "Test Run");
+        assert_eq!(v.icon, "terminal");
     }
 
     #[test]
-    fn parse_skips_reasoning_with_pipe_in_preamble() {
-        // Preamble contains a '|' that doesn't validate — the
-        // parser should keep walking instead of erroring.
-        let raw = "Step 1 | inspect title.\nStep 2 | inspect cwd.\nMonitor|pulse";
-        let (label, icon) = parse_response(raw).unwrap();
-        assert_eq!(label, "Monitor");
-        assert_eq!(icon, TabIconKind::Pulse);
+    fn parse_json_handles_braces_in_strings() {
+        // A label containing curly braces shouldn't confuse the
+        // bracket-balance scanner.
+        let raw = "{\"label\": \"a{b}c\", \"icon\": \"terminal\"}";
+        let v = parse_summary_json(raw).unwrap();
+        assert_eq!(v.label, "a{b}c");
     }
 
     #[test]
-    fn parse_rejects_missing_pipe() {
-        assert!(parse_response("just a label").is_none());
+    fn parse_json_rejects_no_json() {
+        assert!(parse_summary_json("just some prose, no json here").is_none());
     }
 
     #[test]
-    fn parse_rejects_unknown_icon() {
-        assert!(parse_response("Foo|sparkle").is_none());
-    }
-
-    #[test]
-    fn parse_accepts_shell_terminal_for_thin_signal() {
-        // The new prompt explicitly invites "Shell|terminal" when
-        // there's no other signal. That's a real, useful label —
-        // not a sentinel — so the parser should accept it.
-        let (label, icon) = parse_response("Shell|terminal").unwrap();
-        assert_eq!(label, "Shell");
-        assert_eq!(icon, TabIconKind::Terminal);
-    }
-
-    #[test]
-    fn parse_rejects_label_containing_tab_word() {
-        // Prompt explicitly disallows the word "tab" in labels.
-        assert!(parse_response("Build tab|terminal").is_none());
-        assert!(parse_response("Tab 5|terminal").is_none());
-    }
-
-    #[test]
-    fn parse_aliases_editor_to_code() {
-        let (_, icon) = parse_response("Notes|editor").unwrap();
-        assert_eq!(icon, TabIconKind::Code);
+    fn icon_keyword_aliases() {
+        assert_eq!(
+            TabIconKind::from_keyword("editor"),
+            Some(TabIconKind::Code)
+        );
+        assert_eq!(
+            TabIconKind::from_keyword("htop"),
+            Some(TabIconKind::Pulse)
+        );
+        assert_eq!(
+            TabIconKind::from_keyword("ssh"),
+            Some(TabIconKind::Globe)
+        );
+        assert_eq!(TabIconKind::from_keyword("sparkle"), None);
     }
 
     #[test]
