@@ -38,6 +38,7 @@ In short:
 - Added inline render caches for paragraphs, headings, and table cells so repeated rich-render passes can reuse flattened `SharedString` + `TextRun` output instead of rebuilding those transforms every time.
 - Moved assistant message bodies behind their own markdown-document entities so unrelated agent-panel updates do not force a full message-body rerender.
 - Moved whole assistant rows behind their own entities as well, so old restored sessions and live token streaming only rerender the affected assistant row instead of the parent panel reconstructing every assistant message row on each update.
+- Moved the transcript itself off a single scrollable flex column and onto GPUI's variable-height `ListState` path. That lets GPUI virtualize visibility and measurement at the conversation layer instead of treating the whole chat history as one giant document surface.
 - Kept whole-document view caching out of the final design. A prior attempt at caching the entire markdown subtree at the wrong boundary caused overlap/layout regressions with tool cards.
 - Collapsed fenced code blocks from one GPUI row per line down to one highlighted `StyledText` layout per block, which sharply reduces render-tree size for long command/code-heavy replies.
 
@@ -49,6 +50,7 @@ This keeps the semantic styling while collapsing the render tree back down to on
 - “Pretty” inline chips are not free. For long-form assistant output, they are the wrong primitive if they require many independently laid out elements.
 - GPUI view caching is not a universal answer. Caching an intrinsic-height rich-text subtree at the wrong boundary can create layout bugs. Data-transform caches are the safer first move.
 - Entity isolation is often a better boundary than cached views for large document subtrees. It narrows invalidation without lying about layout.
+- Transcript virtualization matters as much as markdown block optimization. If the whole conversation still lives in one scrollable flex tree, cheaper rows alone will not get the app to a responsive scroll path.
 - If a panel still feels slow after data/document caching, the next question should be “is the parent surface rerendering too many siblings?” not “can we hide more content by default?”
 - In chat surfaces, dense markdown should prefer:
   - parsed IR caching
