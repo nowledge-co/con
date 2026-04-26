@@ -97,17 +97,14 @@ impl GhosttyView {
     ) -> Self {
         let terminal = Arc::new(GhosttyTerminal::new());
         let (wake_tx, mut wake_rx) = unbounded::<()>();
-        let wake_for_pty: Arc<dyn Fn() + Send + Sync> = {
-            let wake_tx = wake_tx.clone();
-            Arc::new(move || {
-                let _ = wake_tx.unbounded_send(());
-            })
-        };
+        let wake_for_pty: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = wake_tx.unbounded_send(());
+        });
         terminal.set_wake_callback(Some(wake_for_pty));
 
         cx.spawn(async move |this, cx| {
             while wake_rx.next().await.is_some() {
-                while wake_rx.try_recv().is_ok() {}
+                while let Ok(Some(_)) = wake_rx.try_next() {}
                 if this
                     .update(cx, |view, cx| {
                         let mut changed = false;

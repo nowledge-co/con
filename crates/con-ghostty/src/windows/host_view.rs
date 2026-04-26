@@ -24,6 +24,7 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
 use super::conpty::{ConPty, PtySize};
+use super::profile::{perf_trace_enabled, perf_trace_verbose};
 use super::render::{RenderOutcome, Renderer, RendererConfig, Selection, ThemeColors};
 use super::vt::{ScreenSnapshot, VtScreen};
 
@@ -77,6 +78,7 @@ pub struct MouseEventMods {
 
 impl RenderSession {
     const LOW_LATENCY_BURST_WINDOW: Duration = Duration::from_millis(750);
+    const UNCHANGED_FRAME_LOG_THRESHOLD_MS: f64 = 2.0;
 
     /// Build a renderer + VT parser + ConPTY child shell.
     ///
@@ -182,7 +184,7 @@ impl RenderSession {
             let should_log = perf_trace_verbose()
                 || !matches!(outcome, RenderOutcome::Unchanged)
                 || prefer_latest
-                || total_ms >= 2.0;
+                || total_ms >= Self::UNCHANGED_FRAME_LOG_THRESHOLD_MS;
             if should_log {
                 log::info!(
                     target: "con::perf",
@@ -515,20 +517,6 @@ impl RenderSession {
             None => false,
         }
     }
-}
-
-fn perf_trace_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
-    })
-}
-
-fn perf_trace_verbose() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var_os("CON_GHOSTTY_PROFILE_VERBOSE").is_some_and(|v| !v.is_empty() && v != "0")
-    })
 }
 
 fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
