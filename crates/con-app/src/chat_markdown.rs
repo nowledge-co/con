@@ -594,13 +594,13 @@ impl ChatMarkdownBlockView {
 
     fn render_rich_svg_block(
         &mut self,
-        index: usize,
+        path: &[usize],
         block: &MarkdownBlock,
         style: &ChatMarkdownStyle<'_>,
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let key = rich_svg_key_for_block(block, style)?;
-        let render_id = rich_svg_render_id(index, &key);
+        let render_id = rich_svg_render_id(path, &key);
         let (pending, image) = self.ensure_rich_svg_render(key, cx);
         match block {
             MarkdownBlock::Mermaid { code, scale } => Some(render_mermaid_block(
@@ -630,15 +630,33 @@ impl ChatMarkdownBlockView {
         table_scroll_handle: Option<&ScrollHandle>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let mut path = vec![index];
+        self.render_block_at_path(block, &mut path, style, table_scroll_handle, cx)
+    }
+
+    fn render_block_at_path(
+        &mut self,
+        block: &MarkdownBlock,
+        path: &mut Vec<usize>,
+        style: &ChatMarkdownStyle<'_>,
+        table_scroll_handle: Option<&ScrollHandle>,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let index = path.last().copied().unwrap_or(0);
         match block {
             MarkdownBlock::Mermaid { .. } | MarkdownBlock::MathBlock { .. } => self
-                .render_rich_svg_block(index, block, style, cx)
+                .render_rich_svg_block(path, block, style, cx)
                 .unwrap_or_else(|| render_block(block, index, style, table_scroll_handle)),
             MarkdownBlock::BlockQuote(blocks) => {
                 let children = blocks
                     .iter()
                     .enumerate()
-                    .map(|(idx, block)| self.render_block(block, idx, style, None, cx))
+                    .map(|(idx, block)| {
+                        path.push(idx);
+                        let rendered = self.render_block_at_path(block, path, style, None, cx);
+                        path.pop();
+                        rendered
+                    })
                     .collect::<Vec<_>>();
 
                 render_blockquote_children(children, style)
@@ -650,12 +668,19 @@ impl ChatMarkdownBlockView {
             } => {
                 let item_children = items
                     .iter()
-                    .map(|item_blocks| {
+                    .enumerate()
+                    .map(|(item_idx, item_blocks)| {
                         item_blocks
                             .iter()
                             .enumerate()
                             .map(|(nested_idx, nested_block)| {
-                                self.render_block(nested_block, nested_idx, style, None, cx)
+                                path.push(item_idx);
+                                path.push(nested_idx);
+                                let rendered =
+                                    self.render_block_at_path(nested_block, path, style, None, cx);
+                                path.pop();
+                                path.pop();
+                                rendered
                             })
                             .collect::<Vec<_>>()
                     })
@@ -1757,7 +1782,7 @@ fn mermaid_source_for_theme(source: &str, theme_mode: RichSvgThemeMode) -> Cow<'
                 "#F8FAFC"
             };
             let out = rewritten.get_or_insert_with(|| source[..cursor].to_string());
-            let line_without_newline = line.trim_end_matches('\n');
+            let line_without_newline = line.trim_end_matches(|ch| ch == '\r' || ch == '\n');
             out.push_str(line_without_newline);
             out.push_str(",color:");
             out.push_str(text_color);
@@ -1876,14 +1901,19 @@ fn rich_svg_key_for_block(
     }
 }
 
-fn rich_svg_render_id(index: usize, key: &RichSvgRenderKey) -> SharedString {
+fn rich_svg_render_id(path: &[usize], key: &RichSvgRenderKey) -> SharedString {
     let mut hasher = DefaultHasher::new();
     key.hash(&mut hasher);
     let kind = match key.kind {
         RichSvgRenderKind::Mermaid => "mermaid",
         RichSvgRenderKind::Math => "math",
     };
-    SharedString::from(format!("chat-md-{kind}-{index}-{:x}", hasher.finish()))
+    let path = path
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(".");
+    SharedString::from(format!("chat-md-{kind}-{path}-{:x}", hasher.finish()))
 }
 
 fn rich_svg_render_scale(key: &RichSvgRenderKey) -> f32 {
@@ -2472,6 +2502,14 @@ mod tests {
             RichSvgThemeMode::Dark,
         );
         assert!(styled_dark_source.contains("color:#0F172A"));
+        let crlf_styled_dark_source = mermaid_source_for_theme(
+            "flowchart TD\r\n  A{ i < n? }\r\n  style A fill:#e1f5fe,stroke:#03a9f4\r\n",
+            RichSvgThemeMode::Dark,
+        );
+        assert!(
+            crlf_styled_dark_source.contains("style A fill:#e1f5fe,stroke:#03a9f4,color:#0F172A\n")
+        );
+        assert!(!crlf_styled_dark_source.contains("\r,color:"));
 
         let dark_mermaid = mermaid_rs_renderer::render_with_options(
             styled_dark_source.as_ref(),
@@ -2495,6 +2533,20 @@ mod tests {
         let dark_math = math_svg_for_theme(math, RichSvgThemeMode::Dark);
         assert!(dark_math.contains("color=\"#F8FAFC\""));
         assert!(dark_math.contains("fill=\"#F8FAFC\""));
+    }
+
+    #[test]
+    fn rich_svg_render_ids_include_nested_block_path() {
+        let key = RichSvgRenderKey {
+            kind: RichSvgRenderKind::Mermaid,
+            source: "flowchart TD\n  A-->B".into(),
+            metric: 100,
+            theme_mode: RichSvgThemeMode::Light,
+        };
+
+        let first = rich_svg_render_id(&[0, 0, 0], &key);
+        let second = rich_svg_render_id(&[1, 0, 0], &key);
+        assert_ne!(first, second);
     }
 
     #[test]
