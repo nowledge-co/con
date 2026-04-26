@@ -116,6 +116,12 @@ The renderer should make these rules explicit:
 - nested blocks use a clear but restrained spacing scale
 - prose, thinking text, and trace output can share structure while differing in tone
 
+Performance rule:
+
+- long-form chat content must prefer one text layout with styled runs over per-token element trees
+- inline code inside dense prose, lists, or table cells should not force flex-wrapped chip segmentation at chat-message scale
+- decorative inline-code chips are acceptable for short UI copy, not for large agent replies
+
 ## Migration path
 
 ### Phase 1
