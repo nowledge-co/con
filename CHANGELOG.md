@@ -54,6 +54,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed the command palette scroll behavior on all platforms. Mouse-wheel scrolling and scrollbar dragging no longer snap back to the selected row on every repaint.
 - Reduced agent-panel stalls on session-open, long live responses, and oversized reply expansion by making message markdown and persisted reasoning parse lazily, rendering in-flight replies as cheap plain-text previews, collapsing oversized replies by default, and parsing full reply markdown off the UI thread when opened.
 - Reduced severe hangs when expanding long real-world agent replies in markdown. Inline code inside long prose/table cells now renders through single `StyledText` runs instead of exploding into large flex-wrapped chip trees.
+- Large markdown replies now switch to a document-optimized render mode instead of the chrome-heavier chat markdown path. Expensive replies still open fully, but code blocks and tables render through lower-cardinality text-first layouts to keep the agent panel responsive.
 
 **Terminal — Windows Backend (preview)**
 - Reduced the first-frame flash when splitting a new pane on Windows. Brand-new panes now paint their configured terminal background while the first renderer image is still warming up, instead of briefly showing a transparent hole.
