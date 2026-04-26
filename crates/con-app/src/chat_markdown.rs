@@ -20,10 +20,14 @@ pub enum ChatMarkdownTone {
 
 #[derive(Debug, Clone)]
 enum MarkdownBlock {
-    Paragraph(Vec<MarkdownInline>),
+    Paragraph {
+        inlines: Vec<MarkdownInline>,
+        inline_cache: RefCell<Option<CachedInlineRender>>,
+    },
     Heading {
         level: u8,
         inlines: Vec<MarkdownInline>,
+        inline_cache: RefCell<Option<CachedInlineRender>>,
     },
     CodeBlock {
         language: Option<String>,
@@ -38,7 +42,7 @@ enum MarkdownBlock {
     },
     Table {
         aligns: Vec<MarkdownTableAlign>,
-        rows: Vec<Vec<Vec<MarkdownInline>>>,
+        rows: Vec<Vec<MarkdownTableCell>>,
     },
     Rule,
 }
@@ -46,15 +50,17 @@ enum MarkdownBlock {
 impl PartialEq for MarkdownBlock {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Paragraph(a), Self::Paragraph(b)) => a == b,
+            (Self::Paragraph { inlines: a, .. }, Self::Paragraph { inlines: b, .. }) => a == b,
             (
                 Self::Heading {
                     level: level_a,
                     inlines: inlines_a,
+                    ..
                 },
                 Self::Heading {
                     level: level_b,
                     inlines: inlines_b,
+                    ..
                 },
             ) => level_a == level_b && inlines_a == inlines_b,
             (
@@ -123,6 +129,20 @@ enum MarkdownInline {
     LineBreak,
 }
 
+#[derive(Debug, Clone)]
+struct MarkdownTableCell {
+    inlines: Vec<MarkdownInline>,
+    inline_cache: RefCell<Option<CachedInlineRender>>,
+}
+
+impl PartialEq for MarkdownTableCell {
+    fn eq(&self, other: &Self) -> bool {
+        self.inlines == other.inlines
+    }
+}
+
+impl Eq for MarkdownTableCell {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CodeHighlightCacheKey {
     highlight_theme_ptr: usize,
@@ -134,6 +154,28 @@ struct CodeHighlightCacheKey {
 struct CachedCodeHighlightRuns {
     key: CodeHighlightCacheKey,
     runs: Option<Vec<Vec<TextRun>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InlineRenderCacheKey {
+    font_family: SharedString,
+    font_size_bits: u32,
+    line_height_bits: u32,
+    color: Hsla,
+    font_weight: FontWeight,
+    font_style: FontStyle,
+    underline: Option<UnderlineStyle>,
+    strikethrough: bool,
+    inline_code_background: Hsla,
+    inline_code_text_color: Hsla,
+    link_color: Hsla,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CachedInlineRender {
+    key: InlineRenderCacheKey,
+    text: SharedString,
+    runs: Vec<TextRun>,
 }
 
 struct ChatMarkdownStyle<'a> {
@@ -324,20 +366,25 @@ fn parse_markdown(source: &str) -> Vec<MarkdownBlock> {
     match markdown::to_mdast(source, &ParseOptions::gfm()) {
         Ok(mdast::Node::Root(root)) => root.children.iter().filter_map(parse_block_node).collect(),
         Ok(node) => parse_block_node(&node).into_iter().collect(),
-        Err(_) => vec![MarkdownBlock::Paragraph(vec![MarkdownInline::Text(
-            source.to_string(),
-        )])],
+        Err(_) => vec![MarkdownBlock::Paragraph {
+            inlines: vec![MarkdownInline::Text(source.to_string())],
+            inline_cache: RefCell::new(None),
+        }],
     }
 }
 
 fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
     match node {
         mdast::Node::Paragraph(val) => {
-            Some(MarkdownBlock::Paragraph(parse_inline_nodes(&val.children)))
+            Some(MarkdownBlock::Paragraph {
+                inlines: parse_inline_nodes(&val.children),
+                inline_cache: RefCell::new(None),
+            })
         }
         mdast::Node::Heading(val) => Some(MarkdownBlock::Heading {
             level: val.depth,
             inlines: parse_inline_nodes(&val.children),
+            inline_cache: RefCell::new(None),
         }),
         mdast::Node::Code(raw) => Some(MarkdownBlock::CodeBlock {
             language: raw.lang.clone().filter(|lang| !lang.trim().is_empty()),
@@ -376,7 +423,10 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
                             .iter()
                             .filter_map(|cell| match cell {
                                 mdast::Node::TableCell(cell) => {
-                                    Some(parse_inline_nodes(&cell.children))
+                                    Some(MarkdownTableCell {
+                                        inlines: parse_inline_nodes(&cell.children),
+                                        inline_cache: RefCell::new(None),
+                                    })
                                 }
                                 _ => None,
                             })
@@ -392,8 +442,10 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
         }
         mdast::Node::Html(raw) => {
             let trimmed = raw.value.trim();
-            (!trimmed.is_empty())
-                .then(|| MarkdownBlock::Paragraph(vec![MarkdownInline::Text(trimmed.to_string())]))
+            (!trimmed.is_empty()).then(|| MarkdownBlock::Paragraph {
+                inlines: vec![MarkdownInline::Text(trimmed.to_string())],
+                inline_cache: RefCell::new(None),
+            })
         }
         mdast::Node::Yaml(val) => Some(MarkdownBlock::CodeBlock {
             language: Some("yml".to_string()),
@@ -410,11 +462,12 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
             code: val.value.clone(),
             highlight_cache: RefCell::new(None),
         }),
-        mdast::Node::FootnoteDefinition(def) => Some(MarkdownBlock::Paragraph(
-            std::iter::once(MarkdownInline::Text(format!("[{}]: ", def.identifier)))
+        mdast::Node::FootnoteDefinition(def) => Some(MarkdownBlock::Paragraph {
+            inlines: std::iter::once(MarkdownInline::Text(format!("[{}]: ", def.identifier)))
                 .chain(parse_inline_nodes(&def.children))
                 .collect(),
-        )),
+            inline_cache: RefCell::new(None),
+        }),
         _ => None,
     }
 }
@@ -538,21 +591,30 @@ fn coalesce_inlines(inlines: Vec<MarkdownInline>) -> Vec<MarkdownInline> {
 
 fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'_>) -> AnyElement {
     match block {
-        MarkdownBlock::Paragraph(inlines) => div()
+        MarkdownBlock::Paragraph {
+            inlines,
+            inline_cache,
+        } => div()
             .w_full()
             .child(render_inline_content(
                 inlines,
                 &style.base_text_style(),
                 style,
+                inline_cache,
             ))
             .into_any_element(),
-        MarkdownBlock::Heading { level, inlines } => div()
+        MarkdownBlock::Heading {
+            level,
+            inlines,
+            inline_cache,
+        } => div()
             .w_full()
             .pt(px(if *level <= 2 { 3.0 } else { 1.0 }))
             .child(render_inline_content(
                 inlines,
                 &style.heading_text_style(*level),
                 style,
+                inline_cache,
             ))
             .into_any_element(),
         MarkdownBlock::CodeBlock {
@@ -673,7 +735,7 @@ fn ordered_list_marker_lane_width(max_marker: usize) -> gpui::Pixels {
 fn render_table_block(
     index: usize,
     aligns: &[MarkdownTableAlign],
-    rows: &[Vec<Vec<MarkdownInline>>],
+    rows: &[Vec<MarkdownTableCell>],
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
     if rows.is_empty() {
@@ -760,7 +822,7 @@ fn table_min_width(column_count: usize) -> gpui::Pixels {
 }
 
 fn render_table_cell(
-    cell: &[MarkdownInline],
+    cell: &MarkdownTableCell,
     column_idx: usize,
     column_count: usize,
     aligns: &[MarkdownTableAlign],
@@ -781,7 +843,7 @@ fn render_table_cell(
         .copied()
         .unwrap_or(MarkdownTableAlign::Left);
 
-    let content = render_inline_content(cell, &base_style, style);
+    let content = render_inline_content(&cell.inlines, &base_style, style, &cell.inline_cache);
     let column_min_width = table_column_min_width(column_idx, column_count);
 
     let content_cell = div()
@@ -1083,8 +1145,9 @@ fn render_inline_text(
     inlines: &[MarkdownInline],
     base_style: &TextStyle,
     style: &ChatMarkdownStyle<'_>,
+    inline_cache: &RefCell<Option<CachedInlineRender>>,
 ) -> AnyElement {
-    let (text, runs) = inline_runs(inlines, base_style, style);
+    let (text, runs) = cached_inline_runs(inlines, base_style, style, inline_cache);
     let font_size = text_style_font_size(base_style);
     let line_height = text_style_line_height(base_style, font_size);
     div()
@@ -1101,8 +1164,9 @@ fn render_inline_content(
     inlines: &[MarkdownInline],
     base_style: &TextStyle,
     style: &ChatMarkdownStyle<'_>,
+    inline_cache: &RefCell<Option<CachedInlineRender>>,
 ) -> AnyElement {
-    render_inline_text(inlines, base_style, style)
+    render_inline_text(inlines, base_style, style, inline_cache)
 }
 
 fn text_style_font_size(text_style: &TextStyle) -> gpui::Pixels {
@@ -1117,6 +1181,49 @@ fn text_style_line_height(text_style: &TextStyle, font_size: gpui::Pixels) -> gp
         DefiniteLength::Absolute(AbsoluteLength::Pixels(size)) => size,
         _ => font_size * 1.5,
     }
+}
+
+fn cached_inline_runs(
+    inlines: &[MarkdownInline],
+    base_style: &TextStyle,
+    style: &ChatMarkdownStyle<'_>,
+    cache: &RefCell<Option<CachedInlineRender>>,
+) -> (SharedString, Vec<gpui::TextRun>) {
+    let font_size = text_style_font_size(base_style);
+    let line_height = text_style_line_height(base_style, font_size);
+    let font_size_f32: f32 = font_size.into();
+    let line_height_f32: f32 = line_height.into();
+
+    let key = InlineRenderCacheKey {
+        font_family: base_style.font_family.clone(),
+        font_size_bits: font_size_f32.to_bits(),
+        line_height_bits: line_height_f32.to_bits(),
+        color: base_style.color,
+        font_weight: base_style.font_weight,
+        font_style: base_style.font_style,
+        underline: base_style.underline.clone(),
+        strikethrough: base_style.strikethrough.is_some(),
+        inline_code_background: style.inline_code_background,
+        inline_code_text_color: style.inline_code_text_color,
+        link_color: style.link_color,
+    };
+
+    {
+        let cached = cache.borrow();
+        if let Some(cached) = cached.as_ref()
+            && cached.key == key
+        {
+            return (cached.text.clone(), cached.runs.clone());
+        }
+    }
+
+    let (text, runs) = inline_runs(inlines, base_style, style);
+    *cache.borrow_mut() = Some(CachedInlineRender {
+        key,
+        text: text.clone(),
+        runs: runs.clone(),
+    });
+    (text, runs)
 }
 
 fn inline_runs(
@@ -1220,7 +1327,7 @@ mod tests {
     fn soft_breaks_do_not_become_hard_breaks() {
         let blocks =
             parse_markdown("Root filesystem\n`/`: `340G used / 559G avail` out of `937G` total");
-        let MarkdownBlock::Paragraph(inlines) = &blocks[0] else {
+        let MarkdownBlock::Paragraph { inlines, .. } = &blocks[0] else {
             panic!("expected paragraph");
         };
 

@@ -93,6 +93,7 @@ Windows-named binary requires.
 ## Local Skill
 
 - Project-local skill: `skills/con-cli-e2e/SKILL.md`
+- Project-local skill: `skills/gpui-cache-aware/SKILL.md`
 - Use it when validating the control plane from an external agent or when writing eval automation against a real running Con session.
 - The skill expects agents to prefer `con-cli --json`, verify pane capabilities before acting, and treat `panes create` as provisional until the new pane reports as alive and shell-ready.
 

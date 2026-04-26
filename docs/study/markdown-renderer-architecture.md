@@ -121,7 +121,8 @@ Performance rule:
 - long-form chat content must prefer one text layout with styled runs over per-token element trees
 - inline code inside dense prose, lists, or table cells should not force flex-wrapped chip segmentation at chat-message scale
 - decorative inline-code chips are acceptable for short UI copy, not for large agent replies
-- large markdown bodies should live behind cached child views so unrelated parent-panel updates do not rebuild the entire document tree
+- cache parsed/flattened text-run transforms at the markdown data layer before trying view-level caching
+- use GPUI cached child views only for size-stable subtrees; intrinsic-height rich text is not a safe first cache boundary
 
 ## Migration path
 

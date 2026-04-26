@@ -52,7 +52,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - `Close Pane` now escalates cleanly when nothing smaller remains to close: last pane closes the tab, and the last tab quits the app.
 - Fixed the last-pane quit path so quitting through `Close Pane` or terminal-exit escalation uses the same session save and surface teardown path as the normal app quit action.
 - Fixed the command palette scroll behavior on all platforms. Mouse-wheel scrolling and scrollbar dragging no longer snap back to the selected row on every repaint.
-- Reduced agent-panel stalls on session-open, long live responses, and oversized reply expansion by making message markdown and persisted reasoning parse lazily, rendering in-flight replies as cheap plain-text previews, parsing full reply markdown off the UI thread when opened, and mounting expanded assistant bodies as cached child markdown views so parent panel rerenders do not rebuild the full document subtree.
+- Reduced agent-panel stalls on session-open, long live responses, and oversized reply expansion by making message markdown and persisted reasoning parse lazily, rendering in-flight replies as cheap plain-text previews, parsing full reply markdown off the UI thread when opened, and caching expensive inline markdown text-run transforms so repeated rich-render passes do less work.
 - Reduced severe hangs when expanding long real-world agent replies in markdown. Inline code inside long prose/table cells now renders through single `StyledText` runs instead of exploding into large flex-wrapped chip trees.
 
 **Terminal — Windows Backend (preview)**
