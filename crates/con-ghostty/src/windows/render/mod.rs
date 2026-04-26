@@ -115,7 +115,7 @@ pub struct Renderer {
     atlas: Mutex<GlyphCache>,
 
     instances: Mutex<Vec<Instance>>,
-    frame_cache: Mutex<Option<Vec<u8>>>,
+    has_full_frame: Mutex<bool>,
     /// Generation fingerprint of the last frame we actually rendered.
     /// It includes VT generation, selection state, and snapshot/view
     /// geometry so resize catch-up frames are not mistaken for
@@ -130,11 +130,18 @@ pub struct Renderer {
     height_px: u32,
 }
 
-/// Freshly rendered BGRA frame. Width/height are in physical pixels.
-pub struct FrameBgra {
+/// Freshly rendered BGRA patch. Coordinates and sizes are physical pixels.
+pub struct FramePatchBgra {
     pub bytes: Vec<u8>,
+    pub y: u32,
+    pub height: u32,
+}
+
+/// Freshly rendered BGRA frame patches. Width/height are physical pixels.
+pub struct FrameBgra {
     pub width: u32,
     pub height: u32,
+    pub patches: Vec<FramePatchBgra>,
 }
 
 /// Result of [`Renderer::render`].
@@ -236,7 +243,7 @@ impl Renderer {
             pipeline: std::sync::Mutex::new(pipeline),
             atlas: Mutex::new(atlas),
             instances: Mutex::new(Vec::with_capacity(INITIAL_INSTANCE_CAPACITY as usize)),
-            frame_cache: Mutex::new(None),
+            has_full_frame: Mutex::new(false),
             last_generation: Mutex::new(u64::MAX),
             selection: Mutex::new(None),
             width_px: width,
@@ -271,9 +278,9 @@ impl Renderer {
             .lock()
             .expect("last_generation mutex poisoned in resize()") = u64::MAX;
         *self
-            .frame_cache
+            .has_full_frame
             .lock()
-            .expect("frame_cache mutex poisoned in resize()") = None;
+            .expect("has_full_frame mutex poisoned in resize()") = false;
         Ok(())
     }
 
@@ -445,11 +452,10 @@ impl Renderer {
             // and the staging texture will be ready to Map().
             let submit_started = perf_trace_enabled().then(Instant::now);
             let can_partial_readback = in_flight_before_submit == 0
-                && self
-                    .frame_cache
+                && *self
+                    .has_full_frame
                     .lock()
-                    .expect("frame_cache mutex poisoned checking partial readback")
-                    .is_some();
+                    .expect("has_full_frame mutex poisoned checking partial readback");
             let readback_regions = self.readback_regions(snapshot, sel_hash, can_partial_readback);
             submitted =
                 Some(ring.submit_copy_mailbox(&self.context, &self.rt_texture, &readback_regions));
@@ -633,50 +639,52 @@ impl Renderer {
         }
     }
 
-    fn frame_from_readback(&self, readback: Readback) -> FrameBgra {
+    fn frame_from_readback(&self, mut readback: Readback) -> FrameBgra {
         if readback.regions.len() == 1 && readback.regions[0].is_full(self.height_px) {
-            let mut cache = self
-                .frame_cache
+            *self
+                .has_full_frame
                 .lock()
-                .expect("frame_cache mutex poisoned in frame_from_readback()");
-            *cache = Some(readback.bytes.clone());
+                .expect("has_full_frame mutex poisoned in frame_from_readback()") = true;
             return FrameBgra {
-                bytes: readback.bytes,
                 width: self.width_px,
                 height: self.height_px,
+                patches: vec![FramePatchBgra {
+                    bytes: readback.bytes,
+                    y: 0,
+                    height: self.height_px,
+                }],
             };
         }
 
         let row_bytes = self.width_px as usize * 4;
-        let frame_len = row_bytes * self.height_px as usize;
-        let mut cache = self
-            .frame_cache
-            .lock()
-            .expect("frame_cache mutex poisoned in frame_from_readback()");
-        let frame = cache.get_or_insert_with(|| vec![0; frame_len]);
-        if frame.len() != frame_len {
-            frame.clear();
-            frame.resize(frame_len, 0);
-        }
-
         let mut src_offset = 0usize;
+        let mut patches = Vec::with_capacity(readback.regions.len());
         for region in readback.regions {
-            let top = region.y.min(self.height_px) as usize;
-            let bottom = region.y.saturating_add(region.height).min(self.height_px) as usize;
-            let bytes = (bottom.saturating_sub(top)) * row_bytes;
-            if bytes == 0 || src_offset.saturating_add(bytes) > readback.bytes.len() {
+            let top = region.y.min(self.height_px);
+            let bottom = region.y.saturating_add(region.height).min(self.height_px);
+            let height = bottom.saturating_sub(top);
+            let bytes_len = height as usize * row_bytes;
+            if bytes_len == 0 || src_offset.saturating_add(bytes_len) > readback.bytes.len() {
                 continue;
             }
-            let dst = top * row_bytes;
-            frame[dst..dst + bytes]
-                .copy_from_slice(&readback.bytes[src_offset..src_offset + bytes]);
-            src_offset += bytes;
+
+            let bytes = if src_offset == 0 && bytes_len == readback.bytes.len() {
+                std::mem::take(&mut readback.bytes)
+            } else {
+                readback.bytes[src_offset..src_offset + bytes_len].to_vec()
+            };
+            patches.push(FramePatchBgra {
+                bytes,
+                y: top,
+                height,
+            });
+            src_offset += bytes_len;
         }
 
         FrameBgra {
-            bytes: frame.clone(),
             width: self.width_px,
             height: self.height_px,
+            patches,
         }
     }
 
