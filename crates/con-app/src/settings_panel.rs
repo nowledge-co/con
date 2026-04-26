@@ -2808,11 +2808,28 @@ impl SettingsPanel {
                             .checked(vertical_tabs_enabled)
                             .small()
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                // Live toggle: write the new value
+                                // into self.config, persist to disk
+                                // immediately so closing the panel
+                                // (or quitting + relaunching)
+                                // doesn't lose the change, and emit
+                                // SaveSettings so the workspace's
+                                // on_settings_saved live-applies the
+                                // orientation switch (the panel
+                                // collapses / expands without the
+                                // user clicking the explicit Save
+                                // button).
                                 this.config.appearance.tabs_orientation = if *checked {
                                     con_core::config::TabsOrientation::Vertical
                                 } else {
                                     con_core::config::TabsOrientation::Horizontal
                                 };
+                                if let Err(err) = this.persist_config() {
+                                    log::warn!(
+                                        "settings: persist tabs_orientation failed: {err}"
+                                    );
+                                }
+                                cx.emit(SaveSettings);
                                 cx.notify();
                             })),
                         theme,
