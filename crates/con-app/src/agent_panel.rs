@@ -11,6 +11,8 @@ use gpui_component::{ActiveTheme, Disableable, Icon, Sizable as _};
 
 /// Max lines to show for tool result previews in collapsed steps
 const TOOL_RESULT_PREVIEW_LINES: usize = 6;
+const RESTORED_MESSAGE_PREVIEW_LINES: usize = 12;
+const RESTORED_MESSAGE_COLLAPSE_CHAR_THRESHOLD: usize = 2400;
 use con_agent::{
     AgentConfig, ConversationSummary, ProviderKind, ToolApprovalDecision, conversation::AgentStep,
     oauth_token_dir,
@@ -189,6 +191,9 @@ impl PanelState {
         let mut message = PanelMessage::new(role, content);
         message.model = model.map(ToOwned::to_owned);
         message.duration_ms = duration_ms;
+        if role == "assistant" && should_collapse_restored_message(content) {
+            message.content_collapsed = true;
+        }
         self.messages.push(message);
     }
 
@@ -449,6 +454,7 @@ struct PanelMessage {
     role: String,
     content: String,
     content_markdown: Option<ParsedChatMarkdown>,
+    content_collapsed: bool,
     /// Extended thinking/reasoning text from the model (collapsible)
     thinking: Option<String>,
     thinking_markdown: Option<ParsedChatMarkdown>,
@@ -489,6 +495,7 @@ impl PanelMessage {
             role: role.to_string(),
             content: content.to_string(),
             content_markdown: None,
+            content_collapsed: false,
             thinking: None,
             thinking_markdown: None,
             thinking_collapsed: true,
@@ -2061,6 +2068,11 @@ fn hidden_result_line_count(content: &str, max_lines: usize) -> usize {
     content.lines().count().saturating_sub(max_lines)
 }
 
+fn should_collapse_restored_message(content: &str) -> bool {
+    content.len() > RESTORED_MESSAGE_COLLAPSE_CHAR_THRESHOLD
+        || content.lines().count() > RESTORED_MESSAGE_PREVIEW_LINES
+}
+
 fn parse_key_value_rows(content: &str) -> Option<Vec<(String, String)>> {
     let mut rows = Vec::new();
     for line in content.lines() {
@@ -2848,13 +2860,35 @@ impl Render for AgentPanel {
 
                 // Message content — render as markdown
                 if !msg.content.is_empty() {
+                    let content_collapsed = msg.content_collapsed;
+                    let visible_content = if content_collapsed {
+                        result_preview(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES)
+                    } else {
+                        msg.content.clone()
+                    };
                     let mut content_el = div()
                         .ml(px(19.0))
                         .pr(px(4.0))
                         .text_size(px(14.0))
                         .line_height(px(23.0))
                         .text_color(theme.foreground.opacity(0.88));
-                    if let Some(markdown) = msg.content_markdown() {
+                    if content_collapsed {
+                        let mut preview_lines = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .font_family(theme.mono_font_family.clone());
+                        for line in visible_content.lines() {
+                            preview_lines = preview_lines.child(
+                                div()
+                                    .whitespace_normal()
+                                    .child(if line.is_empty() { " " } else { line }.to_string()),
+                            );
+                        }
+                        content_el = content_el.child(
+                            preview_lines,
+                        );
+                    } else if let Some(markdown) = msg.content_markdown() {
                         content_el = content_el.child(render_parsed_chat_markdown(
                             markdown,
                             ChatMarkdownTone::Message,
@@ -2862,6 +2896,54 @@ impl Render for AgentPanel {
                         ));
                     }
                     msg_el = msg_el.child(content_el);
+
+                    if content_collapsed {
+                        let hidden = hidden_result_line_count(
+                            &msg.content,
+                            RESTORED_MESSAGE_PREVIEW_LINES,
+                        );
+                        let button_label = if hidden > 0 {
+                            format!("Open full reply · {} more lines", hidden)
+                        } else {
+                            "Open full reply".to_string()
+                        };
+                        msg_el = msg_el.child(
+                            div()
+                                .ml(px(19.0))
+                                .mt(px(4.0))
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "assistant-expand-{msg_idx}"
+                                        )))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.0))
+                                        .cursor_pointer()
+                                        .hover(|s| {
+                                            s.bg(theme.muted.opacity(0.04)).rounded(px(6.0))
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |this, _, _, cx| {
+                                                if let Some(message) =
+                                                    this.state.messages.get_mut(msg_idx)
+                                                {
+                                                    message.content_collapsed = false;
+                                                }
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(div().px(px(4.0)).py(px(3.0)).child(
+                                            render_result_toggle_chrome(
+                                                false,
+                                                button_label,
+                                                theme,
+                                            ),
+                                        )),
+                                ),
+                        );
+                    }
 
                     // Copy button — slightly tighter
                     let content_for_clip = assistant_content_for_copy;
