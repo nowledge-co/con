@@ -180,17 +180,20 @@ impl ConPty {
 
         // SAFETY: command_line_w is mutable + NUL-terminated;
         // `attribute_buffer` keeps the attribute list alive until after
-        // CreateProcessW returns. `bInheritHandles = true` is REQUIRED
-        // for ConPTY — the internal conhost helper inherits the pipe
-        // ends captured by CreatePseudoConsole. Passing `false` breaks
-        // output delivery the same way CREATE_NO_WINDOW does.
+        // CreateProcessW returns. The HPCON travels through the
+        // PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE attribute, so the child
+        // must NOT inherit the host process' unrelated stdout/stderr
+        // handles. This matters when con itself is launched with
+        // redirected logs (`*> con-profile.log`): inheriting those
+        // handles lets PowerShell write its banner/prompt to the log
+        // instead of through ConPTY, leaving the pane blank.
         let create_result = unsafe {
             CreateProcessW(
                 None,
                 Some(PWSTR(command_line_w.as_mut_ptr())),
                 None,
                 None,
-                true,
+                false,
                 creation_flags,
                 None,
                 None,
