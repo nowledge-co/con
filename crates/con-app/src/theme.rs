@@ -257,54 +257,28 @@ fn apply_font_overrides(
 /// returns) to the actual `name` table entry on the registered TTFs
 /// (`"IoskeleyMono"`, no space).
 ///
-/// macOS Core Text and Windows DirectWrite are forgiving about the
-/// space-vs-no-space variant and resolve both names to the same font,
-/// which is why the workspace shipped with `"Ioskeley Mono"` as the
-/// default and macOS / Windows ship that way in production. GPUI
-/// Linux's CosmicText backend, however, only matches the exact
-/// `family` string in the TTF `name` table — `"Ioskeley Mono"`
-/// misses, the lookup falls through to the system fallback (a
-/// proportional sans on most desktops), and the terminal pane loses
-/// its monospace shaping.
-///
-/// Normalizing only on Linux keeps every consumer (linux_view,
-/// chat_markdown, agent_panel preview, settings) on the registered
-/// family name on Linux, and leaves macOS / Windows behavior
-/// byte-identical to what's currently in production.
+/// GPUI resolves the family string against its registered fonts. Keep
+/// the user-facing settings label (`"Ioskeley Mono"`) out of GPUI's
+/// hot render path and use the actual TTF family (`"IoskeleyMono"`)
+/// for terminal chrome, markdown code blocks, and table text. This is
+/// required on Linux's CosmicText backend and also avoids platform-
+/// specific fallback behavior in StyledText code runs.
 pub fn canonical_terminal_font_family(name: &str) -> String {
-    #[cfg(target_os = "linux")]
-    {
-        // Normalize aggressively: trim, lowercase, strip whitespace
-        // and hyphens. That way `"Ioskeley Mono"`, `"IoskeleyMono"`,
-        // `"Ioskeley-Mono"`, `"ioskeley mono"`, `" IOSKELEY  MONO "`,
-        // and any other casing / spacing the user might paste into
-        // the config or settings UI all resolve to the registered
-        // TTF family `"IoskeleyMono"`. CosmicText's exact-match
-        // lookup would otherwise miss them and fall back to a
-        // proportional system sans.
-        let key: String = name
-            .chars()
-            .filter(|c| !c.is_whitespace() && *c != '-')
-            .flat_map(|c| c.to_lowercase())
-            .collect();
-        if key == "ioskeleymono" {
-            return "IoskeleyMono".to_string();
-        }
-        // Preserve the trim-on-fall-through that the original
-        // helper had before we added the case-insensitive
-        // canonicalization above. A user with accidental
-        // whitespace padding around their custom font name
-        // (common when copy-pasting from a font catalog into the
-        // settings panel or the TOML config) would otherwise hit
-        // CosmicText's exact-match lookup with the padded string
-        // and silently fall back to the system sans.
-        return name.trim().to_string();
+    // Normalize aggressively: trim, lowercase, strip whitespace and
+    // hyphens. That way `"Ioskeley Mono"`, `"IoskeleyMono"`,
+    // `"Ioskeley-Mono"`, `"ioskeley mono"`, `" IOSKELEY  MONO "`,
+    // and any other casing / spacing the user might paste into the
+    // config or settings UI all resolve to the registered TTF family.
+    let key: String = name
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    if key == "ioskeleymono" {
+        return "IoskeleyMono".to_string();
     }
 
-    #[cfg(not(target_os = "linux"))]
-    {
-        name.to_string()
-    }
+    name.trim().to_string()
 }
 
 /// Apply con's scrollbar overrides after any Theme::change call.
