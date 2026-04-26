@@ -19,6 +19,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Agent Panel**
 - Fixed Mermaid and display math inside nested Markdown containers such as blockquotes and lists so they use the same cached rich renderer as top-level blocks instead of falling back to source text.
+- Fixed inline math detection so hyphenated prose and dollar ranges such as `$end-to-end$` or `$3-5$` are not misread as math.
 - Fixed dark-theme Mermaid diagrams with custom light node fills so missing Mermaid `color:` styles are inferred from fill luminance instead of leaving white text on light shapes.
 - Fixed display math SVGs in dark mode so formulas use theme-aware foreground colors and re-render correctly after theme switches.
 - Fixed rich Mermaid and math render caching during streaming so replacing a parsed Markdown document with equivalent block content no longer discards already-rendered SVG images.
@@ -27,7 +28,10 @@ con is still pre-release, so entries may group related beta work while the produ
 - Consolidated blockquote and list layout rendering for cached rich blocks and fallback Markdown blocks so future spacing and typography changes cannot drift between the two paths.
 
 **Terminal**
-- Fixed macOS IME English-mode commits in the terminal so direct ASCII input keeps the normal shell key path and does not disable shell ghost suggestions, while marked CJK composition still uses the IME text path.
+- Fixed macOS IME English-mode commits in the terminal so direct ASCII input keeps the normal shell key path and does not disable shell ghost suggestions, while marked CJK composition still uses the IME text path. Buffered ASCII commits are now replayed as per-character key events instead of one synthetic multi-character key.
+
+**Keyboard**
+- Fixed the Input / Terminal toggle fallback so Cmd+I still lands on the bottom input bar if the agent-panel inline input has not initialized yet.
 
 ## `v0.1.0-beta.39` - 2026-04-26
 

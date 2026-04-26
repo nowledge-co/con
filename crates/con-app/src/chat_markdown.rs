@@ -985,7 +985,6 @@ fn looks_like_inline_math(value: &str) -> bool {
                 | '<'
                 | '>'
                 | '+'
-                | '-'
                 | '*'
                 | '/'
                 | '|'
@@ -996,6 +995,12 @@ fn looks_like_inline_math(value: &str) -> bool {
                 | '{'
                 | '}'
         )
+    }) {
+        return true;
+    }
+
+    if value.as_bytes().windows(3).any(|window| {
+        window[1] == b'-' && window[0].is_ascii_whitespace() && window[2].is_ascii_whitespace()
     }) {
         return true;
     }
@@ -2406,6 +2411,41 @@ mod tests {
         assert!(inlines.iter().any(|inline| {
             matches!(inline, MarkdownInline::Text(text) if text.contains("$5 and $6"))
         }));
+    }
+
+    #[test]
+    fn hyphenated_dollar_text_does_not_become_inline_math() {
+        for source in [
+            "This is $end-to-end$ tested.",
+            "The $X-ray$ scan passed.",
+            "Costs are $3-5$ today.",
+        ] {
+            let blocks = parse_markdown(source);
+            let MarkdownBlock::Paragraph { inlines, .. } = &blocks[0] else {
+                panic!("expected paragraph");
+            };
+
+            assert!(
+                !inlines
+                    .iter()
+                    .any(|inline| matches!(inline, MarkdownInline::Math(_))),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn spaced_minus_inline_math_is_supported() {
+        let blocks = parse_markdown("Use $x - y$ for the delta.");
+        let MarkdownBlock::Paragraph { inlines, .. } = &blocks[0] else {
+            panic!("expected paragraph");
+        };
+
+        assert!(
+            inlines
+                .iter()
+                .any(|inline| matches!(inline, MarkdownInline::Math(math) if math == "x - y"))
+        );
     }
 
     #[test]

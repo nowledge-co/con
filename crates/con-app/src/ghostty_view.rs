@@ -874,7 +874,7 @@ impl InputHandler for GhosttyInputHandler {
             let had_marked_text = view.ime_marked_text.take().is_some();
             if let Some(terminal) = &view.terminal {
                 if !had_marked_text && should_send_ime_insert_as_key_event(text) {
-                    terminal.send_text_as_key_event(text);
+                    send_ime_insert_as_key_events(terminal, text);
                 } else {
                     terminal.send_text(text);
                 }
@@ -954,6 +954,13 @@ impl InputHandler for GhosttyInputHandler {
 
 fn should_send_ime_insert_as_key_event(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|ch| ch.is_ascii() && !ch.is_control())
+}
+
+fn send_ime_insert_as_key_events(terminal: &GhosttyTerminal, text: &str) {
+    for ch in text.chars() {
+        let mut buffer = [0; 4];
+        terminal.send_text_as_key_event(ch.encode_utf8(&mut buffer));
+    }
 }
 
 // ── GPUI → ghostty modifier mapping ─────────────────────────
