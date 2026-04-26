@@ -1240,8 +1240,38 @@ impl AgentPanel {
         self.sync_inline_input_visual_state(cx);
     }
 
-    pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
+    pub fn set_skills(&mut self, skills: Vec<SkillEntry>, cx: &mut Context<Self>) {
+        if self.skills.len() == skills.len()
+            && self
+                .skills
+                .iter()
+                .zip(skills.iter())
+                .all(|(left, right)| {
+                    left.name == right.name && left.description == right.description
+                })
+        {
+            return;
+        }
+
         self.skills = skills;
+        let visual_changed = self.sync_inline_input_visual_state(cx);
+        let previous_selection = self.inline_skill_selection;
+        let completions_len = self.filtered_inline_skills(cx).len();
+        if completions_len == 0 {
+            self.inline_skill_selection = 0;
+        } else {
+            self.inline_skill_selection = self
+                .inline_skill_selection
+                .min(completions_len.saturating_sub(1));
+        }
+
+        if visual_changed
+            || self.inline_input_has_skills
+            || self.inline_skill_selection != previous_selection
+        {
+            cx.emit(InlineSkillAutocompleteChanged);
+            cx.notify();
+        }
     }
 
     pub fn set_recent_inputs(&mut self, inputs: Vec<String>) {

@@ -6872,7 +6872,7 @@ impl Render for ConWorkspace {
             panel.set_model_name(model_name);
             panel.set_session_model_options(available_models, window, cx);
             panel.set_show_inline_input(show_inline);
-            panel.set_skills(panel_skills);
+            panel.set_skills(panel_skills, cx);
             panel.set_recent_inputs(self.recent_input_history(80));
         });
 
