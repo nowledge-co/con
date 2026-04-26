@@ -39,8 +39,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
-/// Minimum gap between two LLM requests for the same tab.
+/// Minimum gap between two LLM requests for the same tab when the
+/// previous one *succeeded*. Holds chatty PROMPT_COMMAND cwd updates
+/// in check during steady-state.
 const PER_TAB_REQUEST_BUDGET: Duration = Duration::from_secs(5);
+/// Same idea but for the post-failure retry path. Shorter so a flaky
+/// upstream (rate limit / empty response from a thinking model)
+/// doesn't lock the tab out for several seconds.
+const PER_TAB_RETRY_BUDGET: Duration = Duration::from_millis(750);
 /// Cap on the model's label string. Sanity bound; the model is
 /// instructed to stay under ~24 chars.
 const LABEL_MAX_LEN: usize = 32;
@@ -127,12 +133,20 @@ pub struct TabSummaryRequest {
 
 #[derive(Default)]
 struct PerTabState {
-    /// Hash key of the last request we sent — skip if context hasn't
-    /// changed.
-    last_key: Option<u64>,
-    /// When the last request fired. Used to enforce
-    /// `PER_TAB_REQUEST_BUDGET`.
+    /// Hash key of the last request that *succeeded*. We dedupe on
+    /// this — if the context hasn't moved since the last accepted
+    /// label, no need to re-ask. Failures DO NOT update this so a
+    /// future call with the same context will retry instead of
+    /// being silently locked out (the bug in the previous version).
+    last_success_key: Option<u64>,
+    /// When the last request was dispatched (success or failure).
+    /// Used by the budget gates below.
     last_dispatch: Option<Instant>,
+    /// `true` if the last completed request returned a usable
+    /// summary. False after the engine drops a malformed / empty
+    /// response. Distinguishes the success-budget gate from the
+    /// (much shorter) retry-budget gate.
+    last_was_success: bool,
     /// `true` while a request is in flight; prevents duplicate work.
     in_flight: bool,
 }
@@ -205,19 +219,47 @@ impl TabSummaryEngine {
             let entry = guard.entry(tab_id).or_default();
 
             if entry.in_flight {
+                log::debug!(
+                    target: "con_core::tab_summary",
+                    "tab_summary skip tab_id={} reason=in_flight",
+                    tab_id
+                );
                 return;
             }
-            if entry.last_key == Some(key) {
+            // Cache hit: only short-circuit when the LAST SUCCESSFUL
+            // request used the same context. A failed request must
+            // not poison this slot — otherwise a single empty
+            // response from the model permanently locks the tab
+            // until the user types something new.
+            if entry.last_success_key == Some(key) {
+                log::debug!(
+                    target: "con_core::tab_summary",
+                    "tab_summary skip tab_id={} reason=cache_hit",
+                    tab_id
+                );
                 return;
             }
+            // Budget gate: success path uses the long budget, failure
+            // path uses the short retry budget.
+            let budget = if entry.last_was_success {
+                PER_TAB_REQUEST_BUDGET
+            } else {
+                PER_TAB_RETRY_BUDGET
+            };
             if let Some(t) = entry.last_dispatch {
-                if t.elapsed() < PER_TAB_REQUEST_BUDGET {
+                if t.elapsed() < budget {
+                    log::debug!(
+                        target: "con_core::tab_summary",
+                        "tab_summary skip tab_id={} reason=budget elapsed={:?} budget={:?}",
+                        tab_id,
+                        t.elapsed(),
+                        budget,
+                    );
                     return;
                 }
             }
             entry.in_flight = true;
             entry.last_dispatch = Some(Instant::now());
-            entry.last_key = Some(key);
         }
 
         let config = self.config.clone();
@@ -225,10 +267,12 @@ impl TabSummaryEngine {
         self.runtime.spawn(async move {
             let result = request_summary(&config, &req).await;
 
-            // Always clear in-flight, even on parse failure / network
-            // error — a future context change will retry.
             if let Some(entry) = state.lock().get_mut(&tab_id) {
                 entry.in_flight = false;
+                entry.last_was_success = result.is_some();
+                if result.is_some() {
+                    entry.last_success_key = Some(key);
+                }
             }
 
             if let Some((label, icon)) = result {
@@ -508,6 +552,87 @@ mod tests {
         let out = truncate_label(&long);
         assert!(out.chars().count() <= LABEL_MAX_LEN);
         assert!(out.ends_with('…'));
+    }
+
+    /// PerTabState gate logic — pure simulation of the conditions in
+    /// `request()` so we can lock down "a failed call must not
+    /// poison the cache" without having to spin up a real engine
+    /// + tokio runtime.
+    fn should_dispatch(state: &PerTabState, key: u64) -> bool {
+        if state.in_flight {
+            return false;
+        }
+        if state.last_success_key == Some(key) {
+            return false;
+        }
+        let budget = if state.last_was_success {
+            PER_TAB_REQUEST_BUDGET
+        } else {
+            PER_TAB_RETRY_BUDGET
+        };
+        if let Some(t) = state.last_dispatch {
+            if t.elapsed() < budget {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn cache_blocks_resend_for_same_context_after_success() {
+        let mut s = PerTabState::default();
+        s.last_success_key = Some(42);
+        s.last_was_success = true;
+        s.last_dispatch = Some(Instant::now());
+        assert!(!should_dispatch(&s, 42), "same context after success → skip");
+    }
+
+    #[test]
+    fn cache_does_not_block_after_failure_with_same_context() {
+        // The bug: previous version stored the dispatch key in
+        // `last_key` BEFORE the LLM call, so a failed call locked
+        // the tab out forever for that context. Verify the new
+        // success-keyed cache lets the next call through.
+        let mut s = PerTabState::default();
+        s.last_success_key = None;
+        s.last_was_success = false;
+        // Pretend the last dispatch was 1 s ago — beyond the
+        // failure-retry budget (750 ms) but well under the success
+        // budget (5 s). Failure path should let it through.
+        s.last_dispatch = Some(Instant::now() - Duration::from_secs(1));
+        assert!(
+            should_dispatch(&s, 99),
+            "failure → context unchanged → next call must retry"
+        );
+    }
+
+    #[test]
+    fn retry_budget_holds_inside_750ms() {
+        let mut s = PerTabState::default();
+        s.last_dispatch = Some(Instant::now());
+        s.last_was_success = false;
+        // Just under the retry budget — should still hold.
+        assert!(
+            !should_dispatch(&s, 99),
+            "retry budget should hold for the first 750 ms"
+        );
+    }
+
+    #[test]
+    fn in_flight_blocks_everything() {
+        let mut s = PerTabState::default();
+        s.in_flight = true;
+        assert!(!should_dispatch(&s, 0));
+    }
+
+    #[test]
+    fn new_context_after_success_dispatches() {
+        let mut s = PerTabState::default();
+        s.last_success_key = Some(1);
+        s.last_was_success = true;
+        s.last_dispatch = Some(Instant::now() - Duration::from_secs(10));
+        // Different key, both budgets satisfied.
+        assert!(should_dispatch(&s, 2));
     }
 
     /// Tab reorder math (mirrors `on_sidebar_reorder` in workspace.rs).

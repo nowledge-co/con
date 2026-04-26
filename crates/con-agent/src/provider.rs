@@ -1577,9 +1577,14 @@ impl AgentProvider {
                 let mut builder = $client.agent(self.config.effective_model(kind));
                 builder = builder.preamble(preamble);
                 builder = builder.max_tokens(max_tokens);
-                if let Some(temp) = self.config.temperature {
-                    builder = builder.temperature(temp);
-                }
+                // Pin temperature to 0.0 by default for these
+                // structured short-form completions — caller still
+                // wins via self.config.temperature if they set one.
+                // Moonshot Kimi K2 + a non-zero temperature was
+                // returning empty content for our LABEL|ICON prompt
+                // (reasoning tokens consumed before the visible
+                // response landed); pinning to 0 stabilizes it.
+                builder = builder.temperature(self.config.temperature.unwrap_or(0.0));
                 let agent = builder.build();
                 agent
                     .prompt(prompt)
