@@ -992,6 +992,15 @@ impl ConWorkspace {
 
         // Poll all tabs' agent sessions.
         cx.spawn(async move |this, cx| {
+            // Periodic AI-summary poll. The pump-driven trigger
+            // below only fires while output is actively streaming
+            // — once a command finishes, the pump goes quiet and
+            // we'd never re-summarize. So separately, every few
+            // seconds we ask the engine to re-check; the engine's
+            // per-tab cache + 5 s success budget make repeated
+            // calls cheap (most are cache-hits / budgeted out).
+            let summary_poll_interval = std::time::Duration::from_secs(3);
+            let mut last_summary_poll = std::time::Instant::now();
             loop {
                 let mut got_event = false;
 
@@ -1058,6 +1067,20 @@ impl ConWorkspace {
                         // firing more than once per real change.
                         workspace.request_tab_summaries(cx);
                         cx.notify();
+                    } else if last_summary_poll.elapsed() >= summary_poll_interval {
+                        // Periodic poll. `pump_ghostty_views` only
+                        // returns true while output is actively
+                        // streaming; once the user's command
+                        // finishes scrolling, the pump goes quiet
+                        // and the trigger above stops firing —
+                        // but the tab's effective context (last 5
+                        // output lines, cwd, title) has changed
+                        // and we want a fresh AI summary against
+                        // it. The engine's per-tab cache + 5 s
+                        // success budget make this safe to call on
+                        // every tick.
+                        workspace.request_tab_summaries(cx);
+                        last_summary_poll = std::time::Instant::now();
                     }
                 })
                 .ok();
