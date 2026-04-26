@@ -303,6 +303,52 @@ fn clear_render_state_row_dirty(row_iter: GhosttyRowIterator) {
     }
 }
 
+fn recreate_render_state(inner: &mut VtInner) -> anyhow::Result<()> {
+    if !inner.row_cells.is_null() {
+        unsafe { ghostty_render_state_row_cells_free(inner.row_cells) };
+        inner.row_cells = std::ptr::null_mut();
+    }
+    if !inner.row_iter.is_null() {
+        unsafe { ghostty_render_state_row_iterator_free(inner.row_iter) };
+        inner.row_iter = std::ptr::null_mut();
+    }
+    if !inner.render_state.is_null() {
+        unsafe { ghostty_render_state_free(inner.render_state) };
+        inner.render_state = std::ptr::null_mut();
+    }
+
+    let mut render_state: GhosttyRenderState = std::ptr::null_mut();
+    let rc = unsafe { ghostty_render_state_new(std::ptr::null(), &mut render_state) };
+    if rc != 0 || render_state.is_null() {
+        anyhow::bail!("ghostty_render_state_new failed while recreating: rc={rc}");
+    }
+
+    let mut row_iter: GhosttyRowIterator = std::ptr::null_mut();
+    let rc = unsafe { ghostty_render_state_row_iterator_new(std::ptr::null(), &mut row_iter) };
+    if rc != 0 || row_iter.is_null() {
+        unsafe { ghostty_render_state_free(render_state) };
+        anyhow::bail!("ghostty_render_state_row_iterator_new failed while recreating: rc={rc}");
+    }
+
+    let mut row_cells: GhosttyRowCells = std::ptr::null_mut();
+    let rc = unsafe { ghostty_render_state_row_cells_new(std::ptr::null(), &mut row_cells) };
+    if rc != 0 || row_cells.is_null() {
+        unsafe { ghostty_render_state_row_iterator_free(row_iter) };
+        unsafe { ghostty_render_state_free(render_state) };
+        anyhow::bail!("ghostty_render_state_row_cells_new failed while recreating: rc={rc}");
+    }
+
+    inner.render_state = render_state;
+    inner.row_iter = row_iter;
+    inner.row_cells = row_cells;
+    inner.scratch.clear();
+    inner.scratch_cols = 0;
+    inner.scratch_rows = 0;
+    inner.last_cursor = Cursor::default();
+    inner.force_full_snapshot = true;
+    Ok(())
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GhosttyTerminalOptions {
@@ -715,6 +761,7 @@ struct VtInner {
     scratch: Vec<Cell>,
     last_cursor: Cursor,
     last_alt_screen: bool,
+    reset_render_state: bool,
 }
 
 unsafe impl Send for VtInner {}
@@ -899,6 +946,7 @@ impl VtScreen {
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
                 last_cursor: Cursor::default(),
                 last_alt_screen: false,
+                reset_render_state: false,
             })),
         })
     }
@@ -936,6 +984,7 @@ impl VtScreen {
         let alt_screen = terminal_alt_screen_active(inner.terminal);
         if alt_screen != inner.last_alt_screen {
             inner.last_alt_screen = alt_screen;
+            inner.reset_render_state = true;
             inner.force_full_snapshot = true;
         }
         inner.generation = inner.generation.wrapping_add(1);
@@ -984,6 +1033,19 @@ impl VtScreen {
 
         let fallback_cols = inner.cols;
         let fallback_rows = inner.rows;
+
+        if inner.reset_render_state {
+            match recreate_render_state(&mut inner) {
+                Ok(()) => {
+                    inner.reset_render_state = false;
+                }
+                Err(err) => {
+                    log::warn!("failed to recreate render state after alt-screen switch: {err:#}");
+                    inner.reset_render_state = false;
+                    inner.force_full_snapshot = true;
+                }
+            }
+        }
 
         if inner.render_state.is_null() {
             // Render-state path disabled — return empty snapshot. The
