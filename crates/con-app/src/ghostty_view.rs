@@ -70,6 +70,73 @@ impl NativeSeamBackground {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Default)]
+struct NativeChromeSeamCover {
+    terminal_left: f64,
+    terminal_top: f64,
+    terminal_right: f64,
+    terminal_bottom: f64,
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeChromeSeamCover {
+    fn approx_eq(&self, other: &Self) -> bool {
+        const EPS: f64 = 0.25;
+        (self.terminal_left - other.terminal_left).abs() <= EPS
+            && (self.terminal_top - other.terminal_top).abs() <= EPS
+            && (self.terminal_right - other.terminal_right).abs() <= EPS
+            && (self.terminal_bottom - other.terminal_bottom).abs() <= EPS
+            && (self.left - other.left).abs() <= EPS
+            && (self.right - other.right).abs() <= EPS
+            && (self.top - other.top).abs() <= EPS
+            && (self.bottom - other.bottom).abs() <= EPS
+    }
+
+    fn widths_for_bounds(&self, bounds: Bounds<Pixels>) -> [f64; 4] {
+        const EDGE_EPSILON_PT: f64 = 2.0;
+        let left = f64::from(bounds.origin.x);
+        let top = f64::from(bounds.origin.y);
+        let right = left + f64::from(bounds.size.width);
+        let bottom = top + f64::from(bounds.size.height);
+
+        [
+            if self.left > MIN_VISIBLE_NATIVE_SEAM_COVER_PT
+                && (left - self.terminal_left).abs() <= EDGE_EPSILON_PT
+            {
+                self.left
+            } else {
+                0.0
+            },
+            if self.right > MIN_VISIBLE_NATIVE_SEAM_COVER_PT
+                && (right - self.terminal_right).abs() <= EDGE_EPSILON_PT
+            {
+                self.right
+            } else {
+                0.0
+            },
+            if self.top > MIN_VISIBLE_NATIVE_SEAM_COVER_PT
+                && (top - self.terminal_top).abs() <= EDGE_EPSILON_PT
+            {
+                self.top
+            } else {
+                0.0
+            },
+            if self.bottom > MIN_VISIBLE_NATIVE_SEAM_COVER_PT
+                && (bottom - self.terminal_bottom).abs() <= EDGE_EPSILON_PT
+            {
+                self.bottom
+            } else {
+                0.0
+            },
+        ]
+    }
+}
+
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -112,7 +179,7 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     seam_background: NativeSeamBackground,
     #[cfg(target_os = "macos")]
-    native_seam_cover_width: f64,
+    native_chrome_seam_cover: NativeChromeSeamCover,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -174,7 +241,7 @@ impl GhosttyView {
                 a: 1.0,
             },
             #[cfg(target_os = "macos")]
-            native_seam_cover_width: 0.0,
+            native_chrome_seam_cover: NativeChromeSeamCover::default(),
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
@@ -356,19 +423,43 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn set_native_seam_cover_width(&mut self, cover_width: f64) {
-        let cover_width = cover_width.max(0.0);
-        if (self.native_seam_cover_width - cover_width).abs() <= f64::EPSILON {
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_native_chrome_seam_cover(
+        &mut self,
+        terminal_left: f64,
+        terminal_top: f64,
+        terminal_right: f64,
+        terminal_bottom: f64,
+        left: f64,
+        right: f64,
+        top: f64,
+        bottom: f64,
+    ) {
+        let cover = NativeChromeSeamCover {
+            terminal_left,
+            terminal_top,
+            terminal_right,
+            terminal_bottom,
+            left: left.max(0.0),
+            right: right.max(0.0),
+            top: top.max(0.0),
+            bottom: bottom.max(0.0),
+        };
+        if self.native_chrome_seam_cover.approx_eq(&cover) {
             return;
         }
-        self.native_seam_cover_width = cover_width;
+        self.native_chrome_seam_cover = cover;
         if let Some(host_view) = self.host_view {
             unsafe {
                 let frame: NSRect = msg_send![host_view, frame];
-                self.update_native_seam_frames(frame);
+                if let Some(bounds) = self.last_bounds {
+                    self.update_native_seam_frames(frame, bounds);
+                } else {
+                    self.sync_native_seam_visibility([0.0; 4]);
+                }
             }
         } else {
-            self.sync_native_seam_visibility();
+            self.sync_native_seam_visibility([0.0; 4]);
         }
     }
 
@@ -422,13 +513,14 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
-    fn update_native_seam_frames(&self, terminal_frame: NSRect) {
+    fn update_native_seam_frames(&self, terminal_frame: NSRect, bounds: Bounds<Pixels>) {
         let [left, right, top, bottom] = self.seam_views;
         if left.is_null() || right.is_null() || top.is_null() || bottom.is_null() {
             return;
         }
 
-        let seam = self.native_seam_cover_width;
+        let [left_cover, right_cover, top_cover, bottom_cover] =
+            self.native_chrome_seam_cover.widths_for_bounds(bounds);
         let x = terminal_frame.origin.x;
         let y = terminal_frame.origin.y;
         let width = terminal_frame.size.width.max(1.0);
@@ -436,20 +528,20 @@ impl GhosttyView {
 
         let frames = [
             NSRect::new(
-                cocoa::foundation::NSPoint::new(x - seam, y - seam),
-                cocoa::foundation::NSSize::new(seam, height + (seam * 2.0)),
+                cocoa::foundation::NSPoint::new(x - left_cover, y),
+                cocoa::foundation::NSSize::new(left_cover, height),
             ),
             NSRect::new(
-                cocoa::foundation::NSPoint::new(x + width, y - seam),
-                cocoa::foundation::NSSize::new(seam, height + (seam * 2.0)),
+                cocoa::foundation::NSPoint::new(x + width, y),
+                cocoa::foundation::NSSize::new(right_cover, height),
             ),
             NSRect::new(
                 cocoa::foundation::NSPoint::new(x, y + height),
-                cocoa::foundation::NSSize::new(width, seam),
+                cocoa::foundation::NSSize::new(width, top_cover),
             ),
             NSRect::new(
-                cocoa::foundation::NSPoint::new(x, y - seam),
-                cocoa::foundation::NSSize::new(width, seam),
+                cocoa::foundation::NSPoint::new(x, y - bottom_cover),
+                cocoa::foundation::NSSize::new(width, bottom_cover),
             ),
         ];
 
@@ -458,19 +550,18 @@ impl GhosttyView {
                 let _: () = msg_send![*seam_view, setFrame:frame];
             }
         }
-        self.sync_native_seam_visibility();
+        self.sync_native_seam_visibility([left_cover, right_cover, top_cover, bottom_cover]);
     }
 
     #[cfg(target_os = "macos")]
-    fn sync_native_seam_visibility(&self) {
-        let visible = self.native_view_visible.get()
-            && !self.awaiting_first_layout_visibility
-            && self.native_seam_cover_width > MIN_VISIBLE_NATIVE_SEAM_COVER_PT;
-        let hidden = if visible { NO } else { YES };
+    fn sync_native_seam_visibility(&self, widths: [f64; 4]) {
+        let base_visible = self.native_view_visible.get() && !self.awaiting_first_layout_visibility;
         unsafe {
-            for seam_view in self.seam_views {
+            for (seam_view, width) in self.seam_views.iter().zip(widths) {
                 if !seam_view.is_null() {
-                    let _: () = msg_send![seam_view, setHidden:hidden];
+                    let visible = base_visible && width > MIN_VISIBLE_NATIVE_SEAM_COVER_PT;
+                    let hidden = if visible { NO } else { YES };
+                    let _: () = msg_send![*seam_view, setHidden:hidden];
                 }
             }
         }
@@ -667,7 +758,7 @@ impl GhosttyView {
                     ),
                 );
                 let _: () = msg_send![host_view, setFrame:frame];
-                self.update_native_seam_frames(frame);
+                self.update_native_seam_frames(frame, bounds);
             }
         }
 
@@ -857,7 +948,12 @@ impl GhosttyView {
                 let effective_visible = visible && !self.awaiting_first_layout_visibility;
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![host_view, setHidden:hidden];
-                self.sync_native_seam_visibility();
+                if let Some(bounds) = self.last_bounds {
+                    let widths = self.native_chrome_seam_cover.widths_for_bounds(bounds);
+                    self.sync_native_seam_visibility(widths);
+                } else {
+                    self.sync_native_seam_visibility([0.0; 4]);
+                }
             }
         }
     }

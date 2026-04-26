@@ -22,7 +22,7 @@ const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
 #[cfg(target_os = "macos")]
-const MACOS_ACTIVE_NATIVE_SEAM_COVER_PT: f64 = 28.0;
+const MACOS_ACTIVE_NATIVE_SEAM_COVER_PT: f64 = 96.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
@@ -299,6 +299,34 @@ struct NSOperatingSystemVersion {
     patch_version: isize,
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Default)]
+struct NativeChromeSeamCoverState {
+    terminal_left: f64,
+    terminal_top: f64,
+    terminal_right: f64,
+    terminal_bottom: f64,
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeChromeSeamCoverState {
+    fn approx_eq(&self, other: &Self) -> bool {
+        const EPS: f64 = 0.25;
+        (self.terminal_left - other.terminal_left).abs() <= EPS
+            && (self.terminal_top - other.terminal_top).abs() <= EPS
+            && (self.terminal_right - other.terminal_right).abs() <= EPS
+            && (self.terminal_bottom - other.terminal_bottom).abs() <= EPS
+            && (self.left - other.left).abs() <= EPS
+            && (self.right - other.right).abs() <= EPS
+            && (self.top - other.top).abs() <= EPS
+            && (self.bottom - other.bottom).abs() <= EPS
+    }
+}
+
 #[derive(Clone)]
 struct ShellSuggestionResult {
     tab_idx: usize,
@@ -366,7 +394,7 @@ pub struct ConWorkspace {
     #[cfg(target_os = "macos")]
     last_window_resize_increment_millipoints: Option<(u32, u32)>,
     #[cfg(target_os = "macos")]
-    active_native_seam_cover_width: f64,
+    active_native_chrome_seam_cover: NativeChromeSeamCoverState,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -1249,7 +1277,7 @@ impl ConWorkspace {
             #[cfg(target_os = "macos")]
             last_window_resize_increment_millipoints: None,
             #[cfg(target_os = "macos")]
-            active_native_seam_cover_width: 0.0,
+            active_native_chrome_seam_cover: NativeChromeSeamCoverState::default(),
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             control_request_rx,
@@ -1291,20 +1319,34 @@ impl ConWorkspace {
     }
 
     #[cfg(target_os = "macos")]
-    fn sync_active_native_seam_cover_width(&mut self, width: f64, cx: &mut Context<Self>) {
-        if (self.active_native_seam_cover_width - width).abs() <= f64::EPSILON {
+    fn sync_active_native_chrome_seam_cover(
+        &mut self,
+        cover: NativeChromeSeamCoverState,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_native_chrome_seam_cover.approx_eq(&cover) {
             return;
         }
-        self.active_native_seam_cover_width = width;
+        self.active_native_chrome_seam_cover = cover;
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_terminals() {
-                terminal.set_native_seam_cover_width(width, cx);
+                terminal.set_native_chrome_seam_cover(
+                    cover.terminal_left,
+                    cover.terminal_top,
+                    cover.terminal_right,
+                    cover.terminal_bottom,
+                    cover.left,
+                    cover.right,
+                    cover.top,
+                    cover.bottom,
+                    cx,
+                );
             }
         }
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn sync_active_native_seam_cover_width(&mut self, _width: f64, _cx: &mut Context<Self>) {}
+    fn sync_active_native_chrome_seam_cover(&mut self, _cover: (), _cx: &mut Context<Self>) {}
 
     fn horizontal_tabs_visible(&self) -> bool {
         matches!(self.tabs_orientation, TabsOrientation::Horizontal) && self.tabs.len() > 1
@@ -6997,21 +7039,64 @@ impl Render for ConWorkspace {
         let tab_strip_progress = self.tab_strip_motion.value(window);
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
+        let effective_agent_panel_width = self
+            .agent_panel_width
+            .min(max_agent_panel_width(window.bounds().size.width.as_f32()));
+        let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
+        let top_bar_height = self.current_top_bar_height();
+        let window_size = window.bounds().size;
+        let vertical_tabs_width = if self.vertical_tabs_active() {
+            self.sidebar.read(cx).occupied_width()
+        } else {
+            0.0
+        };
         let sidebar_transitioning =
             self.vertical_tabs_active() && self.sidebar.read(cx).is_width_animating();
-        let chrome_seam_moving =
-            agent_panel_transitioning || input_bar_transitioning || sidebar_transitioning;
         #[cfg(target_os = "macos")]
-        self.sync_active_native_seam_cover_width(
-            if chrome_seam_moving || self.agent_panel_drag.is_some() {
-                MACOS_ACTIVE_NATIVE_SEAM_COVER_PT
-            } else {
-                0.0
+        self.sync_active_native_chrome_seam_cover(
+            NativeChromeSeamCoverState {
+                terminal_left: f64::from(vertical_tabs_width),
+                terminal_top: f64::from(top_bar_height),
+                terminal_right: f64::from(
+                    window_size.width.as_f32()
+                        - if agent_panel_progress > 0.01 {
+                            animated_panel_width + 1.0
+                        } else {
+                            0.0
+                        },
+                ),
+                terminal_bottom: f64::from(
+                    window_size.height.as_f32() - (43.0 * input_bar_progress),
+                ),
+                left: if sidebar_transitioning {
+                    MACOS_ACTIVE_NATIVE_SEAM_COVER_PT
+                } else {
+                    0.0
+                },
+                right: if agent_panel_transitioning || self.agent_panel_drag.is_some() {
+                    MACOS_ACTIVE_NATIVE_SEAM_COVER_PT
+                } else {
+                    0.0
+                },
+                top: 0.0,
+                bottom: if input_bar_transitioning {
+                    MACOS_ACTIVE_NATIVE_SEAM_COVER_PT
+                } else {
+                    0.0
+                },
             },
             cx,
         );
         #[cfg(not(target_os = "macos"))]
-        let _ = chrome_seam_moving;
+        {
+            let _ = (
+                window_size,
+                vertical_tabs_width,
+                sidebar_transitioning,
+                input_bar_transitioning,
+                agent_panel_transitioning,
+            );
+        }
 
         // Render the vertical-tabs hover-card overlay up front so it
         // takes the (re-entrant) sidebar borrow before `theme` claims
@@ -7034,10 +7119,6 @@ impl Render for ConWorkspace {
             .clamp(0.0, 1.0)
             .powf(0.92);
         let compact_titlebar_progress = 1.0 - tab_strip_progress;
-        let effective_agent_panel_width = self
-            .agent_panel_width
-            .min(max_agent_panel_width(window.bounds().size.width.as_f32()));
-        let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -7130,7 +7211,6 @@ impl Render for ConWorkspace {
         }
 
         // Top bar — compact titlebar for one tab, full strip for many
-        let top_bar_height = self.current_top_bar_height();
         let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
         // macOS: leave 78px for the system traffic-light cluster that

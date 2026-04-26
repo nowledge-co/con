@@ -124,13 +124,45 @@ impl TerminalPane {
         self.entity.read(cx).set_visible(visible);
     }
 
-    pub fn set_native_seam_cover_width(&self, width: f64, cx: &mut App) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_native_chrome_seam_cover(
+        &self,
+        terminal_left: f64,
+        terminal_top: f64,
+        terminal_right: f64,
+        terminal_bottom: f64,
+        left: f64,
+        right: f64,
+        top: f64,
+        bottom: f64,
+        cx: &mut App,
+    ) {
         #[cfg(target_os = "macos")]
-        self.entity
-            .update(cx, |view, _| view.set_native_seam_cover_width(width));
+        self.entity.update(cx, |view, _| {
+            view.set_native_chrome_seam_cover(
+                terminal_left,
+                terminal_top,
+                terminal_right,
+                terminal_bottom,
+                left,
+                right,
+                top,
+                bottom,
+            )
+        });
 
         #[cfg(not(target_os = "macos"))]
-        let _ = (width, cx);
+        let _ = (
+            terminal_left,
+            terminal_top,
+            terminal_right,
+            terminal_bottom,
+            left,
+            right,
+            top,
+            bottom,
+            cx,
+        );
     }
 
     pub fn shutdown_surface(&self, cx: &mut App) {
