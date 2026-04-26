@@ -19,7 +19,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Tightened Windows staging mailbox behavior further so command bursts discard older in-flight readback cache entries and present the newest completed frame instead of replaying intermediate full-screen snapshots.
 - Extended Windows interactive low-latency mode long enough to cover delayed command-start output, so shells and TUIs that begin painting a few hundred milliseconds after Enter can still take the freshest-frame path instead of falling back to delayed non-blocking readback.
 - Reduced Windows input/readback latency by deriving exact changed VT rows even when libghostty-vt reports a full render-state dirty flag, then copying only those pixel rows from the D3D render target into the staging readback texture for small terminal updates.
-- Reduced Windows GPUI image handoff cost by keeping a full base terminal image and layering dirty-row strip images on top, so single-line input and prompt updates no longer rebuild and re-upload the entire terminal surface.
+- Reduced Windows readback cost with dirty-row D3D copies while preserving translucent-terminal correctness by replacing dirty rows in a CPU backing frame instead of alpha-blending row overlays over stale pixels.
 - Expanded Windows profiling behind `CON_GHOSTTY_PROFILE` so one run now captures ConPTY read-chunk cadence, renderer sub-stage timings (drain/draw/submit/block-drain), `RenderSession::render_frame`, and the GPUI image-wrap stage alongside the shared VT snapshot timings; idle unchanged frames are filtered by default, with `CON_GHOSTTY_PROFILE_VERBOSE=1` available for every-frame traces.
 
 ## **v0.1.0-beta.38** - 2026-04-24

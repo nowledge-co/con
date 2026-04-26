@@ -9,11 +9,14 @@
 //! Paint model:
 //! - No child HWND. The renderer draws into an offscreen D3D11 texture
 //!   and hands back BGRA bytes each dirty frame.
-//! - Full redraws replace a base `Arc<RenderImage>`; dirty-row redraws
-//!   replace narrow row-strip overlay images. The terminal pane lives
-//!   inside GPUI's DirectComposition tree so modals (settings, command
-//!   palette) and newly-opened panes compose correctly — no z-order
-//!   flashes, no "modal is 100% transparent over the pane".
+//! - Full redraws replace a CPU-side BGRA backing frame; dirty-row
+//!   redraws patch that backing frame before publishing one
+//!   `Arc<RenderImage>`. We do not layer translucent row-strip images
+//!   over an old base image because alpha blending cannot erase stale
+//!   glyph pixels. The terminal pane lives inside GPUI's
+//!   DirectComposition tree so modals (settings, command palette) and
+//!   newly-opened panes compose correctly — no z-order flashes, no
+//!   "modal is 100% transparent over the pane".
 //!
 //! Lifecycle:
 //!
@@ -69,12 +72,6 @@ impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 
-struct CachedImagePatch {
-    y_px: u32,
-    height_px: u32,
-    image: Arc<RenderImage>,
-}
-
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
@@ -97,13 +94,16 @@ pub struct GhosttyView {
     last_physical_size: Option<(u32, u32)>,
     /// Last scale factor handed to `session.set_dpi`.
     last_scale_factor: f32,
-    /// The most recently rendered full frame, wrapped as a GPUI image.
-    /// Each `RenderImage` has a unique `ImageId`, so dirty-row frames
-    /// are layered as small overlay patches instead of replacing this
-    /// full-size image and forcing a full sprite-atlas upload.
+    /// The most recently rendered frame, wrapped as a GPUI image.
     cached_image: Option<Arc<RenderImage>>,
-    /// Dirty-row overlays painted on top of `cached_image`.
-    cached_patches: Vec<CachedImagePatch>,
+    /// CPU-side copy of the current BGRA frame. Dirty-row readbacks
+    /// replace byte ranges in this backing store before we publish a new
+    /// full `RenderImage`. Keeping the replacement semantics here is
+    /// required while the terminal background is translucent: GPUI image
+    /// children alpha-composite, so row-strip overlays would blend with
+    /// stale text instead of erasing it.
+    cached_frame: Option<Vec<u8>>,
+    cached_frame_size: Option<(u32, u32)>,
     /// Replaced images, kept live until the next prepaint so the paint
     /// that referenced them has finished. Dropped after via
     /// `Window::drop_image` to evict sprite-atlas tiles.
@@ -169,7 +169,8 @@ impl GhosttyView {
             last_physical_size: None,
             last_scale_factor: 0.0,
             cached_image: None,
-            cached_patches: Vec::new(),
+            cached_frame: None,
+            cached_frame_size: None,
             images_to_drop: Vec::new(),
             wake_tx,
             wake_pending,
@@ -216,7 +217,8 @@ impl GhosttyView {
         // the window closes; no way to reach `Window::drop_image` from
         // here. A per-pane ~2×framebytes residue is acceptable.
         self.cached_image = None;
-        self.cached_patches.clear();
+        self.cached_frame = None;
+        self.cached_frame_size = None;
         self.images_to_drop.clear();
         self.last_physical_size = None;
     }
@@ -394,11 +396,10 @@ impl GhosttyView {
                             .unwrap_or(0.0);
                         log::info!(
                             target: "con::perf",
-                            "win_sync_render outcome=rendered width_px={} height_px={} patches={} overlays={} session_ms={:.3} image_ms={:.3} total_ms={:.3}",
+                            "win_sync_render outcome=rendered width_px={} height_px={} patches={} session_ms={:.3} image_ms={:.3} total_ms={:.3}",
                             width_px,
                             height_px,
                             patch_count,
-                            self.cached_patches.len(),
                             render_frame_ms,
                             image_ms,
                             started.elapsed().as_secs_f64() * 1000.0,
@@ -433,54 +434,114 @@ impl GhosttyView {
     }
 
     fn cache_rendered_frame(&mut self, frame: FrameBgra) -> bool {
-        let mut rendered = false;
+        let frame_width = frame.width;
+        let frame_height = frame.height;
+        let frame_len = (frame_width as usize)
+            .saturating_mul(frame_height as usize)
+            .saturating_mul(4);
+        if frame_width == 0 || frame_height == 0 || frame_len == 0 {
+            return false;
+        }
+
+        if self.cached_frame_size != Some((frame_width, frame_height)) {
+            self.cached_frame = None;
+            self.cached_frame_size = None;
+        }
+
+        let mut changed = false;
 
         for patch in frame.patches {
             let patch_y = patch.y;
             let patch_height = patch.height;
             let is_full_frame = patch_y == 0 && patch_height == frame.height;
-            let Some(image) = bgra_frame_to_image(patch.bytes, frame.width, patch_height) else {
-                continue;
-            };
-
-            if is_full_frame {
-                if let Some(old) = self.cached_image.replace(image) {
-                    self.images_to_drop.push(old);
-                }
-                for old in self.cached_patches.drain(..) {
-                    self.images_to_drop.push(old.image);
-                }
-            } else if self.cached_image.is_some() {
-                let mut retained = Vec::with_capacity(self.cached_patches.len());
-                for old in self.cached_patches.drain(..) {
-                    if ranges_overlap(old.y_px, old.height_px, patch_y, patch_height) {
-                        self.images_to_drop.push(old.image);
-                    } else {
-                        retained.push(old);
-                    }
-                }
-                self.cached_patches = retained;
-                self.cached_patches.push(CachedImagePatch {
-                    y_px: patch_y,
-                    height_px: patch_height,
-                    image,
-                });
-                self.cached_patches.sort_by_key(|patch| patch.y_px);
-            } else {
-                log::debug!("Ignoring partial Windows terminal patch before first full frame");
+            let patch_len = (frame_width as usize)
+                .saturating_mul(patch_height as usize)
+                .saturating_mul(4);
+            if patch_height == 0 || patch.bytes.len() != patch_len {
+                log::warn!(
+                    "Ignoring malformed Windows terminal patch: y={} height={} bytes={} expected={}",
+                    patch_y,
+                    patch_height,
+                    patch.bytes.len(),
+                    patch_len
+                );
                 continue;
             }
 
-            rendered = true;
+            if is_full_frame {
+                self.cached_frame = Some(patch.bytes);
+                self.cached_frame_size = Some((frame_width, frame_height));
+                changed = true;
+                continue;
+            }
+
+            let Some(backing_len) = self.cached_frame.as_ref().map(Vec::len) else {
+                log::debug!("Ignoring partial Windows terminal patch before first full frame");
+                continue;
+            };
+            if backing_len != frame_len {
+                log::warn!(
+                    "Dropping Windows terminal backing frame with unexpected len {} != {}",
+                    backing_len,
+                    frame_len
+                );
+                self.cached_frame = None;
+                self.cached_frame_size = None;
+                continue;
+            }
+
+            let patch_bottom = patch_y.saturating_add(patch_height).min(frame_height);
+            if patch_y >= patch_bottom {
+                continue;
+            }
+
+            let row_bytes = frame_width as usize * 4;
+            let rows_to_copy = (patch_bottom - patch_y) as usize;
+            let src_len = rows_to_copy * row_bytes;
+            if src_len > patch.bytes.len() {
+                log::warn!(
+                    "Ignoring truncated Windows terminal patch: y={} rows={} bytes={} expected_at_least={}",
+                    patch_y,
+                    rows_to_copy,
+                    patch.bytes.len(),
+                    src_len
+                );
+                continue;
+            }
+
+            let Some(backing) = self.cached_frame.as_mut() else {
+                continue;
+            };
+            for row in 0..rows_to_copy {
+                let dst_start = (patch_y as usize + row) * row_bytes;
+                let src_start = row * row_bytes;
+                backing[dst_start..dst_start + row_bytes]
+                    .copy_from_slice(&patch.bytes[src_start..src_start + row_bytes]);
+            }
+            changed = true;
         }
 
-        rendered
+        if changed
+            && let Some(bytes) = self.cached_frame.as_ref().cloned()
+            && let Some(image) = bgra_frame_to_image(bytes, frame_width, frame_height)
+        {
+            if let Some(old) = self.cached_image.replace(image) {
+                self.images_to_drop.push(old);
+            }
+            self.cached_frame_size = Some((frame_width, frame_height));
+            return true;
+        }
+
+        if changed {
+            self.cached_frame = None;
+            self.cached_frame_size = None;
+        }
+
+        false
     }
 
     fn image_children(&self) -> Vec<AnyElement> {
-        let mut children = Vec::with_capacity(
-            usize::from(self.cached_image.is_some()) + self.cached_patches.len(),
-        );
+        let mut children = Vec::with_capacity(usize::from(self.cached_image.is_some()));
         // `ObjectFit::Fill` keeps each image quad exactly equal to its
         // logical bounds. The default `Contain` applies aspect-ratio
         // letterboxing using float math, which produces a quad a
@@ -491,20 +552,6 @@ impl GhosttyView {
             children.push(
                 img(ImageSource::Render(img_arc))
                     .size_full()
-                    .object_fit(ObjectFit::Fill)
-                    .into_any_element(),
-            );
-        }
-
-        let scale_factor = self.scale_factor.max(f32::EPSILON);
-        for patch in &self.cached_patches {
-            children.push(
-                img(ImageSource::Render(patch.image.clone()))
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .top(px(patch.y_px as f32 / scale_factor))
-                    .h(px(patch.height_px as f32 / scale_factor))
                     .object_fit(ObjectFit::Fill)
                     .into_any_element(),
             );
@@ -755,12 +802,6 @@ fn bgra_frame_to_image(bytes: Vec<u8>, width: u32, height: u32) -> Option<Arc<Re
     let frame = Frame::new(buffer);
     let data: SmallVec<[Frame; 1]> = SmallVec::from_buf([frame]);
     Some(Arc::new(RenderImage::new(data)))
-}
-
-fn ranges_overlap(a_y: u32, a_height: u32, b_y: u32, b_height: u32) -> bool {
-    let a_end = a_y.saturating_add(a_height);
-    let b_end = b_y.saturating_add(b_height);
-    a_y < b_end && b_y < a_end
 }
 
 /// xterm modifier parameter (`m`) — `1 + (shift | alt<<1 | ctrl<<2)`,

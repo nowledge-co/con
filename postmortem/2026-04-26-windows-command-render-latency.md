@@ -43,7 +43,9 @@ small queueing mistakes across the end-to-end path:
    presented first, producing the visible "slide" effect.
 3. **Small updates still paid full-image handoff cost.** Dirty-row D3D
    readback helped, but GPUI still received new full terminal images until
-   the row-strip overlay path landed.
+   the row-local handoff landed. The first version used row overlays,
+   which later had to be corrected to CPU-backed replacement for
+   translucent backgrounds.
 4. **Low-latency arming was too short for real commands.** The first
    latency-critical window covered immediate echo but not delayed command
    start / prompt redraw output.
@@ -63,8 +65,8 @@ small queueing mistakes across the end-to-end path:
   than presented.
 - Derived exact changed VT rows and copied only those D3D pixel rows for
   small updates.
-- Kept a full base GPUI image and layered row-strip patch images for
-  row-local changes.
+- Kept a CPU BGRA backing frame and replaced row byte ranges for
+  row-local changes before publishing the GPUI image.
 - Extended the interactive low-latency window so delayed command-start
   output can still take the freshest-frame path.
 - Aligned the default Windows shell with Windows Terminal where possible:
@@ -84,12 +86,13 @@ C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
 
 The same run showed the intended steady-state shape:
 
-- one-line interactive updates used row-strip readback / overlay handoff
-  (`readback_rows=35`, `patches=1 overlays=1`) and usually landed around
-  1-3 ms end-to-end inside con's measured render path;
-- medium command output stayed row-local when possible (`readback_rows=70`
-  or `875`, multiple patches/overlays) rather than rebuilding the full
-  surface for every chunk;
+- one-line interactive updates used row-strip D3D readback and
+  CPU-backed row replacement (`readback_rows=35`, `patches=1`) and
+  usually landed around 1-3 ms end-to-end inside con's measured render
+  path;
+- medium command output stayed row-local on the D3D readback side when
+  possible (`readback_rows=70` or `875`, multiple patches) rather than
+  reading back the full surface for every chunk;
 - full or near-full redraws still cost several milliseconds because they
   necessarily travel through the temporary GPU→CPU→GPUI image path.
 
@@ -106,14 +109,16 @@ direct-composition follow-up.
 - For interactive command output, the freshest frame matters more than
   delivering every intermediate frame. Mailbox semantics are the right
   default for PTY-driven redraws.
-- A dirty-row renderer is incomplete unless the UI handoff is also
-  row-local. Otherwise one changed command line still becomes a full-frame
-  CPU clone and upload.
+- A dirty-row renderer is incomplete unless the UI handoff preserves row
+  replacement semantics. For translucent terminal images, row overlays
+  alpha-blend with stale pixels; the bridge now patches a CPU BGRA
+  backing frame before publishing the image.
 - Performance comparisons must control the shell and prompt. PowerShell
   profiles, oh-my-posh/starship hooks, WSL startup, and `pwsh.exe` vs
   `powershell.exe` can easily account for hundreds of milliseconds before
   con's renderer is involved.
 - The long-term architecture is still direct swap-chain composition into
-  GPUI's DirectComposition tree. The row-patch path is the right tactical
-  bridge because it removes the visible latency without changing terminal
-  semantics or blocking the upstream composition work.
+  GPUI's DirectComposition tree. The dirty-row readback plus CPU backing
+  frame is the right tactical bridge because it removes the visible
+  latency without changing terminal semantics or blocking the upstream
+  composition work.
