@@ -17,7 +17,7 @@ con is still pre-release, so entries may group related beta work while the produ
   - **Pinned panel** — full panel (~240 px) with two-line rows (name in system font, optional cwd / `user@host` subtitle in mono). Persisted across restart via `session.vertical_tabs_pinned`.
 - Smart per-tab naming. Priority: **user override → AI summary → SSH host → focused process** (parsed from the OSC-set terminal title — `vim README.md`, `htop`, `less log.txt`, etc.) **→ cwd basename → shell**. Bare shells fall through so a row never reads as "bash" when there's something more useful.
 - AI labels and icons via a new `TabSummaryEngine` in `con-core`. Each tab's `(cwd, recent commands, OSC title, recent terminal scrollback)` is summarized by the user's already-configured suggestion model into a 1–3 word label and one icon from a closed Phosphor set: `terminal`, `code`, `pulse`, `book-open`, `file-code`, `globe`.
-- The AI summarizer uses a JSON response shape (`{"label": "...", "icon": "..."}`) with a tolerant bracket-balanced parser instead of the original `LABEL|ICON` plain-text format, so reasoning models and markdown-fenced answers are handled without rendering malformed labels.
+- The AI summarizer uses a JSON response shape (`{"label": "...", "icon": "..."}`) with a tolerant bracket-balanced parser instead of the original `LABEL|ICON` plain-text format, so reasoning models and Markdown-fenced answers are handled without rendering malformed labels.
 - Periodic AI re-summarization now polls `request_tab_summaries` every 3 s. The engine stays gated on `agent.suggestion_model.enabled`, short-circuits SSH tabs to host + globe with no LLM call, and uses a per-tab context cache plus 5 s success budget so re-asks stay bounded.
 - Smart per-tab icons keyed off the focused process when no AI is available: `terminal` for shells, `globe` for SSH, `</>` for editors (vim/nvim/nano/emacs/helix/code), `pulse` for monitors (htop/top/btop/k9s), `book-open` for pagers (less/more/man/bat), `file-code` for git tools (git/lazygit/tig/gh). User-labelled tabs still get a smart icon picked from the live process / SSH signal — or from the AI summary when available.
 - No emoji anywhere in the panel — every glyph is a Phosphor SVG.
@@ -32,11 +32,11 @@ con is still pre-release, so entries may group related beta work while the produ
 ### Improved
 
 **Agent Panel**
-- Reworked long restored agent replies to cache rendered markdown by block, so typing, scrolling, and revealing more content no longer recreate every paragraph/table/code layout inside a large assistant response.
-- Fixed wide markdown table scrolling so vertical transcript scroll no longer gets hijacked into sideways table movement, while preserving a structured rich-table layout with a native horizontal scrollbar for oversized tables.
+- Reworked long restored agent replies to cache rendered Markdown by block, so typing, scrolling, and revealing more content no longer recreate every paragraph/table/code layout inside a large assistant response.
+- Fixed wide Markdown table scrolling so vertical transcript scroll no longer gets hijacked into sideways table movement, while preserving a structured rich-table layout with a native horizontal scrollbar for oversized tables.
 - Added more deliberate transcript gutters so user and assistant messages no longer collide with the panel edge or scrollbar.
-- Normalized con's embedded mono font family for GPUI-rendered code blocks and terminal chrome so markdown code uses the intended IoskeleyMono face instead of platform font fallback.
-- Hardened restored-session markdown caching so stale assistant views are cleared when switching or clearing conversations, and in-flight markdown parses cannot attach to the wrong message after reruns or state swaps.
+- Normalized con's embedded mono font family for GPUI-rendered code blocks and terminal chrome so Markdown code uses the intended IoskeleyMono face instead of platform font fallback.
+- Hardened restored-session Markdown caching so stale assistant views are cleared when switching or clearing conversations, and in-flight Markdown parses cannot attach to the wrong message after reruns or state swaps.
 
 **Terminal — Windows Backend (preview)**
 - Made Windows command rendering feel substantially closer to native terminals by closing the full PTY-to-paint loop: ConPTY output wakes are preserved, stale readbacks are discarded with mailbox semantics, row-local D3D readbacks stay row-local through GPUI image handoff, and delayed command-start output remains latency-critical long enough to present fresh frames.
