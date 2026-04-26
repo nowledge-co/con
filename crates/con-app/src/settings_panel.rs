@@ -3784,7 +3784,7 @@ impl SettingsPanel {
             ("Command Palette", "command_palette"),
             ("Toggle Agent", "toggle_agent"),
             ("Toggle Input Bar", "toggle_input_bar"),
-            ("Focus Input", "focus_input"),
+            ("Toggle Input / Terminal", "focus_input"),
             ("Cycle Input Mode", "cycle_input_mode"),
             ("Toggle Pane Scope", "toggle_pane_scope"),
             ("Quit", "quit"),
