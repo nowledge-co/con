@@ -222,8 +222,8 @@ use crate::settings_panel::{
     self, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
 use crate::sidebar::{
-    NewSession, SessionEntry, SessionSidebar, SidebarCloseOthers, SidebarCloseTab,
-    SidebarDuplicate, SidebarRename, SidebarReorder, SidebarSelect,
+    NewSession, PANEL_WIDTH, RAIL_WIDTH, SessionEntry, SessionSidebar, SidebarCloseOthers,
+    SidebarCloseTab, SidebarDuplicate, SidebarRename, SidebarReorder, SidebarSelect,
 };
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
@@ -7068,11 +7068,7 @@ impl Render for ConWorkspace {
                 terminal_bottom: f64::from(
                     window_size.height.as_f32() - (43.0 * input_bar_progress),
                 ),
-                left: if sidebar_transitioning {
-                    MACOS_ACTIVE_NATIVE_SEAM_COVER_PT
-                } else {
-                    0.0
-                },
+                left: 0.0,
                 right: if agent_panel_transitioning || self.agent_panel_drag.is_some() {
                     MACOS_ACTIVE_NATIVE_SEAM_COVER_PT
                 } else {
@@ -7790,14 +7786,32 @@ impl Render for ConWorkspace {
             .child(top_bar)
             .child(main_area);
 
-        if agent_panel_transitioning && agent_panel_progress > 0.01 {
+        if sidebar_transitioning {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(top_bar_height))
+                    .bottom(px(43.0 * input_bar_progress))
+                    .left(px(RAIL_WIDTH))
+                    .w(px(PANEL_WIDTH - RAIL_WIDTH + 12.0))
+                    .bg(theme.background.opacity(elevated_ui_surface_opacity)),
+            );
+        }
+
+        if (agent_panel_transitioning || self.agent_panel_drag.is_some())
+            && agent_panel_progress > 0.01
+        {
             root = root.child(
                 div()
                     .absolute()
                     .top(px(top_bar_height))
                     .bottom(px(43.0 * input_bar_progress))
                     .right(px(animated_panel_width))
-                    .w(px(CHROME_TRANSITION_SEAM_COVER))
+                    .w(px(if self.agent_panel_drag.is_some() {
+                        64.0
+                    } else {
+                        CHROME_TRANSITION_SEAM_COVER
+                    }))
                     .bg(theme.background.opacity(elevated_ui_surface_opacity)),
             );
         }
