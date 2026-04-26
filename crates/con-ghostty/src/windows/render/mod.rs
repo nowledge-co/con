@@ -28,7 +28,6 @@ mod font_loader;
 mod pipeline;
 
 use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -49,6 +48,7 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::DXGI_ERROR_WAS_STILL_DRAWING;
 
+use super::profile::{perf_trace_enabled, perf_trace_verbose};
 use super::vt::{ATTR_INVERSE, ATTR_STRIKE, ATTR_UNDERLINE, Cell, ScreenSnapshot};
 use atlas::{GlyphCache, GlyphKey};
 use pipeline::{Globals, Instance, Pipeline, instance_for_cell};
@@ -926,20 +926,6 @@ impl Renderer {
         drop(pipeline);
         Ok(())
     }
-}
-
-fn perf_trace_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
-    })
-}
-
-fn perf_trace_verbose() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var_os("CON_GHOSTTY_PROFILE_VERBOSE").is_some_and(|v| !v.is_empty() && v != "0")
-    })
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -34,6 +34,7 @@
 //! 4. Drop releases the `RenderSession` and ends the child shell.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use con_ghostty::{GhosttyApp, GhosttySplitDirection, GhosttyTerminal};
@@ -108,12 +109,13 @@ pub struct GhosttyView {
     /// `Window::drop_image` to evict sprite-atlas tiles.
     images_to_drop: Vec<Arc<RenderImage>>,
     /// Cloned and handed to `RenderSession::new`; the ConPTY reader
-    /// thread sends `()` here after each chunk it feeds into the VT
-    /// parser. The coalescer task spawned in `new()` consumes those
-    /// signals on the GPUI thread and pokes `cx.notify()` so freshly
+    /// thread sends at most one queued signal while a repaint wake is
+    /// pending. The coalescer task spawned in `new()` consumes that
+    /// signal on the GPUI thread and pokes `cx.notify()` so freshly
     /// arrived shell output paints on the next prepaint instead of
     /// waiting for the next user input event.
     wake_tx: UnboundedSender<()>,
+    wake_pending: Arc<AtomicBool>,
 }
 
 enum SyncRenderResult {
@@ -136,16 +138,16 @@ impl GhosttyView {
     ) -> Self {
         let terminal = Arc::new(GhosttyTerminal::new());
         let (wake_tx, mut wake_rx) = unbounded::<()>();
+        let wake_pending = Arc::new(AtomicBool::new(false));
 
-        // Output wake path: each ConPTY read posts one wake signal.
-        // Preserve those wakes instead of draining them into a single
-        // notify so command output can keep advancing across successive
-        // prepaints rather than appearing in larger collapsed batches.
-        // GPUI already coalesces notifies within one frame boundary, so
-        // the important thing here is to avoid throwing later output
-        // wakes away before the next prepaint has had a chance to run.
+        // Output wake path: the ConPTY reader may produce many chunks
+        // while GPUI is blocked or the window is minimized. Queue at
+        // most one pending wake; the renderer's mailbox owns latest-frame
+        // semantics, so more `()` entries would only grow memory.
+        let pending_for_task = wake_pending.clone();
         cx.spawn(async move |this, cx| {
             while wake_rx.next().await.is_some() {
+                pending_for_task.store(false, Ordering::Release);
                 if this.update(cx, |_, cx| cx.notify()).is_err() {
                     return;
                 }
@@ -170,6 +172,7 @@ impl GhosttyView {
             cached_patches: Vec::new(),
             images_to_drop: Vec::new(),
             wake_tx,
+            wake_pending,
         }
     }
 
@@ -281,11 +284,18 @@ impl GhosttyView {
         config.initial_height = height_px;
 
         let wake_tx = self.wake_tx.clone();
+        let wake_pending = self.wake_pending.clone();
         let wake = move || {
             // `unbounded_send` only fails after the receiver is dropped,
             // which happens when the view dies — at which point losing
             // a wake is harmless.
-            let _ = wake_tx.unbounded_send(());
+            if wake_pending
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+                && wake_tx.unbounded_send(()).is_err()
+            {
+                wake_pending.store(false, Ordering::Release);
+            }
         };
 
         match RenderSession::new(width_px, height_px, dpi, config, wake) {

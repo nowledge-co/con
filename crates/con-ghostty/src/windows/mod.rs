@@ -23,6 +23,7 @@ pub mod backend;
 pub mod clipboard;
 pub mod conpty;
 pub mod host_view;
+mod profile;
 pub mod render;
 pub mod vt;
 

@@ -211,12 +211,16 @@ impl LinuxGhosttyTerminal {
 
     pub fn spawn_with_options(&self, options: LinuxPtyOptions) -> Result<(), String> {
         let mut options = options;
-        options.wake_callback = self.wake_callback.lock().clone();
+        if options.wake_callback.is_none() {
+            options.wake_callback = self.wake_callback.lock().clone();
+        }
         let session = LinuxPtySession::spawn(options).map_err(|err| err.to_string())?;
         self.attach(session);
         Ok(())
     }
 
+    /// Set the callback used by subsequent `spawn_with_options` calls.
+    /// Existing PTY sessions keep the callback captured at spawn time.
     pub fn set_wake_callback(&self, callback: Option<LinuxWakeCallback>) {
         *self.wake_callback.lock() = callback;
     }

@@ -624,14 +624,12 @@ fn windows_terminal_profile_command(profile: &serde_json::Value) -> Option<Strin
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "cmd.exe".to_string()),
         ),
-        "Windows.Terminal.Wsl" => {
-            let Some(distro) =
-                profile_string(profile, "name").filter(|name| !name.trim().is_empty())
-            else {
-                return Some("wsl.exe".to_string());
-            };
-            Some(format!("wsl.exe -d {}", quote_command_arg(distro.trim())))
-        }
+        // Windows Terminal dynamic WSL profiles don't always persist the
+        // distro command line, and `name` is user-editable display text,
+        // not a stable distro id. Prefer a valid default WSL launch over
+        // constructing `wsl.exe -d <display-name>` and failing startup for
+        // renamed profiles.
+        "Windows.Terminal.Wsl" => Some("wsl.exe".to_string()),
         _ => None,
     }
 }

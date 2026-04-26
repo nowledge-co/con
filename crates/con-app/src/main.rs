@@ -953,11 +953,13 @@ fn main() {
     if std::env::var_os("RUST_LOG").is_none() {
         builder.filter_level(log::LevelFilter::Info);
     }
+    let mut log_file_path = None;
     if let Some(path) = std::env::var_os("CON_LOG_FILE") {
         match std::fs::File::create(&path) {
             Ok(file) => {
                 builder.target(env_logger::Target::Pipe(Box::new(file)));
                 builder.write_style(env_logger::WriteStyle::Never);
+                log_file_path = Some(std::path::PathBuf::from(&path));
             }
             Err(err) => {
                 eprintln!(
@@ -970,8 +972,8 @@ fn main() {
     builder.init();
 
     log::info!("con starting (pid {})", std::process::id());
-    if let Some(path) = std::env::var_os("CON_LOG_FILE") {
-        log::info!("logging to {}", std::path::Path::new(&path).display());
+    if let Some(path) = log_file_path.as_ref() {
+        log::info!("logging to {}", path.display());
     }
     apply_linux_platform_override();
 
