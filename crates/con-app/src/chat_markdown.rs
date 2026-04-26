@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
@@ -526,10 +527,16 @@ impl ChatMarkdownBlockView {
                 .background_spawn(async move {
                     let result: anyhow::Result<Arc<RenderImage>> = (|| {
                         let svg = match background_key.kind {
-                            RichSvgRenderKind::Mermaid => mermaid_rs_renderer::render_with_options(
-                                background_key.source.as_ref(),
-                                mermaid_render_options(background_key.theme_mode),
-                            )?,
+                            RichSvgRenderKind::Mermaid => {
+                                let source = mermaid_source_for_theme(
+                                    background_key.source.as_ref(),
+                                    background_key.theme_mode,
+                                );
+                                mermaid_rs_renderer::render_with_options(
+                                    source.as_ref(),
+                                    mermaid_render_options(background_key.theme_mode),
+                                )?
+                            }
                             RichSvgRenderKind::Math => {
                                 let options = mathjax_svg_rs::Options {
                                     font_size: background_key.metric as f64 / 1000.0,
@@ -1690,6 +1697,97 @@ fn mermaid_render_options(theme_mode: RichSvgThemeMode) -> mermaid_rs_renderer::
     options
 }
 
+fn mermaid_source_for_theme(source: &str, theme_mode: RichSvgThemeMode) -> Cow<'_, str> {
+    if !matches!(theme_mode, RichSvgThemeMode::Dark) {
+        return Cow::Borrowed(source);
+    }
+
+    let mut rewritten = None::<String>;
+    let mut cursor = 0;
+    for line in source.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let should_rewrite = (trimmed.starts_with("style ") || trimmed.starts_with("classDef "))
+            && mermaid_style_has_key(trimmed, "fill")
+            && !mermaid_style_has_key(trimmed, "color");
+        if should_rewrite
+            && let Some(fill) = mermaid_style_value(trimmed, "fill")
+        {
+            let text_color = if mermaid_fill_is_light(fill) {
+                "#0F172A"
+            } else {
+                "#F8FAFC"
+            };
+            let out = rewritten.get_or_insert_with(|| source[..cursor].to_string());
+            let line_without_newline = line.trim_end_matches('\n');
+            out.push_str(line_without_newline);
+            out.push_str(",color:");
+            out.push_str(text_color);
+            if line.ends_with('\n') {
+                out.push('\n');
+            }
+        } else if let Some(out) = rewritten.as_mut() {
+            out.push_str(line);
+        }
+        cursor += line.len();
+    }
+
+    if cursor < source.len() {
+        if let Some(out) = rewritten.as_mut() {
+            out.push_str(&source[cursor..]);
+        }
+    }
+
+    rewritten.map_or(Cow::Borrowed(source), Cow::Owned)
+}
+
+fn mermaid_style_has_key(line: &str, key: &str) -> bool {
+    mermaid_style_value(line, key).is_some()
+}
+
+fn mermaid_style_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let styles = if let Some(rest) = line.strip_prefix("style ") {
+        rest.trim_start().split_once(char::is_whitespace)?.1
+    } else if let Some(rest) = line.strip_prefix("classDef ") {
+        rest.trim_start().split_once(char::is_whitespace)?.1
+    } else {
+        return None;
+    };
+
+    styles.trim_start().split(',').find_map(|part| {
+        let (part_key, value) = part.split_once(':')?;
+        (part_key.trim() == key).then(|| value.trim())
+    })
+}
+
+fn mermaid_fill_is_light(fill: &str) -> bool {
+    let Some((r, g, b)) = mermaid_hex_color(fill) else {
+        return false;
+    };
+    let luminance = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b);
+    luminance >= 150.0
+}
+
+fn mermaid_hex_color(fill: &str) -> Option<(u8, u8, u8)> {
+    let fill = fill.trim();
+    let hex = fill.strip_prefix('#')?;
+    match hex.len() {
+        3 => {
+            let mut chars = hex.chars();
+            let r = chars.next()?.to_digit(16)? as u8;
+            let g = chars.next()?.to_digit(16)? as u8;
+            let b = chars.next()?.to_digit(16)? as u8;
+            Some((r * 17, g * 17, b * 17))
+        }
+        6 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            Some((r, g, b))
+        }
+        _ => None,
+    }
+}
+
 fn mermaid_dark_theme() -> mermaid_rs_renderer::Theme {
     let mut theme = mermaid_rs_renderer::Theme::modern();
     theme.primary_color = "#1E293B".to_string();
@@ -2295,13 +2393,20 @@ mod tests {
         let mermaid = mermaid_rs_renderer::render("flowchart TD\n  A-->B").unwrap();
         assert!(mermaid.contains("<svg"));
 
+        let styled_dark_source = mermaid_source_for_theme(
+            "flowchart TD\n  A{ i < n? }\n  style A fill:#e1f5fe,stroke:#03a9f4\n",
+            RichSvgThemeMode::Dark,
+        );
+        assert!(styled_dark_source.contains("color:#0F172A"));
+
         let dark_mermaid = mermaid_rs_renderer::render_with_options(
-            "flowchart TD\n  A-->B",
+            styled_dark_source.as_ref(),
             mermaid_render_options(RichSvgThemeMode::Dark),
         )
         .unwrap();
         assert!(dark_mermaid.contains("<svg"));
         assert!(dark_mermaid.contains("#0B1120") || dark_mermaid.contains("#0b1120"));
+        assert!(dark_mermaid.contains("#0F172A") || dark_mermaid.contains("#0f172a"));
 
         let math = mathjax_svg_rs::render_tex(
             r"e^{i\pi}+1=0",
