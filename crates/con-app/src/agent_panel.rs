@@ -2984,6 +2984,19 @@ fn visible_markdown_block_count(rendered_markdown_blocks: usize, block_count: us
     rendered_markdown_blocks.max(1).min(block_count)
 }
 
+fn unparsed_markdown_suffix(message: &PanelMessage) -> Option<&str> {
+    let parsed_len = message.content_markdown_len;
+    if parsed_len == 0
+        || parsed_len >= message.content.len()
+        || !message.content.is_char_boundary(parsed_len)
+    {
+        return None;
+    }
+
+    let suffix = &message.content[parsed_len..];
+    (!suffix.is_empty()).then_some(suffix)
+}
+
 fn render_assistant_message(
     msg: &PanelMessage,
     panel: WeakEntity<AgentPanel>,
@@ -3132,6 +3145,19 @@ fn render_assistant_message(
                     theme,
                     visible_blocks,
                 ));
+            }
+            if let Some(suffix) = unparsed_markdown_suffix(msg) {
+                content_el = content_el.child(
+                    div()
+                        .mt(px(6.0))
+                        .child(render_plain_multiline_text(
+                            suffix,
+                            theme.mono_font_family.clone(),
+                            px(14.0),
+                            px(23.0),
+                            theme.foreground.opacity(0.78),
+                        )),
+                );
             }
             if visible_blocks < markdown.block_count() {
                 let remaining = markdown.block_count().saturating_sub(visible_blocks);
