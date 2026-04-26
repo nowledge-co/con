@@ -3702,6 +3702,8 @@ impl Render for AgentPanel {
             }),
         )
         .with_sizing_behavior(ListSizingBehavior::Auto)
+        .h_full()
+        .min_h_0()
         .w_full()
         .px(px(14.0))
         .pt(px(12.0))
