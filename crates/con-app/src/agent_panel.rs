@@ -423,6 +423,7 @@ pub struct AgentPanel {
     message_list_state: ListState,
     message_list_handler_installed: bool,
     history_scroll_handle: ScrollHandle,
+    transcript_footer_scroll_handle: ScrollHandle,
     showing_history: bool,
     conversation_list: Vec<ConversationSummary>,
     auto_approve: bool,
@@ -915,6 +916,7 @@ impl AgentPanel {
             message_list_state: ListState::new(0, ListAlignment::Top, px(2048.0)),
             message_list_handler_installed: false,
             history_scroll_handle: ScrollHandle::new(),
+            transcript_footer_scroll_handle: ScrollHandle::new(),
             showing_history: false,
             conversation_list: Vec::new(),
             auto_approve: false,
@@ -997,6 +999,7 @@ impl AgentPanel {
             message_list_state: ListState::new(0, ListAlignment::Top, px(2048.0)),
             message_list_handler_installed: false,
             history_scroll_handle: ScrollHandle::new(),
+            transcript_footer_scroll_handle: ScrollHandle::new(),
             showing_history: false,
             conversation_list: Vec::new(),
             auto_approve: false,
@@ -1031,6 +1034,7 @@ impl AgentPanel {
         self.message_list_state = ListState::new(0, ListAlignment::Top, px(2048.0));
         self.message_list_state.set_follow_mode(FollowMode::Tail);
         self.message_list_handler_installed = false;
+        self.transcript_footer_scroll_handle = ScrollHandle::new();
         self.assistant_message_views.clear();
         self.follow_output = FollowOutputState::Auto;
         self.showing_history = false;
@@ -4774,15 +4778,26 @@ impl Render for AgentPanel {
 
             messages_container = messages_container.child(
                 div()
+                    .relative()
                     .flex_shrink_0()
+                    .max_h(px(320.0))
+                    .min_h_0()
                     .pl(px(16.0))
                     .pr(px(22.0))
                     .pb(px(12.0))
                     .child(
-                        transcript_footer
-                            .opacity(content_reveal)
-                            .pt(vertical_reveal_offset(content_reveal, 10.0)),
-                    ),
+                        div()
+                            .id("agent-transcript-footer")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.transcript_footer_scroll_handle)
+                            .child(
+                                transcript_footer
+                                    .opacity(content_reveal)
+                                    .pt(vertical_reveal_offset(content_reveal, 10.0)),
+                            ),
+                    )
+                    .vertical_scrollbar(&self.transcript_footer_scroll_handle),
             );
 
             if show_jump_to_latest {
