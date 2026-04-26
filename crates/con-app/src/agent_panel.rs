@@ -23,7 +23,10 @@ use con_agent::{
 use con_core::harness::HarnessEvent;
 
 use chrono::Utc;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 
 use crate::chat_markdown::{
@@ -464,6 +467,7 @@ struct ProviderSelectItem {
 
 #[derive(Clone)]
 struct PanelMessage {
+    id: u64,
     revision: u64,
     role: String,
     content: String,
@@ -509,6 +513,7 @@ enum StepStatus {
 impl PanelMessage {
     fn new(role: &str, content: &str) -> Self {
         Self {
+            id: next_panel_message_id(),
             revision: 0,
             role: role.to_string(),
             content: content.to_string(),
@@ -559,6 +564,12 @@ impl PanelMessage {
         self.thinking_markdown = None;
         self.touch();
     }
+}
+
+static NEXT_PANEL_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_panel_message_id() -> u64 {
+    NEXT_PANEL_MESSAGE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 struct AssistantMessageView {
@@ -1011,6 +1022,7 @@ impl AgentPanel {
         self.message_list_state = ListState::new(0, ListAlignment::Top, px(2048.0));
         self.message_list_state.set_follow_mode(FollowMode::Tail);
         self.message_list_handler_installed = false;
+        self.assistant_message_views.clear();
         self.follow_output = FollowOutputState::Auto;
         self.showing_history = false;
         cx.notify();
@@ -1020,6 +1032,7 @@ impl AgentPanel {
     pub fn clear_messages(&mut self, cx: &mut Context<Self>) {
         self.state.clear();
         self.message_list_state.splice(0..self.message_list_state.item_count(), 0);
+        self.assistant_message_views.clear();
         self.showing_history = false;
         cx.notify();
     }
@@ -1030,6 +1043,7 @@ impl AgentPanel {
     pub fn rerun_from(&mut self, msg_idx: usize, new_content: String, cx: &mut Context<Self>) {
         self.state.truncate_to(msg_idx);
         self.state.add_message("user", &new_content);
+        self.assistant_message_views.truncate(msg_idx);
         cx.emit(RerunFromMessage {
             content: new_content,
         });
@@ -1642,6 +1656,7 @@ impl AgentPanel {
         }
 
         let content = message.content.clone();
+        let message_id = message.id;
         let parse_content = content.clone();
         let parse_len = content.len();
         message.content_markdown_pending = true;
@@ -1657,6 +1672,9 @@ impl AgentPanel {
             let _ = this.update(cx, |panel, cx| {
                 let mut needs_follow_up = false;
                 if let Some(message) = panel.state.messages.get_mut(msg_idx) {
+                    if message.id != message_id {
+                        return;
+                    }
                     if message.content == content {
                         message.content_markdown = Some(parsed.clone());
                         message.content_markdown_len = parse_len;
@@ -2943,6 +2961,10 @@ fn render_plain_multiline_text(
         .into_any_element()
 }
 
+fn visible_markdown_block_count(rendered_markdown_blocks: usize, block_count: usize) -> usize {
+    rendered_markdown_blocks.max(1).min(block_count)
+}
+
 fn render_assistant_message(
     msg: &PanelMessage,
     panel: WeakEntity<AgentPanel>,
@@ -3080,10 +3102,8 @@ fn render_assistant_message(
                 theme.foreground.opacity(0.88),
             ));
         } else if let Some(markdown) = msg.content_markdown.as_ref() {
-            let visible_blocks = rendered_markdown_blocks
-                .max(1)
-                .min(markdown.block_count())
-                .min(markdown.block_count().max(1));
+            let visible_blocks =
+                visible_markdown_block_count(rendered_markdown_blocks, markdown.block_count());
             if let Some(rendered_markdown) = rendered_markdown {
                 content_el = content_el.child(rendered_markdown);
             } else {
@@ -3593,10 +3613,8 @@ impl Render for AssistantMessageView {
             .as_ref()
             .filter(|markdown| markdown.block_count() > 0)
             .map(|markdown| {
-                let visible_blocks = rendered_markdown_blocks
-                    .max(1)
-                    .min(markdown.block_count())
-                    .min(markdown.block_count().max(1));
+                let visible_blocks =
+                    visible_markdown_block_count(rendered_markdown_blocks, markdown.block_count());
                 self.render_markdown_blocks(markdown, visible_blocks, theme, cx)
             });
 
