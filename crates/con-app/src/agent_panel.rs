@@ -564,6 +564,18 @@ impl PanelMessage {
         self.thinking_markdown = None;
         self.touch();
     }
+
+    fn ensure_thinking_markdown(&mut self) {
+        if self.thinking_markdown.is_some() {
+            return;
+        }
+
+        let Some(thinking) = self.thinking.as_deref().filter(|text| !text.is_empty()) else {
+            return;
+        };
+
+        self.thinking_markdown = Some(Arc::new(ParsedChatMarkdown::parse(thinking)));
+    }
 }
 
 static NEXT_PANEL_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
@@ -1171,12 +1183,16 @@ impl AgentPanel {
                         }
                     }
                     let skills = this.filtered_inline_skills(cx);
+                    let previous_skill_selection = this.inline_skill_selection;
                     if skills.is_empty() {
                         this.inline_skill_selection = 0;
                     } else {
                         this.inline_skill_selection = this
                             .inline_skill_selection
                             .min(skills.len().saturating_sub(1));
+                    }
+                    if this.inline_skill_selection != previous_skill_selection {
+                        needs_notify = true;
                     }
                     cx.emit(InlineSkillAutocompleteChanged);
                     if needs_notify {
@@ -3601,6 +3617,10 @@ impl Render for AssistantMessageView {
         let panel = self.panel.clone();
         let view = cx.weak_entity();
         let rendered_markdown_blocks = self.rendered_markdown_blocks;
+
+        if !self.is_streaming_assistant && !self.message.thinking_collapsed {
+            self.message.ensure_thinking_markdown();
+        }
 
         if self.is_streaming_assistant
             && self.state_key.content_markdown_blocks > self.rendered_markdown_blocks
