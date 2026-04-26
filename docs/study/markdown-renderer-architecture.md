@@ -124,6 +124,7 @@ Performance rule:
 - fenced code blocks must prefer one highlighted text layout per block over one UI row per line
 - mermaid diagram rendering must happen off the UI thread and cache the rendered image by source text + scale
 - display math rendering must happen off the UI thread and cache the rendered image by source text + font-size key
+- nested rich blocks must use the same async image pipeline as top-level rich blocks; source-text fallback is only an error/loading path
 - inline math should use a conservative false-positive filter so normal prose such as prices does not become math
 - `mathjax-svg-rs` pulls in a real JavaScript/MathJax engine; keep it isolated to the UI crate, render only on a background executor, and revisit only with measured binary-size or cold-start data
 - inline code inside dense prose, lists, or table cells should not force flex-wrapped chip segmentation at chat-message scale
