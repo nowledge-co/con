@@ -7,7 +7,7 @@ use gpui_component::input::{Input, InputEvent, InputState, Position};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
-use gpui_component::{ActiveTheme, Disableable, Icon, Sizable as _};
+use gpui_component::{ActiveTheme, Disableable, Icon, Sizable as _, Theme};
 
 /// Max lines to show for tool result previews in collapsed steps
 const TOOL_RESULT_PREVIEW_LINES: usize = 6;
@@ -27,8 +27,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::chat_markdown::{
-    ChatMarkdownTone, ParsedChatMarkdown, render_parsed_chat_markdown,
-    render_parsed_chat_markdown_prefix,
+    ChatMarkdownBlockView, ChatMarkdownTone, ParsedChatMarkdown, chat_markdown_block_gap,
+    render_parsed_chat_markdown, render_parsed_chat_markdown_prefix,
 };
 use crate::input_bar::SkillEntry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
@@ -569,6 +569,8 @@ struct AssistantMessageView {
     is_streaming_assistant: bool,
     rendered_markdown_blocks: usize,
     markdown_hydration_pending: bool,
+    markdown_block_views: Vec<Option<Entity<ChatMarkdownBlockView>>>,
+    markdown_block_view_len: usize,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -598,6 +600,8 @@ impl AssistantMessageView {
             is_streaming_assistant,
             rendered_markdown_blocks,
             markdown_hydration_pending: false,
+            markdown_block_views: Vec::new(),
+            markdown_block_view_len: 0,
         }
     }
 
@@ -625,6 +629,8 @@ impl AssistantMessageView {
             if self.state_key.content_markdown_blocks == 0 {
                 self.rendered_markdown_blocks = 0;
                 self.markdown_hydration_pending = false;
+                self.markdown_block_views.clear();
+                self.markdown_block_view_len = 0;
             } else if !same_message_family
                 || self.rendered_markdown_blocks == 0
                 || self.rendered_markdown_blocks > self.state_key.content_markdown_blocks
@@ -633,10 +639,16 @@ impl AssistantMessageView {
                     self.state_key.content_markdown_blocks,
                 );
                 self.markdown_hydration_pending = false;
+                self.markdown_block_views.clear();
+                self.markdown_block_view_len = self.state_key.content_markdown_len;
             } else {
                 self.rendered_markdown_blocks = self
                     .rendered_markdown_blocks
                     .min(self.state_key.content_markdown_blocks);
+                if self.markdown_block_view_len != self.state_key.content_markdown_len {
+                    self.markdown_block_views.clear();
+                    self.markdown_block_view_len = self.state_key.content_markdown_len;
+                }
             }
             cx.notify();
         }
@@ -685,6 +697,49 @@ impl AssistantMessageView {
             });
         })
         .detach();
+    }
+
+    fn render_markdown_blocks(
+        &mut self,
+        markdown: &Arc<ParsedChatMarkdown>,
+        visible_blocks: usize,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.markdown_block_view_len != self.state_key.content_markdown_len {
+            self.markdown_block_views.clear();
+            self.markdown_block_view_len = self.state_key.content_markdown_len;
+        }
+
+        if self.markdown_block_views.len() < visible_blocks {
+            self.markdown_block_views
+                .resize_with(visible_blocks, || None);
+        }
+
+        let gap = chat_markdown_block_gap(ChatMarkdownTone::Message, theme);
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(gap)
+            .children((0..visible_blocks).map(|block_idx| {
+                let document = markdown.clone();
+                let view = if let Some(view) = self.markdown_block_views[block_idx].as_ref() {
+                    let view = view.clone();
+                    view.update(cx, |view, cx| {
+                        view.update(document, block_idx, ChatMarkdownTone::Message, cx);
+                    });
+                    view
+                } else {
+                    let view = cx.new(|_| {
+                        ChatMarkdownBlockView::new(document, block_idx, ChatMarkdownTone::Message)
+                    });
+                    self.markdown_block_views[block_idx] = Some(view.clone());
+                    view
+                };
+                view.into_any_element()
+            }))
+            .into_any_element()
     }
 }
 
@@ -2895,7 +2950,8 @@ fn render_assistant_message(
     msg_idx: usize,
     _is_streaming_assistant: bool,
     rendered_markdown_blocks: usize,
-    theme: &gpui_component::Theme,
+    rendered_markdown: Option<AnyElement>,
+    theme: &Theme,
 ) -> AnyElement {
     let assistant_content_for_copy = msg.content.clone();
     let msg_model = msg.model.as_deref().unwrap_or("");
@@ -3028,12 +3084,16 @@ fn render_assistant_message(
                 .max(1)
                 .min(markdown.block_count())
                 .min(markdown.block_count().max(1));
-            content_el = content_el.child(render_parsed_chat_markdown_prefix(
-                markdown,
-                ChatMarkdownTone::Message,
-                theme,
-                visible_blocks,
-            ));
+            if let Some(rendered_markdown) = rendered_markdown {
+                content_el = content_el.child(rendered_markdown);
+            } else {
+                content_el = content_el.child(render_parsed_chat_markdown_prefix(
+                    markdown,
+                    ChatMarkdownTone::Message,
+                    theme,
+                    visible_blocks,
+                ));
+            }
             if visible_blocks < markdown.block_count() {
                 let remaining = markdown.block_count().saturating_sub(visible_blocks);
                 let more_view = view.clone();
@@ -3528,6 +3588,18 @@ impl Render for AssistantMessageView {
             self.schedule_markdown_hydration(cx);
         }
 
+        let content_markdown = self.message.content_markdown.clone();
+        let rendered_markdown = content_markdown
+            .as_ref()
+            .filter(|markdown| markdown.block_count() > 0)
+            .map(|markdown| {
+                let visible_blocks = rendered_markdown_blocks
+                    .max(1)
+                    .min(markdown.block_count())
+                    .min(markdown.block_count().max(1));
+                self.render_markdown_blocks(markdown, visible_blocks, theme, cx)
+            });
+
         render_assistant_message(
             &self.message,
             panel,
@@ -3535,6 +3607,7 @@ impl Render for AssistantMessageView {
             msg_idx,
             self.is_streaming_assistant,
             rendered_markdown_blocks,
+            rendered_markdown,
             theme,
         )
     }
@@ -3791,7 +3864,6 @@ impl Render for AgentPanel {
         .h_full()
         .min_h_0()
         .w_full()
-        .px(px(14.0))
         .pt(px(12.0))
         .pb(px(64.0))
         .flex_grow();
@@ -4522,7 +4594,8 @@ impl Render for AgentPanel {
                 .h_full()
                 .overflow_y_scroll()
                 .track_scroll(&self.history_scroll_handle)
-                .px(px(12.0))
+                .pl(px(14.0))
+                .pr(px(22.0))
                 .pt(px(8.0))
                 .gap(px(1.0));
 
@@ -4637,9 +4710,16 @@ impl Render for AgentPanel {
                 .flex_1()
                 .min_h_0()
                 .child(
-                    messages_content
-                        .opacity(content_reveal)
-                        .pt(vertical_reveal_offset(content_reveal, 10.0)),
+                    div()
+                        .size_full()
+                        .min_h_0()
+                        .pl(px(14.0))
+                        .pr(px(34.0))
+                        .child(
+                            messages_content
+                                .opacity(content_reveal)
+                                .pt(vertical_reveal_offset(content_reveal, 10.0)),
+                        ),
                 )
                 .vertical_scrollbar(&self.message_list_state);
 
@@ -4654,7 +4734,8 @@ impl Render for AgentPanel {
             messages_container = messages_container.child(
                 div()
                     .flex_shrink_0()
-                    .px(px(14.0))
+                    .pl(px(16.0))
+                    .pr(px(22.0))
                     .pb(px(12.0))
                     .child(
                         transcript_footer

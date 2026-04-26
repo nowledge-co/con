@@ -29,6 +29,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Improved
 
+**Agent Panel**
+- Reworked long restored agent replies to cache rendered markdown by block, so typing, scrolling, and revealing more content no longer recreate every paragraph/table/code layout inside a large assistant response.
+- Fixed wide markdown table scrolling so vertical transcript scroll no longer gets hijacked into sideways table movement, while preserving a structured rich-table layout with a native horizontal scrollbar for oversized tables.
+- Added more deliberate transcript gutters so user and assistant messages no longer collide with the panel edge or scrollbar.
+- Normalized con's embedded mono font family for GPUI-rendered code blocks and terminal chrome so markdown code uses the intended IoskeleyMono face instead of platform font fallback.
+
 **Terminal — Windows Backend (preview)**
 - Made Windows command rendering feel substantially closer to native terminals by closing the full PTY-to-paint loop: ConPTY output wakes are preserved, stale readbacks are discarded with mailbox semantics, row-local D3D readbacks stay row-local through GPUI image handoff, and delayed command-start output remains latency-critical long enough to present fresh frames.
 - Aligned the default Windows shell choice with Windows Terminal when possible by reading its configured default profile before falling back to `pwsh.exe`, `powershell.exe`, `%COMSPEC%`, and `cmd.exe`; `CON_SHELL` remains the explicit override.

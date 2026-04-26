@@ -3,11 +3,13 @@ use std::sync::Arc;
 
 use gpui::{
     AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, InteractiveElement,
-    IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, StyledText,
-    TextStyle, TextRun, UnderlineStyle, WhiteSpace, div, px,
+    IntoElement, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, StyledText, TextStyle, TextRun, UnderlineStyle, WhiteSpace, Window, div, px,
 };
+use gpui_component::ActiveTheme as _;
 use gpui_component::clipboard::Clipboard;
 use gpui_component::highlighter::SyntaxHighlighter;
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Colorize, Theme};
 use markdown::{ParseOptions, mdast};
 use ropey::Rope;
@@ -135,6 +137,7 @@ enum MarkdownInline {
 #[derive(Debug, Clone)]
 struct MarkdownTableCell {
     inlines: Vec<MarkdownInline>,
+    inline_cache: RefCell<Option<CachedInlineRender>>,
 }
 
 impl PartialEq for MarkdownTableCell {
@@ -172,8 +175,8 @@ struct TableRenderCacheKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CachedTableRender {
     key: TableRenderCacheKey,
-    text: SharedString,
-    runs: Vec<TextRun>,
+    column_widths: Vec<gpui::Pixels>,
+    min_width: gpui::Pixels,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -388,9 +391,70 @@ pub fn render_parsed_chat_markdown_prefix(
             blocks
                 .iter()
                 .enumerate()
-                .map(|(idx, block)| render_block_with_width(block, idx, &style)),
+                .map(|(idx, block)| render_block_with_width(block, idx, &style, None)),
         )
         .into_any_element()
+}
+
+pub fn chat_markdown_block_gap(tone: ChatMarkdownTone, theme: &Theme) -> gpui::Pixels {
+    ChatMarkdownStyle::new(theme, tone).block_gap
+}
+
+pub struct ChatMarkdownBlockView {
+    document: Arc<ParsedChatMarkdown>,
+    block_index: usize,
+    tone: ChatMarkdownTone,
+    table_scroll_handle: ScrollHandle,
+}
+
+impl ChatMarkdownBlockView {
+    pub fn new(
+        document: Arc<ParsedChatMarkdown>,
+        block_index: usize,
+        tone: ChatMarkdownTone,
+    ) -> Self {
+        Self {
+            document,
+            block_index,
+            tone,
+            table_scroll_handle: ScrollHandle::new(),
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        document: Arc<ParsedChatMarkdown>,
+        block_index: usize,
+        tone: ChatMarkdownTone,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.block_index != block_index
+            || self.tone != tone
+            || !Arc::ptr_eq(&self.document, &document)
+        {
+            self.document = document;
+            self.block_index = block_index;
+            self.tone = tone;
+            self.table_scroll_handle = ScrollHandle::new();
+            cx.notify();
+        }
+    }
+}
+
+impl Render for ChatMarkdownBlockView {
+    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let style = ChatMarkdownStyle::new(&theme, self.tone);
+        self.document
+            .blocks
+            .get(self.block_index)
+            .map(|block| {
+                let table_scroll_handle = matches!(block, MarkdownBlock::Table { .. })
+                    .then_some(&self.table_scroll_handle);
+                render_block_with_width(block, self.block_index, &style, table_scroll_handle)
+            })
+            .unwrap_or_else(|| div().into_any_element())
+    }
 }
 
 fn parse_markdown(source: &str) -> Vec<MarkdownBlock> {
@@ -456,6 +520,7 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
                                 mdast::Node::TableCell(cell) => {
                                     Some(MarkdownTableCell {
                                         inlines: parse_inline_nodes(&cell.children),
+                                        inline_cache: RefCell::new(None),
                                     })
                                 }
                                 _ => None,
@@ -620,7 +685,12 @@ fn coalesce_inlines(inlines: Vec<MarkdownInline>) -> Vec<MarkdownInline> {
     output
 }
 
-fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'_>) -> AnyElement {
+fn render_block(
+    block: &MarkdownBlock,
+    index: usize,
+    style: &ChatMarkdownStyle<'_>,
+    table_scroll_handle: Option<&ScrollHandle>,
+) -> AnyElement {
     match block {
         MarkdownBlock::Paragraph {
             inlines,
@@ -676,7 +746,7 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
                             blocks
                                 .iter()
                                 .enumerate()
-                                .map(|(idx, block)| render_block(block, idx, style)),
+                                .map(|(idx, block)| render_block(block, idx, style, None)),
                         ),
                     ),
             )
@@ -729,7 +799,7 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
                             .flex_1()
                             .children(item_blocks.iter().enumerate().map(
                                 |(nested_idx, nested_block)| {
-                                    render_block(nested_block, nested_idx, style)
+                                    render_block(nested_block, nested_idx, style, None)
                                 },
                             )),
                     )
@@ -740,7 +810,7 @@ fn render_block(block: &MarkdownBlock, index: usize, style: &ChatMarkdownStyle<'
             aligns,
             rows,
             text_cache,
-        } => render_table_block(index, aligns, rows, text_cache, style),
+        } => render_table_block(index, aligns, rows, text_cache, style, table_scroll_handle),
         MarkdownBlock::Rule => div()
             .w_full()
             .h(px(1.0))
@@ -753,13 +823,16 @@ fn render_block_with_width(
     block: &MarkdownBlock,
     index: usize,
     style: &ChatMarkdownStyle<'_>,
+    table_scroll_handle: Option<&ScrollHandle>,
 ) -> AnyElement {
     let mut wrapper = div().w_full();
     if !matches!(block, MarkdownBlock::CodeBlock { .. } | MarkdownBlock::Table { .. }) {
         wrapper = wrapper.max_w(style.content_width);
     }
 
-    wrapper.child(render_block(block, index, style)).into_any_element()
+    wrapper
+        .child(render_block(block, index, style, table_scroll_handle))
+        .into_any_element()
 }
 
 fn ordered_list_marker_lane_width(max_marker: usize) -> gpui::Pixels {
@@ -773,38 +846,120 @@ fn render_table_block(
     rows: &[Vec<MarkdownTableCell>],
     text_cache: &RefCell<Option<CachedTableRender>>,
     style: &ChatMarkdownStyle<'_>,
+    table_scroll_handle: Option<&ScrollHandle>,
 ) -> AnyElement {
     if rows.is_empty() {
         return div().into_any_element();
     }
-    let (table_text, table_runs, table_min_width) =
-        cached_table_text_runs(rows, aligns, text_cache, style);
+    let (column_widths, table_min_width) = cached_table_layout(rows, text_cache, style);
 
-    div()
+    let mut table_scroll = div()
         .id(("chat-md-table-scroll", index))
         .w_full()
-        .overflow_x_scroll()
-        .child(
-            div()
-                .min_w(table_min_width)
-                .overflow_hidden()
-                .rounded(px(10.0))
-                .bg(style.table_border.opacity(0.92))
-                .p(px(1.0))
-                .child(
+        .overflow_x_scroll();
+    table_scroll.style().restrict_scroll_to_axis = Some(true);
+    if let Some(handle) = table_scroll_handle {
+        table_scroll = table_scroll.track_scroll(handle);
+    }
+
+    let mut table_body = div()
+        .min_w(table_min_width)
+        .overflow_hidden()
+        .rounded(px(10.0))
+        .bg(style.table_cell_background);
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        if row_idx > 0 {
+            table_body = table_body.child(
+                div()
+                    .h(px(1.0))
+                    .w_full()
+                    .bg(style.table_border.opacity(0.55)),
+            );
+        }
+
+        let is_header = row_idx == 0;
+        let mut row_el = div()
+            .flex()
+            .items_stretch()
+            .w_full()
+            .bg(if is_header {
+                style.table_border.opacity(0.18)
+            } else {
+                style.table_cell_background
+            });
+
+        for (col_idx, width) in column_widths.iter().enumerate() {
+            if col_idx > 0 {
+                row_el = row_el.child(
                     div()
-                        .bg(style.table_cell_background)
-                        .rounded(px(9.0))
-                        .px(px(12.0))
-                        .py(px(10.0))
-                        .font_family(style.theme.mono_font_family.clone())
-                        .text_size(style.base_font_size)
-                        .line_height(style.base_line_height)
-                        .text_color(style.text_color.opacity(0.9))
-                        .child(StyledText::new(table_text).with_runs(table_runs)),
-                ),
-        )
-        .into_any_element()
+                        .w(px(1.0))
+                        .flex_none()
+                        .bg(style.table_border.opacity(if is_header { 0.52 } else { 0.34 })),
+                );
+            }
+
+            let cell = row.get(col_idx);
+            let mut cell_style = style.base_text_style();
+            cell_style.font_size = style.base_font_size.into();
+            cell_style.line_height = style.base_line_height.into();
+            cell_style.color = if is_header {
+                style.text_color.opacity(0.96)
+            } else {
+                style.text_color.opacity(0.84)
+            };
+            cell_style.font_weight = if is_header {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::NORMAL
+            };
+
+            let content = cell
+                .map(|cell| {
+                    render_inline_content(&cell.inlines, &cell_style, style, &cell.inline_cache)
+                })
+                .unwrap_or_else(|| div().into_any_element());
+
+            let mut cell_el = div()
+                .w(*width)
+                .flex_none()
+                .px(px(14.0))
+                .py(px(if is_header { 12.0 } else { 11.0 }))
+                .min_h(px(if is_header { 46.0 } else { 42.0 }))
+                .child(content);
+
+            match aligns.get(col_idx).copied().unwrap_or(MarkdownTableAlign::Left) {
+                MarkdownTableAlign::Right => {
+                    cell_el = cell_el.text_right();
+                }
+                MarkdownTableAlign::Center => {
+                    cell_el = cell_el.text_center();
+                }
+                MarkdownTableAlign::Left | MarkdownTableAlign::None => {}
+            }
+
+            row_el = row_el.child(cell_el);
+        }
+
+        table_body = table_body.child(row_el);
+    }
+
+    let mut table_frame = div()
+        .relative()
+        .w_full()
+        .pb(px(if table_scroll_handle.is_some() { 8.0 } else { 0.0 }))
+        .child(table_scroll.child(table_body));
+    if let Some(handle) = table_scroll_handle {
+        table_frame = table_frame.horizontal_scrollbar(handle);
+    }
+
+    let container = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .child(table_frame);
+
+    container.into_any_element()
 }
 
 fn render_code_block(
@@ -889,12 +1044,11 @@ fn render_code_block(
         .into_any_element()
 }
 
-fn cached_table_text_runs(
+fn cached_table_layout(
     rows: &[Vec<MarkdownTableCell>],
-    aligns: &[MarkdownTableAlign],
     cache: &RefCell<Option<CachedTableRender>>,
     style: &ChatMarkdownStyle<'_>,
-) -> (SharedString, Vec<TextRun>, gpui::Pixels) {
+) -> (Vec<gpui::Pixels>, gpui::Pixels) {
     let key = TableRenderCacheKey {
         mono_font_family: style.theme.mono_font_family.clone(),
         font_size_bits: {
@@ -915,197 +1069,63 @@ fn cached_table_text_runs(
         if let Some(cached) = cached.as_ref()
             && cached.key == key
         {
-            let min_width = px(
-                cached
-                    .text
-                    .lines()
-                    .map(|line| line.chars().count())
-                    .max()
-                    .unwrap_or(1) as f32
-                    * 8.4
-                    + 28.0,
-            );
-            return (cached.text.clone(), cached.runs.clone(), min_width);
+            return (cached.column_widths.clone(), cached.min_width);
         }
     }
 
-    let (text, runs, min_width) = table_text_runs(rows, aligns, style);
+    let (column_widths, min_width) = table_layout(rows);
     *cache.borrow_mut() = Some(CachedTableRender {
         key,
-        text: text.clone(),
-        runs: runs.clone(),
+        column_widths: column_widths.clone(),
+        min_width,
     });
-    (text, runs, min_width)
+    (column_widths, min_width)
 }
 
-fn table_text_runs(
-    rows: &[Vec<MarkdownTableCell>],
-    aligns: &[MarkdownTableAlign],
-    style: &ChatMarkdownStyle<'_>,
-) -> (SharedString, Vec<TextRun>, gpui::Pixels) {
+fn table_layout(rows: &[Vec<MarkdownTableCell>]) -> (Vec<gpui::Pixels>, gpui::Pixels) {
     let column_count = rows.iter().map(|row| row.len()).max().unwrap_or(0).max(1);
-    let plain_rows: Vec<Vec<String>> = rows
-        .iter()
-        .map(|row| {
-            let mut out = Vec::with_capacity(column_count);
-            for idx in 0..column_count {
-                out.push(
-                    row.get(idx)
-                        .map(|cell| flatten_inlines_plain(&cell.inlines))
-                        .unwrap_or_default(),
-                );
-            }
-            out
-        })
-        .collect();
-
-    let mut widths = vec![3usize; column_count];
-    for row in &plain_rows {
+    let mut char_widths = vec![3usize; column_count];
+    for row in rows {
         for (idx, cell) in row.iter().enumerate() {
-            widths[idx] = widths[idx].max(cell.chars().count());
+            char_widths[idx] = char_widths[idx].max(table_cell_measure_chars(&cell.inlines));
         }
     }
 
-    let mut text = String::new();
-    let mut runs = Vec::new();
-    let body_style = table_text_style(style);
-    let mut header_style = body_style.clone();
-    header_style.font_weight = FontWeight::SEMIBOLD;
-    header_style.color = style.text_color.opacity(0.97);
-    let mut separator_style = body_style.clone();
-    separator_style.color = style.muted_text_color.opacity(0.78);
+    let column_widths = char_widths
+        .into_iter()
+        .map(|chars| {
+            let measured = chars as f32 * 8.2 + 36.0;
+            px(measured.clamp(112.0, 320.0))
+        })
+        .collect::<Vec<_>>();
+    let separators = column_widths.len().saturating_sub(1) as f32;
+    let min_width = column_widths
+        .iter()
+        .copied()
+        .fold(px(0.0), |total, width| total + width)
+        + px(separators);
 
-    for (row_idx, row) in plain_rows.iter().enumerate() {
-        let line = format_table_row(row, &widths, aligns);
-        text.push_str(&line);
-        runs.push(if row_idx == 0 {
-            header_style.to_run(line.len())
-        } else {
-            body_style.to_run(line.len())
-        });
-        text.push('\n');
-        runs.push(body_style.to_run(1));
-
-        if row_idx == 0 {
-            let separator = format_table_separator(&widths, aligns);
-            text.push_str(&separator);
-            runs.push(separator_style.to_run(separator.len()));
-            if row_idx + 1 < plain_rows.len() {
-                text.push('\n');
-                runs.push(body_style.to_run(1));
-            }
-        } else if row_idx + 1 < plain_rows.len() {
-            text.push('\n');
-            runs.push(body_style.to_run(1));
-        }
-    }
-
-    let max_chars = text
-        .lines()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(1);
-    let min_width = px(max_chars as f32 * 8.4 + 28.0);
-    (text.into(), runs, min_width)
+    (column_widths, min_width)
 }
 
-fn table_text_style(style: &ChatMarkdownStyle<'_>) -> TextStyle {
-    TextStyle {
-        font_family: style.theme.mono_font_family.clone(),
-        font_size: style.base_font_size.into(),
-        line_height: style.base_line_height.into(),
-        color: style.text_color.opacity(0.9),
-        white_space: WhiteSpace::Normal,
-        ..Default::default()
-    }
-}
-
-fn flatten_inlines_plain(inlines: &[MarkdownInline]) -> String {
-    let mut out = String::new();
-    append_plain_inlines(&mut out, inlines);
-    out
-}
-
-fn append_plain_inlines(out: &mut String, inlines: &[MarkdownInline]) {
-    for inline in inlines {
-        match inline {
-            MarkdownInline::Text(text) | MarkdownInline::Code(text) => out.push_str(text),
+fn table_cell_measure_chars(inlines: &[MarkdownInline]) -> usize {
+    inlines
+        .iter()
+        .map(|inline| match inline {
+            MarkdownInline::Text(text) | MarkdownInline::Code(text) => text
+                .split_whitespace()
+                .map(|word| word.chars().count())
+                .max()
+                .unwrap_or(0)
+                .max(text.chars().count().min(24)),
             MarkdownInline::Emphasis(children)
             | MarkdownInline::Strong(children)
-            | MarkdownInline::Strikethrough(children) => append_plain_inlines(out, children),
-            MarkdownInline::Link { label, .. } => append_plain_inlines(out, label),
-            MarkdownInline::SoftBreak | MarkdownInline::LineBreak => out.push(' '),
-        }
-    }
-}
-
-fn format_table_row(
-    row: &[String],
-    widths: &[usize],
-    aligns: &[MarkdownTableAlign],
-) -> String {
-    row.iter()
-        .enumerate()
-        .map(|(idx, cell)| {
-            let align = aligns.get(idx).copied().unwrap_or(MarkdownTableAlign::Left);
-            align_table_cell(cell, widths[idx], align)
+            | MarkdownInline::Strikethrough(children) => table_cell_measure_chars(children),
+            MarkdownInline::Link { label, .. } => table_cell_measure_chars(label),
+            MarkdownInline::SoftBreak | MarkdownInline::LineBreak => 1,
         })
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
-fn format_table_separator(widths: &[usize], aligns: &[MarkdownTableAlign]) -> String {
-    widths
-        .iter()
-        .enumerate()
-        .map(|(idx, width)| {
-            let dash_count = (*width).max(3);
-            match aligns.get(idx).copied().unwrap_or(MarkdownTableAlign::Left) {
-                MarkdownTableAlign::Center => {
-                    if dash_count <= 2 {
-                        ":--:".to_string()
-                    } else {
-                        format!(":{}:", "-".repeat(dash_count.saturating_sub(2)))
-                    }
-                }
-                MarkdownTableAlign::Right => {
-                    if dash_count <= 1 {
-                        "-:".to_string()
-                    } else {
-                        format!("{}:", "-".repeat(dash_count.saturating_sub(1)))
-                    }
-                }
-                MarkdownTableAlign::Left => {
-                    if dash_count <= 1 {
-                        ":-".to_string()
-                    } else {
-                        format!(":{}", "-".repeat(dash_count.saturating_sub(1)))
-                    }
-                }
-                MarkdownTableAlign::None => "-".repeat(dash_count),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("-+-")
-}
-
-fn align_table_cell(text: &str, width: usize, align: MarkdownTableAlign) -> String {
-    let len = text.chars().count();
-    if len >= width {
-        return text.to_string();
-    }
-    let pad = width - len;
-    match align {
-        MarkdownTableAlign::Right => format!("{}{}", " ".repeat(pad), text),
-        MarkdownTableAlign::Center => {
-            let left = pad / 2;
-            let right = pad - left;
-            format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
-        }
-        MarkdownTableAlign::Left | MarkdownTableAlign::None => {
-            format!("{}{}", text, " ".repeat(pad))
-        }
-    }
+        .max()
+        .unwrap_or(3)
 }
 
 fn cached_highlighted_code_runs(
@@ -1474,5 +1494,19 @@ mod tests {
         assert_eq!(text.as_ref(), code);
         assert!(!runs.is_empty());
         assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), code.len());
+    }
+
+    #[test]
+    fn highlighted_code_runs_keep_mono_font() {
+        let mut theme = Theme::default();
+        theme.mono_font_family = "IoskeleyMono".into();
+        let style = ChatMarkdownStyle::new(&theme, ChatMarkdownTone::Message);
+        let (_, runs) = highlighted_code_runs("let value = 1;", &Some("rust".into()), &style);
+
+        assert!(!runs.is_empty());
+        assert!(
+            runs.iter()
+                .all(|run| run.font.family.as_ref() == "IoskeleyMono")
+        );
     }
 }
