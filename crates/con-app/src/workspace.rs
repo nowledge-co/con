@@ -5382,6 +5382,14 @@ impl ConWorkspace {
             self.input_bar_visible = true;
             self.save_session(cx);
         }
+        self.focus_input_bar_surface(window, cx);
+    }
+
+    fn focus_input_bar_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.input_bar_visible {
+            self.input_bar_visible = true;
+            self.save_session(cx);
+        }
         self.input_bar.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
@@ -5555,7 +5563,7 @@ impl ConWorkspace {
                 .agent_panel
                 .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
             if !focused {
-                workspace.focus_terminal(window, cx);
+                workspace.focus_input_bar_surface(window, cx);
             }
         });
     }
