@@ -1568,10 +1568,28 @@ impl AgentProvider {
         preamble: &str,
         max_tokens: u64,
     ) -> Result<String> {
-        use rig::completion::Prompt;
+        use futures::StreamExt;
+        use rig::agent::MultiTurnStreamItem;
+        use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 
         let kind = &self.config.provider;
 
+        // Drive completion via the streaming API, NOT the
+        // non-streaming `Prompt::prompt` path. Reason:
+        // rig's openai-compatible non-streaming response parser
+        // (providers/openai/completion/mod.rs:791) only reads
+        // `choices[0].message.content` and ignores
+        // `reasoning_content`. Reasoning models like Kimi K2.6 emit
+        // their final answer into `reasoning_content` and leave
+        // `content` empty — so the non-streaming path errors out
+        // with "Response contained no message or tool call (empty)"
+        // even though the model produced a perfectly valid answer.
+        // The streaming path (providers/openai/completion/streaming.rs)
+        // does parse `reasoning_content`, and the multi-turn stream's
+        // `FinalResponse` already concatenates the visible text for
+        // us. Same protocol, different parser; we pick the one that
+        // works on every model class the user might pick (regular,
+        // reasoning, structured-output).
         macro_rules! do_complete {
             ($client:expr) => {{
                 let mut builder = $client.agent(self.config.effective_model(kind));
@@ -1588,11 +1606,57 @@ impl AgentProvider {
                     builder = builder.temperature(temp);
                 }
                 let agent = builder.build();
-                agent
-                    .prompt(prompt)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Completion error: {e}"))
+                drive_streaming_completion(&agent, prompt).await
             }};
+        }
+
+        async fn drive_streaming_completion<M, P>(
+            agent: &rig::agent::Agent<M, P>,
+            prompt: &str,
+        ) -> Result<String>
+        where
+            M: rig::completion::CompletionModel + 'static,
+            M::StreamingResponse: rig::completion::GetTokenUsage,
+            P: rig::agent::PromptHook<M> + 'static,
+        {
+            let mut stream = agent.stream_prompt(prompt.to_owned()).await;
+            // Accumulate visible text deltas as we go. The multi-turn
+            // FinalResponse already concatenates visible text, but
+            // some providers emit it with an empty `response` field
+            // when the text arrived only via per-chunk deltas — so
+            // we keep a backstop.
+            let mut accumulated = String::new();
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(MultiTurnStreamItem::StreamAssistantItem(
+                        StreamedAssistantContent::Text(text),
+                    )) => {
+                        accumulated.push_str(&text.text);
+                    }
+                    Ok(MultiTurnStreamItem::FinalResponse(fin)) => {
+                        let resp = fin.response();
+                        if !resp.is_empty() {
+                            return Ok(resp.to_string());
+                        }
+                        break;
+                    }
+                    Ok(_) => {
+                        // Reasoning / tool deltas / tool calls /
+                        // user items — irrelevant for the
+                        // single-turn structured prompts that go
+                        // through this method.
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("Completion error: {e}"));
+                    }
+                }
+            }
+            if !accumulated.is_empty() {
+                return Ok(accumulated);
+            }
+            Err(anyhow::anyhow!(
+                "Completion error: streaming completion produced no visible text"
+            ))
         }
 
         match *kind {
