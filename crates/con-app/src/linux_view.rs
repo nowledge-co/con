@@ -526,12 +526,18 @@ impl GhosttyView {
                 .resize_with(usize::from(snapshot.rows), CachedTerminalRow::default);
         }
 
-        let mut rows_to_refresh =
-            if force_full_rebuild || self.row_cache_generation != Some(snapshot.generation) {
-                rows_needing_refresh(snapshot, self.row_cache_cursor, force_full_rebuild)
-            } else {
-                Vec::new()
-            };
+        let mut rows_to_refresh = if force_full_rebuild {
+            rows_needing_refresh(snapshot, self.row_cache_cursor, true)
+        } else if self.row_cache_generation != Some(snapshot.generation) {
+            // Linux currently paints terminal rows through GPUI `StyledText`
+            // elements, so stale rows remain visible if the VT dirty-row set
+            // misses rows that became blank during alternate-screen restore.
+            // Rebuilding all row elements for a changed snapshot is still
+            // bounded by the visible grid and keeps TUI exits correct.
+            (0..usize::from(snapshot.rows)).collect()
+        } else {
+            Vec::new()
+        };
 
         rows_to_refresh.sort_unstable();
         rows_to_refresh.dedup();
