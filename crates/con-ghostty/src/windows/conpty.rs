@@ -16,9 +16,11 @@
 //! Reference: https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session
 
 use std::ffi::OsString;
+use std::fs;
 use std::io;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -505,22 +507,22 @@ where
         .expect("conpty reader thread spawn failed")
 }
 
-/// Discover a sensible default shell. Matches Windows Terminal's
-/// default-profile selection:
-///   1. `pwsh.exe`   (PowerShell 7+) if on PATH.
-///   2. `powershell.exe` (Windows PowerShell) if on PATH.
-///   3. `$env:COMSPEC` if set (usually `cmd.exe`).
-///   4. `cmd.exe` (hardcoded last resort — always present).
+/// Discover a sensible default shell.
 ///
 /// Users who want to force a different shell can point us at it via
-/// `CON_SHELL` (future: a config-file field). We prefer pwsh over
-/// cmd because Windows Terminal does, and because pwsh is the modern
-/// default on Windows 11 / Server 2025.
+/// `CON_SHELL` (future: a config-file field). Otherwise we try to honor
+/// Windows Terminal's configured default profile before falling back to a
+/// simple executable search. Matching the user's Windows Terminal shell is
+/// important when comparing prompt latency: PowerShell profile scripts,
+/// prompt frameworks, and WSL startup can dominate the first 400-500ms.
 pub fn default_shell_command() -> String {
     if let Some(cmd) = std::env::var("CON_SHELL")
         .ok()
         .filter(|s| !s.trim().is_empty())
     {
+        return cmd;
+    }
+    if let Some(cmd) = windows_terminal_default_shell_command() {
         return cmd;
     }
     for candidate in ["pwsh.exe", "powershell.exe"] {
@@ -537,6 +539,149 @@ pub fn default_shell_command() -> String {
     "cmd.exe".to_string()
 }
 
+fn windows_terminal_default_shell_command() -> Option<String> {
+    for settings_path in windows_terminal_settings_paths() {
+        let Ok(settings) = fs::read_to_string(&settings_path) else {
+            continue;
+        };
+        match windows_terminal_profile_command_from_settings(&settings) {
+            Some(command) => {
+                log::info!(
+                    "using Windows Terminal default profile command from {}: {}",
+                    settings_path.display(),
+                    command
+                );
+                return Some(command);
+            }
+            None => {
+                log::debug!(
+                    "Windows Terminal settings did not resolve to a supported shell: {}",
+                    settings_path.display()
+                );
+            }
+        }
+    }
+    None
+}
+
+fn windows_terminal_settings_paths() -> Vec<PathBuf> {
+    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) else {
+        return Vec::new();
+    };
+
+    vec![
+        local_app_data
+            .join("Packages")
+            .join("Microsoft.WindowsTerminal_8wekyb3d8bbwe")
+            .join("LocalState")
+            .join("settings.json"),
+        local_app_data
+            .join("Packages")
+            .join("Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe")
+            .join("LocalState")
+            .join("settings.json"),
+        local_app_data
+            .join("Microsoft")
+            .join("Windows Terminal")
+            .join("settings.json"),
+        local_app_data
+            .join("Microsoft")
+            .join("Windows Terminal Preview")
+            .join("settings.json"),
+    ]
+}
+
+fn windows_terminal_profile_command_from_settings(settings: &str) -> Option<String> {
+    let json = strip_jsonc_for_settings(settings);
+    let root = serde_json::from_str::<serde_json::Value>(&json).ok()?;
+    let default_profile = root.get("defaultProfile")?.as_str()?.trim();
+    if default_profile.is_empty() {
+        return None;
+    }
+
+    let profiles = root.get("profiles")?.get("list")?.as_array()?;
+    let profile = profiles.iter().find(|profile| {
+        ["guid", "name"].iter().any(|key| {
+            profile_string(profile, key)
+                .is_some_and(|value| value.eq_ignore_ascii_case(default_profile))
+        })
+    })?;
+
+    windows_terminal_profile_command(profile)
+}
+
+fn windows_terminal_profile_command(profile: &serde_json::Value) -> Option<String> {
+    if let Some(command) = profile_string(profile, "commandline").and_then(clean_commandline) {
+        return Some(command);
+    }
+
+    match profile_string(profile, "source")?.as_str() {
+        "Windows.Terminal.PowershellCore" => powershell_core_command(),
+        "Windows.Terminal.WindowsPowerShell" => Some("powershell.exe".to_string()),
+        "Windows.Terminal.Cmd" => Some(
+            std::env::var("COMSPEC")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "cmd.exe".to_string()),
+        ),
+        "Windows.Terminal.Wsl" => {
+            let Some(distro) =
+                profile_string(profile, "name").filter(|name| !name.trim().is_empty())
+            else {
+                return Some("wsl.exe".to_string());
+            };
+            Some(format!("wsl.exe -d {}", quote_command_arg(distro.trim())))
+        }
+        _ => None,
+    }
+}
+
+fn profile_string(profile: &serde_json::Value, key: &str) -> Option<String> {
+    profile.get(key)?.as_str().map(str::to_string)
+}
+
+fn clean_commandline(commandline: String) -> Option<String> {
+    let expanded = expand_percent_env_vars(commandline.trim());
+    let command = expanded.trim();
+    if command.is_empty() {
+        None
+    } else {
+        Some(command.to_string())
+    }
+}
+
+fn powershell_core_command() -> Option<String> {
+    if path_lookup("pwsh.exe").is_some() {
+        return Some("pwsh.exe".to_string());
+    }
+
+    for path in powershell_core_candidate_paths() {
+        if path.is_file() {
+            return Some(quote_path_for_command(&path));
+        }
+    }
+    None
+}
+
+fn powershell_core_candidate_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        paths.push(PathBuf::from(program_files).join("PowerShell\\7\\pwsh.exe"));
+    }
+    if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+        paths.push(PathBuf::from(program_files_x86).join("PowerShell\\7\\pwsh.exe"));
+    }
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(
+            PathBuf::from(local_app_data)
+                .join("Microsoft")
+                .join("WindowsApps")
+                .join("pwsh.exe"),
+        );
+    }
+    paths
+}
+
 fn path_lookup(name: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     for entry in std::env::split_paths(&path) {
@@ -546,4 +691,199 @@ fn path_lookup(name: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+fn quote_path_for_command(path: &Path) -> String {
+    quote_command_arg(&path.display().to_string())
+}
+
+fn quote_command_arg(arg: &str) -> String {
+    if arg.chars().any(|ch| matches!(ch, ' ' | '\t' | '"')) {
+        format!("\"{}\"", arg.replace('"', "\\\""))
+    } else {
+        arg.to_string()
+    }
+}
+
+fn expand_percent_env_vars(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start + 1..];
+
+        let Some(end) = rest.find('%') else {
+            out.push('%');
+            out.push_str(rest);
+            return out;
+        };
+
+        let name = &rest[..end];
+        if name.is_empty() {
+            out.push_str("%%");
+        } else if let Ok(value) = std::env::var(name) {
+            out.push_str(&value);
+        } else {
+            out.push('%');
+            out.push_str(name);
+            out.push('%');
+        }
+        rest = &rest[end + 1..];
+    }
+
+    out.push_str(rest);
+    out
+}
+
+fn strip_jsonc_for_settings(input: &str) -> String {
+    let without_comments = strip_jsonc_comments(input);
+    strip_jsonc_trailing_commas(&without_comments)
+}
+
+fn strip_jsonc_comments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                out.push(ch);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                chars.next();
+                for comment_ch in chars.by_ref() {
+                    if comment_ch == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = '\0';
+                for comment_ch in chars.by_ref() {
+                    if comment_ch == '\n' {
+                        out.push('\n');
+                    }
+                    if prev == '*' && comment_ch == '/' {
+                        break;
+                    }
+                    prev = comment_ch;
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+
+    out
+}
+
+fn strip_jsonc_trailing_commas(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                out.push(ch);
+            }
+            ',' => {
+                let mut next = i + 1;
+                while next < chars.len() && chars[next].is_whitespace() {
+                    next += 1;
+                }
+                if next < chars.len() && matches!(chars[next], '}' | ']') {
+                    i += 1;
+                    continue;
+                }
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+        i += 1;
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_windows_terminal_default_profile_commandline() {
+        let settings = r#"
+        {
+          // settings.json is JSONC
+          "defaultProfile": "{pwsh}",
+          "profiles": {
+            "list": [
+              { "guid": "{cmd}", "commandline": "cmd.exe", },
+              { "guid": "{pwsh}", "commandline": "pwsh.exe -NoLogo", },
+            ],
+          },
+        }
+        "#;
+
+        assert_eq!(
+            windows_terminal_profile_command_from_settings(settings).as_deref(),
+            Some("pwsh.exe -NoLogo")
+        );
+    }
+
+    #[test]
+    fn maps_windows_terminal_dynamic_profiles() {
+        let settings = r#"
+        {
+          "defaultProfile": "Windows PowerShell",
+          "profiles": {
+            "list": [
+              {
+                "name": "Windows PowerShell",
+                "source": "Windows.Terminal.WindowsPowerShell"
+              }
+            ]
+          }
+        }
+        "#;
+
+        assert_eq!(
+            windows_terminal_profile_command_from_settings(settings).as_deref(),
+            Some("powershell.exe")
+        );
+    }
 }
