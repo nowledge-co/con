@@ -2,11 +2,11 @@
 
 ## Decision
 
-con should keep `pulldown-cmark` as the Markdown parser and continue building a Con-owned renderer/style system on top of it.
+con should use the `markdown` crate's mdast parser for agent-panel Markdown and continue building a Con-owned renderer/style system on top of it.
 
 con should not import Zed's markdown crate directly.
 
-con should not switch to a heavier AST-first parser unless the product genuinely needs AST mutation or CommonMark extensions that `pulldown-cmark` cannot provide cleanly.
+The mdast parser choice is intentional now: GFM tables, display math, and inline math are product requirements, and the renderer benefits from a stable block/inline tree with per-node caches.
 
 ## Why
 
@@ -18,9 +18,7 @@ The current quality gap in Con's chat panel is not Markdown parsing correctness.
 - fenced code blocks need their own surface, language label, and mono treatment
 - lists, blockquotes, and headings need a cleaner style ladder
 
-`pulldown-cmark` already gives us a clean event stream for this.
-
-Upstream explicitly positions it as a pull parser with parsing and rendering separated, and notes that it can also support source offsets when needed. That is the right fit for Con's UI renderer.
+The `markdown` crate gives us a normalized mdast tree with GFM and math constructs, while keeping parsing and rendering separated. That is the right fit for Con's UI renderer because parsed block entities can own cache state without reparsing during ordinary GPUI paints.
 
 ### 2. Zed is not reusable as-is
 
@@ -34,9 +32,9 @@ That makes the long-term answer straightforward:
 
 ### 3. A heavier parser would not solve the UI problem
 
-`comrak` is a reasonable Rust Markdown library when you need an AST and HTML rendering, but Con's current problem is not "we lack an AST." It is "our renderer does not have enough explicit style slots and layout structure."
+`comrak` is a reasonable Rust Markdown library when you need HTML rendering or deeper AST mutation, but Con's current problem is not HTML generation. It is "our renderer must turn a known Markdown tree into cached GPUI text/image blocks without stalling the app."
 
-Switching parsers would add cost and churn without solving the typography problem by itself.
+Switching parsers again would add cost and churn without solving the typography and cache-boundary problem by itself.
 
 ## Recommended Con design
 
@@ -44,13 +42,14 @@ Switching parsers would add cost and churn without solving the typography proble
 
 Keep:
 
-- `pulldown-cmark`
+- `markdown`
 
 Use it for:
 
-- CommonMark event parsing
-- extension flags we actually need
-- optional source-offset tracking later through event ranges
+- mdast parsing
+- GFM tables
+- fenced code blocks
+- math flow and math text constructs
 
 ### Con-owned intermediate representation
 
@@ -63,10 +62,13 @@ Keep or evolve the current custom block/inline model in `chat_markdown.rs` into 
   - list item
   - blockquote
   - fenced code block
+  - mermaid diagram
+  - display math
   - thematic break
 - inline nodes:
   - text
   - code
+  - math
   - emphasis
   - strong
   - strikethrough
@@ -120,6 +122,10 @@ Performance rule:
 
 - long-form chat content must prefer one text layout with styled runs over per-token element trees
 - fenced code blocks must prefer one highlighted text layout per block over one UI row per line
+- mermaid diagram rendering must happen off the UI thread and cache the rendered image by source text + scale
+- display math rendering must happen off the UI thread and cache the rendered image by source text + font-size key
+- inline math should use a conservative false-positive filter so normal prose such as prices does not become math
+- `mathjax-svg-rs` pulls in a real JavaScript/MathJax engine; keep it isolated to the UI crate, render only on a background executor, and revisit only with measured binary-size or cold-start data
 - inline code inside dense prose, lists, or table cells should not force flex-wrapped chip segmentation at chat-message scale
 - decorative inline-code chips are acceptable for short UI copy, not for large agent replies
 - cache parsed/flattened text-run transforms at the markdown data layer before trying view-level caching
@@ -152,13 +158,13 @@ Add source-range support if needed for:
 - hover actions
 - future copy/open behaviors on links or code blocks
 
-`pulldown-cmark` can support that without forcing a parser rewrite.
+The mdast layer can be extended with source-position tracking if we need this later.
 
 ## Conclusion
 
 The long-term elegant path is:
 
-- keep `pulldown-cmark`
+- keep `markdown` mdast parsing
 - keep a Con-owned renderer
 - formalize a real markdown style/render abstraction
 - do not import Zed's GPL markdown crate
@@ -168,7 +174,6 @@ That is the lowest-redundancy, license-safe, long-term architecture.
 
 ## Primary sources
 
-- `pulldown-cmark` upstream README: <https://github.com/pulldown-cmark/pulldown-cmark>
-- `pulldown-cmark` Rust docs: <https://docs.rs/pulldown-cmark/latest/pulldown_cmark/>
+- `markdown` Rust docs: <https://docs.rs/markdown/latest/markdown/>
 - `comrak` Rust docs: <https://docs.rs/comrak/latest/comrak/>
 - CommonMark spec: <https://spec.commonmark.org/>

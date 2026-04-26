@@ -2,9 +2,10 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use gpui::{
-    AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
-    Styled, StyledText, TextStyle, TextRun, UnderlineStyle, WhiteSpace, Window, div, px,
+    AbsoluteLength, AnyElement, AppContext, DefiniteLength, FontStyle, FontWeight, Hsla,
+    ImageSource, InteractiveElement, IntoElement, ParentElement, Render, RenderImage, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, StyledText, Task, TextRun, TextStyle,
+    UnderlineStyle, WhiteSpace, Window, div, img, px,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::clipboard::Clipboard;
@@ -35,6 +36,14 @@ enum MarkdownBlock {
         language: Option<String>,
         code: String,
         highlight_cache: RefCell<Option<CachedCodeHighlightRuns>>,
+    },
+    Mermaid {
+        code: String,
+        scale: u32,
+    },
+    MathBlock {
+        math: String,
+        inline_cache: RefCell<Option<CachedInlineRender>>,
     },
     BlockQuote(Vec<MarkdownBlock>),
     List {
@@ -78,6 +87,19 @@ impl PartialEq for MarkdownBlock {
                     ..
                 },
             ) => language_a == language_b && code_a == code_b,
+            (
+                Self::Mermaid {
+                    code: code_a,
+                    scale: scale_a,
+                },
+                Self::Mermaid {
+                    code: code_b,
+                    scale: scale_b,
+                },
+            ) => code_a == code_b && scale_a == scale_b,
+            (Self::MathBlock { math: math_a, .. }, Self::MathBlock { math: math_b, .. }) => {
+                math_a == math_b
+            }
             (Self::BlockQuote(a), Self::BlockQuote(b)) => a == b,
             (
                 Self::List {
@@ -123,6 +145,7 @@ enum MarkdownTableAlign {
 enum MarkdownInline {
     Text(String),
     Code(String),
+    Math(String),
     Emphasis(Vec<MarkdownInline>),
     Strong(Vec<MarkdownInline>),
     Strikethrough(Vec<MarkdownInline>),
@@ -191,6 +214,8 @@ struct InlineRenderCacheKey {
     strikethrough: bool,
     inline_code_background: Hsla,
     inline_code_text_color: Hsla,
+    inline_math_background: Hsla,
+    math_text_color: Hsla,
     link_color: Hsla,
 }
 
@@ -199,6 +224,19 @@ struct CachedInlineRender {
     key: InlineRenderCacheKey,
     text: SharedString,
     runs: Vec<TextRun>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RichSvgRenderKind {
+    Mermaid,
+    Math,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RichSvgRenderKey {
+    kind: RichSvgRenderKind,
+    source: SharedString,
+    metric: u32,
 }
 
 struct ChatMarkdownStyle<'a> {
@@ -213,6 +251,10 @@ struct ChatMarkdownStyle<'a> {
     muted_text_color: Hsla,
     inline_code_background: Hsla,
     inline_code_text_color: Hsla,
+    inline_math_background: Hsla,
+    math_text_color: Hsla,
+    math_block_background: Hsla,
+    math_block_text_color: Hsla,
     code_block_background: Hsla,
     code_block_body_background: Hsla,
     code_block_language_background: Hsla,
@@ -245,6 +287,10 @@ impl<'a> ChatMarkdownStyle<'a> {
                     .mix_oklab(theme.background, 0.26)
                     .opacity(0.96),
                 inline_code_text_color: theme.foreground.opacity(0.96),
+                inline_math_background: theme.primary.opacity(0.08),
+                math_text_color: theme.primary.mix_oklab(theme.foreground, 0.58),
+                math_block_background: theme.secondary.mix_oklab(theme.background, 0.62),
+                math_block_text_color: theme.foreground.opacity(0.92),
                 code_block_background: theme.secondary.mix_oklab(theme.background, 0.56),
                 code_block_body_background: theme.background.mix_oklab(theme.secondary, 0.90),
                 code_block_language_background: theme
@@ -276,6 +322,10 @@ impl<'a> ChatMarkdownStyle<'a> {
                     .mix_oklab(theme.background, 0.20)
                     .opacity(0.90),
                 inline_code_text_color: theme.foreground.opacity(0.84),
+                inline_math_background: theme.primary.opacity(0.06),
+                math_text_color: theme.primary.mix_oklab(theme.muted_foreground, 0.62),
+                math_block_background: theme.secondary.mix_oklab(theme.background, 0.52),
+                math_block_text_color: theme.foreground.opacity(0.78),
                 code_block_background: theme.secondary.mix_oklab(theme.background, 0.48),
                 code_block_body_background: theme.background.mix_oklab(theme.secondary, 0.84),
                 code_block_language_background: theme
@@ -405,6 +455,10 @@ pub struct ChatMarkdownBlockView {
     block_index: usize,
     tone: ChatMarkdownTone,
     table_scroll_handle: ScrollHandle,
+    rich_svg_key: Option<RichSvgRenderKey>,
+    rich_svg_image: Option<Result<Arc<RenderImage>, SharedString>>,
+    rich_svg_pending: bool,
+    rich_svg_task: Option<Task<()>>,
 }
 
 impl ChatMarkdownBlockView {
@@ -418,6 +472,10 @@ impl ChatMarkdownBlockView {
             block_index,
             tone,
             table_scroll_handle: ScrollHandle::new(),
+            rich_svg_key: None,
+            rich_svg_image: None,
+            rich_svg_pending: false,
+            rich_svg_task: None,
         }
     }
 
@@ -436,8 +494,80 @@ impl ChatMarkdownBlockView {
             self.block_index = block_index;
             self.tone = tone;
             self.table_scroll_handle = ScrollHandle::new();
+            self.rich_svg_key = None;
+            self.rich_svg_image = None;
+            self.rich_svg_pending = false;
+            self.rich_svg_task = None;
             cx.notify();
         }
+    }
+
+    fn ensure_rich_svg_render(
+        &mut self,
+        kind: RichSvgRenderKind,
+        source: &str,
+        metric: u32,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let key = RichSvgRenderKey {
+            kind,
+            source: SharedString::from(source.to_string()),
+            metric,
+        };
+
+        if self.rich_svg_key.as_ref() != Some(&key) {
+            self.rich_svg_key = Some(key.clone());
+            self.rich_svg_image = None;
+            self.rich_svg_pending = false;
+            self.rich_svg_task = None;
+        }
+
+        if self.rich_svg_image.is_some() || self.rich_svg_pending {
+            return;
+        }
+
+        self.rich_svg_pending = true;
+        let render_key = key.clone();
+        let background_key = key.clone();
+        let svg_renderer = cx.svg_renderer();
+        self.rich_svg_task = Some(cx.spawn(async move |this, cx| {
+            let result: Result<Arc<RenderImage>, SharedString> = cx
+                .background_spawn(async move {
+                    let result: anyhow::Result<Arc<RenderImage>> = (|| {
+                        let svg = match background_key.kind {
+                            RichSvgRenderKind::Mermaid => {
+                                mermaid_rs_renderer::render(background_key.source.as_ref())?
+                            }
+                            RichSvgRenderKind::Math => {
+                                let options = mathjax_svg_rs::Options {
+                                    font_size: background_key.metric as f64 / 1000.0,
+                                    horizontal_align: mathjax_svg_rs::HorizontalAlign::Center,
+                                };
+                                mathjax_svg_rs::render_tex(background_key.source.as_ref(), &options)
+                                    .map_err(anyhow::Error::msg)?
+                            }
+                        };
+                        svg_renderer
+                            .render_single_frame(
+                                svg.as_bytes(),
+                                rich_svg_render_scale(&background_key),
+                            )
+                            .map_err(|error| anyhow::anyhow!("{error}"))
+                    })();
+                    result
+                })
+                .await
+                .map_err(|error| SharedString::from(error.to_string()));
+
+            this.update(cx, |view, cx| {
+                if view.rich_svg_key.as_ref() == Some(&render_key) {
+                    view.rich_svg_image = Some(result);
+                    view.rich_svg_pending = false;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
     }
 }
 
@@ -445,6 +575,45 @@ impl Render for ChatMarkdownBlockView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let style = ChatMarkdownStyle::new(&theme, self.tone);
+        let rich_svg_block = self
+            .document
+            .blocks
+            .get(self.block_index)
+            .and_then(|block| {
+                if let MarkdownBlock::Mermaid { code, scale } = block {
+                    Some((RichSvgRenderKind::Mermaid, code.clone(), *scale))
+                } else if let MarkdownBlock::MathBlock { math, .. } = block {
+                    Some((
+                        RichSvgRenderKind::Math,
+                        math.clone(),
+                        math_font_size_metric(&style),
+                    ))
+                } else {
+                    None
+                }
+            });
+
+        if let Some((kind, source, metric)) = rich_svg_block {
+            self.ensure_rich_svg_render(kind, &source, metric, cx);
+            return match kind {
+                RichSvgRenderKind::Mermaid => render_mermaid_block(
+                    self.block_index,
+                    &source,
+                    metric,
+                    self.rich_svg_pending,
+                    self.rich_svg_image.as_ref(),
+                    &style,
+                ),
+                RichSvgRenderKind::Math => render_math_svg_block(
+                    self.block_index,
+                    &source,
+                    self.rich_svg_pending,
+                    self.rich_svg_image.as_ref(),
+                    &style,
+                ),
+            };
+        }
+
         self.document
             .blocks
             .get(self.block_index)
@@ -458,7 +627,7 @@ impl Render for ChatMarkdownBlockView {
 }
 
 fn parse_markdown(source: &str) -> Vec<MarkdownBlock> {
-    match markdown::to_mdast(source, &ParseOptions::gfm()) {
+    match markdown::to_mdast(source, &chat_parse_options()) {
         Ok(mdast::Node::Root(root)) => root.children.iter().filter_map(parse_block_node).collect(),
         Ok(node) => parse_block_node(&node).into_iter().collect(),
         Err(_) => vec![MarkdownBlock::Paragraph {
@@ -468,24 +637,36 @@ fn parse_markdown(source: &str) -> Vec<MarkdownBlock> {
     }
 }
 
+fn chat_parse_options() -> ParseOptions {
+    let mut options = ParseOptions::gfm();
+    options.constructs.math_flow = true;
+    options.constructs.math_text = true;
+    options
+}
+
 fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
     match node {
-        mdast::Node::Paragraph(val) => {
-            Some(MarkdownBlock::Paragraph {
-                inlines: parse_inline_nodes(&val.children),
-                inline_cache: RefCell::new(None),
-            })
-        }
+        mdast::Node::Paragraph(val) => Some(MarkdownBlock::Paragraph {
+            inlines: parse_inline_nodes(&val.children),
+            inline_cache: RefCell::new(None),
+        }),
         mdast::Node::Heading(val) => Some(MarkdownBlock::Heading {
             level: val.depth,
             inlines: parse_inline_nodes(&val.children),
             inline_cache: RefCell::new(None),
         }),
-        mdast::Node::Code(raw) => Some(MarkdownBlock::CodeBlock {
-            language: raw.lang.clone().filter(|lang| !lang.trim().is_empty()),
-            code: raw.value.clone(),
-            highlight_cache: RefCell::new(None),
-        }),
+        mdast::Node::Code(raw) => parse_mermaid_scale(raw.lang.as_deref(), raw.meta.as_deref())
+            .map(|scale| MarkdownBlock::Mermaid {
+                code: raw.value.clone(),
+                scale,
+            })
+            .or_else(|| {
+                Some(MarkdownBlock::CodeBlock {
+                    language: raw.lang.clone().filter(|lang| !lang.trim().is_empty()),
+                    code: raw.value.clone(),
+                    highlight_cache: RefCell::new(None),
+                })
+            }),
         mdast::Node::Blockquote(val) => Some(MarkdownBlock::BlockQuote(
             val.children.iter().filter_map(parse_block_node).collect(),
         )),
@@ -517,12 +698,10 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
                         row.children
                             .iter()
                             .filter_map(|cell| match cell {
-                                mdast::Node::TableCell(cell) => {
-                                    Some(MarkdownTableCell {
-                                        inlines: parse_inline_nodes(&cell.children),
-                                        inline_cache: RefCell::new(None),
-                                    })
-                                }
+                                mdast::Node::TableCell(cell) => Some(MarkdownTableCell {
+                                    inlines: parse_inline_nodes(&cell.children),
+                                    inline_cache: RefCell::new(None),
+                                }),
                                 _ => None,
                             })
                             .collect::<Vec<_>>(),
@@ -553,10 +732,9 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
             code: val.value.clone(),
             highlight_cache: RefCell::new(None),
         }),
-        mdast::Node::Math(val) => Some(MarkdownBlock::CodeBlock {
-            language: None,
-            code: val.value.clone(),
-            highlight_cache: RefCell::new(None),
+        mdast::Node::Math(val) => Some(MarkdownBlock::MathBlock {
+            math: val.value.clone(),
+            inline_cache: RefCell::new(None),
         }),
         mdast::Node::FootnoteDefinition(def) => Some(MarkdownBlock::Paragraph {
             inlines: std::iter::once(MarkdownInline::Text(format!("[{}]: ", def.identifier)))
@@ -577,13 +755,33 @@ fn parse_table_align(align: &markdown::mdast::AlignKind) -> MarkdownTableAlign {
     }
 }
 
+fn parse_mermaid_scale(lang: Option<&str>, meta: Option<&str>) -> Option<u32> {
+    let lang = lang?.trim();
+    if !lang.eq_ignore_ascii_case("mermaid") {
+        return None;
+    }
+
+    Some(
+        meta.and_then(|meta| meta.split_whitespace().next())
+            .and_then(|scale| scale.parse::<u32>().ok())
+            .unwrap_or(100)
+            .clamp(10, 500),
+    )
+}
+
 fn parse_inline_nodes(nodes: &[mdast::Node]) -> Vec<MarkdownInline> {
     let mut inlines = Vec::new();
     for node in nodes {
         match node {
             mdast::Node::Text(val) => push_text_fragments(&mut inlines, &val.value),
             mdast::Node::InlineCode(val) => inlines.push(MarkdownInline::Code(val.value.clone())),
-            mdast::Node::InlineMath(val) => inlines.push(MarkdownInline::Code(val.value.clone())),
+            mdast::Node::InlineMath(val) => {
+                if looks_like_inline_math(&val.value) {
+                    inlines.push(MarkdownInline::Math(val.value.clone()));
+                } else {
+                    push_text_fragments(&mut inlines, &format!("${}$", val.value));
+                }
+            }
             mdast::Node::Emphasis(val) => {
                 inlines.push(MarkdownInline::Emphasis(parse_inline_nodes(&val.children)))
             }
@@ -685,6 +883,52 @@ fn coalesce_inlines(inlines: Vec<MarkdownInline>) -> Vec<MarkdownInline> {
     output
 }
 
+fn looks_like_inline_math(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+
+    if value.chars().any(|ch| {
+        matches!(
+            ch,
+            '\\' | '^'
+                | '_'
+                | '='
+                | '<'
+                | '>'
+                | '+'
+                | '-'
+                | '*'
+                | '/'
+                | '|'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+        )
+    }) {
+        return true;
+    }
+
+    let words = value
+        .split_whitespace()
+        .map(|word| word.trim_matches(|ch: char| !ch.is_alphanumeric()))
+        .collect::<Vec<_>>();
+    if words.iter().any(|word| {
+        matches!(
+            word.to_ascii_lowercase().as_str(),
+            "and" | "or" | "the" | "for"
+        )
+    }) {
+        return false;
+    }
+
+    value.chars().count() <= 3 && value.chars().any(char::is_alphabetic)
+}
+
 fn render_block(
     block: &MarkdownBlock,
     index: usize,
@@ -723,6 +967,12 @@ fn render_block(
             code,
             highlight_cache,
         } => render_code_block(index, language, code, highlight_cache, style),
+        MarkdownBlock::Mermaid { code, scale } => {
+            render_mermaid_code_fallback(index, code, *scale, style)
+        }
+        MarkdownBlock::MathBlock { math, inline_cache } => {
+            render_math_block(math, inline_cache, style)
+        }
         MarkdownBlock::BlockQuote(blocks) => div()
             .w_full()
             .px(px(10.0))
@@ -826,7 +1076,12 @@ fn render_block_with_width(
     table_scroll_handle: Option<&ScrollHandle>,
 ) -> AnyElement {
     let mut wrapper = div().w_full();
-    if !matches!(block, MarkdownBlock::CodeBlock { .. } | MarkdownBlock::Table { .. }) {
+    if !matches!(
+        block,
+        MarkdownBlock::CodeBlock { .. }
+            | MarkdownBlock::Mermaid { .. }
+            | MarkdownBlock::Table { .. }
+    ) {
         wrapper = wrapper.max_w(style.content_width);
     }
 
@@ -879,15 +1134,11 @@ fn render_table_block(
         }
 
         let is_header = row_idx == 0;
-        let mut row_el = div()
-            .flex()
-            .items_stretch()
-            .w_full()
-            .bg(if is_header {
-                style.table_border.opacity(0.18)
-            } else {
-                style.table_cell_background
-            });
+        let mut row_el = div().flex().items_stretch().w_full().bg(if is_header {
+            style.table_border.opacity(0.18)
+        } else {
+            style.table_cell_background
+        });
 
         for (col_idx, width) in column_widths.iter().enumerate() {
             if col_idx > 0 {
@@ -895,7 +1146,9 @@ fn render_table_block(
                     div()
                         .w(px(1.0))
                         .flex_none()
-                        .bg(style.table_border.opacity(if is_header { 0.52 } else { 0.34 })),
+                        .bg(style
+                            .table_border
+                            .opacity(if is_header { 0.52 } else { 0.34 })),
                 );
             }
 
@@ -928,7 +1181,11 @@ fn render_table_block(
                 .min_h(px(if is_header { 46.0 } else { 42.0 }))
                 .child(content);
 
-            match aligns.get(col_idx).copied().unwrap_or(MarkdownTableAlign::Left) {
+            match aligns
+                .get(col_idx)
+                .copied()
+                .unwrap_or(MarkdownTableAlign::Left)
+            {
                 MarkdownTableAlign::Right => {
                     cell_el = cell_el.text_right();
                 }
@@ -947,17 +1204,17 @@ fn render_table_block(
     let mut table_frame = div()
         .relative()
         .w_full()
-        .pb(px(if table_scroll_handle.is_some() { 8.0 } else { 0.0 }))
+        .pb(px(if table_scroll_handle.is_some() {
+            8.0
+        } else {
+            0.0
+        }))
         .child(table_scroll.child(table_body));
     if let Some(handle) = table_scroll_handle {
         table_frame = table_frame.horizontal_scrollbar(handle);
     }
 
-    let container = div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .child(table_frame);
+    let container = div().w_full().flex().flex_col().child(table_frame);
 
     container.into_any_element()
 }
@@ -1021,7 +1278,8 @@ fn render_code_block(
                 ),
         );
 
-    let (code_text, code_runs) = cached_highlighted_code_runs(code, language, highlight_cache, style);
+    let (code_text, code_runs) =
+        cached_highlighted_code_runs(code, language, highlight_cache, style);
     let code_column = div()
         .w_full()
         .font_family(style.theme.mono_font_family.clone())
@@ -1042,6 +1300,287 @@ fn render_code_block(
             ),
         )
         .into_any_element()
+}
+
+fn render_mermaid_block(
+    index: usize,
+    code: &str,
+    scale: u32,
+    pending: bool,
+    image: Option<&Result<Arc<RenderImage>, SharedString>>,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let header = render_mermaid_header(index, code, scale, style);
+    let body = match image {
+        Some(Ok(image)) => div()
+            .id(("chat-md-mermaid-scroll", index))
+            .w_full()
+            .overflow_x_scroll()
+            .child(
+                div()
+                    .min_w(px(240.0))
+                    .p(px(14.0))
+                    .child(img(ImageSource::Render(image.clone())).flex_none()),
+            )
+            .into_any_element(),
+        Some(Err(error)) => div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .p(px(14.0))
+            .child(
+                div()
+                    .font_family(style.theme.font_family.clone())
+                    .text_size(px(12.5))
+                    .line_height(px(18.0))
+                    .text_color(style.muted_text_color)
+                    .child(format!("Could not render Mermaid diagram: {error}")),
+            )
+            .child(render_mermaid_source_text(code, style))
+            .into_any_element(),
+        None => div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .p(px(14.0))
+            .child(
+                div()
+                    .font_family(style.theme.font_family.clone())
+                    .text_size(px(12.5))
+                    .line_height(px(18.0))
+                    .text_color(style.muted_text_color)
+                    .child(if pending {
+                        "Rendering Mermaid diagram..."
+                    } else {
+                        "Mermaid diagram"
+                    }),
+            )
+            .child(render_mermaid_source_text(code, style))
+            .into_any_element(),
+    };
+
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .rounded(px(13.0))
+        .bg(style.code_block_background.opacity(0.98))
+        .p(px(1.0))
+        .child(header)
+        .child(
+            div()
+                .mx(px(10.0))
+                .mb(px(10.0))
+                .rounded(px(10.0))
+                .bg(style.code_block_body_background.opacity(0.985))
+                .child(body),
+        )
+        .into_any_element()
+}
+
+fn render_math_svg_block(
+    index: usize,
+    math: &str,
+    pending: bool,
+    image: Option<&Result<Arc<RenderImage>, SharedString>>,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let body = match image {
+        Some(Ok(image)) => div()
+            .id(("chat-md-math-scroll", index))
+            .w_full()
+            .overflow_x_scroll()
+            .child(
+                div()
+                    .min_w(px(180.0))
+                    .px(px(16.0))
+                    .py(px(14.0))
+                    .child(img(ImageSource::Render(image.clone())).flex_none()),
+            )
+            .into_any_element(),
+        Some(Err(error)) => div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .px(px(16.0))
+            .py(px(13.0))
+            .child(
+                div()
+                    .font_family(style.theme.font_family.clone())
+                    .text_size(px(12.5))
+                    .line_height(px(18.0))
+                    .text_color(style.muted_text_color)
+                    .child(format!("Could not render LaTeX: {error}")),
+            )
+            .child(render_math_source_text(math, style))
+            .into_any_element(),
+        None => div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .px(px(16.0))
+            .py(px(13.0))
+            .child(
+                div()
+                    .font_family(style.theme.font_family.clone())
+                    .text_size(px(12.5))
+                    .line_height(px(18.0))
+                    .text_color(style.muted_text_color)
+                    .child(if pending {
+                        "Rendering LaTeX..."
+                    } else {
+                        "LaTeX"
+                    }),
+            )
+            .child(render_math_source_text(math, style))
+            .into_any_element(),
+    };
+
+    div()
+        .w_full()
+        .max_w(style.content_width)
+        .overflow_hidden()
+        .rounded(px(12.0))
+        .bg(style.math_block_background.opacity(0.92))
+        .child(body)
+        .into_any_element()
+}
+
+fn render_mermaid_code_fallback(
+    index: usize,
+    code: &str,
+    scale: u32,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .rounded(px(13.0))
+        .bg(style.code_block_background.opacity(0.98))
+        .p(px(1.0))
+        .child(render_mermaid_header(index, code, scale, style))
+        .child(
+            div()
+                .mx(px(10.0))
+                .mb(px(10.0))
+                .rounded(px(10.0))
+                .bg(style.code_block_body_background.opacity(0.985))
+                .p(px(12.0))
+                .child(render_mermaid_source_text(code, style)),
+        )
+        .into_any_element()
+}
+
+fn render_mermaid_header(
+    index: usize,
+    code: &str,
+    scale: u32,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let label = if scale == 100 {
+        "mermaid".to_string()
+    } else {
+        format!("mermaid {scale}%")
+    };
+
+    div()
+        .px(px(14.0))
+        .pt(px(10.0))
+        .pb(px(8.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .px(px(8.0))
+                        .py(px(4.0))
+                        .rounded(px(8.0))
+                        .bg(style.code_block_language_background)
+                        .font_family(style.theme.mono_font_family.clone())
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_size(px(10.5))
+                        .line_height(px(11.0))
+                        .text_color(style.code_block_language_text_color)
+                        .child(label),
+                )
+                .child(div().h(px(1.0)).flex_1().bg(style.rule_color.opacity(0.36)))
+                .child(
+                    Clipboard::new(format!("copy-mermaid-block-{index}"))
+                        .value(SharedString::from(code.to_string())),
+                ),
+        )
+        .into_any_element()
+}
+
+fn render_mermaid_source_text(code: &str, style: &ChatMarkdownStyle<'_>) -> AnyElement {
+    let text = code_display_text(code);
+    div()
+        .w_full()
+        .font_family(style.theme.mono_font_family.clone())
+        .text_size(style.code_font_size)
+        .line_height(style.code_line_height)
+        .text_color(style.text_color.opacity(0.82))
+        .child(StyledText::new(SharedString::from(text)))
+        .into_any_element()
+}
+
+fn render_math_block(
+    math: &str,
+    inline_cache: &RefCell<Option<CachedInlineRender>>,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let inlines = [MarkdownInline::Math(math.to_string())];
+    let mut text_style = style.code_text_style();
+    text_style.color = style.math_block_text_color;
+    text_style.font_size = (style.code_font_size + px(1.0)).into();
+    text_style.line_height = (style.code_line_height + px(3.0)).into();
+
+    div()
+        .w_full()
+        .max_w(style.content_width)
+        .rounded(px(12.0))
+        .bg(style.math_block_background.opacity(0.92))
+        .px(px(16.0))
+        .py(px(13.0))
+        .child(render_inline_content(
+            &inlines,
+            &text_style,
+            style,
+            inline_cache,
+        ))
+        .into_any_element()
+}
+
+fn render_math_source_text(math: &str, style: &ChatMarkdownStyle<'_>) -> AnyElement {
+    div()
+        .w_full()
+        .font_family(style.theme.mono_font_family.clone())
+        .text_size(style.code_font_size + px(1.0))
+        .line_height(style.code_line_height + px(3.0))
+        .text_color(style.math_block_text_color)
+        .child(StyledText::new(SharedString::from(math.to_string())))
+        .into_any_element()
+}
+
+fn math_font_size_metric(style: &ChatMarkdownStyle<'_>) -> u32 {
+    let font_size: f32 = (style.code_font_size + px(3.0)).into();
+    (font_size * 1000.0).round().max(1.0) as u32
+}
+
+fn rich_svg_render_scale(key: &RichSvgRenderKey) -> f32 {
+    match key.kind {
+        RichSvgRenderKind::Mermaid => key.metric as f32 / 100.0,
+        RichSvgRenderKind::Math => 1.0,
+    }
 }
 
 fn cached_table_layout(
@@ -1112,7 +1651,9 @@ fn table_cell_measure_chars(inlines: &[MarkdownInline]) -> usize {
     inlines
         .iter()
         .map(|inline| match inline {
-            MarkdownInline::Text(text) | MarkdownInline::Code(text) => text
+            MarkdownInline::Text(text)
+            | MarkdownInline::Code(text)
+            | MarkdownInline::Math(text) => text
                 .split_whitespace()
                 .map(|word| word.chars().count())
                 .max()
@@ -1334,6 +1875,8 @@ fn cached_inline_runs(
         strikethrough: base_style.strikethrough.is_some(),
         inline_code_background: style.inline_code_background,
         inline_code_text_color: style.inline_code_text_color,
+        inline_math_background: style.inline_math_background,
+        math_text_color: style.math_text_color,
         link_color: style.link_color,
     };
 
@@ -1387,6 +1930,15 @@ fn append_inline_runs(
                 code_style.font_weight = FontWeight::MEDIUM;
                 code_style.color = style.inline_code_text_color;
                 push_run(text, runs, &code_style, value);
+            }
+            MarkdownInline::Math(value) => {
+                let mut math_style = current_style.clone();
+                math_style.font_family = style.theme.mono_font_family.clone();
+                math_style.background_color = Some(style.inline_math_background);
+                math_style.font_style = FontStyle::Italic;
+                math_style.font_weight = FontWeight::MEDIUM;
+                math_style.color = style.math_text_color;
+                push_run(text, runs, &math_style, value);
             }
             MarkdownInline::Emphasis(children) => {
                 let mut emphasis = current_style.clone();
@@ -1482,6 +2034,82 @@ mod tests {
         assert_eq!(aligns.len(), 2);
         assert_eq!(rows.len(), 2);
         assert!(matches!(aligns[1], MarkdownTableAlign::Right));
+    }
+
+    #[test]
+    fn parses_mermaid_fences_as_diagram_blocks() {
+        let blocks = parse_markdown("```mermaid 140\ngraph TD\n  A-->B\n```");
+        let Some(MarkdownBlock::Mermaid { code, scale }) = blocks.first() else {
+            panic!("expected mermaid block");
+        };
+
+        assert_eq!(*scale, 140);
+        assert!(code.contains("A-->B"));
+    }
+
+    #[test]
+    fn parses_markdown_math_as_first_class_content() {
+        let blocks = parse_markdown("Inline $a^2 + b^2 = c^2$ math.\n\n$$\ne^{i\\pi}+1=0\n$$");
+        let MarkdownBlock::Paragraph { inlines, .. } = &blocks[0] else {
+            panic!("expected paragraph");
+        };
+
+        assert!(
+            inlines
+                .iter()
+                .any(|inline| matches!(inline, MarkdownInline::Math(math) if math.contains("a^2")))
+        );
+        assert!(matches!(
+            blocks.get(1),
+            Some(MarkdownBlock::MathBlock { math, .. }) if math.contains("e^{i\\pi}")
+        ));
+    }
+
+    #[test]
+    fn dollar_amounts_do_not_become_inline_math() {
+        let blocks = parse_markdown("Costs are $5 and $6 today, but `$x$` stays code.");
+        let MarkdownBlock::Paragraph { inlines, .. } = &blocks[0] else {
+            panic!("expected paragraph");
+        };
+
+        assert!(
+            !inlines
+                .iter()
+                .any(|inline| matches!(inline, MarkdownInline::Math(_)))
+        );
+        assert!(inlines.iter().any(|inline| {
+            matches!(inline, MarkdownInline::Text(text) if text.contains("$5 and $6"))
+        }));
+    }
+
+    #[test]
+    fn single_letter_inline_math_is_supported() {
+        let blocks = parse_markdown("Let $x$ be the selected pane.");
+        let MarkdownBlock::Paragraph { inlines, .. } = &blocks[0] else {
+            panic!("expected paragraph");
+        };
+
+        assert!(
+            inlines
+                .iter()
+                .any(|inline| matches!(inline, MarkdownInline::Math(math) if math == "x"))
+        );
+    }
+
+    #[test]
+    fn rich_svg_renderers_produce_svg() {
+        let mermaid = mermaid_rs_renderer::render("flowchart TD\n  A-->B").unwrap();
+        assert!(mermaid.contains("<svg"));
+
+        let math = mathjax_svg_rs::render_tex(
+            r"e^{i\pi}+1=0",
+            &mathjax_svg_rs::Options {
+                font_size: 18.0,
+                horizontal_align: mathjax_svg_rs::HorizontalAlign::Center,
+            },
+        )
+        .unwrap();
+        assert!(math.contains("<svg"));
     }
 
     #[test]
