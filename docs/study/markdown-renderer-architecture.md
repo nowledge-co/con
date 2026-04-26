@@ -121,6 +121,8 @@ Performance rule:
 - long-form chat content must prefer one text layout with styled runs over per-token element trees
 - inline code inside dense prose, lists, or table cells should not force flex-wrapped chip segmentation at chat-message scale
 - decorative inline-code chips are acceptable for short UI copy, not for large agent replies
+- once a markdown body crosses a real complexity threshold, switch renderer modes instead of letting the rich small-message path scale unbounded
+- large replies should preserve content fidelity first, but can trade decorative chrome for lower render-tree cardinality
 
 ## Migration path
 

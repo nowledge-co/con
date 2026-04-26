@@ -35,6 +35,10 @@ In short:
   - medium weight
   - background color
   - adjusted foreground color
+- Added a second renderer mode for large markdown bodies. Once a parsed reply crosses a cost threshold, Con switches from the richer small-message markdown surfaces to a document-optimized layout:
+  - headings and paragraphs stay text-first
+  - code blocks render without per-line syntax-highlight rebuild work
+  - tables render as compact monospace text grids instead of nested cell chrome
 
 This keeps the semantic styling while collapsing the render tree back down to one text layout per paragraph/list cell/table cell instead of many small child elements.
 
