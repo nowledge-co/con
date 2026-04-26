@@ -592,6 +592,7 @@ impl Render for GhosttyView {
 
         let foreground = theme.foreground;
         let status_color = foreground.opacity(0.5);
+        let pane_opacity = self.app.background_opacity().clamp(0.0, 1.0);
         self.sync_row_cache(
             foreground,
             theme.background,
@@ -623,6 +624,7 @@ impl Render for GhosttyView {
                         row,
                         px(font_size_px),
                         px(line_height_px),
+                        theme.background.opacity(pane_opacity),
                     ));
                 }
             }
@@ -640,7 +642,6 @@ impl Render for GhosttyView {
             );
         }
 
-        let pane_opacity = self.app.background_opacity().clamp(0.0, 1.0);
         let terminal_content = div()
             .flex()
             .flex_col()
@@ -776,8 +777,14 @@ fn render_cached_terminal_row(
     row: &CachedTerminalRow,
     font_size: Pixels,
     line_height: Pixels,
+    clear_bg: Hsla,
 ) -> AnyElement {
     div()
+        .w_full()
+        .h(line_height)
+        .min_h(line_height)
+        .overflow_hidden()
+        .bg(clear_bg)
         .text_size(font_size)
         .line_height(line_height)
         .child(StyledText::new(row.text.clone()).with_runs(row.runs.clone()))
