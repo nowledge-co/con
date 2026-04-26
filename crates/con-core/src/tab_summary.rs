@@ -408,28 +408,28 @@ async fn request_summary(
     // Override the default `complete()` preamble — that one tells
     // the model it's a shell-completion assistant, which fights
     // the LABEL|ICON instruction in our user prompt and made every
-    // Moonshot/OpenAI-style provider return empty text. A short,
+    // Moonshot / OpenAI-style provider return empty text. A short,
     // task-aligned preamble fixes that.
     //
-    // Token budget is generous (512) because thinking models like
-    // Kimi K2 (Moonshot kimi-k2.6 / kimi-k2-thinking — see
+    // Token budget is generous (512) because thinking models —
+    // Kimi K2.6 / kimi-k2-thinking (see
     // 3pp/models.dev/providers/moonshotai/models/kimi-k2.6.toml,
     // `reasoning = true`, `interleaved.field = "reasoning_content"`),
-    // GPT-5, and Claude Sonnet 4.5/4.7 reasoning consume reasoning
+    // GPT-5, Claude Sonnet 4.5/4.7 reasoning — consume reasoning
     // tokens BEFORE the visible response. A 64-token cap was
     // burning the entire budget on chain-of-thought and surfacing
     // as "Response contained no message or tool call (empty)". The
     // visible response is at most ~30 chars, so 512 costs nothing
     // on non-thinking providers and gives reasoning models room.
     //
-    // NOTE: even at 512 tokens, kimi-k2.6 (a reasoning model that
-    // emits visible content into a separate `reasoning_content`
-    // field per its model.toml) may still surface as empty here —
-    // rig's openai-compatible client reads `content` only. If the
-    // user picks a thinking model for tab summaries and gets empty
-    // responses, the heuristic name takes over (which is the
-    // correct fallback). Re-routing thinking-model output through
-    // rig is a separate follow-up.
+    // `complete_with_options` itself drives this through rig's
+    // streaming API rather than `Prompt::prompt`, because rig's
+    // non-streaming openai-compatible parser only reads
+    // `choices[0].message.content` — reasoning models that emit
+    // their final answer into `reasoning_content` would otherwise
+    // come back empty. The streaming path supports the
+    // `reasoning_content` channel and `MultiTurnStreamItem::FinalResponse`
+    // already aggregates the visible text for us.
     let preamble = "You label terminal tabs in a developer's IDE-style sidebar. \
                     Output exactly one line in the format LABEL|ICON. Nothing else.";
     let raw = match provider.complete_with_options(&prompt, preamble, 512).await {
