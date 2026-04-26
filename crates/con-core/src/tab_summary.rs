@@ -361,37 +361,39 @@ async fn request_summary(
     };
 
     let prompt = format!(
-        "You name terminal tabs for a developer's vertical-tabs panel.\n\
-         Given the tab's live context, pick a short, professional label and one icon.\n\
+        "Pick a short, professional label + one icon for a terminal tab.\n\
+         Output ONE line, format: LABEL|ICON. Nothing before, nothing after.\n\
          \n\
-         Rules:\n\
-         - Output EXACTLY one line in the format LABEL|ICON. Nothing else.\n\
-         - LABEL: 1–3 words, ≤24 chars, Title Case. Describe what the tab is FOR\n\
-           (e.g. \"Build watch\", \"DB shell\", \"Test run\", \"Logs\", \"Editor\",\n\
-           \"Twosum\", \"Study\", \"API tests\").\n\
-           Do NOT use emoji. Do NOT quote. Do NOT include the word \"tab\".\n\
-           Do NOT just echo the shell name (\"bash\", \"zsh\").\n\
-           If the only signal is the cwd, use a Title-Case version of the cwd's\n\
-           basename (e.g. cwd /home/u/proj/study → \"Study\").\n\
-         - ICON: pick ONE keyword from this fixed set, exact spelling:\n\
-           terminal | code | pulse | book | file | globe\n\
-           - terminal — generic shell, build, test, ad-hoc commands, scripts\n\
-           - code — editor (vim/nvim/emacs/nano/helix/code) currently in use\n\
-           - pulse — long-running monitor (htop/top/btop/k9s/tail -f)\n\
-           - book — pager / docs viewer (less/more/man/bat)\n\
-           - file — version control / file ops (git/lazygit/tig)\n\
-           - globe — remote session / network tool (ssh/curl/http)\n\
-         - Read the recent output bottom-up — the most recent lines are\n\
-           usually the most informative.\n\
+         LABEL: 1–3 words, ≤24 chars, Title Case. What is the tab FOR?\n\
+         Examples: Build Watch, DB Shell, Test Run, Logs, Editor, Twosum, Study, API Tests.\n\
+         No emoji, no quotes, no \"tab\". Do not echo \"bash\"/\"zsh\".\n\
+         If only signal is cwd, use Title-Case of cwd basename\n\
+         (cwd /home/u/proj/study → Study).\n\
+         If signal is genuinely thin (no cwd, no commands, empty output), label \"Shell\".\n\
+         \n\
+         ICON keyword (pick ONE, exact spelling):\n\
+         terminal — generic shell / build / test / scripts\n\
+         code — vim/nvim/emacs/nano/helix/code editor in use\n\
+         pulse — htop/top/btop/k9s/tail -f monitors\n\
+         book — less/more/man/bat pagers\n\
+         file — git/lazygit/tig version-control tools\n\
+         globe — ssh/curl/http remote / network tools\n\
          \n\
          Context:\n\
          cwd: {cwd}\n\
          title: {title}\n\
-         commands captured by Con:\n{recent_cmds}\n\
-         recent terminal output (oldest first):\n{recent_output}",
+         commands: {recent_cmds}\n\
+         recent output:\n{recent_output}\n\
+         \n\
+         Decide and emit the line now. Do not show your work.\n\
+         Final output (single line, LABEL|ICON):",
         cwd = req.cwd.as_deref().unwrap_or("(unknown)"),
         title = req.title.as_deref().unwrap_or("(unknown)"),
-        recent_cmds = recent_cmds,
+        recent_cmds = if recent_cmds == "(none captured by Con — user may have typed directly)" {
+            "(none)".to_string()
+        } else {
+            recent_cmds
+        },
         recent_output = recent_output,
     );
 
@@ -432,7 +434,13 @@ async fn request_summary(
     // already aggregates the visible text for us.
     let preamble = "You label terminal tabs in a developer's IDE-style sidebar. \
                     Output exactly one line in the format LABEL|ICON. Nothing else.";
-    let raw = match provider.complete_with_options(&prompt, preamble, 512).await {
+    // 2048 is sized for k2.6-class reasoning models — your log
+    // showed a ~1500-char chain-of-thought running out at "Let me
+    // double-check constraints:\n-" before reaching the final
+    // LABEL|ICON line. 2048 gives the model room to think and
+    // still emit the structured answer; non-thinking providers
+    // ignore the extra budget (they only generate ~30 chars).
+    let raw = match provider.complete_with_options(&prompt, preamble, 2048).await {
         Ok(s) => s,
         Err(e) => {
             log::warn!(
@@ -507,15 +515,14 @@ fn parse_label_icon_line(line: &str) -> Option<(String, TabIconKind)> {
     if label.is_empty() || label.contains('\n') {
         return None;
     }
-    // "Shell|terminal" was the previous prompt's "I don't know"
-    // sentinel. The current prompt no longer asks for it, but
-    // older cached responses or prompt variants might still hit
-    // this — keep the rejection so we fall back to the heuristic
-    // instead of literally rendering "Shell".
+    // Reject obviously bad labels: anything that includes "tab" is
+    // explicitly disallowed by the prompt. "Shell" + terminal IS
+    // allowed — the prompt explicitly invites it as the
+    // thin-signal default — so a response of "Shell|terminal"
+    // means "model genuinely could not find anything more
+    // specific", which is a useful label.
     let lower = label.to_ascii_lowercase();
-    if lower == "tab"
-        || (lower == "shell" && icon_part.trim().eq_ignore_ascii_case("terminal"))
-    {
+    if lower == "tab" || lower.contains(" tab") || lower.starts_with("tab ") {
         return None;
     }
 
@@ -581,9 +588,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_shell_terminal_fallback() {
-        // The prompt's "I don't know" sentinel — keep the heuristic.
-        assert!(parse_response("Shell|terminal").is_none());
+    fn parse_accepts_shell_terminal_for_thin_signal() {
+        // The new prompt explicitly invites "Shell|terminal" when
+        // there's no other signal. That's a real, useful label —
+        // not a sentinel — so the parser should accept it.
+        let (label, icon) = parse_response("Shell|terminal").unwrap();
+        assert_eq!(label, "Shell");
+        assert_eq!(icon, TabIconKind::Terminal);
+    }
+
+    #[test]
+    fn parse_rejects_label_containing_tab_word() {
+        // Prompt explicitly disallows the word "tab" in labels.
+        assert!(parse_response("Build tab|terminal").is_none());
+        assert!(parse_response("Tab 5|terminal").is_none());
     }
 
     #[test]
