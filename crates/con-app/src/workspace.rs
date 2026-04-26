@@ -381,6 +381,7 @@ pub struct ConWorkspace {
     tab_summary_engine: TabSummaryEngine,
     tab_summary_rx: crossbeam_channel::Receiver<TabSummary>,
     tab_summary_tx: crossbeam_channel::Sender<TabSummary>,
+    last_sidebar_pinned: bool,
     /// Monotonic counter for [`Tab::summary_id`] — stable across the
     /// window's lifetime so the summary engine's per-tab cache
     /// survives reorders and tab close/reopen.
@@ -915,11 +916,15 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_close_others)
             .detach();
-        cx.observe(&sidebar, |this, _sidebar, cx| {
-            // The sidebar's pin/peek state lives in the sidebar entity,
-            // so the workspace re-renders when it changes — and we save
-            // pinned state so it survives restart.
-            this.save_session(cx);
+        cx.observe(&sidebar, |this, sidebar, cx| {
+            // The sidebar also notifies for transient hover and drag
+            // affordances. Re-render for all sidebar changes, but only
+            // persist when the actual pin state changes.
+            let pinned = sidebar.read(cx).is_pinned();
+            if this.last_sidebar_pinned != pinned {
+                this.last_sidebar_pinned = pinned;
+                this.save_session(cx);
+            }
             cx.notify();
         })
         .detach();
@@ -1211,6 +1216,7 @@ impl ConWorkspace {
             tab_summary_engine,
             tab_summary_rx,
             tab_summary_tx,
+            last_sidebar_pinned: initial_vertical_pinned,
             next_tab_summary_id: next_tab_summary_id_init,
             next_control_agent_request_id: 1,
             window_handle: window.window_handle(),
@@ -3586,6 +3592,9 @@ impl ConWorkspace {
         }
         self.tabs_orientation = orientation;
         self.sync_tab_strip_motion();
+        if self.vertical_tabs_active() {
+            self.request_tab_summaries(cx);
+        }
         self.save_session(cx);
         cx.notify();
     }
@@ -6136,12 +6145,13 @@ impl ConWorkspace {
     /// repeatedly — the engine debounces, dedupes, and short-
     /// circuits SSH tabs without an LLM round-trip.
     ///
-    /// No-op when the user has disabled `agent.suggestion_model`.
+    /// No-op when vertical tabs are inactive or the user has disabled
+    /// `agent.suggestion_model`.
     /// Tabs with an explicit `user_label` still get an `ai_icon`
     /// hint requested (the model's icon choice can still be useful
     /// even when the user picked the name).
     fn request_tab_summaries(&self, cx: &App) {
-        if !self.harness.config().suggestion_model.enabled {
+        if !self.vertical_tabs_active() || !self.harness.config().suggestion_model.enabled {
             return;
         }
         let tx = self.tab_summary_tx.clone();
@@ -6158,13 +6168,16 @@ impl ConWorkspace {
                 cwd: terminal.current_dir(cx),
                 title: terminal.title(cx),
                 ssh_host: self.effective_remote_host_for_tab(i, terminal, cx),
-                recent_commands: tab
-                    .shell_history
-                    .values()
-                    .flat_map(|q| q.iter().rev())
-                    .map(|entry| entry.command.clone())
-                    .take(8)
-                    .collect(),
+                recent_commands: {
+                    let mut histories: Vec<_> = tab.shell_history.iter().collect();
+                    histories.sort_by_key(|(pane_id, _)| *pane_id);
+                    histories
+                        .into_iter()
+                        .flat_map(|(_, q)| q.iter().rev())
+                        .map(|entry| entry.command.clone())
+                        .take(8)
+                        .collect()
+                },
                 recent_output,
             };
             let tx = tx.clone();
