@@ -180,6 +180,15 @@ impl TabSummaryEngine {
         }
     }
 
+    /// Reuse the per-tab cache/in-flight bookkeeping from an older
+    /// engine while replacing config/runtime plumbing. This avoids
+    /// duplicate model requests when settings are saved while a
+    /// previous request is still in flight.
+    pub fn with_state_from(mut self, previous: &Self) -> Self {
+        self.state = previous.state.clone();
+        self
+    }
+
     /// Drop cached state — called when settings change so a new
     /// model gets a clean slate.
     pub fn clear(&self) {
@@ -204,6 +213,9 @@ impl TabSummaryEngine {
         req: TabSummaryRequest,
         callback: impl FnOnce(TabSummary) + Send + 'static,
     ) {
+        let tab_id = req.tab_id;
+        let key = context_hash(&req);
+
         // SSH tab: short-circuit, no LLM call.
         if let Some(host) = req
             .ssh_host
@@ -211,11 +223,44 @@ impl TabSummaryEngine {
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
         {
+            {
+                let mut guard = self.state.lock();
+                let entry = guard.entry(tab_id).or_default();
+                if entry.last_success_key == Some(key) {
+                    log::trace!(
+                        target: "con_core::tab_summary",
+                        "tab_summary skip tab_id={} reason=ssh_cache_hit",
+                        tab_id
+                    );
+                    return;
+                }
+                let budget = if entry.last_was_success {
+                    PER_TAB_REQUEST_BUDGET
+                } else {
+                    PER_TAB_RETRY_BUDGET
+                };
+                if let Some(t) = entry.last_dispatch
+                    && t.elapsed() < budget
+                {
+                    log::trace!(
+                        target: "con_core::tab_summary",
+                        "tab_summary skip tab_id={} reason=ssh_budget elapsed={:?} budget={:?}",
+                        tab_id,
+                        t.elapsed(),
+                        budget,
+                    );
+                    return;
+                }
+                entry.last_success_key = Some(key);
+                entry.last_dispatch = Some(Instant::now());
+                entry.last_was_success = true;
+            }
+
             // Use the host's first label as the short name (e.g.
             // `prod-1.example.com` -> `prod-1`).
             let short = host.split('.').next().unwrap_or(host).to_string();
             let summary = TabSummary {
-                tab_id: req.tab_id,
+                tab_id,
                 label: truncate_label(&short),
                 icon: TabIconKind::Globe,
             };
@@ -224,9 +269,6 @@ impl TabSummaryEngine {
             });
             return;
         }
-
-        let tab_id = req.tab_id;
-        let key = context_hash(&req);
 
         {
             let mut guard = self.state.lock();
@@ -462,8 +504,7 @@ async fn request_summary(
         );
         return None;
     }
-    let lower = label.to_ascii_lowercase();
-    if lower == "tab" || lower.contains(" tab") || lower.starts_with("tab ") {
+    if label_mentions_tab(&label) {
         log::debug!(
             target: "con_core::tab_summary",
             "tab_summary parse rejected tab_id={} reason=label_contains_tab raw={:?}",
@@ -539,6 +580,12 @@ fn parse_summary_json(raw: &str) -> Option<TabSummaryJson> {
     None
 }
 
+fn label_mentions_tab(label: &str) -> bool {
+    label
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|word| matches!(word.to_ascii_lowercase().as_str(), "tab" | "tabs"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +652,16 @@ mod tests {
     #[test]
     fn parse_json_rejects_no_json() {
         assert!(parse_summary_json("just some prose, no json here").is_none());
+    }
+
+    #[test]
+    fn tab_word_filter_allows_embedded_substrings() {
+        assert!(!label_mentions_tab("Stable Diffusion"));
+        assert!(!label_mentions_tab("Establish Conn"));
+        assert!(!label_mentions_tab("Portable Build"));
+        assert!(label_mentions_tab("Tab"));
+        assert!(label_mentions_tab("Terminal Tab"));
+        assert!(label_mentions_tab("Project Tabs"));
     }
 
     #[test]
