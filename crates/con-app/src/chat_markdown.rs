@@ -45,7 +45,6 @@ enum MarkdownBlock {
     },
     MathBlock {
         math: SharedString,
-        inline_cache: RefCell<Option<CachedInlineRender>>,
     },
     BlockQuote(Vec<MarkdownBlock>),
     List {
@@ -234,11 +233,18 @@ enum RichSvgRenderKind {
     Math,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RichSvgThemeMode {
+    Light,
+    Dark,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RichSvgRenderKey {
     kind: RichSvgRenderKind,
     source: SharedString,
     metric: u32,
+    theme_mode: RichSvgThemeMode,
 }
 
 struct RichSvgRenderEntry {
@@ -520,9 +526,10 @@ impl ChatMarkdownBlockView {
                 .background_spawn(async move {
                     let result: anyhow::Result<Arc<RenderImage>> = (|| {
                         let svg = match background_key.kind {
-                            RichSvgRenderKind::Mermaid => {
-                                mermaid_rs_renderer::render(background_key.source.as_ref())?
-                            }
+                            RichSvgRenderKind::Mermaid => mermaid_rs_renderer::render_with_options(
+                                background_key.source.as_ref(),
+                                mermaid_render_options(background_key.theme_mode),
+                            )?,
                             RichSvgRenderKind::Math => {
                                 let options = mathjax_svg_rs::Options {
                                     font_size: background_key.metric as f64 / 1000.0,
@@ -616,93 +623,27 @@ impl ChatMarkdownBlockView {
                     .map(|(idx, block)| self.render_block(block, idx, style, None, cx))
                     .collect::<Vec<_>>();
 
-                div()
-                    .w_full()
-                    .px(px(10.0))
-                    .py(px(10.0))
-                    .rounded(px(8.0))
-                    .bg(style.quote_background)
-                    .child(
-                        div()
-                            .flex()
-                            .items_start()
-                            .gap(px(9.0))
-                            .child(
-                                div()
-                                    .w(px(3.0))
-                                    .h_full()
-                                    .min_h(px(18.0))
-                                    .bg(style.quote_tint),
-                            )
-                            .child(div().flex().flex_col().gap(style.inner_gap).children(children)),
-                    )
-                    .into_any_element()
+                render_blockquote_children(children, style)
             }
             MarkdownBlock::List {
                 ordered,
                 start,
                 items,
             } => {
-                let marker_lane_width = if *ordered {
-                    ordered_list_marker_lane_width(start + items.len().saturating_sub(1))
-                } else {
-                    px(14.0)
-                };
-                let children = items
+                let item_children = items
                     .iter()
-                    .enumerate()
-                    .map(|(item_idx, item_blocks)| {
-                        let marker = if *ordered {
-                            format!("{}.", start + item_idx)
-                        } else {
-                            "\u{2022}".to_string()
-                        };
-                        let nested_children = item_blocks
+                    .map(|item_blocks| {
+                        item_blocks
                             .iter()
                             .enumerate()
                             .map(|(nested_idx, nested_block)| {
                                 self.render_block(nested_block, nested_idx, style, None, cx)
                             })
-                            .collect::<Vec<_>>();
-
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_start()
-                            .gap(px(9.0))
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .pt(px(1.0))
-                                    .w(marker_lane_width)
-                                    .text_right()
-                                    .font_family(style.theme.mono_font_family.clone())
-                                    .text_size(style.base_font_size)
-                                    .line_height(style.base_line_height)
-                                    .text_color(style.muted_text_color)
-                                    .child(marker),
-                            )
-                            .child(
-                                div()
-                                    .w_full()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(7.0))
-                                    .flex_1()
-                                    .children(nested_children),
-                            )
-                            .into_any_element()
+                            .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>();
 
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(7.0))
-                    .children(children)
-                    .into_any_element()
+                render_list_children(*ordered, *start, items.len(), item_children, style)
             }
             _ => render_block(block, index, style, table_scroll_handle),
         }
@@ -863,7 +804,6 @@ fn parse_block_node(node: &mdast::Node) -> Option<MarkdownBlock> {
         }),
         mdast::Node::Math(val) => Some(MarkdownBlock::MathBlock {
             math: SharedString::from(val.value.clone()),
-            inline_cache: RefCell::new(None),
         }),
         mdast::Node::FootnoteDefinition(def) => Some(MarkdownBlock::Paragraph {
             inlines: std::iter::once(MarkdownInline::Text(format!("[{}]: ", def.identifier)))
@@ -1099,92 +1039,36 @@ fn render_block(
         MarkdownBlock::Mermaid { code, scale } => {
             render_mermaid_code_fallback(index, code, *scale, style)
         }
-        MarkdownBlock::MathBlock { math, inline_cache } => {
-            render_math_block(math, inline_cache, style)
+        MarkdownBlock::MathBlock { math, .. } => render_math_block(math, style),
+        MarkdownBlock::BlockQuote(blocks) => {
+            let children = blocks
+                .iter()
+                .enumerate()
+                .map(|(idx, block)| render_block(block, idx, style, None))
+                .collect::<Vec<_>>();
+
+            render_blockquote_children(children, style)
         }
-        MarkdownBlock::BlockQuote(blocks) => div()
-            .w_full()
-            .px(px(10.0))
-            .py(px(10.0))
-            .rounded(px(8.0))
-            .bg(style.quote_background)
-            .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(px(9.0))
-                    .child(
-                        div()
-                            .w(px(3.0))
-                            .h_full()
-                            .min_h(px(18.0))
-                            .bg(style.quote_tint),
-                    )
-                    .child(
-                        div().flex().flex_col().gap(style.inner_gap).children(
-                            blocks
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, block)| render_block(block, idx, style, None)),
-                        ),
-                    ),
-            )
-            .into_any_element(),
         MarkdownBlock::List {
             ordered,
             start,
             items,
-        } => div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap(px(7.0))
-            .children(items.iter().enumerate().map(|(item_idx, item_blocks)| {
-                let marker = if *ordered {
-                    format!("{}.", start + item_idx)
-                } else {
-                    "\u{2022}".to_string()
-                };
-                let marker_lane_width = if *ordered {
-                    ordered_list_marker_lane_width(start + items.len().saturating_sub(1))
-                } else {
-                    px(14.0)
-                };
+        } => {
+            let item_children = items
+                .iter()
+                .map(|item_blocks| {
+                    item_blocks
+                        .iter()
+                        .enumerate()
+                        .map(|(nested_idx, nested_block)| {
+                            render_block(nested_block, nested_idx, style, None)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
 
-                div()
-                    .w_full()
-                    .flex()
-                    .items_start()
-                    .gap(px(9.0))
-                    .child(
-                        div()
-                            .flex_none()
-                            .pt(px(1.0))
-                            .w(marker_lane_width)
-                            .text_right()
-                            .font_family(style.theme.mono_font_family.clone())
-                            .text_size(style.base_font_size)
-                            .line_height(style.base_line_height)
-                            .text_color(style.muted_text_color)
-                            .child(marker),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(7.0))
-                            .flex_1()
-                            .children(item_blocks.iter().enumerate().map(
-                                |(nested_idx, nested_block)| {
-                                    render_block(nested_block, nested_idx, style, None)
-                                },
-                            )),
-                    )
-                    .into_any_element()
-            }))
-            .into_any_element(),
+            render_list_children(*ordered, *start, items.len(), item_children, style)
+        }
         MarkdownBlock::Table {
             aligns,
             rows,
@@ -1222,6 +1106,101 @@ fn render_block_with_width(
 fn ordered_list_marker_lane_width(max_marker: usize) -> gpui::Pixels {
     let digits = max_marker.max(1).to_string().len() as f32;
     px(14.0 + digits * 8.0)
+}
+
+fn render_blockquote_children(
+    children: Vec<AnyElement>,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    div()
+        .w_full()
+        .px(px(10.0))
+        .py(px(10.0))
+        .rounded(px(8.0))
+        .bg(style.quote_background)
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(9.0))
+                .child(
+                    div()
+                        .w(px(3.0))
+                        .h_full()
+                        .min_h(px(18.0))
+                        .bg(style.quote_tint),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(style.inner_gap)
+                        .children(children),
+                ),
+        )
+        .into_any_element()
+}
+
+fn render_list_children(
+    ordered: bool,
+    start: usize,
+    item_count: usize,
+    item_children: Vec<Vec<AnyElement>>,
+    style: &ChatMarkdownStyle<'_>,
+) -> AnyElement {
+    let marker_lane_width = if ordered {
+        ordered_list_marker_lane_width(start + item_count.saturating_sub(1))
+    } else {
+        px(14.0)
+    };
+
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(7.0))
+        .children(
+            item_children
+                .into_iter()
+                .enumerate()
+                .map(|(item_idx, nested_children)| {
+                    let marker = if ordered {
+                        format!("{}.", start + item_idx)
+                    } else {
+                        "\u{2022}".to_string()
+                    };
+
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_start()
+                        .gap(px(9.0))
+                        .child(
+                            div()
+                                .flex_none()
+                                .pt(px(1.0))
+                                .w(marker_lane_width)
+                                .text_right()
+                                .font_family(style.theme.mono_font_family.clone())
+                                .text_size(style.base_font_size)
+                                .line_height(style.base_line_height)
+                                .text_color(style.muted_text_color)
+                                .child(marker),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(7.0))
+                                .flex_1()
+                                .children(nested_children),
+                        )
+                        .into_any_element()
+                }),
+        )
+        .into_any_element()
 }
 
 fn render_table_block(
@@ -1667,17 +1646,7 @@ fn render_mermaid_source_text(code: &str, style: &ChatMarkdownStyle<'_>) -> AnyE
         .into_any_element()
 }
 
-fn render_math_block(
-    math: &str,
-    inline_cache: &RefCell<Option<CachedInlineRender>>,
-    style: &ChatMarkdownStyle<'_>,
-) -> AnyElement {
-    let inlines = [MarkdownInline::Math(math.to_string())];
-    let mut text_style = style.code_text_style();
-    text_style.color = style.math_block_text_color;
-    text_style.font_size = (style.code_font_size + px(1.0)).into();
-    text_style.line_height = (style.code_line_height + px(3.0)).into();
-
+fn render_math_block(math: &str, style: &ChatMarkdownStyle<'_>) -> AnyElement {
     div()
         .w_full()
         .max_w(style.content_width)
@@ -1685,12 +1654,7 @@ fn render_math_block(
         .bg(style.math_block_background.opacity(0.92))
         .px(px(16.0))
         .py(px(13.0))
-        .child(render_inline_content(
-            &inlines,
-            &text_style,
-            style,
-            inline_cache,
-        ))
+        .child(render_math_source_text(math, style))
         .into_any_element()
 }
 
@@ -1710,6 +1674,50 @@ fn math_font_size_metric(style: &ChatMarkdownStyle<'_>) -> u32 {
     (font_size * 1000.0).round().max(1.0) as u32
 }
 
+fn rich_svg_theme_mode(style: &ChatMarkdownStyle<'_>) -> RichSvgThemeMode {
+    if style.theme.is_dark() {
+        RichSvgThemeMode::Dark
+    } else {
+        RichSvgThemeMode::Light
+    }
+}
+
+fn mermaid_render_options(theme_mode: RichSvgThemeMode) -> mermaid_rs_renderer::RenderOptions {
+    let mut options = mermaid_rs_renderer::RenderOptions::default();
+    if matches!(theme_mode, RichSvgThemeMode::Dark) {
+        options.theme = mermaid_dark_theme();
+    }
+    options
+}
+
+fn mermaid_dark_theme() -> mermaid_rs_renderer::Theme {
+    let mut theme = mermaid_rs_renderer::Theme::modern();
+    theme.primary_color = "#1E293B".to_string();
+    theme.primary_text_color = "#F8FAFC".to_string();
+    theme.primary_border_color = "#64748B".to_string();
+    theme.line_color = "#94A3B8".to_string();
+    theme.secondary_color = "#334155".to_string();
+    theme.tertiary_color = "#0F172A".to_string();
+    theme.edge_label_background = "#0F172A".to_string();
+    theme.cluster_background = "#111827".to_string();
+    theme.cluster_border = "#475569".to_string();
+    theme.background = "#0B1120".to_string();
+    theme.sequence_actor_fill = "#1E293B".to_string();
+    theme.sequence_actor_border = "#64748B".to_string();
+    theme.sequence_actor_line = "#64748B".to_string();
+    theme.sequence_note_fill = "#422006".to_string();
+    theme.sequence_note_border = "#B45309".to_string();
+    theme.sequence_activation_fill = "#334155".to_string();
+    theme.sequence_activation_border = "#94A3B8".to_string();
+    theme.text_color = "#E2E8F0".to_string();
+    theme.pie_title_text_color = "#F8FAFC".to_string();
+    theme.pie_section_text_color = "#F8FAFC".to_string();
+    theme.pie_legend_text_color = "#CBD5E1".to_string();
+    theme.pie_stroke_color = "#0F172A".to_string();
+    theme.pie_outer_stroke_color = "#475569".to_string();
+    theme
+}
+
 fn rich_svg_key_for_block(
     block: &MarkdownBlock,
     style: &ChatMarkdownStyle<'_>,
@@ -1719,11 +1727,13 @@ fn rich_svg_key_for_block(
             kind: RichSvgRenderKind::Mermaid,
             source: code.clone(),
             metric: *scale,
+            theme_mode: rich_svg_theme_mode(style),
         }),
         MarkdownBlock::MathBlock { math, .. } => Some(RichSvgRenderKey {
             kind: RichSvgRenderKind::Math,
             source: math.clone(),
             metric: math_font_size_metric(style),
+            theme_mode: RichSvgThemeMode::Light,
         }),
         _ => None,
     }
@@ -2230,9 +2240,8 @@ mod tests {
 
     #[test]
     fn parses_nested_mermaid_and_math_blocks() {
-        let blocks = parse_markdown(
-            "> ```mermaid\n> flowchart TD\n>   A-->B\n> ```\n\n- $$\n  x^2\n  $$",
-        );
+        let blocks =
+            parse_markdown("> ```mermaid\n> flowchart TD\n>   A-->B\n> ```\n\n- $$\n  x^2\n  $$");
         let Some(MarkdownBlock::BlockQuote(quote_blocks)) = blocks.first() else {
             panic!("expected blockquote");
         };
@@ -2285,6 +2294,14 @@ mod tests {
     fn rich_svg_renderers_produce_svg() {
         let mermaid = mermaid_rs_renderer::render("flowchart TD\n  A-->B").unwrap();
         assert!(mermaid.contains("<svg"));
+
+        let dark_mermaid = mermaid_rs_renderer::render_with_options(
+            "flowchart TD\n  A-->B",
+            mermaid_render_options(RichSvgThemeMode::Dark),
+        )
+        .unwrap();
+        assert!(dark_mermaid.contains("<svg"));
+        assert!(dark_mermaid.contains("#0B1120") || dark_mermaid.contains("#0b1120"));
 
         let math = mathjax_svg_rs::render_tex(
             r"e^{i\pi}+1=0",
