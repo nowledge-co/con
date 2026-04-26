@@ -15,9 +15,9 @@ use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::os::raw::c_void;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Once};
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use dispatch::Queue;
@@ -321,8 +321,7 @@ static mut GHOSTTY_INIT_RESULT: i32 = -1;
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var_os("CON_GHOSTTY_PROFILE")
-            .is_some_and(|v| !v.is_empty() && v != "0")
+        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
     })
 }
 
@@ -414,7 +413,9 @@ impl GhosttyApp {
             background_opacity,
             background_opacity_cells: background_opacity.map(|opacity| opacity < 0.999),
             background_blur,
-            cursor_style: cursor_style.map(normalize_cursor_style).map(ToOwned::to_owned),
+            cursor_style: cursor_style
+                .map(normalize_cursor_style)
+                .map(ToOwned::to_owned),
             background_image: background_image.map(ToOwned::to_owned),
             background_image_opacity,
             background_image_position: background_image_position.map(ToOwned::to_owned),
@@ -792,13 +793,7 @@ impl GhosttyTerminal {
         let mut width = 0.0;
         let mut height = 0.0;
         unsafe {
-            ffi::ghostty_surface_ime_point(
-                self.surface,
-                &mut x,
-                &mut y,
-                &mut width,
-                &mut height,
-            );
+            ffi::ghostty_surface_ime_point(self.surface, &mut x, &mut y, &mut width, &mut height);
         }
         ImePoint {
             x,

@@ -10,10 +10,10 @@ use cocoa::base::id;
 use cocoa::foundation::NSSize;
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{ActiveTheme, tooltip::Tooltip};
-use serde_json::json;
-use tokio::sync::oneshot;
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl};
+use serde_json::json;
+use tokio::sync::oneshot;
 
 const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
@@ -28,26 +28,26 @@ const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var_os("CON_GHOSTTY_PROFILE")
-            .is_some_and(|v| !v.is_empty() && v != "0")
+        std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
     })
 }
 
-fn chrome_tooltip(label: &str, stroke: Option<Keystroke>, window: &mut Window, cx: &mut App) -> AnyView {
+fn chrome_tooltip(
+    label: &str,
+    stroke: Option<Keystroke>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyView {
     let label = label.to_string();
     Tooltip::element(move |_, cx| {
         let theme = cx.theme();
-        let mut content = div()
-            .flex()
-            .items_center()
-            .gap(px(7.0))
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .line_height(px(16.0))
-                    .text_color(theme.popover_foreground)
-                    .child(label.clone()),
-            );
+        let mut content = div().flex().items_center().gap(px(7.0)).child(
+            div()
+                .text_size(px(12.0))
+                .line_height(px(16.0))
+                .text_color(theme.popover_foreground)
+                .child(label.clone()),
+        );
 
         if let Some(stroke) = stroke.as_ref() {
             content = content.child(crate::keycaps::keycaps_for_stroke(stroke, theme));
@@ -95,9 +95,9 @@ fn caption_buttons(
     // route it explicitly.
     #[cfg(target_os = "linux")] workspace: gpui::WeakEntity<ConWorkspace>,
 ) -> impl IntoElement {
-    use gpui::{div, px, svg, Hsla, ParentElement, Rgba, Styled, WindowControlArea};
     #[cfg(target_os = "linux")]
     use gpui::MouseButton;
+    use gpui::{Hsla, ParentElement, Rgba, Styled, WindowControlArea, div, px, svg};
 
     let close_red: Hsla = Rgba {
         r: 232.0 / 255.0,
@@ -109,10 +109,7 @@ fn caption_buttons(
     let fg = theme.muted_foreground.opacity(0.9);
     let hover_bg = theme.muted.opacity(0.12);
 
-    let button = |id: &'static str,
-                  icon: &'static str,
-                  area: WindowControlArea,
-                  close: bool| {
+    let button = |id: &'static str, icon: &'static str, area: WindowControlArea, close: bool| {
         let hover = if close { close_red } else { hover_bg };
         // All three glyphs rest at the same theme-muted foreground so
         // min/max/close read as one visual row. Only on hover does the
@@ -207,8 +204,7 @@ fn caption_buttons(
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
     InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
-    RerunFromMessage, SelectSessionModel, SelectSessionProvider,
-    SetAutoApprove,
+    RerunFromMessage, SelectSessionModel, SelectSessionProvider, SetAutoApprove,
 };
 use crate::command_palette::{
     CommandPalette, PaletteDismissed, PaletteSelect, ToggleCommandPalette,
@@ -220,7 +216,9 @@ use crate::input_bar::{
 use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
 use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
-use crate::settings_panel::{self, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview};
+use crate::settings_panel::{
+    self, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
+};
 use crate::sidebar::{
     NewSession, SessionEntry, SessionSidebar, SidebarCloseOthers, SidebarCloseTab,
     SidebarDuplicate, SidebarRename, SidebarReorder, SidebarSelect,
@@ -233,10 +231,12 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit,
-    SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
+    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit, SplitDown,
+    SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
 };
-use con_agent::{AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse};
+use con_agent::{
+    AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
+};
 use con_core::config::{Config, TabsOrientation};
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
@@ -1153,9 +1153,12 @@ impl ConWorkspace {
             let tx = tab_summary_tx.clone();
             for (i, tab) in tabs.iter_mut().enumerate() {
                 let terminal = tab.pane_tree.focused_terminal();
-                let cwd = terminal
-                    .current_dir(cx)
-                    .or_else(|| session.tabs.get(i).and_then(|tab_state| tab_state.cwd.clone()));
+                let cwd = terminal.current_dir(cx).or_else(|| {
+                    session
+                        .tabs
+                        .get(i)
+                        .and_then(|tab_state| tab_state.cwd.clone())
+                });
                 let title = Some(tab.title.clone()).filter(|t| !t.is_empty());
                 let pane_id = tab
                     .pane_tree
@@ -1267,7 +1270,11 @@ impl ConWorkspace {
     }
 
     fn sync_tab_strip_motion(&mut self) {
-        let target = if self.horizontal_tabs_visible() { 1.0 } else { 0.0 };
+        let target = if self.horizontal_tabs_visible() {
+            1.0
+        } else {
+            0.0
+        };
         self.tab_strip_motion
             .set_target(target, std::time::Duration::from_millis(180));
     }
@@ -1400,9 +1407,9 @@ impl ConWorkspace {
 
         let raw_handle: raw_window_handle::WindowHandle<'_> =
             match <Window as raw_window_handle::HasWindowHandle>::window_handle(window) {
-            Ok(handle) => handle,
-            Err(_) => return,
-        };
+                Ok(handle) => handle,
+                Err(_) => return,
+            };
         let gpui_nsview = match raw_handle.as_raw() {
             raw_window_handle::RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr() as id,
             _ => return,
@@ -2596,9 +2603,7 @@ impl ConWorkspace {
                 let current_tab_idx = workspace
                     .pending_control_agent_requests
                     .iter()
-                    .find_map(|(idx, pending)| {
-                        (pending.request_id == request_id).then_some(*idx)
-                    });
+                    .find_map(|(idx, pending)| (pending.request_id == request_id).then_some(*idx));
                 if let Some(current_tab_idx) = current_tab_idx {
                     let pending = workspace
                         .pending_control_agent_requests
@@ -2740,14 +2745,11 @@ impl ConWorkspace {
         let session = self.snapshot_session(cx);
         let history = self.snapshot_global_history();
         let (done_tx, done_rx) = crossbeam_channel::bounded(1);
-        if let Err(err) = self
-            .session_save_tx
-            .send(SessionSaveRequest::Flush(
-                session.clone(),
-                history.clone(),
-                done_tx,
-            ))
-        {
+        if let Err(err) = self.session_save_tx.send(SessionSaveRequest::Flush(
+            session.clone(),
+            history.clone(),
+            done_tx,
+        )) {
             log::warn!("Failed to flush session save queue: {}", err);
             if let Err(save_err) = session.save() {
                 log::warn!("Failed to save session directly during flush: {}", save_err);
@@ -2764,7 +2766,10 @@ impl ConWorkspace {
         if let Err(err) = done_rx.recv_timeout(Duration::from_secs(2)) {
             log::warn!("Timed out waiting for session save flush: {}", err);
             if let Err(save_err) = session.save() {
-                log::warn!("Failed to save session directly after flush timeout: {}", save_err);
+                log::warn!(
+                    "Failed to save session directly after flush timeout: {}",
+                    save_err
+                );
             }
             if let Err(save_err) = history.save() {
                 log::warn!(
@@ -2868,7 +2873,11 @@ impl ConWorkspace {
             ProviderKind::Together,
             ProviderKind::XAI,
         ] {
-            if let Some(model) = config.providers.get(&provider).and_then(|entry| entry.model.clone()) {
+            if let Some(model) = config
+                .providers
+                .get(&provider)
+                .and_then(|entry| entry.model.clone())
+            {
                 model_overrides.push(AgentModelOverrideState { provider, model });
             }
         }
@@ -2891,7 +2900,9 @@ impl ConWorkspace {
             }
             let mut provider_config = config.providers.get_or_default(&override_state.provider);
             provider_config.model = Some(override_state.model.clone());
-            config.providers.set(&override_state.provider, provider_config);
+            config
+                .providers
+                .set(&override_state.provider, provider_config);
         }
 
         config
@@ -3164,18 +3175,24 @@ impl ConWorkspace {
                     .is_some(),
             ) {
                 InputKind::SkillInvoke(name, args) => {
-                    if let Some(desc) =
-                        self.harness
-                            .invoke_skill(session, agent_config.clone(), &name, args.as_deref(), context)
-                    {
+                    if let Some(desc) = self.harness.invoke_skill(
+                        session,
+                        agent_config.clone(),
+                        &name,
+                        args.as_deref(),
+                        context,
+                    ) {
                         self.agent_panel.update(cx, |panel, cx| {
                             panel.add_step(&desc, cx);
                         });
                     }
                 }
-                _ => self
-                    .harness
-                    .send_message(session, agent_config.clone(), event.content.clone(), context),
+                _ => self.harness.send_message(
+                    session,
+                    agent_config.clone(),
+                    event.content.clone(),
+                    context,
+                ),
             }
         } else {
             self.harness
@@ -3561,7 +3578,8 @@ impl ConWorkspace {
             panel.set_provider_name(active_agent_config.provider.clone(), window, cx);
             panel.set_model_name(AgentHarness::active_model_name_for(&active_agent_config));
             panel.set_session_model_options(
-                self.model_registry.models_for(&active_agent_config.provider),
+                self.model_registry
+                    .models_for(&active_agent_config.provider),
                 window,
                 cx,
             );
@@ -3830,10 +3848,13 @@ impl ConWorkspace {
                         let context = self.build_agent_context(cx);
                         let session = &self.tabs[self.active_tab].session;
                         let agent_config = self.active_tab_agent_config();
-                        if let Some(desc) =
-                            self.harness
-                                .invoke_skill(session, agent_config, &name, args.as_deref(), context)
-                        {
+                        if let Some(desc) = self.harness.invoke_skill(
+                            session,
+                            agent_config,
+                            &name,
+                            args.as_deref(),
+                            context,
+                        ) {
                             if !self.agent_panel_open {
                                 self.agent_panel_open = true;
                             }
@@ -5100,9 +5121,13 @@ impl ConWorkspace {
             None
         };
         let base_tile_surface = if theme.is_dark() {
-            theme.title_bar.opacity(if is_focused { 0.84 } else { 0.72 })
+            theme
+                .title_bar
+                .opacity(if is_focused { 0.84 } else { 0.72 })
         } else {
-            theme.background.opacity(if is_focused { 0.96 } else { 0.90 })
+            theme
+                .background
+                .opacity(if is_focused { 0.96 } else { 0.90 })
         };
         let hover_tile_surface = if theme.is_dark() {
             theme.title_bar.opacity(0.90)
@@ -5521,11 +5546,7 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    fn focus_agent_inline_input_next_frame(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn focus_agent_inline_input_next_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.on_next_frame(window, |workspace, window, cx| {
             if !workspace.agent_panel_open || workspace.input_bar_visible {
                 return;
@@ -6015,12 +6036,10 @@ impl ConWorkspace {
             .into_iter()
             .find_map(|(id, terminal)| (id == pane_id).then_some(terminal));
         let cwd = pane.as_ref().and_then(|pane| pane.current_dir(cx));
-        let is_remote = pane
-            .as_ref()
-            .is_some_and(|terminal| {
-                self.effective_remote_host_for_tab(self.active_tab, terminal, cx)
-                    .is_some()
-            });
+        let is_remote = pane.as_ref().is_some_and(|terminal| {
+            self.effective_remote_host_for_tab(self.active_tab, terminal, cx)
+                .is_some()
+        });
 
         if let Some(path_match) =
             self.local_path_completion_for_prefix(self.active_tab, pane_id, &text, cx)
@@ -6219,12 +6238,7 @@ impl ConWorkspace {
     /// `summary_id` (NOT index, since reorders / closes shift the
     /// indexes), update its `ai_label` / `ai_icon`, and republish to
     /// the sidebar.
-    fn apply_tab_summary(
-        &mut self,
-        generation: u64,
-        summary: TabSummary,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_tab_summary(&mut self, generation: u64, summary: TabSummary, cx: &mut Context<Self>) {
         if generation != self.tab_summary_generation
             || !self.vertical_tabs_active()
             || !self.harness.config().suggestion_model.enabled
@@ -6412,12 +6426,7 @@ impl ConWorkspace {
 
     fn split_down(&mut self, _: &SplitDown, window: &mut Window, cx: &mut Context<Self>) {
         if self.has_active_tab() {
-            self.split_pane(
-                SplitDirection::Vertical,
-                SplitPlacement::After,
-                window,
-                cx,
-            );
+            self.split_pane(SplitDirection::Vertical, SplitPlacement::After, window, cx);
         }
     }
 
@@ -6941,8 +6950,9 @@ impl Render for ConWorkspace {
         // takes the (re-entrant) sidebar borrow before `theme` claims
         // the immutable cx borrow that the rest of `render` relies on.
         let vertical_tabs_overlay = if self.vertical_tabs_active() {
-            self.sidebar
-                .update(cx, |sidebar, cx| sidebar.render_hover_card_overlay(window, cx))
+            self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.render_hover_card_overlay(window, cx)
+            })
         } else {
             None
         };
@@ -7025,13 +7035,15 @@ impl Render for ConWorkspace {
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
-                                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                                            this.release_active_terminal_mouse_selection(cx);
-                                            this.agent_panel_drag = Some((
-                                                f32::from(event.position.x),
-                                                effective_agent_panel_width,
-                                            ));
-                                        }),
+                                        cx.listener(
+                                            move |this, event: &MouseDownEvent, _window, cx| {
+                                                this.release_active_terminal_mouse_selection(cx);
+                                                this.agent_panel_drag = Some((
+                                                    f32::from(event.position.x),
+                                                    effective_agent_panel_width,
+                                                ));
+                                            },
+                                        ),
                                     ),
                             ),
                     )
@@ -7062,11 +7074,7 @@ impl Render for ConWorkspace {
         // (GPUI's hit-test walks buttons first so child clickables
         // still work) and still lets macOS react to
         // `titlebar_double_click`.
-        let leading_pad = if cfg!(target_os = "macos") {
-            78.0
-        } else {
-            8.0
-        };
+        let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
         let mut top_bar = div()
             .id("tab-bar")
             .flex()
@@ -7400,14 +7408,11 @@ impl Render for ConWorkspace {
                         this.toggle_settings(&settings_panel::ToggleSettings, window, cx);
                     }))
                     .child(
-                        svg()
-                            .path("phosphor/gear.svg")
-                            .size(px(12.0))
-                            .text_color(
-                                theme
-                                    .muted_foreground
-                                    .opacity(0.45 + (0.08 * compact_titlebar_progress)),
-                            ),
+                        svg().path("phosphor/gear.svg").size(px(12.0)).text_color(
+                            theme
+                                .muted_foreground
+                                .opacity(0.45 + (0.08 * compact_titlebar_progress)),
+                        ),
                     ),
             );
         }
@@ -7452,7 +7457,8 @@ impl Render for ConWorkspace {
             root = root.rounded(px(14.0)).overflow_hidden();
         }
 
-        root = root.key_context("ConWorkspace")
+        root = root
+            .key_context("ConWorkspace")
             // Pane drag-to-resize: capture mouse move/up on root so it works
             // even when cursor is over terminal views (which capture mouse events).
             .on_mouse_move({
@@ -7462,8 +7468,8 @@ impl Render for ConWorkspace {
                     if let Some((start_x, start_width)) = this.agent_panel_drag {
                         let delta = start_x - f32::from(event.position.x);
                         let max_width = max_agent_panel_width(win.bounds().size.width.as_f32());
-                        let new_width = (start_width + delta)
-                            .clamp(AGENT_PANEL_MIN_WIDTH, max_width);
+                        let new_width =
+                            (start_width + delta).clamp(AGENT_PANEL_MIN_WIDTH, max_width);
                         if (this.agent_panel_width - new_width).abs() > 1.0 {
                             this.agent_panel_width = new_width;
                             if this.active_tab >= this.tabs.len() {
@@ -7935,48 +7941,46 @@ impl Render for ConWorkspace {
                     );
 
                 let preset_segment = |id: &'static str, label: &'static str, active: bool| {
-                    div()
-                        .flex_1()
-                        .child(
-                            div()
-                                .id(SharedString::from(id))
-                                .h(px(24.0))
-                                .w_full()
-                                .rounded(px(7.0))
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .bg(if active {
-                                    theme.primary.opacity(0.14)
+                    div().flex_1().child(
+                        div()
+                            .id(SharedString::from(id))
+                            .h(px(24.0))
+                            .w_full()
+                            .rounded(px(7.0))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(if active {
+                                theme.primary.opacity(0.14)
+                            } else {
+                                theme.transparent
+                            })
+                            .hover(|s| {
+                                s.bg(if active {
+                                    theme.primary.opacity(0.16)
                                 } else {
-                                    theme.transparent
+                                    theme.muted.opacity(0.05)
                                 })
-                                .hover(|s| {
-                                    s.bg(if active {
-                                        theme.primary.opacity(0.16)
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .line_height(px(13.0))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .font_weight(if active {
+                                        FontWeight::MEDIUM
                                     } else {
-                                        theme.muted.opacity(0.05)
+                                        FontWeight::NORMAL
                                     })
-                                })
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .line_height(px(13.0))
-                                        .font_family(theme.mono_font_family.clone())
-                                        .font_weight(if active {
-                                            FontWeight::MEDIUM
-                                        } else {
-                                            FontWeight::NORMAL
-                                        })
-                                        .text_color(if active {
-                                            theme.primary
-                                        } else {
-                                            theme.muted_foreground.opacity(0.72)
-                                        })
-                                        .child(label),
-                                ),
-                        )
+                                    .text_color(if active {
+                                        theme.primary
+                                    } else {
+                                        theme.muted_foreground.opacity(0.72)
+                                    })
+                                    .child(label),
+                            ),
+                    )
                 };
 
                 let presets_row = div()
@@ -7993,24 +7997,34 @@ impl Render for ConWorkspace {
                             .flex()
                             .items_center()
                             .gap(px(2.0))
-                            .child(preset_segment(
-                                "scope-all",
-                                "All panes",
-                                is_broadcast,
-                            ).on_mouse_down(MouseButton::Left, cx.listener(
-                                |this: &mut ConWorkspace, _: &MouseDownEvent, window, cx| {
-                                    this.set_scope_broadcast(window, cx);
-                                },
-                            )))
-                            .child(preset_segment(
-                                "scope-focused",
-                                "Focused",
-                                is_focused,
-                            ).on_mouse_down(MouseButton::Left, cx.listener(
-                                |this: &mut ConWorkspace, _: &MouseDownEvent, window, cx| {
-                                    this.set_scope_focused(window, cx);
-                                },
-                            ))),
+                            .child(
+                                preset_segment("scope-all", "All panes", is_broadcast)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            |this: &mut ConWorkspace,
+                                             _: &MouseDownEvent,
+                                             window,
+                                             cx| {
+                                                this.set_scope_broadcast(window, cx);
+                                            },
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                preset_segment("scope-focused", "Focused", is_focused)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            |this: &mut ConWorkspace,
+                                             _: &MouseDownEvent,
+                                             window,
+                                             cx| {
+                                                this.set_scope_focused(window, cx);
+                                            },
+                                        ),
+                                    ),
+                            ),
                     )
                     .child(div().flex_1());
 
@@ -8238,10 +8252,7 @@ fn smart_tab_presentation(
     };
 
     // 1. User label always wins for the name.
-    if let Some(label) = user_label
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(label) = user_label.map(str::trim).filter(|s| !s.is_empty()) {
         let icon = if is_ssh_session {
             "phosphor/globe.svg"
         } else {
@@ -8394,18 +8405,16 @@ fn parse_focused_process(title: &str) -> Option<(String, &'static str)> {
     match lower.as_str() {
         // Bare shells aren't an interesting "process" — fall through
         // so the row gets named by cwd or user label instead.
-        "bash" | "sh" | "zsh" | "fish" | "dash" | "ksh" | "ion" | "nu" | "pwsh"
-        | "powershell" | "cmd" | "tmux" | "screen" => None,
+        "bash" | "sh" | "zsh" | "fish" | "dash" | "ksh" | "ion" | "nu" | "pwsh" | "powershell"
+        | "cmd" | "tmux" | "screen" => None,
 
-        "vim" | "nvim" | "vi" | "neovim" | "nano" | "emacs" | "ed" | "helix" | "hx"
-        | "kakoune" | "kak" | "micro" | "code" | "codium" | "subl" => {
+        "vim" | "nvim" | "vi" | "neovim" | "nano" | "emacs" | "ed" | "helix" | "hx" | "kakoune"
+        | "kak" | "micro" | "code" | "codium" | "subl" => {
             Some((trimmed.to_string(), "phosphor/code.svg"))
         }
 
-        "htop" | "top" | "btop" | "btm" | "atop" | "iotop" | "glances" | "nvtop"
-        | "bashtop" | "ctop" | "k9s" => {
-            Some((trimmed.to_string(), "phosphor/pulse.svg"))
-        }
+        "htop" | "top" | "btop" | "btm" | "atop" | "iotop" | "glances" | "nvtop" | "bashtop"
+        | "ctop" | "k9s" => Some((trimmed.to_string(), "phosphor/pulse.svg")),
 
         "less" | "more" | "most" | "bat" | "cat" | "tail" | "head" | "view" | "man" => {
             Some((trimmed.to_string(), "phosphor/book-open.svg"))
@@ -8413,9 +8422,7 @@ fn parse_focused_process(title: &str) -> Option<(String, &'static str)> {
 
         "ssh" | "mosh" => Some((trimmed.to_string(), "phosphor/globe.svg")),
 
-        "git" | "lazygit" | "tig" | "gh" => {
-            Some((trimmed.to_string(), "phosphor/file-code.svg"))
-        }
+        "git" | "lazygit" | "tig" | "gh" => Some((trimmed.to_string(), "phosphor/file-code.svg")),
 
         _ => Some((trimmed.to_string(), "phosphor/terminal.svg")),
     }

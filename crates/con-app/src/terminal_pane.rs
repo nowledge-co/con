@@ -61,8 +61,9 @@ impl TerminalPane {
     }
 
     pub fn ensure_surface(&self, window: &mut Window, cx: &mut App) {
-        self.entity
-            .update(cx, |view, cx| view.ensure_initialized_for_control(window, cx));
+        self.entity.update(cx, |view, cx| {
+            view.ensure_initialized_for_control(window, cx)
+        });
     }
 
     pub fn set_theme(
@@ -134,11 +135,13 @@ impl TerminalPane {
     }
 
     pub fn drain_surface_state(&self, cx: &mut App) -> bool {
-        self.entity.update(cx, |view, cx| view.drain_surface_state(cx))
+        self.entity
+            .update(cx, |view, cx| view.drain_surface_state(cx))
     }
 
     pub fn pump_surface_deferred_work(&self, cx: &mut App) -> bool {
-        self.entity.update(cx, |view, cx| view.pump_deferred_work(cx))
+        self.entity
+            .update(cx, |view, cx| view.pump_deferred_work(cx))
     }
 
     pub fn sync_window_background_blur(&self, cx: &mut App) {

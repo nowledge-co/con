@@ -96,7 +96,12 @@ impl GhosttyView {
 
     pub fn set_surface_focus_state(&mut self, _focused: bool) {}
 
-    pub fn ensure_initialized_for_control(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+    pub fn ensure_initialized_for_control(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
 
     pub fn set_visible(&self, _visible: bool) {}
 
@@ -129,11 +134,7 @@ impl Render for GhosttyView {
             .gap(px(10.0))
             .bg(theme.background.opacity(0.9))
             .text_color(theme.foreground.opacity(0.8))
-            .child(
-                div()
-                    .text_lg()
-                    .child("Terminal backend under construction"),
-            )
+            .child(div().text_lg().child("Terminal backend under construction"))
             .child(
                 div()
                     .text_sm()

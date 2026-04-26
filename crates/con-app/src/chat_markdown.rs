@@ -549,12 +549,11 @@ impl ChatMarkdownBlockView {
                                     font_size: background_key.metric as f64 / 1000.0,
                                     horizontal_align: mathjax_svg_rs::HorizontalAlign::Center,
                                 };
-                                let svg =
-                                    mathjax_svg_rs::render_tex(
-                                        background_key.source.as_ref(),
-                                        &options,
-                                    )
-                                    .map_err(anyhow::Error::msg)?;
+                                let svg = mathjax_svg_rs::render_tex(
+                                    background_key.source.as_ref(),
+                                    &options,
+                                )
+                                .map_err(anyhow::Error::msg)?;
                                 math_svg_for_theme(svg, background_key.theme_mode)
                             }
                         };
@@ -1746,9 +1745,7 @@ fn mermaid_source_for_theme(source: &str, theme_mode: RichSvgThemeMode) -> Cow<'
         let should_rewrite = (trimmed.starts_with("style ") || trimmed.starts_with("classDef "))
             && mermaid_style_has_key(trimmed, "fill")
             && !mermaid_style_has_key(trimmed, "color");
-        if should_rewrite
-            && let Some(fill) = mermaid_style_value(trimmed, "fill")
-        {
+        if should_rewrite && let Some(fill) = mermaid_style_value(trimmed, "fill") {
             let text_color = if mermaid_fill_is_light(fill) {
                 "#0F172A"
             } else {

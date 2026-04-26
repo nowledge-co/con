@@ -76,10 +76,7 @@ pub(crate) fn keycaps_for_stroke(stroke: &Keystroke, theme: &gpui_component::The
         .children(parts.into_iter().map(|part| keycap(part, theme)))
 }
 
-pub(crate) fn keycaps_for_binding(
-    binding: &str,
-    theme: &gpui_component::Theme,
-) -> AnyElement {
+pub(crate) fn keycaps_for_binding(binding: &str, theme: &gpui_component::Theme) -> AnyElement {
     if let Ok(stroke) = Keystroke::parse(binding) {
         keycaps_for_stroke(&stroke, theme).into_any_element()
     } else {

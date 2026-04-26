@@ -71,7 +71,10 @@ pub enum CheckState {
 }
 
 pub fn latest_check() -> CheckState {
-    latest_slot().lock().map(|g| g.clone()).unwrap_or(CheckState::Idle)
+    latest_slot()
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or(CheckState::Idle)
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -178,7 +181,10 @@ fn init_inner() -> bool {
 
     let channel = con_core::release_channel::current();
     if !channel.polls_for_updates() {
-        log::info!("updater: channel={} — skipping Sparkle init", channel.name());
+        log::info!(
+            "updater: channel={} — skipping Sparkle init",
+            channel.name()
+        );
         let _ = STATUS.set(UpdaterStatus::Disabled(
             UpdaterDisabledReason::ChannelDoesNotPoll,
         ));
@@ -239,9 +245,7 @@ fn init_inner() -> bool {
                 let reason = if reason_cstr.is_null() {
                     ""
                 } else {
-                    std::ffi::CStr::from_ptr(reason_cstr)
-                        .to_str()
-                        .unwrap_or("")
+                    std::ffi::CStr::from_ptr(reason_cstr).to_str().unwrap_or("")
                 };
                 log::warn!(
                     "updater: failed to load Sparkle.framework: {} {}",
@@ -266,7 +270,9 @@ fn init_inner() -> bool {
         let feed_url: id = msg_send![info_dict, objectForKey: feed_key];
         if feed_url == nil {
             log::info!("updater: SUFeedURL not set in Info.plist — auto-update disabled");
-            let _ = STATUS.set(UpdaterStatus::Disabled(UpdaterDisabledReason::MissingFeedUrl));
+            let _ = STATUS.set(UpdaterStatus::Disabled(
+                UpdaterDisabledReason::MissingFeedUrl,
+            ));
             return false;
         }
 
@@ -626,7 +632,10 @@ mod notify_impl {
     /// keeps this module fully self-contained.
     pub(super) fn spawn_check(channel: ReleaseChannel) {
         set_latest(CheckState::Checking);
-        let url = channel.feed_url(release_channel::host_platform(), release_channel::host_arch());
+        let url = channel.feed_url(
+            release_channel::host_platform(),
+            release_channel::host_arch(),
+        );
         std::thread::spawn(move || {
             let result = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -682,7 +691,11 @@ mod notify_impl {
     /// the newest item first, so we only need to parse the head of
     /// the document.
     fn parse_latest(xml: &str) -> Option<(String, String)> {
-        let version = between(xml, "<sparkle:shortVersionString>", "</sparkle:shortVersionString>")?;
+        let version = between(
+            xml,
+            "<sparkle:shortVersionString>",
+            "</sparkle:shortVersionString>",
+        )?;
         let enclosure_start = xml.find("<enclosure")?;
         let enclosure_end = xml[enclosure_start..]
             .find('>')

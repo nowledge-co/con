@@ -1229,29 +1229,35 @@ impl Render for InputBar {
                             .flex()
                             .items_center()
                             .gap(px(6.0))
-                            .bg(if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {
-                                theme.primary.opacity(0.08)
-                            } else {
-                                theme.title_bar.opacity(self.ui_opacity * 0.94)
-                            })
-                            .hover(|s| {
-                                s.bg(if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {
-                                    theme.primary.opacity(0.11)
+                            .bg(
+                                if all_selected
+                                    || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
+                                {
+                                    theme.primary.opacity(0.08)
                                 } else {
-                                    theme.title_bar.opacity(self.ui_opacity)
-                                })
-                            })
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                cx.emit(TogglePaneScopePicker);
-                                this.current_input_state()
-                                    .update(cx, |state, cx| state.focus(window, cx));
-                            }))
-                            .child(
-                                svg()
-                                    .path(scope_icon)
-                                    .size(px(11.0))
-                                    .text_color(scope_tint),
+                                    theme.title_bar.opacity(self.ui_opacity * 0.94)
+                                },
                             )
+                            .hover(|s| {
+                                s.bg(
+                                    if all_selected
+                                        || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
+                                    {
+                                        theme.primary.opacity(0.11)
+                                    } else {
+                                        theme.title_bar.opacity(self.ui_opacity)
+                                    },
+                                )
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                    cx.emit(TogglePaneScopePicker);
+                                    this.current_input_state()
+                                        .update(cx, |state, cx| state.focus(window, cx));
+                                }),
+                            )
+                            .child(svg().path(scope_icon).size(px(11.0)).text_color(scope_tint))
                             .child(
                                 div()
                                     .text_size(px(10.5))
@@ -1259,7 +1265,9 @@ impl Render for InputBar {
                                     .font_family(theme.mono_font_family.clone())
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(
-                                        if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {
+                                        if all_selected
+                                            || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
+                                        {
                                             theme.primary
                                         } else {
                                             theme.muted_foreground.opacity(0.76)

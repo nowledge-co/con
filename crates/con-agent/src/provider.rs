@@ -530,15 +530,14 @@ where
         }
         ProviderKind::GitHubCopilot => {
             let prompt_handler = prompt_handler.clone();
-            let mut builder =
-                copilot::Client::builder()
-                    .oauth()
-                    .on_device_code(move |prompt| {
-                        prompt_handler(OAuthDevicePrompt {
-                            verification_uri: prompt.verification_uri,
-                            user_code: prompt.user_code,
-                        });
+            let mut builder = copilot::Client::builder()
+                .oauth()
+                .on_device_code(move |prompt| {
+                    prompt_handler(OAuthDevicePrompt {
+                        verification_uri: prompt.verification_uri,
+                        user_code: prompt.user_code,
                     });
+                });
             if let Some(dir) = oauth_token_dir(&kind) {
                 builder = builder.token_dir(dir);
             }
@@ -835,7 +834,9 @@ impl Default for SuggestionModelConfig {
 impl AgentConfig {
     pub fn provider_transport_for(&self, provider: &ProviderKind) -> Option<ProviderTransport> {
         match provider {
-            ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => self.provider_protocols.minimax,
+            ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
+                self.provider_protocols.minimax
+            }
             ProviderKind::Moonshot | ProviderKind::MoonshotAnthropic => {
                 self.provider_protocols.moonshot
             }
@@ -894,9 +895,13 @@ impl AgentConfig {
                 Some(ProviderTransport::Anthropic)
             } else if active_provider == &openai_kind {
                 Some(ProviderTransport::OpenAI)
-            } else if providers.get(&anthropic_kind).is_some() && providers.get(&openai_kind).is_none() {
+            } else if providers.get(&anthropic_kind).is_some()
+                && providers.get(&openai_kind).is_none()
+            {
                 Some(ProviderTransport::Anthropic)
-            } else if providers.get(&openai_kind).is_some() && providers.get(&anthropic_kind).is_none() {
+            } else if providers.get(&openai_kind).is_some()
+                && providers.get(&anthropic_kind).is_none()
+            {
                 Some(ProviderTransport::OpenAI)
             } else {
                 None

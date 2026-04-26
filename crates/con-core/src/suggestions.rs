@@ -183,7 +183,9 @@ impl SuggestionEngine {
                     );
                     callback(completion);
                 } else {
-                    empty_cache.lock().insert(cache_key_owned.clone(), Instant::now());
+                    empty_cache
+                        .lock()
+                        .insert(cache_key_owned.clone(), Instant::now());
                     log::debug!(
                         target: "con_core::suggestions",
                         "ai suggestion empty result prefix={:?}",
@@ -191,7 +193,9 @@ impl SuggestionEngine {
                     );
                 }
             } else {
-                empty_cache.lock().insert(cache_key_owned.clone(), Instant::now());
+                empty_cache
+                    .lock()
+                    .insert(cache_key_owned.clone(), Instant::now());
             }
             in_flight.lock().remove(&cache_key_owned);
         });

@@ -387,7 +387,10 @@ fn truncate_label(s: &str) -> String {
     if trimmed.chars().count() <= LABEL_MAX_LEN {
         trimmed.to_string()
     } else {
-        let mut out: String = trimmed.chars().take(LABEL_MAX_LEN.saturating_sub(1)).collect();
+        let mut out: String = trimmed
+            .chars()
+            .take(LABEL_MAX_LEN.saturating_sub(1))
+            .collect();
         out.push('…');
         out
     }
@@ -491,7 +494,10 @@ async fn request_summary(
                     Respond with a JSON object only: \
                     {\"label\": \"...\", \"icon\": \"...\"}. \
                     No prose, no code fences, no commentary.";
-    let raw = match provider.complete_with_options(&prompt, preamble, 2048).await {
+    let raw = match provider
+        .complete_with_options(&prompt, preamble, 2048)
+        .await
+    {
         Ok(s) => s,
         Err(e) => {
             log::debug!(
@@ -648,8 +654,7 @@ mod tests {
 
     #[test]
     fn parse_json_skips_invalid_brace_block_before_answer() {
-        let raw =
-            "Use {label, icon} as fields.\n{\"label\": \"Build\", \"icon\": \"terminal\"}";
+        let raw = "Use {label, icon} as fields.\n{\"label\": \"Build\", \"icon\": \"terminal\"}";
         let v = parse_summary_json(raw).unwrap();
         assert_eq!(v.label, "Build");
         assert_eq!(v.icon, "terminal");
@@ -690,18 +695,9 @@ mod tests {
 
     #[test]
     fn icon_keyword_aliases() {
-        assert_eq!(
-            TabIconKind::from_keyword("editor"),
-            Some(TabIconKind::Code)
-        );
-        assert_eq!(
-            TabIconKind::from_keyword("htop"),
-            Some(TabIconKind::Pulse)
-        );
-        assert_eq!(
-            TabIconKind::from_keyword("ssh"),
-            Some(TabIconKind::Globe)
-        );
+        assert_eq!(TabIconKind::from_keyword("editor"), Some(TabIconKind::Code));
+        assert_eq!(TabIconKind::from_keyword("htop"), Some(TabIconKind::Pulse));
+        assert_eq!(TabIconKind::from_keyword("ssh"), Some(TabIconKind::Globe));
         assert_eq!(TabIconKind::from_keyword("sparkle"), None);
     }
 
@@ -745,7 +741,10 @@ mod tests {
             last_dispatch: Some(Instant::now()),
             ..Default::default()
         };
-        assert!(!should_dispatch(&s, 42), "same context after success → skip");
+        assert!(
+            !should_dispatch(&s, 42),
+            "same context after success → skip"
+        );
     }
 
     #[test]
