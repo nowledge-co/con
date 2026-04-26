@@ -202,6 +202,7 @@ impl PanelState {
                 if !last.steps.is_empty() {
                     last.steps_collapsed = true;
                 }
+                last.touch();
             }
         }
     }
@@ -218,6 +219,7 @@ impl PanelState {
                 detail_expanded: false,
                 duration: None,
             });
+            last.touch();
         }
     }
 
@@ -301,6 +303,7 @@ impl PanelState {
                 if last.role == "assistant" {
                     last.model = model.map(|s| s.to_string());
                     last.duration_ms = duration_ms;
+                    last.touch();
                 }
             }
             self.streaming = false;
@@ -324,6 +327,7 @@ impl PanelState {
         if let Some(last) = self.messages.last_mut() {
             if !last.steps.is_empty() {
                 last.steps_collapsed = true;
+                last.touch();
             }
         }
         // Move active tool calls into the message's step timeline
@@ -346,6 +350,7 @@ impl PanelState {
                     detail_expanded: false,
                     duration: tc.duration,
                 });
+                last.touch();
             }
         }
     }
@@ -405,6 +410,7 @@ impl PanelState {
 
 pub struct AgentPanel {
     state: PanelState,
+    assistant_message_views: Vec<Option<Entity<AssistantMessageView>>>,
     scroll_handle: ScrollHandle,
     history_scroll_handle: ScrollHandle,
     showing_history: bool,
@@ -446,7 +452,9 @@ struct ProviderSelectItem {
     icon_path: &'static str,
 }
 
+#[derive(Clone)]
 struct PanelMessage {
+    revision: u64,
     role: String,
     content: String,
     content_markdown: Option<ParsedChatMarkdown>,
@@ -466,6 +474,7 @@ struct PanelMessage {
 }
 
 /// A structured step entry (replaces raw Debug strings).
+#[derive(Clone)]
 struct StepEntry {
     icon: &'static str,
     label: String,
@@ -490,6 +499,7 @@ enum StepStatus {
 impl PanelMessage {
     fn new(role: &str, content: &str) -> Self {
         Self {
+            revision: 0,
             role: role.to_string(),
             content: content.to_string(),
             content_markdown: None,
@@ -510,11 +520,16 @@ impl PanelMessage {
         Self::new("assistant", "")
     }
 
+    fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     fn append_content(&mut self, token: &str) {
         self.content.push_str(token);
         self.content_markdown = None;
         self.content_view = None;
         self.content_markdown_pending = false;
+        self.touch();
     }
 
     fn replace_content(&mut self, content: &str) {
@@ -522,17 +537,20 @@ impl PanelMessage {
         self.content_markdown = None;
         self.content_view = None;
         self.content_markdown_pending = false;
+        self.touch();
     }
 
     fn set_thinking(&mut self, thinking: Option<String>) {
         self.thinking_markdown = None;
         self.thinking = thinking;
+        self.touch();
     }
 
     fn append_thinking(&mut self, text: &str) {
         let thinking = self.thinking.get_or_insert_with(String::new);
         thinking.push_str(text);
         self.thinking_markdown = None;
+        self.touch();
     }
 
     fn thinking_markdown(&mut self) -> Option<&ParsedChatMarkdown> {
@@ -544,6 +562,47 @@ impl PanelMessage {
             self.thinking_markdown = Some(ParsedChatMarkdown::parse(thinking));
         }
         self.thinking_markdown.as_ref()
+    }
+}
+
+struct AssistantMessageView {
+    panel: WeakEntity<AgentPanel>,
+    msg_idx: usize,
+    message: PanelMessage,
+    is_streaming_assistant: bool,
+}
+
+impl AssistantMessageView {
+    fn new(
+        panel: WeakEntity<AgentPanel>,
+        msg_idx: usize,
+        message: PanelMessage,
+        is_streaming_assistant: bool,
+    ) -> Self {
+        Self {
+            panel,
+            msg_idx,
+            message,
+            is_streaming_assistant,
+        }
+    }
+
+    fn update_state(
+        &mut self,
+        msg_idx: usize,
+        message: PanelMessage,
+        is_streaming_assistant: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = self.msg_idx != msg_idx
+            || self.is_streaming_assistant != is_streaming_assistant
+            || self.message.revision != message.revision;
+        if changed {
+            self.msg_idx = msg_idx;
+            self.message = message;
+            self.is_streaming_assistant = is_streaming_assistant;
+            cx.notify();
+        }
     }
 }
 
@@ -695,6 +754,7 @@ impl AgentPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut panel = Self {
             state: PanelState::new(),
+            assistant_message_views: Vec::new(),
             scroll_handle: ScrollHandle::new(),
             history_scroll_handle: ScrollHandle::new(),
             showing_history: false,
@@ -772,6 +832,7 @@ impl AgentPanel {
     pub fn with_state(state: PanelState, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut panel = Self {
             state,
+            assistant_message_views: Vec::new(),
             scroll_handle: ScrollHandle::new(),
             history_scroll_handle: ScrollHandle::new(),
             showing_history: false,
@@ -1353,6 +1414,7 @@ impl AgentPanel {
         let content = message.content.clone();
         let parse_content = content.clone();
         message.content_markdown_pending = true;
+        message.touch();
 
         cx.spawn(async move |this, cx| {
             let parsed = cx
@@ -1367,6 +1429,7 @@ impl AgentPanel {
                         needs_view = true;
                     }
                     message.content_markdown_pending = false;
+                    message.touch();
                 }
                 if needs_view {
                     panel.ensure_content_markdown_view(msg_idx, cx);
@@ -1393,6 +1456,41 @@ impl AgentPanel {
         } else {
             let view = cx.new(|_| MarkdownDocumentView::new(document, ChatMarkdownTone::Message));
             message.content_view = Some(view);
+            message.touch();
+        }
+    }
+
+    fn sync_assistant_message_view(
+        &mut self,
+        msg_idx: usize,
+        is_streaming_assistant: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<AssistantMessageView>> {
+        let Some(message) = self.state.messages.get(msg_idx) else {
+            return None;
+        };
+        if message.role != "assistant" {
+            return None;
+        }
+
+        if self.assistant_message_views.len() <= msg_idx {
+            self.assistant_message_views.resize_with(msg_idx + 1, || None);
+        }
+
+        let snapshot = message.clone();
+        if let Some(view) = self.assistant_message_views[msg_idx].as_ref() {
+            let view = view.clone();
+            view.update(cx, |view, cx| {
+                view.update_state(msg_idx, snapshot, is_streaming_assistant, cx);
+            });
+            Some(view)
+        } else {
+            let panel = cx.weak_entity();
+            let view = cx.new(|_| {
+                AssistantMessageView::new(panel, msg_idx, snapshot, is_streaming_assistant)
+            });
+            self.assistant_message_views[msg_idx] = Some(view.clone());
+            Some(view)
         }
     }
 
@@ -2586,6 +2684,592 @@ fn render_user_message_text(
     block.into_any_element()
 }
 
+impl Render for AssistantMessageView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let theme = &theme;
+        let msg_idx = self.msg_idx;
+        let msg = &mut self.message;
+
+        let mut msg_el = div().flex().flex_col().gap(px(4.0));
+
+        let assistant_content_for_copy = msg.content.clone();
+        let msg_model = msg.model.as_deref().unwrap_or("");
+        let msg_duration_ms = msg.duration_ms;
+        let mut header_row = div().flex().items_center().gap(px(6.0)).pb(px(3.0)).child(
+            svg()
+                .path("phosphor/oven-duotone.svg")
+                .size(px(13.0))
+                .text_color(theme.primary.opacity(0.65)),
+        );
+        header_row = header_row.child(render_model_chips(msg_model, msg_duration_ms, theme));
+        msg_el = msg_el.child(header_row);
+
+        if let Some(thinking) = &msg.thinking
+            && !thinking.is_empty()
+        {
+            let thinking_collapsed = msg.thinking_collapsed;
+            let chevron = if thinking_collapsed {
+                "phosphor/caret-right.svg"
+            } else {
+                "phosphor/caret-down.svg"
+            };
+            let word_count = thinking.split_whitespace().count();
+            let thinking_summary = if word_count > 0 {
+                format!("Thought · {} words", word_count)
+            } else {
+                "Thinking…".to_string()
+            };
+
+            let panel = self.panel.clone();
+            msg_el = msg_el.child(
+                div()
+                    .id(SharedString::from(format!("thinking-toggle-{msg_idx}")))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.0))
+                    .ml(px(19.0))
+                    .py(px(2.0))
+                    .px(px(4.0))
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.muted.opacity(0.05)))
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        let _ = panel.update(cx, |this, cx| {
+                            if let Some(m) = this.state.messages.get_mut(msg_idx) {
+                                m.thinking_collapsed = !m.thinking_collapsed;
+                                m.touch();
+                            }
+                            cx.notify();
+                        });
+                    })
+                    .child(
+                        svg()
+                            .path(chevron)
+                            .size(px(10.0))
+                            .text_color(theme.muted_foreground.opacity(0.3)),
+                    )
+                    .child(
+                        svg()
+                            .path("phosphor/brain-duotone.svg")
+                            .size(px(11.0))
+                            .text_color(theme.primary.opacity(0.42)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground.opacity(0.4))
+                            .child(thinking_summary),
+                    ),
+            );
+
+            if !thinking_collapsed {
+                let mut thinking_el = div()
+                    .ml(px(23.0))
+                    .mr(px(4.0))
+                    .mt(px(1.0))
+                    .mb(px(2.0))
+                    .px(px(10.0))
+                    .py(px(7.0))
+                    .rounded(px(8.0))
+                    .bg(theme.muted.opacity(0.04))
+                    .max_h(px(200.0))
+                    .overflow_y_hidden()
+                    .text_size(px(12.0))
+                    .line_height(px(18.0))
+                    .text_color(theme.muted_foreground.opacity(0.54));
+                if let Some(markdown) = msg.thinking_markdown() {
+                    thinking_el = thinking_el.child(render_parsed_chat_markdown(
+                        markdown,
+                        ChatMarkdownTone::Thinking,
+                        theme,
+                    ));
+                }
+                msg_el = msg_el.child(thinking_el);
+            }
+        }
+
+        if !msg.content.is_empty() {
+            let content_collapsed = msg.content_collapsed || self.is_streaming_assistant;
+            let visible_content = if self.is_streaming_assistant {
+                tail_preview(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES)
+            } else if content_collapsed {
+                result_preview(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES)
+            } else {
+                msg.content.clone()
+            };
+            let mut content_el = div()
+                .ml(px(19.0))
+                .pr(px(4.0))
+                .text_size(px(14.0))
+                .line_height(px(23.0))
+                .text_color(theme.foreground.opacity(0.88));
+
+            if content_collapsed {
+                let mut preview_lines = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.0))
+                    .font_family(theme.mono_font_family.clone());
+                for line in visible_content.lines() {
+                    preview_lines = preview_lines.child(
+                        div()
+                            .whitespace_normal()
+                            .child(if line.is_empty() { " " } else { line }.to_string()),
+                    );
+                }
+                content_el = content_el.child(preview_lines);
+            } else if let Some(view) = msg.content_view.clone() {
+                content_el = content_el.child(view);
+            } else if let Some(markdown) = msg.content_markdown.as_ref() {
+                content_el = content_el.child(render_parsed_chat_markdown(
+                    markdown,
+                    ChatMarkdownTone::Message,
+                    theme,
+                ));
+            } else {
+                let mut preview_lines = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.0))
+                    .font_family(theme.mono_font_family.clone());
+                for line in visible_content.lines() {
+                    preview_lines = preview_lines.child(
+                        div()
+                            .whitespace_normal()
+                            .child(if line.is_empty() { " " } else { line }.to_string()),
+                    );
+                }
+                content_el = content_el.child(preview_lines);
+            }
+
+            msg_el = msg_el.child(content_el);
+
+            if msg.content_collapsed && !self.is_streaming_assistant {
+                let hidden =
+                    hidden_result_line_count(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES);
+                let button_label = if hidden > 0 {
+                    format!("Open full reply · {} more lines", hidden)
+                } else {
+                    "Open full reply".to_string()
+                };
+                let panel = self.panel.clone();
+                msg_el = msg_el.child(
+                    div()
+                        .ml(px(19.0))
+                        .mt(px(4.0))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("assistant-expand-{msg_idx}")))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(theme.muted.opacity(0.04)).rounded(px(6.0)))
+                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                    let _ = panel.update(cx, |this, cx| {
+                                        if let Some(message) = this.state.messages.get_mut(msg_idx)
+                                        {
+                                            message.content_collapsed = false;
+                                            message.touch();
+                                        }
+                                        this.ensure_content_markdown_async(msg_idx, cx);
+                                        cx.notify();
+                                    });
+                                })
+                                .child(
+                                    div().px(px(4.0)).py(px(3.0)).child(
+                                        render_result_toggle_chrome(false, button_label, theme),
+                                    ),
+                                ),
+                        ),
+                );
+            }
+
+            msg_el = msg_el.child(
+                div().ml(px(19.0)).mt(px(2.0)).child(
+                    Clipboard::new(format!("copy-asst-{msg_idx}"))
+                        .value(SharedString::from(assistant_content_for_copy)),
+                ),
+            );
+        }
+
+        if !msg.steps.is_empty() {
+            let step_count = msg.steps.len();
+            let collapsed = msg.steps_collapsed;
+            let chevron = if collapsed {
+                "phosphor/caret-right.svg"
+            } else {
+                "phosphor/caret-down.svg"
+            };
+            let running_count = msg
+                .steps
+                .iter()
+                .filter(|step| step.status == StepStatus::Running)
+                .count();
+            let denied_count = msg
+                .steps
+                .iter()
+                .filter(|step| step.status == StepStatus::Denied)
+                .count();
+            let run_title = if running_count > 0 {
+                "Working now"
+            } else if denied_count > 0 {
+                "Run needs review"
+            } else {
+                "Run trace"
+            };
+
+            let panel = self.panel.clone();
+            let mut run_card = div()
+                .ml(px(19.0))
+                .mr(px(4.0))
+                .mt(px(6.0))
+                .px(px(10.0))
+                .py(px(10.0))
+                .rounded(px(12.0))
+                .bg(trace_group_surface(theme))
+                .flex()
+                .flex_col()
+                .gap(px(10.0));
+
+            run_card = run_card.child(
+                div()
+                    .id(SharedString::from(format!("steps-toggle-{msg_idx}")))
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .gap(px(8.0))
+                    .px(px(4.0))
+                    .py(px(3.0))
+                    .cursor_pointer()
+                    .rounded(px(10.0))
+                    .hover(|s| s.bg(theme.muted.opacity(0.035)))
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        let _ = panel.update(cx, |this, cx| {
+                            if let Some(m) = this.state.messages.get_mut(msg_idx) {
+                                m.steps_collapsed = !m.steps_collapsed;
+                                m.touch();
+                            }
+                            cx.notify();
+                        });
+                    })
+                    .child(
+                        svg()
+                            .path(chevron)
+                            .size(px(11.0))
+                            .text_color(theme.muted_foreground.opacity(0.34)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.0))
+                            .child(render_section_kicker(run_title, theme))
+                            .child(
+                                div()
+                                    .text_size(px(12.75))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.foreground.opacity(0.74))
+                                    .child("Actions, probes, and output"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.75))
+                                    .text_color(theme.muted_foreground.opacity(0.46))
+                                    .min_w_0()
+                                    .child("A compact trace of what the agent actually did"),
+                            ),
+                    )
+                    .child({
+                        let mut summary = div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .flex_shrink_0()
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground.opacity(0.40))
+                                    .child(run_status_summary(
+                                        step_count,
+                                        running_count,
+                                        denied_count,
+                                    )),
+                            );
+                        if running_count > 0 {
+                            summary = summary.child(render_inline_state(
+                                format!("{} live", running_count).into(),
+                                theme.warning,
+                                theme,
+                            ));
+                        }
+                        if denied_count > 0 {
+                            summary = summary.child(render_inline_state(
+                                format!("{} denied", denied_count).into(),
+                                theme.danger,
+                                theme,
+                            ));
+                        }
+                        summary
+                    }),
+            );
+
+            if !collapsed {
+                let mut steps_el = div().flex().flex_col().gap(px(8.0));
+
+                for (step_idx, step) in msg.steps.iter().enumerate() {
+                    let icon_color = match step.status {
+                        StepStatus::Running => theme.warning,
+                        StepStatus::Complete => theme.muted_foreground.opacity(0.4),
+                        StepStatus::Denied => theme.danger.opacity(0.7),
+                    };
+
+                    let has_detail = step.detail.is_some();
+                    let detail_collapsed = step.detail_collapsed;
+
+                    let (step_name, step_detail) = if let Some(colon_pos) = step.label.find(": ") {
+                        (&step.label[..colon_pos], Some(&step.label[colon_pos + 2..]))
+                    } else {
+                        (step.label.as_str(), None)
+                    };
+
+                    let mut top_line = div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(
+                            svg()
+                                .path(step.icon)
+                                .size(px(12.0))
+                                .flex_shrink_0()
+                                .text_color(icon_color),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .text_color(theme.foreground.opacity(0.66))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(step_name.to_string()),
+                        )
+                        .child(div().flex_1());
+
+                    if let Some(status_tag) = render_step_status_tag(step.status, theme) {
+                        top_line = top_line.child(status_tag);
+                    }
+
+                    if let Some(dur) = step.duration {
+                        top_line = top_line.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(10.0))
+                                .font_family(theme.mono_font_family.clone())
+                                .text_color(theme.muted_foreground.opacity(0.36))
+                                .child(format_step_duration(dur)),
+                        );
+                    }
+
+                    if has_detail {
+                        top_line = top_line.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_color(theme.muted_foreground.opacity(0.34))
+                                        .child(if detail_collapsed { "Details" } else { "Hide" }),
+                                )
+                                .child(
+                                    svg()
+                                        .path(if detail_collapsed {
+                                            "phosphor/caret-right.svg"
+                                        } else {
+                                            "phosphor/caret-down.svg"
+                                        })
+                                        .size(px(10.0))
+                                        .flex_shrink_0()
+                                        .text_color(theme.muted_foreground.opacity(0.30)),
+                                ),
+                        );
+                    }
+
+                    let mut step_header = div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .px(px(12.0))
+                        .py(px(10.0))
+                        .child(top_line);
+
+                    if let Some(detail_text) = step_detail {
+                        step_header = step_header.child(
+                            div()
+                                .ml(px(18.0))
+                                .text_size(px(10.5))
+                                .line_height(px(15.0))
+                                .text_color(theme.muted_foreground.opacity(0.56))
+                                .font_family(theme.mono_font_family.clone())
+                                .overflow_x_hidden()
+                                .whitespace_nowrap()
+                                .child(truncate_str(detail_text, 84)),
+                        );
+                    }
+
+                    let mut step_shell = div()
+                        .flex()
+                        .flex_col()
+                        .rounded(px(12.0))
+                        .overflow_hidden()
+                        .bg(trace_step_surface(theme))
+                        .gap(px(0.0));
+
+                    let step_header_shell = step_header
+                        .bg(trace_step_header_surface(theme))
+                        .min_h(px(44.0));
+
+                    if has_detail {
+                        let panel = self.panel.clone();
+                        step_shell = step_shell.child(
+                            step_header_shell
+                                .id(SharedString::from(format!(
+                                    "step-detail-{msg_idx}-{step_idx}"
+                                )))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(trace_step_header_hover_surface(theme)))
+                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                    let _ = panel.update(cx, |this, cx| {
+                                        if let Some(m) = this.state.messages.get_mut(msg_idx)
+                                            && let Some(s) = m.steps.get_mut(step_idx)
+                                        {
+                                            s.detail_collapsed = !s.detail_collapsed;
+                                            m.touch();
+                                        }
+                                        cx.notify();
+                                    });
+                                }),
+                        );
+                    } else {
+                        step_shell = step_shell.child(step_header_shell);
+                    }
+
+                    if let Some(detail) = &step.detail
+                        && !detail_collapsed
+                    {
+                        let is_expandable = result_is_expandable(detail);
+                        let visible_detail = if step.detail_expanded || !is_expandable {
+                            detail.to_string()
+                        } else {
+                            result_preview(detail, TOOL_RESULT_PREVIEW_LINES)
+                        };
+                        let detail_block = div()
+                            .px(px(12.0))
+                            .pt(px(10.0))
+                            .bg(trace_detail_surface(theme))
+                            .child(render_result_block(
+                                &visible_detail,
+                                &format!("step-result-{msg_idx}-{step_idx}"),
+                                theme,
+                                true,
+                            ));
+                        step_shell = step_shell.child(
+                            detail_block.with_animation(
+                                SharedString::from(format!(
+                                    "step-detail-reveal-{msg_idx}-{step_idx}"
+                                )),
+                                Animation::new(std::time::Duration::from_millis(170))
+                                    .with_easing(ease_out_quint()),
+                                |this, delta| this.opacity(delta).pt(px((1.0 - delta) * 6.0)),
+                            ),
+                        );
+                        if is_expandable {
+                            let expanded = step.detail_expanded;
+                            let button_label = result_toggle_label(detail, expanded);
+                            let panel = self.panel.clone();
+                            let detail_toggle = div()
+                                .px(px(12.0))
+                                .pt(px(4.0))
+                                .pb(px(10.0))
+                                .bg(trace_detail_surface(theme))
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "step-detail-expand-{msg_idx}-{step_idx}"
+                                        )))
+                                        .cursor_pointer()
+                                        .hover(|s| {
+                                            s.bg(theme.muted.opacity(0.03)).rounded(px(6.0))
+                                        })
+                                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                            let _ = panel.update(cx, |this, cx| {
+                                                if let Some(message) =
+                                                    this.state.messages.get_mut(msg_idx)
+                                                    && let Some(step) =
+                                                        message.steps.get_mut(step_idx)
+                                                {
+                                                    step.detail_expanded = !step.detail_expanded;
+                                                    message.touch();
+                                                }
+                                                cx.notify();
+                                            });
+                                        })
+                                        .child(
+                                            div().px(px(2.0)).py(px(2.0)).child(
+                                                render_result_toggle_chrome(
+                                                    expanded,
+                                                    button_label,
+                                                    theme,
+                                                ),
+                                            ),
+                                        ),
+                                );
+                            step_shell = step_shell.child(
+                                detail_toggle.with_animation(
+                                    SharedString::from(format!(
+                                        "step-detail-toggle-{msg_idx}-{step_idx}"
+                                    )),
+                                    Animation::new(std::time::Duration::from_millis(185))
+                                        .with_easing(ease_out_quint()),
+                                    |this, delta| {
+                                        this.opacity(delta).pt(px((1.0 - delta) * 4.0))
+                                    },
+                                ),
+                            );
+                        } else {
+                            step_shell = step_shell.child(
+                                div()
+                                    .px(px(10.0))
+                                    .pb(px(10.0))
+                                    .bg(trace_detail_surface(theme)),
+                            );
+                        }
+                    }
+
+                    steps_el = steps_el.child(step_shell);
+                }
+
+                run_card = run_card.child(
+                    steps_el.with_animation(
+                        SharedString::from(format!("steps-reveal-{msg_idx}")),
+                        Animation::new(std::time::Duration::from_millis(190))
+                            .with_easing(ease_out_quint()),
+                        |this, delta| this.opacity(delta).pt(px((1.0 - delta) * 8.0)),
+                    ),
+                );
+            }
+
+            msg_el = msg_el.child(run_card);
+        }
+
+        msg_el
+    }
+}
+
 impl Render for AgentPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_inline_input_state(window, cx);
@@ -2609,9 +3293,13 @@ impl Render for AgentPanel {
             .gap(px(16.0));
 
         let total_messages = self.state.messages.len();
+        if self.assistant_message_views.len() > total_messages {
+            self.assistant_message_views.truncate(total_messages);
+        }
         let mut content_parse_requests = Vec::new();
         let mut content_view_requests = Vec::new();
-        for (msg_idx, msg) in self.state.messages.iter_mut().enumerate() {
+        for msg_idx in 0..total_messages {
+            let msg = &self.state.messages[msg_idx];
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
 
@@ -2820,623 +3508,27 @@ impl Render for AgentPanel {
                     );
                 }
             } else {
-                // ── Assistant message ──
-                let assistant_content_for_copy: String = msg.content.clone();
-
-                // Header row — oven icon + model name + duration
-                let msg_model = msg.model.as_deref().unwrap_or("");
-                let msg_duration_ms = msg.duration_ms;
-                let mut header_row = div().flex().items_center().gap(px(6.0)).pb(px(3.0)).child(
-                    svg()
-                        .path("phosphor/oven-duotone.svg")
-                        .size(px(13.0))
-                        .text_color(theme.primary.opacity(0.65)),
-                );
-                header_row =
-                    header_row.child(render_model_chips(msg_model, msg_duration_ms, theme));
-                msg_el = msg_el.child(header_row);
-
-                // Extended thinking (collapsible)
-                if let Some(thinking) = &msg.thinking {
-                    if !thinking.is_empty() {
-                        let thinking_collapsed = msg.thinking_collapsed;
-                        let chevron = if thinking_collapsed {
-                            "phosphor/caret-right.svg"
-                        } else {
-                            "phosphor/caret-down.svg"
-                        };
-                        let word_count = thinking.split_whitespace().count();
-                        let thinking_summary = if word_count > 0 {
-                            format!("Thought · {} words", word_count)
-                        } else {
-                            "Thinking…".to_string()
-                        };
-
-                        // Thinking toggle — same indent as steps toggle
-                        msg_el = msg_el.child(
-                            div()
-                                .id(SharedString::from(format!("thinking-toggle-{msg_idx}")))
-                                .flex()
-                                .items_center()
-                                .gap(px(5.0))
-                                .ml(px(19.0))
-                                .py(px(2.0))
-                                .px(px(4.0))
-                                .rounded(px(4.0))
-                                .cursor_pointer()
-                                .hover(|s| s.bg(theme.muted.opacity(0.05)))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, _, cx| {
-                                        if let Some(m) = this.state.messages.get_mut(msg_idx) {
-                                            m.thinking_collapsed = !m.thinking_collapsed;
-                                        }
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(
-                                    svg()
-                                        .path(chevron)
-                                        .size(px(10.0))
-                                        .text_color(theme.muted_foreground.opacity(0.3)),
-                                )
-                                .child(
-                                    svg()
-                                        .path("phosphor/brain-duotone.svg")
-                                        .size(px(11.0))
-                                        .text_color(theme.primary.opacity(0.42)),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(theme.muted_foreground.opacity(0.4))
-                                        .child(thinking_summary),
-                                ),
-                        );
-
-                        // Expanded content
-                        if !thinking_collapsed {
-                            let mut thinking_el = div()
-                                .ml(px(23.0))
-                                .mr(px(4.0))
-                                .mt(px(1.0))
-                                .mb(px(2.0))
-                                .px(px(10.0))
-                                .py(px(7.0))
-                                .rounded(px(8.0))
-                                .bg(theme.muted.opacity(0.04))
-                                .max_h(px(200.0))
-                                .overflow_y_hidden()
-                                .text_size(px(12.0))
-                                .line_height(px(18.0))
-                                .text_color(theme.muted_foreground.opacity(0.54));
-                            if let Some(markdown) = msg.thinking_markdown() {
-                                thinking_el = thinking_el.child(render_parsed_chat_markdown(
-                                    markdown,
-                                    ChatMarkdownTone::Thinking,
-                                    theme,
-                                ));
-                            }
-                            msg_el = msg_el.child(thinking_el);
-                        }
-                    }
-                }
-
-                // Message content — render as markdown
+                let is_streaming_assistant =
+                    self.state.streaming && msg_idx + 1 == total_messages;
                 if !msg.content.is_empty() {
-                    let is_streaming_assistant =
-                        self.state.streaming
-                            && msg.role == "assistant"
-                            && msg_idx + 1 == total_messages;
-                    let content_collapsed = msg.content_collapsed || is_streaming_assistant;
-                    let visible_content = if is_streaming_assistant {
-                        tail_preview(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES)
-                    } else if content_collapsed {
-                        result_preview(&msg.content, RESTORED_MESSAGE_PREVIEW_LINES)
-                    } else {
-                        msg.content.clone()
-                    };
-                    let mut content_el = div()
-                        .ml(px(19.0))
-                        .pr(px(4.0))
-                        .text_size(px(14.0))
-                        .line_height(px(23.0))
-                        .text_color(theme.foreground.opacity(0.88));
-                    if content_collapsed {
-                        let mut preview_lines = div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(1.0))
-                            .font_family(theme.mono_font_family.clone());
-                        for line in visible_content.lines() {
-                            preview_lines = preview_lines.child(
-                                div()
-                                    .whitespace_normal()
-                                    .child(if line.is_empty() { " " } else { line }.to_string()),
-                            );
-                        }
-                        content_el = content_el.child(
-                            preview_lines,
-                        );
-                    } else if let Some(view) = msg.content_view.clone() {
-                        content_el = content_el.child(view);
-                    } else if msg.content_markdown.is_some() {
+                    if !msg.content_markdown_pending
+                        && !msg.content_collapsed
+                        && !is_streaming_assistant
+                        && msg.content_markdown.is_none()
+                    {
+                        content_parse_requests.push(msg_idx);
+                    } else if msg.content_markdown.is_some() && msg.content_view.is_none() {
                         content_view_requests.push(msg_idx);
-                        let mut preview_lines = div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(1.0))
-                            .font_family(theme.mono_font_family.clone());
-                        for line in visible_content.lines() {
-                            preview_lines = preview_lines.child(
-                                div()
-                                    .whitespace_normal()
-                                    .child(if line.is_empty() { " " } else { line }.to_string()),
-                            );
-                        }
-                        content_el = content_el.child(preview_lines);
-                    } else {
-                        if !msg.content_markdown_pending {
-                            content_parse_requests.push(msg_idx);
-                        }
-                        let mut preview_lines = div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(1.0))
-                            .font_family(theme.mono_font_family.clone());
-                        for line in visible_content.lines() {
-                            preview_lines = preview_lines.child(
-                                div()
-                                    .whitespace_normal()
-                                    .child(if line.is_empty() { " " } else { line }.to_string()),
-                            );
-                        }
-                        content_el = content_el.child(preview_lines);
                     }
-                    msg_el = msg_el.child(content_el);
-
-                    if msg.content_collapsed && !is_streaming_assistant {
-                        let hidden = hidden_result_line_count(
-                            &msg.content,
-                            RESTORED_MESSAGE_PREVIEW_LINES,
-                        );
-                        let button_label = if hidden > 0 {
-                            format!("Open full reply · {} more lines", hidden)
-                        } else {
-                            "Open full reply".to_string()
-                        };
-                        msg_el = msg_el.child(
-                            div()
-                                .ml(px(19.0))
-                                .mt(px(4.0))
-                                .child(
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "assistant-expand-{msg_idx}"
-                                        )))
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.0))
-                                        .cursor_pointer()
-                                        .hover(|s| {
-                                            s.bg(theme.muted.opacity(0.04)).rounded(px(6.0))
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |this, _, _, cx| {
-                                                if let Some(message) =
-                                                    this.state.messages.get_mut(msg_idx)
-                                                {
-                                                    message.content_collapsed = false;
-                                                }
-                                                this.ensure_content_markdown_async(msg_idx, cx);
-                                                cx.notify();
-                                            }),
-                                        )
-                                        .child(div().px(px(4.0)).py(px(3.0)).child(
-                                            render_result_toggle_chrome(
-                                                false,
-                                                button_label,
-                                                &theme,
-                                            ),
-                                        )),
-                                ),
-                        );
-                    }
-
-                    // Copy button — slightly tighter
-                    let content_for_clip = assistant_content_for_copy;
-                    msg_el = msg_el.child(
-                        div().ml(px(19.0)).mt(px(2.0)).child(
-                            Clipboard::new(format!("copy-asst-{msg_idx}"))
-                                .value(SharedString::from(content_for_clip)),
-                        ),
-                    );
-                }
-            }
-
-            // ── Steps (flat inline rows with compact disclosure) ──
-            if !msg.steps.is_empty() {
-                let step_count = msg.steps.len();
-                let collapsed = msg.steps_collapsed;
-                let chevron = if collapsed {
-                    "phosphor/caret-right.svg"
-                } else {
-                    "phosphor/caret-down.svg"
-                };
-                let running_count = msg
-                    .steps
-                    .iter()
-                    .filter(|step| step.status == StepStatus::Running)
-                    .count();
-                let denied_count = msg
-                    .steps
-                    .iter()
-                    .filter(|step| step.status == StepStatus::Denied)
-                    .count();
-                let run_title = if running_count > 0 {
-                    "Working now"
-                } else if denied_count > 0 {
-                    "Run needs review"
-                } else {
-                    "Run trace"
-                };
-
-                let mut run_card = div()
-                    .ml(px(19.0))
-                    .mr(px(4.0))
-                    .mt(px(6.0))
-                    .px(px(10.0))
-                    .py(px(10.0))
-                    .rounded(px(12.0))
-                    .bg(trace_group_surface(theme))
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.0));
-
-                run_card = run_card.child(
-                    div()
-                        .id(SharedString::from(format!("steps-toggle-{msg_idx}")))
-                        .flex()
-                        .items_center()
-                        .min_w_0()
-                        .gap(px(8.0))
-                        .px(px(4.0))
-                        .py(px(3.0))
-                        .cursor_pointer()
-                        .rounded(px(10.0))
-                        .hover(|s| s.bg(theme.muted.opacity(0.035)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                if let Some(m) = this.state.messages.get_mut(msg_idx) {
-                                    m.steps_collapsed = !m.steps_collapsed;
-                                }
-                                cx.notify();
-                            }),
-                        )
-                        .child(
-                            svg()
-                                .path(chevron)
-                                .size(px(11.0))
-                                .text_color(theme.muted_foreground.opacity(0.34)),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .min_w_0()
-                                .gap(px(2.0))
-                                .child(render_section_kicker(run_title, theme))
-                                .child(
-                                    div()
-                                        .text_size(px(12.75))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground.opacity(0.74))
-                                        .child("Actions, probes, and output"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.75))
-                                        .text_color(theme.muted_foreground.opacity(0.46))
-                                        .min_w_0()
-                                        .child("A compact trace of what the agent actually did"),
-                                ),
-                        )
-                        .child({
-                            let mut summary = div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.0))
-                                .flex_shrink_0()
-                                .child(
-                                    div()
-                                        .text_size(px(10.5))
-                                        .font_family(theme.mono_font_family.clone())
-                                        .text_color(theme.muted_foreground.opacity(0.40))
-                                        .child(run_status_summary(
-                                            step_count,
-                                            running_count,
-                                            denied_count,
-                                        )),
-                                );
-                            if running_count > 0 {
-                                summary = summary.child(render_inline_state(
-                                    format!("{} live", running_count).into(),
-                                    theme.warning,
-                                    theme,
-                                ));
-                            }
-                            if denied_count > 0 {
-                                summary = summary.child(render_inline_state(
-                                    format!("{} denied", denied_count).into(),
-                                    theme.danger,
-                                    theme,
-                                ));
-                            }
-                            summary
-                        }),
-                );
-
-                if !collapsed {
-                    let mut steps_el = div().flex().flex_col().gap(px(8.0));
-
-                    for (step_idx, step) in msg.steps.iter().enumerate() {
-                        let icon_color = match step.status {
-                            StepStatus::Running => theme.warning,
-                            StepStatus::Complete => theme.muted_foreground.opacity(0.4),
-                            StepStatus::Denied => theme.danger.opacity(0.7),
-                        };
-
-                        let has_detail = step.detail.is_some();
-                        let detail_collapsed = step.detail_collapsed;
-
-                        // Parse label "Human Name: detail" into (name, detail)
-                        let (step_name, step_detail) =
-                            if let Some(colon_pos) = step.label.find(": ") {
-                                (&step.label[..colon_pos], Some(&step.label[colon_pos + 2..]))
-                            } else {
-                                (step.label.as_str(), None)
-                            };
-
-                        // Step row — two-line layout: [icon + name + duration + chevron] / [args]
-                        // Top line: icon, name, spacer, duration, chevron
-                        let mut top_line = div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .child(
-                                svg()
-                                    .path(step.icon)
-                                    .size(px(12.0))
-                                    .flex_shrink_0()
-                                    .text_color(icon_color),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.5))
-                                    .text_color(theme.foreground.opacity(0.66))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(step_name.to_string()),
-                            )
-                            .child(div().flex_1()); // spacer
-
-                        if let Some(status_tag) = render_step_status_tag(step.status, theme) {
-                            top_line = top_line.child(status_tag);
-                        }
-
-                        if let Some(dur) = step.duration {
-                            top_line = top_line.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(10.0))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.36))
-                                    .child(format_step_duration(dur)),
-                            );
-                        }
-
-                        if has_detail {
-                            top_line = top_line.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.0))
-                                    .child(
-                                        div()
-                                            .text_size(px(10.0))
-                                            .font_family(theme.mono_font_family.clone())
-                                            .text_color(theme.muted_foreground.opacity(0.34))
-                                            .child(if detail_collapsed {
-                                                "Details"
-                                            } else {
-                                                "Hide"
-                                            }),
-                                    )
-                                    .child(
-                                        svg()
-                                            .path(if detail_collapsed {
-                                                "phosphor/caret-right.svg"
-                                            } else {
-                                                "phosphor/caret-down.svg"
-                                            })
-                                            .size(px(10.0))
-                                            .flex_shrink_0()
-                                            .text_color(theme.muted_foreground.opacity(0.30)),
-                                    ),
-                            );
-                        }
-
-                        // Build step header as a column: top line + optional args line
-                        let mut step_header = div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.0))
-                            .px(px(12.0))
-                            .py(px(10.0))
-                            .child(top_line);
-
-                        // Args on second line — consistent indent with approval card
-                        if let Some(detail_text) = step_detail {
-                            step_header = step_header.child(
-                                div()
-                                    .ml(px(18.0))
-                                    .text_size(px(10.5))
-                                    .line_height(px(15.0))
-                                    .text_color(theme.muted_foreground.opacity(0.56))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .overflow_x_hidden()
-                                    .whitespace_nowrap()
-                                    .child(truncate_str(detail_text, 84)),
-                            );
-                        }
-
-                        let mut step_shell = div()
-                            .flex()
-                            .flex_col()
-                            .rounded(px(12.0))
-                            .overflow_hidden()
-                            .bg(trace_step_surface(theme))
-                            .gap(px(0.0));
-
-                        let step_header_shell = step_header
-                            .bg(trace_step_header_surface(theme))
-                            .min_h(px(44.0));
-
-                        if has_detail {
-                            step_shell = step_shell.child(
-                                step_header_shell
-                                    .id(SharedString::from(format!(
-                                        "step-detail-{msg_idx}-{step_idx}"
-                                    )))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(trace_step_header_hover_surface(theme)))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, _, cx| {
-                                            if let Some(m) = this.state.messages.get_mut(msg_idx) {
-                                                if let Some(s) = m.steps.get_mut(step_idx) {
-                                                    s.detail_collapsed = !s.detail_collapsed;
-                                                }
-                                            }
-                                            cx.notify();
-                                        }),
-                                    ),
-                            );
-                        } else {
-                            step_shell = step_shell.child(step_header_shell);
-                        }
-
-                        // Expanded detail
-                        if let Some(detail) = &step.detail {
-                            if !detail_collapsed {
-                                let is_expandable = result_is_expandable(detail);
-                                let visible_detail = if step.detail_expanded || !is_expandable {
-                                    detail.to_string()
-                                } else {
-                                    result_preview(detail, TOOL_RESULT_PREVIEW_LINES)
-                                };
-                                let detail_block = div()
-                                    .px(px(12.0))
-                                    .pt(px(10.0))
-                                    .bg(trace_detail_surface(theme))
-                                    .child(render_result_block(
-                                        &visible_detail,
-                                        &format!("step-result-{msg_idx}-{step_idx}"),
-                                        theme,
-                                        true,
-                                    ));
-                                step_shell = step_shell.child(
-                                    detail_block.with_animation(
-                                        SharedString::from(format!(
-                                            "step-detail-reveal-{msg_idx}-{step_idx}"
-                                        )),
-                                        Animation::new(std::time::Duration::from_millis(170))
-                                            .with_easing(ease_out_quint()),
-                                        |this, delta| {
-                                            this.opacity(delta).pt(px((1.0 - delta) * 6.0))
-                                        },
-                                    ),
-                                );
-                                if is_expandable {
-                                    let expanded = step.detail_expanded;
-                                    let button_label = result_toggle_label(detail, expanded);
-                                    let detail_toggle = div()
-                                        .px(px(12.0))
-                                        .pt(px(4.0))
-                                        .pb(px(10.0))
-                                        .bg(trace_detail_surface(theme))
-                                        .child(
-                                            div()
-                                                .id(SharedString::from(format!(
-                                                    "step-detail-expand-{msg_idx}-{step_idx}"
-                                                )))
-                                                .cursor_pointer()
-                                                .hover(|s| {
-                                                    s.bg(theme.muted.opacity(0.03)).rounded(px(6.0))
-                                                })
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(move |this, _, _, cx| {
-                                                        if let Some(message) =
-                                                            this.state.messages.get_mut(msg_idx)
-                                                        {
-                                                            if let Some(step) =
-                                                                message.steps.get_mut(step_idx)
-                                                            {
-                                                                step.detail_expanded =
-                                                                    !step.detail_expanded;
-                                                            }
-                                                        }
-                                                        cx.notify();
-                                                    }),
-                                                )
-                                                .child(div().px(px(2.0)).py(px(2.0)).child(
-                                                    render_result_toggle_chrome(
-                                                        expanded,
-                                                        button_label,
-                                                        theme,
-                                                    ),
-                                                )),
-                                        );
-                                    step_shell = step_shell.child(
-                                        detail_toggle.with_animation(
-                                            SharedString::from(format!(
-                                                "step-detail-toggle-{msg_idx}-{step_idx}"
-                                            )),
-                                            Animation::new(std::time::Duration::from_millis(185))
-                                                .with_easing(ease_out_quint()),
-                                            |this, delta| {
-                                                this.opacity(delta).pt(px((1.0 - delta) * 4.0))
-                                            },
-                                        ),
-                                    );
-                                } else {
-                                    step_shell = step_shell.child(
-                                        div()
-                                            .px(px(10.0))
-                                            .pb(px(10.0))
-                                            .bg(trace_detail_surface(theme)),
-                                    );
-                                }
-                            }
-                        }
-
-                        steps_el = steps_el.child(step_shell);
-                    }
-
-                    run_card = run_card.child(
-                        steps_el.with_animation(
-                            SharedString::from(format!("steps-reveal-{msg_idx}")),
-                            Animation::new(std::time::Duration::from_millis(190))
-                                .with_easing(ease_out_quint()),
-                            |this, delta| this.opacity(delta).pt(px((1.0 - delta) * 8.0)),
-                        ),
-                    );
                 }
 
-                msg_el = msg_el.child(run_card);
+                if let Some(view) = self.sync_assistant_message_view(
+                    msg_idx,
+                    is_streaming_assistant,
+                    cx,
+                ) {
+                    msg_el = msg_el.child(view);
+                }
             }
 
             messages_content = messages_content.child(msg_el);

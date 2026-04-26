@@ -124,6 +124,7 @@ Performance rule:
 - decorative inline-code chips are acceptable for short UI copy, not for large agent replies
 - cache parsed/flattened text-run transforms at the markdown data layer before trying view-level caching
 - isolate expensive message documents behind their own entities before reaching for whole-document cached views
+- if the parent chat surface still rerenders too broadly, isolate the full assistant row behind its own entity so live streaming only repaints the active row
 - use GPUI cached child views only for size-stable subtrees; intrinsic-height rich text is not a safe first cache boundary
 
 ## Migration path

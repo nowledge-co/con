@@ -55,6 +55,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Reduced agent-panel stalls on session-open, long live responses, and oversized reply expansion by making message markdown and persisted reasoning parse lazily, rendering in-flight replies as cheap plain-text previews, parsing full reply markdown off the UI thread when opened, and caching expensive inline markdown text-run transforms so repeated rich-render passes do less work.
 - Reduced severe hangs when expanding long real-world agent replies in markdown. Inline code inside long prose/table cells now renders through single `StyledText` runs instead of exploding into large flex-wrapped chip trees.
 - Reduced another major markdown-render cost for long agent replies. Assistant message bodies now live behind their own markdown-document entities, and fenced code blocks render as one highlighted text layout per block instead of one GPUI row per line.
+- Reduced agent-panel rerender churn further by isolating whole assistant rows behind their own entities. Old restored sessions and live token streaming no longer force the parent panel loop to rebuild every assistant message row on each update.
 
 **Terminal — Windows Backend (preview)**
 - Reduced the first-frame flash when splitting a new pane on Windows. Brand-new panes now paint their configured terminal background while the first renderer image is still warming up, instead of briefly showing a transparent hole.
