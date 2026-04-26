@@ -73,6 +73,8 @@ pub enum GhosttyTerminalData {
     Rows = 2,
     CursorX = 3,
     CursorY = 4,
+    CursorPendingWrap = 5,
+    ActiveScreen = 6,
     CursorVisible = 7,
     Title = 12,
 }
@@ -130,6 +132,12 @@ pub enum GhosttyRenderStateDirty {
     Full = 2,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum GhosttyRenderStateOption {
+    Dirty = 0,
+}
+
 /// `GHOSTTY_RENDER_STATE_ROW_DATA_*` keys for `ghostty_render_state_row_get`.
 /// `Cells` (3) binds a cells iterator to the current row.
 #[repr(C)]
@@ -139,6 +147,12 @@ pub enum GhosttyRenderStateRowData {
     Dirty = 1,
     Raw = 2,
     Cells = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum GhosttyRenderStateRowOption {
+    Dirty = 0,
 }
 
 /// `GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_*` keys.
@@ -175,6 +189,13 @@ pub enum GhosttyCellData {
     ColorRgb = 11,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyTerminalScreen {
+    Primary = 0,
+    Alternate = 1,
+}
+
 /// Opaque cell snapshot returned by `row_cells_get(RAW, ...)`.
 /// `typedef uint64_t GhosttyCell;` upstream.
 pub type GhosttyCell = u64;
@@ -202,9 +223,20 @@ fn terminal_mode_active(terminal: GhosttyTerminal, mode: GhosttyMode) -> bool {
 }
 
 fn terminal_alt_screen_active(terminal: GhosttyTerminal) -> bool {
-    terminal_mode_active(terminal, MODE_ALT_SCREEN_LEGACY)
-        || terminal_mode_active(terminal, MODE_ALT_SCREEN)
-        || terminal_mode_active(terminal, MODE_ALT_SCREEN_SAVE_CURSOR)
+    if terminal.is_null() {
+        return false;
+    }
+    let mut screen = GhosttyTerminalScreen::Primary;
+    // SAFETY: terminal is owned by `VtInner`; `screen` matches
+    // GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN's documented output type.
+    let rc = unsafe {
+        ghostty_terminal_get(
+            terminal,
+            GhosttyTerminalData::ActiveScreen,
+            &mut screen as *mut _ as *mut c_void,
+        )
+    };
+    rc == 0 && screen == GhosttyTerminalScreen::Alternate
 }
 
 // Pre-packed DEC private modes the non-macOS renderers query. Keep the
@@ -238,6 +270,38 @@ const GHOSTTY_DA_FEATURE_ANSI_COLOR: u16 = 22;
 const GHOSTTY_DA_FEATURE_RECTANGULAR_EDITING: u16 = 28;
 const GHOSTTY_DA_FEATURE_CLIPBOARD: u16 = 52;
 const GHOSTTY_DA_DEVICE_TYPE_VT220: u16 = 1;
+
+fn clear_render_state_dirty(render_state: GhosttyRenderState) {
+    if render_state.is_null() {
+        return;
+    }
+    let clean = GhosttyRenderStateDirty::False;
+    // SAFETY: render_state is owned by `VtInner`; value type matches
+    // GHOSTTY_RENDER_STATE_OPTION_DIRTY.
+    unsafe {
+        let _ = ghostty_render_state_set(
+            render_state,
+            GhosttyRenderStateOption::Dirty,
+            &clean as *const _ as *const c_void,
+        );
+    }
+}
+
+fn clear_render_state_row_dirty(row_iter: GhosttyRowIterator) {
+    if row_iter.is_null() {
+        return;
+    }
+    let clean = false;
+    // SAFETY: row_iter is currently positioned on a row; value type
+    // matches GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY.
+    unsafe {
+        let _ = ghostty_render_state_row_set(
+            row_iter,
+            GhosttyRenderStateRowOption::Dirty,
+            &clean as *const _ as *const c_void,
+        );
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -448,6 +512,11 @@ unsafe extern "C" {
         key: GhosttyRenderStateData,
         out: *mut c_void,
     ) -> GhosttyResult;
+    pub fn ghostty_render_state_set(
+        state: GhosttyRenderState,
+        key: GhosttyRenderStateOption,
+        value: *const c_void,
+    ) -> GhosttyResult;
 
     pub fn ghostty_render_state_row_iterator_new(
         allocator: *const GhosttyAllocator,
@@ -461,6 +530,11 @@ unsafe extern "C" {
         iter: GhosttyRowIterator,
         key: GhosttyRenderStateRowData,
         out: *mut c_void,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_row_set(
+        iter: GhosttyRowIterator,
+        key: GhosttyRenderStateRowOption,
+        value: *const c_void,
     ) -> GhosttyResult;
 
     pub fn ghostty_render_state_row_cells_new(
@@ -1077,6 +1151,8 @@ impl VtScreen {
                 inner.scratch[idx] = Cell::default();
             }
 
+            clear_render_state_row_dirty(inner.row_iter);
+
             if row_changed {
                 dirty_rows.push(row_idx);
             }
@@ -1103,6 +1179,7 @@ impl VtScreen {
         }
 
         inner.force_full_snapshot = false;
+        clear_render_state_dirty(inner.render_state);
 
         // Cursor read from the render state keys (not the terminal, to
         // stay consistent with the render snapshot).
@@ -1505,5 +1582,55 @@ impl Drop for VtScreen {
                 inner.terminal = std::ptr::null_mut();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot_lines(snapshot: &ScreenSnapshot) -> Vec<String> {
+        let cols = usize::from(snapshot.cols);
+        snapshot
+            .cells
+            .chunks(cols)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| char::from_u32(cell.codepoint).unwrap_or(' '))
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn alt_screen_exit_restores_primary_snapshot() {
+        let vt = VtScreen::new(20, 5, None).expect("create vt screen");
+
+        vt.feed(b"$ ");
+        let primary_before = snapshot_lines(&vt.snapshot()).join("\n");
+        assert!(
+            primary_before.contains("$"),
+            "expected shell prompt on primary screen, got {primary_before:?}"
+        );
+
+        vt.feed(b"\x1b[?1049h\x1b[2J\x1b[Hhtop row 1\r\nhtop row 2");
+        let alternate = snapshot_lines(&vt.snapshot()).join("\n");
+        assert!(
+            alternate.contains("htop"),
+            "expected htop content on alternate screen, got {alternate:?}"
+        );
+
+        vt.feed(b"\x1b[?1049l\r\n$ ");
+        let primary_after = snapshot_lines(&vt.snapshot()).join("\n");
+        assert!(
+            primary_after.contains("$"),
+            "expected shell prompt after alternate-screen exit, got {primary_after:?}"
+        );
+        assert!(
+            !primary_after.contains("htop"),
+            "alternate-screen content leaked after exit: {primary_after:?}"
+        );
     }
 }
