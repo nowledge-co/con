@@ -36,7 +36,7 @@ use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_CPU_ACCESS_READ,
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ,
     D3D11_MAPPED_SUBRESOURCE, D3D11_RENDER_TARGET_VIEW_DESC, D3D11_RTV_DIMENSION_TEXTURE2D,
     D3D11_SDK_VERSION, D3D11_TEX2D_RTV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
@@ -115,6 +115,7 @@ pub struct Renderer {
     atlas: Mutex<GlyphCache>,
 
     instances: Mutex<Vec<Instance>>,
+    frame_cache: Mutex<Option<Vec<u8>>>,
     /// Generation fingerprint of the last frame we actually rendered.
     /// It includes VT generation, selection state, and snapshot/view
     /// geometry so resize catch-up frames are not mistaken for
@@ -235,6 +236,7 @@ impl Renderer {
             pipeline: std::sync::Mutex::new(pipeline),
             atlas: Mutex::new(atlas),
             instances: Mutex::new(Vec::with_capacity(INITIAL_INSTANCE_CAPACITY as usize)),
+            frame_cache: Mutex::new(None),
             last_generation: Mutex::new(u64::MAX),
             selection: Mutex::new(None),
             width_px: width,
@@ -268,6 +270,10 @@ impl Renderer {
             .last_generation
             .lock()
             .expect("last_generation mutex poisoned in resize()") = u64::MAX;
+        *self
+            .frame_cache
+            .lock()
+            .expect("frame_cache mutex poisoned in resize()") = None;
         Ok(())
     }
 
@@ -383,7 +389,7 @@ impl Renderer {
         let drain_target = ring.oldest_in_flight();
 
         let drain_started = perf_trace_enabled().then(Instant::now);
-        let drained: Option<Vec<u8>> = if let Some(idx) = drain_target {
+        let drained: Option<Readback> = if let Some(idx) = drain_target {
             ring.try_drain(&self.context, idx)?
         } else {
             None
@@ -438,7 +444,15 @@ impl Renderer {
             // so by the next prepaint the GPU will have run them all
             // and the staging texture will be ready to Map().
             let submit_started = perf_trace_enabled().then(Instant::now);
-            submitted = Some(ring.submit_copy_mailbox(&self.context, &self.rt_texture));
+            let can_partial_readback = in_flight_before_submit == 0
+                && self
+                    .frame_cache
+                    .lock()
+                    .expect("frame_cache mutex poisoned checking partial readback")
+                    .is_some();
+            let readback_regions = self.readback_regions(snapshot, sel_hash, can_partial_readback);
+            submitted =
+                Some(ring.submit_copy_mailbox(&self.context, &self.rt_texture, &readback_regions));
             submit_ms = submit_started
                 .map(|started| started.elapsed().as_secs_f64() * 1000.0)
                 .unwrap_or(0.0);
@@ -450,20 +464,16 @@ impl Renderer {
             && can_block_for_latest(in_flight_before_submit, backlog, submitted)
             && let Some(submitted) = submitted
             && !submitted.replaced_in_flight
-            && let Some(bytes) = {
+            && let Some(frame) = {
                 let block_started = perf_trace_enabled().then(Instant::now);
-                let bytes = ring.block_drain(&self.context, submitted.idx)?;
+                let readback = ring.block_drain(&self.context, submitted.idx)?;
                 block_drain_ms = block_started
                     .map(|started| started.elapsed().as_secs_f64() * 1000.0)
                     .unwrap_or(0.0);
-                bytes
+                readback.map(|readback| self.frame_from_readback(readback))
             }
         {
-            let outcome = RenderOutcome::Rendered(FrameBgra {
-                bytes,
-                width: self.width_px,
-                height: self.height_px,
-            });
+            let outcome = RenderOutcome::Rendered(frame);
             log_render_profile(
                 prof_started,
                 snapshot,
@@ -514,12 +524,8 @@ impl Renderer {
             return Ok(outcome);
         }
 
-        if let Some(bytes) = drained {
-            let outcome = RenderOutcome::Rendered(FrameBgra {
-                bytes,
-                width: self.width_px,
-                height: self.height_px,
-            });
+        if let Some(readback) = drained {
+            let outcome = RenderOutcome::Rendered(self.frame_from_readback(readback));
             log_render_profile(
                 prof_started,
                 snapshot,
@@ -584,6 +590,94 @@ impl Renderer {
             "unchanged",
         );
         Ok(outcome)
+    }
+
+    fn readback_regions(
+        &self,
+        snapshot: &ScreenSnapshot,
+        sel_hash: u64,
+        allow_partial: bool,
+    ) -> Vec<ReadbackRegion> {
+        if !allow_partial
+            || sel_hash != 0
+            || snapshot.dirty_rows.is_empty()
+            || snapshot.dirty_rows.len() >= snapshot.rows as usize
+        {
+            return vec![ReadbackRegion::full(self.height_px)];
+        }
+
+        let cell_h = self.metrics().cell_height_px.max(1);
+        let mut regions: Vec<ReadbackRegion> = Vec::new();
+        for row in snapshot.dirty_rows.iter().copied() {
+            let y = u32::from(row).saturating_mul(cell_h).min(self.height_px);
+            let bottom = y.saturating_add(cell_h).min(self.height_px);
+            if y >= bottom {
+                continue;
+            }
+            if let Some(last) = regions.last_mut()
+                && last.y.saturating_add(last.height) >= y
+            {
+                let merged_bottom = last.y.saturating_add(last.height).max(bottom);
+                last.height = merged_bottom.saturating_sub(last.y);
+                continue;
+            }
+            regions.push(ReadbackRegion {
+                y,
+                height: bottom - y,
+            });
+        }
+        if regions.is_empty() {
+            vec![ReadbackRegion::full(self.height_px)]
+        } else {
+            regions
+        }
+    }
+
+    fn frame_from_readback(&self, readback: Readback) -> FrameBgra {
+        if readback.regions.len() == 1 && readback.regions[0].is_full(self.height_px) {
+            let mut cache = self
+                .frame_cache
+                .lock()
+                .expect("frame_cache mutex poisoned in frame_from_readback()");
+            *cache = Some(readback.bytes.clone());
+            return FrameBgra {
+                bytes: readback.bytes,
+                width: self.width_px,
+                height: self.height_px,
+            };
+        }
+
+        let row_bytes = self.width_px as usize * 4;
+        let frame_len = row_bytes * self.height_px as usize;
+        let mut cache = self
+            .frame_cache
+            .lock()
+            .expect("frame_cache mutex poisoned in frame_from_readback()");
+        let frame = cache.get_or_insert_with(|| vec![0; frame_len]);
+        if frame.len() != frame_len {
+            frame.clear();
+            frame.resize(frame_len, 0);
+        }
+
+        let mut src_offset = 0usize;
+        for region in readback.regions {
+            let top = region.y.min(self.height_px) as usize;
+            let bottom = region.y.saturating_add(region.height).min(self.height_px) as usize;
+            let bytes = (bottom.saturating_sub(top)) * row_bytes;
+            if bytes == 0 || src_offset.saturating_add(bytes) > readback.bytes.len() {
+                continue;
+            }
+            let dst = top * row_bytes;
+            frame[dst..dst + bytes]
+                .copy_from_slice(&readback.bytes[src_offset..src_offset + bytes]);
+            src_offset += bytes;
+        }
+
+        FrameBgra {
+            bytes: frame.clone(),
+            width: self.width_px,
+            height: self.height_px,
+        }
     }
 
     fn draw_cells(&self, snapshot: &ScreenSnapshot, config: &RendererConfig) -> Result<()> {
@@ -867,7 +961,7 @@ fn log_render_profile(
     }
     log::info!(
         target: "con::perf",
-        "win_renderer generation={} rows={} cols={} prefer_latest={} needs_draw={} in_flight_before={} drain_target={:?} drained_ready={} backlog={} submitted_idx={:?} replaced_in_flight={} draw_ms={:.3} submit_ms={:.3} drain_ms={:.3} block_drain_ms={:.3} outcome={} source={} total_ms={:.3}",
+        "win_renderer generation={} rows={} cols={} prefer_latest={} needs_draw={} in_flight_before={} drain_target={:?} drained_ready={} backlog={} submitted_idx={:?} replaced_in_flight={} readback_regions={} readback_rows={} draw_ms={:.3} submit_ms={:.3} drain_ms={:.3} block_drain_ms={:.3} outcome={} source={} total_ms={:.3}",
         snapshot.generation,
         snapshot.rows,
         snapshot.cols,
@@ -879,6 +973,8 @@ fn log_render_profile(
         backlog,
         submitted.map(|s| s.idx),
         submitted.is_some_and(|s| s.replaced_in_flight),
+        submitted.map(|s| s.readback_regions).unwrap_or(0),
+        submitted.map(|s| s.readback_rows).unwrap_or(0),
         draw_ms,
         submit_ms,
         drain_ms,
@@ -971,12 +1067,36 @@ struct StagingSlot {
     /// can't disambiguate "oldest" from "newest" once both are in
     /// flight.)
     seq: u64,
+    regions: Vec<ReadbackRegion>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct SubmittedCopy {
     idx: usize,
     replaced_in_flight: bool,
+    readback_regions: usize,
+    readback_rows: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReadbackRegion {
+    y: u32,
+    height: u32,
+}
+
+impl ReadbackRegion {
+    fn full(height: u32) -> Self {
+        Self { y: 0, height }
+    }
+
+    fn is_full(&self, height: u32) -> bool {
+        self.y == 0 && self.height >= height
+    }
+}
+
+struct Readback {
+    bytes: Vec<u8>,
+    regions: Vec<ReadbackRegion>,
 }
 
 /// Two-slot staging ring. See `Renderer::render` for the state machine.
@@ -1003,6 +1123,7 @@ impl StagingRing {
                 texture: create_staging_texture(device, width, height)?,
                 in_flight: false,
                 seq: 0,
+                regions: vec![ReadbackRegion::full(height)],
             });
         }
         Ok(Self {
@@ -1024,6 +1145,7 @@ impl StagingRing {
                 texture: create_staging_texture(device, width, height)?,
                 in_flight: false,
                 seq: 0,
+                regions: vec![ReadbackRegion::full(height)],
             });
         }
         self.slots = new_slots;
@@ -1038,6 +1160,7 @@ impl StagingRing {
         &mut self,
         ctx: &ID3D11DeviceContext,
         source: &ID3D11Texture2D,
+        regions: &[ReadbackRegion],
     ) -> SubmittedCopy {
         let clean_idx = self
             .slots
@@ -1050,17 +1173,57 @@ impl StagingRing {
             self.oldest_in_flight().unwrap_or(self.next_idx)
         };
         let replaced_in_flight = self.slots[idx].in_flight;
-        unsafe {
-            ctx.CopyResource(&self.slots[idx].texture, source);
+        let regions = if regions.is_empty() {
+            vec![ReadbackRegion::full(self.height)]
+        } else {
+            regions.to_vec()
+        };
+        if regions.len() == 1 && regions[0].is_full(self.height) {
+            unsafe {
+                ctx.CopyResource(&self.slots[idx].texture, source);
+            }
+        } else {
+            for region in &regions {
+                let top = region.y.min(self.height);
+                let bottom = top.saturating_add(region.height).min(self.height);
+                if top >= bottom {
+                    continue;
+                }
+                let src_box = D3D11_BOX {
+                    left: 0,
+                    top,
+                    front: 0,
+                    right: self.width,
+                    bottom,
+                    back: 1,
+                };
+                unsafe {
+                    ctx.CopySubresourceRegion(
+                        &self.slots[idx].texture,
+                        0,
+                        0,
+                        top,
+                        0,
+                        source,
+                        0,
+                        Some(&src_box as *const D3D11_BOX),
+                    );
+                }
+            }
         }
         let slot = &mut self.slots[idx];
+        let readback_regions = regions.len();
+        let readback_rows = regions.iter().map(|region| region.height).sum();
         slot.in_flight = true;
         slot.seq = self.next_seq;
+        slot.regions = regions;
         self.next_seq = self.next_seq.wrapping_add(1);
         self.next_idx = (idx + 1) % self.slots.len();
         SubmittedCopy {
             idx,
             replaced_in_flight,
+            readback_regions,
+            readback_rows,
         }
     }
 
@@ -1085,16 +1248,16 @@ impl StagingRing {
         best.map(|(i, _)| i)
     }
 
-    /// Non-blocking drain: returns `Ok(Some(bytes))` if the slot is
+    /// Non-blocking drain: returns `Ok(Some(readback))` if the slot is
     /// ready, `Ok(None)` if the GPU is still drawing into it.
-    fn try_drain(&mut self, ctx: &ID3D11DeviceContext, idx: usize) -> Result<Option<Vec<u8>>> {
+    fn try_drain(&mut self, ctx: &ID3D11DeviceContext, idx: usize) -> Result<Option<Readback>> {
         self.drain_with_flags(ctx, idx, D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32)
     }
 
     /// Blocking drain: waits for the GPU to finish the slot's copy,
     /// then maps it. Used as a fallback when the GPU somehow exceeds a
     /// full prepaint cycle to drain `try_drain`'s target.
-    fn block_drain(&mut self, ctx: &ID3D11DeviceContext, idx: usize) -> Result<Option<Vec<u8>>> {
+    fn block_drain(&mut self, ctx: &ID3D11DeviceContext, idx: usize) -> Result<Option<Readback>> {
         self.drain_with_flags(ctx, idx, 0)
     }
 
@@ -1103,7 +1266,7 @@ impl StagingRing {
         ctx: &ID3D11DeviceContext,
         idx: usize,
         flags: u32,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<Readback>> {
         let width = self.width as usize;
         let height = self.height as usize;
         let slot = &mut self.slots[idx];
@@ -1121,17 +1284,33 @@ impl StagingRing {
             return Err(anyhow::anyhow!("Map(staging slot {idx}) failed: {err}"));
         }
 
+        let regions = slot.regions.clone();
+        let full = regions.len() == 1 && regions[0].is_full(self.height);
         let row_bytes = width * 4;
-        let len = row_bytes * height;
+        let len = if full {
+            row_bytes * height
+        } else {
+            regions
+                .iter()
+                .map(|region| region.height.min(self.height.saturating_sub(region.y)) as usize)
+                .sum::<usize>()
+                * row_bytes
+        };
         let mut out: Vec<u8> = Vec::with_capacity(len);
         let src_pitch = mapped.RowPitch as usize;
-        for y in 0..height {
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    (mapped.pData as *const u8).add(src_pitch * y),
-                    out.as_mut_ptr().add(row_bytes * y),
-                    row_bytes,
-                );
+        let mut dst_offset = 0usize;
+        for region in &regions {
+            let top = region.y.min(self.height) as usize;
+            let bottom = region.y.saturating_add(region.height).min(self.height) as usize;
+            for y in top..bottom {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        (mapped.pData as *const u8).add(src_pitch * y),
+                        out.as_mut_ptr().add(dst_offset),
+                        row_bytes,
+                    );
+                }
+                dst_offset += row_bytes;
             }
         }
         // Every byte has been filled by the row-copy loop above.
@@ -1144,7 +1323,10 @@ impl StagingRing {
             ctx.Unmap(&slot.texture, 0);
         }
         slot.in_flight = false;
-        Ok(Some(out))
+        Ok(Some(Readback {
+            bytes: out,
+            regions,
+        }))
     }
 }
 

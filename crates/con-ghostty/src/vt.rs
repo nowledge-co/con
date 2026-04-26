@@ -567,7 +567,7 @@ pub struct Cell {
     pub _pad: [u8; 3],
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Cursor {
     pub col: u16,
     pub row: u16,
@@ -617,6 +617,7 @@ struct VtInner {
     scratch_cols: u16,
     scratch_rows: u16,
     scratch: Vec<Cell>,
+    last_cursor: Cursor,
 }
 
 unsafe impl Send for VtInner {}
@@ -799,6 +800,7 @@ impl VtScreen {
                 scratch_cols: cols,
                 scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
+                last_cursor: Cursor::default(),
             })),
         })
     }
@@ -946,7 +948,8 @@ impl VtScreen {
         cols = cols.max(1);
         rows = rows.max(1);
 
-        let mut full_redraw = inner.force_full_snapshot;
+        let mut force_all_dirty = inner.force_full_snapshot;
+        let mut full_redraw = force_all_dirty;
         let mut state_dirty = GhosttyRenderStateDirty::False;
         // SAFETY: DIRTY out param is sized for the enum.
         unsafe {
@@ -967,6 +970,7 @@ impl VtScreen {
             inner.scratch.resize(total, Cell::default());
             inner.scratch_cols = cols;
             inner.scratch_rows = rows;
+            force_all_dirty = true;
             full_redraw = true;
         }
 
@@ -1007,7 +1011,7 @@ impl VtScreen {
                 row_idx += 1;
                 continue;
             }
-            dirty_rows.push(row_idx);
+            let mut row_changed = force_all_dirty;
 
             // Bind the cells iterator to the current row.
             // SAFETY: iter + cells valid.
@@ -1031,13 +1035,21 @@ impl VtScreen {
                 if col_idx >= cols {
                     break;
                 }
-                inner.scratch[row_start + col_idx as usize] =
-                    read_cell(inner.row_cells, default_fg, default_bg);
+                let cell = read_cell(inner.row_cells, default_fg, default_bg);
+                let idx = row_start + col_idx as usize;
+                row_changed |= inner.scratch[idx] != cell;
+                inner.scratch[idx] = cell;
                 col_idx += 1;
             }
             // Clear trailing cells in the row.
             for c in col_idx..cols {
-                inner.scratch[row_start + c as usize] = Cell::default();
+                let idx = row_start + c as usize;
+                row_changed |= inner.scratch[idx] != Cell::default();
+                inner.scratch[idx] = Cell::default();
+            }
+
+            if row_changed {
+                dirty_rows.push(row_idx);
             }
 
             row_idx += 1;
@@ -1050,8 +1062,14 @@ impl VtScreen {
             for trailing_row in row_idx..rows {
                 let row_start = trailing_row as usize * cols as usize;
                 let row_end = row_start + cols as usize;
-                inner.scratch[row_start..row_end].fill(Cell::default());
-                dirty_rows.push(trailing_row);
+                let mut row_changed = force_all_dirty;
+                for cell in &mut inner.scratch[row_start..row_end] {
+                    row_changed |= *cell != Cell::default();
+                    *cell = Cell::default();
+                }
+                if row_changed {
+                    dirty_rows.push(trailing_row);
+                }
             }
         }
 
@@ -1081,6 +1099,23 @@ impl VtScreen {
             );
         }
 
+        let cursor = Cursor {
+            col: col_u16,
+            row: row_u16,
+            visible,
+        };
+        let previous_cursor = inner.last_cursor;
+        if previous_cursor != cursor {
+            if previous_cursor.visible && previous_cursor.row < rows {
+                push_unique_row(&mut dirty_rows, previous_cursor.row);
+            }
+            if cursor.visible && cursor.row < rows {
+                push_unique_row(&mut dirty_rows, cursor.row);
+            }
+            inner.last_cursor = cursor;
+        }
+        dirty_rows.sort_unstable();
+
         let clone_started = perf_trace_enabled().then(Instant::now);
         let cells = inner.scratch.clone();
         let clone_elapsed_ms =
@@ -1090,11 +1125,7 @@ impl VtScreen {
             rows,
             cells,
             dirty_rows,
-            cursor: Cursor {
-                col: col_u16,
-                row: row_u16,
-                visible,
-            },
+            cursor,
             title: None,
             generation: inner.generation,
         };
@@ -1305,6 +1336,12 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
         cursor: Cursor::default(),
         title: None,
         generation,
+    }
+}
+
+fn push_unique_row(rows: &mut Vec<u16>, row: u16) {
+    if !rows.contains(&row) {
+        rows.push(row);
     }
 }
 

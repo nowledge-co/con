@@ -14,6 +14,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Reduced redundant Windows pre-echo repaint work by letting handled keyboard input wait for actual VT/ConPTY progress instead of forcing a speculative GPUI repaint on every key press.
 - Reduced Windows output batching by preserving successive ConPTY wake signals instead of draining them into a single repaint request before GPUI has had a chance to present intermediate progress.
 - Reduced Windows slideshow-style command redraws by treating the staging ring as a true mailbox during PTY-driven output: once a fresher VT snapshot is submitted, older completed readbacks are no longer presented ahead of it.
+- Reduced Windows input/readback latency by deriving exact changed VT rows even when libghostty-vt reports a full render-state dirty flag, then copying only those pixel rows from the D3D render target into the staging readback texture for small terminal updates.
 - Expanded Windows profiling behind `CON_GHOSTTY_PROFILE` so one run now captures ConPTY read-chunk cadence, renderer sub-stage timings (drain/draw/submit/block-drain), `RenderSession::render_frame`, and the GPUI image-wrap stage alongside the shared VT snapshot timings; idle unchanged frames are filtered by default, with `CON_GHOSTTY_PROFILE_VERBOSE=1` available for every-frame traces.
 
 ## **v0.1.0-beta.38** - 2026-04-24
