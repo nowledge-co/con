@@ -24,8 +24,6 @@
 
 `con` is for people who want a serious terminal first and AI help only when it earns its place.
 
-It keeps the PTY real, the shell visible, and the agent accountable.
-
 If you're an old-school terminal user and only want enough AI harness when needed, nothing more or less, `con` is for you.
 
 ## What it does
