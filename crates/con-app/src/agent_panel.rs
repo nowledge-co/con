@@ -21,7 +21,7 @@ use con_core::harness::HarnessEvent;
 use chrono::Utc;
 
 use crate::chat_markdown::{
-    ChatMarkdownTone, ParsedChatMarkdown, render_parsed_chat_markdown,
+    ChatMarkdownTone, MarkdownDocumentView, ParsedChatMarkdown, render_parsed_chat_markdown,
 };
 use crate::input_bar::SkillEntry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
@@ -450,6 +450,7 @@ struct PanelMessage {
     role: String,
     content: String,
     content_markdown: Option<ParsedChatMarkdown>,
+    content_view: Option<Entity<MarkdownDocumentView>>,
     content_markdown_pending: bool,
     content_collapsed: bool,
     /// Extended thinking/reasoning text from the model (collapsible)
@@ -492,6 +493,7 @@ impl PanelMessage {
             role: role.to_string(),
             content: content.to_string(),
             content_markdown: None,
+            content_view: None,
             content_markdown_pending: false,
             content_collapsed: false,
             thinking: None,
@@ -511,12 +513,14 @@ impl PanelMessage {
     fn append_content(&mut self, token: &str) {
         self.content.push_str(token);
         self.content_markdown = None;
+        self.content_view = None;
         self.content_markdown_pending = false;
     }
 
     fn replace_content(&mut self, content: &str) {
         self.content = content.to_string();
         self.content_markdown = None;
+        self.content_view = None;
         self.content_markdown_pending = false;
     }
 
@@ -1356,16 +1360,40 @@ impl AgentPanel {
                 .spawn(async move { ParsedChatMarkdown::parse(&parse_content) })
                 .await;
             let _ = this.update(cx, |panel, cx| {
+                let mut needs_view = false;
                 if let Some(message) = panel.state.messages.get_mut(msg_idx) {
                     if message.content == content {
                         message.content_markdown = Some(parsed.clone());
+                        needs_view = true;
                     }
                     message.content_markdown_pending = false;
+                }
+                if needs_view {
+                    panel.ensure_content_markdown_view(msg_idx, cx);
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    fn ensure_content_markdown_view(&mut self, msg_idx: usize, cx: &mut Context<Self>) {
+        let Some(message) = self.state.messages.get_mut(msg_idx) else {
+            return;
+        };
+        let Some(document) = message.content_markdown.clone() else {
+            return;
+        };
+
+        if let Some(view) = message.content_view.as_ref() {
+            let view = view.clone();
+            view.update(cx, |view, cx| {
+                view.update_document(document, ChatMarkdownTone::Message, cx);
+            });
+        } else {
+            let view = cx.new(|_| MarkdownDocumentView::new(document, ChatMarkdownTone::Message));
+            message.content_view = Some(view);
+        }
     }
 
     /// Derive a human-readable status line from current panel state.
@@ -2582,6 +2610,7 @@ impl Render for AgentPanel {
 
         let total_messages = self.state.messages.len();
         let mut content_parse_requests = Vec::new();
+        let mut content_view_requests = Vec::new();
         for (msg_idx, msg) in self.state.messages.iter_mut().enumerate() {
             let is_user = msg.role == "user";
             let is_system = msg.role == "system";
@@ -2929,12 +2958,23 @@ impl Render for AgentPanel {
                         content_el = content_el.child(
                             preview_lines,
                         );
-                    } else if let Some(markdown) = msg.content_markdown.as_ref() {
-                        content_el = content_el.child(render_parsed_chat_markdown(
-                            markdown,
-                            ChatMarkdownTone::Message,
-                            &theme,
-                        ));
+                    } else if let Some(view) = msg.content_view.clone() {
+                        content_el = content_el.child(view);
+                    } else if msg.content_markdown.is_some() {
+                        content_view_requests.push(msg_idx);
+                        let mut preview_lines = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .font_family(theme.mono_font_family.clone());
+                        for line in visible_content.lines() {
+                            preview_lines = preview_lines.child(
+                                div()
+                                    .whitespace_normal()
+                                    .child(if line.is_empty() { " " } else { line }.to_string()),
+                            );
+                        }
+                        content_el = content_el.child(preview_lines);
                     } else {
                         if !msg.content_markdown_pending {
                             content_parse_requests.push(msg_idx);
@@ -3404,6 +3444,9 @@ impl Render for AgentPanel {
 
         for msg_idx in content_parse_requests {
             self.ensure_content_markdown_async(msg_idx, cx);
+        }
+        for msg_idx in content_view_requests {
+            self.ensure_content_markdown_view(msg_idx, cx);
         }
 
         // ── Active tool calls (skip if awaiting approval — the card shows it) ──
