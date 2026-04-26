@@ -52,11 +52,11 @@ Move the overlay out of the sidebar's render subtree and into the
 workspace's render subtree as an absolute sibling of the terminal
 pane:
 
-```
+```text
 crates/con-app/src/sidebar.rs
   - Render returns rail (collapsed) | panel-body (pinned). No
     absolute children.
-  - New `pub fn render_peek_overlay(&mut self, cx) -> Option<AnyElement>`
+  - New `pub fn render_hover_card_overlay(&mut self, window, cx) -> Option<AnyElement>`
     returns the overlay element when collapsed-and-hovered.
 
 crates/con-app/src/workspace.rs
@@ -99,8 +99,8 @@ elevated `surface_tone(0.18)` body bg.
 
 ## Follow-ups not in scope
 
-- Drag-to-reorder tabs in the vertical strip (the horizontal strip
-  doesn't support it either; both should land together).
+- Drag-to-reorder for the horizontal tab strip. Vertical strip
+  reordering shipped in this PR.
 - Tab groups / pinned tabs (Chrome-style top-of-list separator).
 - Hover-peek on the agent panel side (right edge), if we ever ship a
   vertical agent-panel mode.

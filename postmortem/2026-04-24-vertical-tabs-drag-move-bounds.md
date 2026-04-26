@@ -12,7 +12,7 @@ the obvious-looking handlers to each row:
 ```rust
 .on_drag(dragged, |d, _, _, cx| cx.new(|_| d.clone()))
 .on_drag_move::<DraggedTab>(cx.listener(move |this, _ev, _, cx| {
-    this.drop_target = Some(i);
+    this.drop_slot = Some(i);
     cx.notify();
 }))
 .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
@@ -47,12 +47,12 @@ self.mouse_move_listeners.push(Box::new(
 
 So with three rows, every cursor move during a drag fired three
 `on_drag_move` callbacks (rows 0, 1, 2 in dispatch order), and the
-last one to write `drop_target = Some(i)` won. That made the indicator
-ping-pong between rows on every frame, and `drop_target` always
+last one to write `drop_slot = Some(i)` won. That made the indicator
+ping-pong between rows on every frame, and `drop_slot` always
 ended up at row 2 regardless of cursor position.
 
 The drop handler is fine — it's anchored on the hit-tested element —
-but my flawed `drop_target` state misled the user about where the
+but my flawed `drop_slot` state misled the user about where the
 drop would land, and on cursor positions outside any row it stayed
 stale forever.
 
@@ -70,8 +70,8 @@ on `DragMoveEvent`:
     {
         return;
     }
-    if this.drop_target != Some(i) {
-        this.drop_target = Some(i);
+    if this.drop_slot != Some(i) {
+        this.drop_slot = Some(i);
         cx.notify();
     }
 }))
@@ -80,15 +80,15 @@ on `DragMoveEvent`:
 `DragMoveEvent` carries `event.position` (cursor in window coords)
 and `bounds` (this listener's element bounds in window coords). The
 explicit point-in-bounds check restores the "only the hovered row
-updates drop_target" semantics I assumed in the first place.
+updates drop_slot" semantics I assumed in the first place.
 
 Plus a render-time clear so the indicator goes away after a drag-
 cancel (`mouseup` outside any row → no `on_drop` fires anywhere):
 
 ```rust
 fn render(...) {
-    if self.drop_target.is_some() && !cx.has_active_drag() {
-        self.drop_target = None;
+    if self.drop_slot.is_some() && !cx.has_active_drag() {
+        self.drop_slot = None;
     }
     ...
 }

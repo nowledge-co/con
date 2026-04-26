@@ -8,7 +8,7 @@ real-world testing against the user's configured Moonshot **Kimi K2.6**
 heuristic name (`bash`, `Shell`) regardless of what command ran in the
 pane. Logs showed every request being **parsed-rejected**:
 
-```
+```text
 WARN con_core::tab_summary tab_summary parse rejected tab_id=0
   raw="The user wants me to label a terminal tab... [3000+ chars
         of chain-of-thought, ending mid-sentence at]
@@ -39,7 +39,7 @@ The first fix attempt was rig's `prompt_typed::<TabSummaryJson>`,
 which sends `response_format: { type: "json_schema", … }` to the
 model. On Moonshot this hits:
 
-```
+```text
 WARN rig::providers::moonshot] Structured outputs currently not
    supported for Moonshot
 ```
@@ -49,7 +49,7 @@ and the model is **not** schema-constrained on the wire. Worse, the
 model still emits something *that looks like* JSON — but wrapped in
 a markdown code fence:
 
-```
+```text
 gen_ai.completion="```json
 {
   \"label\": \"Shell\",
@@ -85,7 +85,7 @@ own:
    in `tab_summary.rs`). Walks the response for the first `{` and the
    matching `}`, ignoring everything else. Naturally strips
    ```` ```json ... ``` ```` fences, reasoning preamble, and trailing
-   commentary. Six unit tests cover code-fenced JSON, unlabeled
+   commentary. Parser unit tests cover code-fenced JSON, unlabeled
    fences, JSON with prose preamble, embedded curly braces in string
    values, and clean / no-JSON inputs.
 3. **Kept the streaming completion path** (`AgentProvider::complete_with_options`)
@@ -113,15 +113,15 @@ out.
 
 End-to-end against live Moonshot K2.6:
 
-```
+```text
 [07:42:02] tab_summary parsed tab_id=0 label="Shell" icon=Terminal       (empty pane)
 [07:43:34] tab_summary parsed tab_id=0 label="Git"   icon=FileCode       (after `cd /workspace && git status`)
 ```
 
 Sidebar visibly updated `Shell → Git` with the file-code icon, no
-restart, no manual refresh. Six new unit tests on the JSON parser, all
-24 `con-core::tab_summary` tests green. Full workspace check `RUSTFLAGS="-D
-warnings"` clean; 139 tests pass.
+restart, no manual refresh. JSON parser, cache, and reorder tests in
+`con-core::tab_summary` stay green. Full workspace check `RUSTFLAGS="-D
+warnings"` clean.
 
 ## What we learned
 

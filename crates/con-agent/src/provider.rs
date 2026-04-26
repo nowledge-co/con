@@ -1559,7 +1559,7 @@ impl AgentProvider {
     /// Same plumbing as `complete`, but lets the caller pick its own
     /// preamble + token budget. Use when the default
     /// shell-completion preamble would mislead the model — e.g.
-    /// vertical-tabs uses this to ask for a `LABEL|ICON` summary;
+    /// vertical-tabs uses this to ask for a small JSON summary;
     /// the shell-completion preamble fights that prompt and most
     /// providers respond with empty text.
     pub async fn complete_with_options(
@@ -1662,7 +1662,7 @@ impl AgentProvider {
                 return Ok(reasoning_text);
             }
             Err(anyhow::anyhow!(
-                "Completion error: streaming completion produced no visible text"
+                "Completion error: streaming completion produced no visible text; contained no message or tool call (empty)"
             ))
         }
 

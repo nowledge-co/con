@@ -220,7 +220,7 @@ use crate::input_bar::{
 use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
 use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
-use crate::settings_panel::{self, SaveSettings, SettingsPanel, ThemePreview};
+use crate::settings_panel::{self, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview};
 use crate::sidebar::{
     NewSession, SessionEntry, SessionSidebar, SidebarCloseOthers, SidebarCloseTab,
     SidebarDuplicate, SidebarRename, SidebarReorder, SidebarSelect,
@@ -622,6 +622,7 @@ impl ConWorkspace {
         let terminal_blur = Self::effective_terminal_blur(config.appearance.terminal_blur);
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
         let effective_ui_opacity = Self::effective_ui_opacity(ui_opacity);
+        sidebar.update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
         let background_image = config.appearance.background_image.clone();
         let background_image_opacity =
             Self::clamp_background_image_opacity(config.appearance.background_image_opacity);
@@ -788,6 +789,7 @@ impl ConWorkspace {
                     );
                     let pane_count = tab.pane_tree.pane_terminals().len();
                     SessionEntry {
+                        id: tab.summary_id,
                         name: presentation.name,
                         subtitle: presentation.subtitle,
                         is_ssh: presentation.is_ssh,
@@ -843,6 +845,7 @@ impl ConWorkspace {
             bar.set_ui_opacity(effective_ui_opacity);
             bar.set_recent_commands(initial_recent_inputs);
         });
+        sidebar.update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
         command_palette.update(cx, |palette, _cx| {
             palette.set_ui_opacity(effective_ui_opacity)
         });
@@ -863,6 +866,8 @@ impl ConWorkspace {
         )
         .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_settings_saved)
+            .detach();
+        cx.subscribe_in(&settings_panel, window, Self::on_tabs_orientation_changed)
             .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_theme_preview)
             .detach();
@@ -1136,13 +1141,16 @@ impl ConWorkspace {
             for (i, tab) in tabs.iter().enumerate() {
                 let req = TabSummaryRequest {
                     tab_id: tab.summary_id,
-                    cwd: None,
+                    cwd: tab
+                        .pane_tree
+                        .focused_terminal()
+                        .current_dir(cx)
+                        .or_else(|| session.tabs.get(i).and_then(|tab_state| tab_state.cwd.clone())),
                     title: Some(tab.title.clone()).filter(|t| !t.is_empty()),
                     ssh_host: None,
                     recent_commands: vec![],
                     recent_output: vec![],
                 };
-                let _ = i;
                 let tx = tx.clone();
                 tab_summary_engine.request(req, move |summary| {
                     let _ = tx.send(summary);
@@ -2546,7 +2554,7 @@ impl ConWorkspace {
 
     fn spawn_control_agent_request_timeout(
         &self,
-        tab_idx: usize,
+        _tab_idx: usize,
         request_id: u64,
         timeout_secs: u64,
         cx: &mut Context<Self>,
@@ -2557,14 +2565,16 @@ impl ConWorkspace {
                 .await;
 
             let _ = this.update(cx, |workspace, _| {
-                let is_current_request = workspace
+                let current_tab_idx = workspace
                     .pending_control_agent_requests
-                    .get(&tab_idx)
-                    .is_some_and(|pending| pending.request_id == request_id);
-                if is_current_request {
+                    .iter()
+                    .find_map(|(idx, pending)| {
+                        (pending.request_id == request_id).then_some(*idx)
+                    });
+                if let Some(current_tab_idx) = current_tab_idx {
                     let pending = workspace
                         .pending_control_agent_requests
-                        .remove(&tab_idx)
+                        .remove(&current_tab_idx)
                         .expect("pending request must exist");
                     Self::send_control_result(
                         pending.response_tx,
@@ -3192,10 +3202,17 @@ impl ConWorkspace {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        if self.tabs[event.index].user_label == new_label {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.summary_id == event.session_id)
+        else {
+            return;
+        };
+        if self.tabs[index].user_label == new_label {
             return;
         }
-        self.tabs[event.index].user_label = new_label;
+        self.tabs[index].user_label = new_label;
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
@@ -3268,12 +3285,29 @@ impl ConWorkspace {
         if from == to || from + 1 == to {
             return;
         }
+        let old_order: Vec<u64> = self.tabs.iter().map(|tab| tab.summary_id).collect();
         let active_id = self.tabs[self.active_tab].summary_id;
         let insert_at = if from < to { to - 1 } else { to };
         let tab = self.tabs.remove(from);
         // Vec::insert clamps via assert; insert_at is guaranteed
         // ≤ tabs.len() (post-remove) by construction above.
         self.tabs.insert(insert_at, tab);
+
+        let new_positions: HashMap<u64, usize> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(idx, tab)| (tab.summary_id, idx))
+            .collect();
+        let mut remapped_pending = HashMap::new();
+        for (old_idx, pending) in std::mem::take(&mut self.pending_control_agent_requests) {
+            if let Some(summary_id) = old_order.get(old_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                remapped_pending.insert(new_idx, pending);
+            }
+        }
+        self.pending_control_agent_requests = remapped_pending;
 
         // Re-locate the active tab by stable summary_id rather than
         // index arithmetic (which had its own off-by-one in the
@@ -3334,6 +3368,7 @@ impl ConWorkspace {
                 );
                 let pane_count = tab.pane_tree.pane_terminals().len();
                 SessionEntry {
+                    id: tab.summary_id,
                     name: presentation.name,
                     subtitle: presentation.subtitle,
                     is_ssh: presentation.is_ssh,
@@ -3444,8 +3479,16 @@ impl ConWorkspace {
         // Same suggestion model drives the tab summarizer; rebuild
         // it so the new credentials / model override take effect.
         self.tab_summary_engine = self.harness.tab_summary_engine();
-        // Re-ask for fresh summaries with the new model.
-        self.request_tab_summaries(cx);
+        if self.harness.config().suggestion_model.enabled {
+            // Re-ask for fresh summaries with the new model.
+            self.request_tab_summaries(cx);
+        } else {
+            for tab in &mut self.tabs {
+                tab.ai_label = None;
+                tab.ai_icon = None;
+            }
+            self.sync_sidebar(cx);
+        }
         let active_agent_config = self.active_tab_agent_config();
 
         // Sync auto-approve to agent panel UI
@@ -3505,6 +3548,8 @@ impl ConWorkspace {
             .update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
         self.input_bar
             .update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
+        self.sidebar
+            .update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
         self.command_palette.update(cx, |palette, _cx| {
             palette.set_ui_opacity(effective_ui_opacity)
         });
@@ -3526,6 +3571,23 @@ impl ConWorkspace {
 
         // Settings panel closes on save — restore terminal focus
         self.focus_terminal(window, cx);
+    }
+
+    fn on_tabs_orientation_changed(
+        &mut self,
+        settings: &Entity<SettingsPanel>,
+        _event: &TabsOrientationChanged,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let orientation = settings.read(cx).appearance_config().tabs_orientation;
+        if self.tabs_orientation == orientation {
+            return;
+        }
+        self.tabs_orientation = orientation;
+        self.sync_tab_strip_motion();
+        self.save_session(cx);
+        cx.notify();
     }
 
     fn on_theme_preview(
@@ -8245,4 +8307,3 @@ fn longest_common_prefix<'a>(values: impl IntoIterator<Item = &'a str>) -> Strin
     }
     prefix
 }
-

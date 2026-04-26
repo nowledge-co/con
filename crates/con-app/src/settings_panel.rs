@@ -23,7 +23,7 @@ use crate::motion::{MotionValue, vertical_reveal_offset};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
+actions!(settings, [ToggleSettings, SaveSettings, DismissSettings, TabsOrientationChanged]);
 
 /// Emitted when the user selects a different terminal theme for live preview.
 pub struct ThemePreview(pub String);
@@ -2813,12 +2813,8 @@ impl SettingsPanel {
                                 // immediately so closing the panel
                                 // (or quitting + relaunching)
                                 // doesn't lose the change, and emit
-                                // SaveSettings so the workspace's
-                                // on_settings_saved live-applies the
-                                // orientation switch (the panel
-                                // collapses / expands without the
-                                // user clicking the explicit Save
-                                // button).
+                                // a narrow event so the workspace
+                                // applies only the orientation switch.
                                 this.config.appearance.tabs_orientation = if *checked {
                                     con_core::config::TabsOrientation::Vertical
                                 } else {
@@ -2828,8 +2824,12 @@ impl SettingsPanel {
                                     log::warn!(
                                         "settings: persist tabs_orientation failed: {err}"
                                     );
+                                    this.save_error = Some(err.to_string());
+                                    cx.notify();
+                                    return;
                                 }
-                                cx.emit(SaveSettings);
+                                this.save_error = None;
+                                cx.emit(TabsOrientationChanged);
                                 cx.notify();
                             })),
                         theme,
@@ -4077,6 +4077,7 @@ impl SettingsPanel {
 }
 
 impl EventEmitter<SaveSettings> for SettingsPanel {}
+impl EventEmitter<TabsOrientationChanged> for SettingsPanel {}
 impl EventEmitter<ThemePreview> for SettingsPanel {}
 
 impl Focusable for SettingsPanel {
