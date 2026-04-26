@@ -191,7 +191,23 @@ pub const fn ghostty_mode(value: u16, ansi: bool) -> GhosttyMode {
     (value & 0x7FFF) | ((ansi as u16) << 15)
 }
 
-// Pre-packed DEC private modes we care about on Windows. Keep the
+fn terminal_mode_active(terminal: GhosttyTerminal, mode: GhosttyMode) -> bool {
+    if terminal.is_null() {
+        return false;
+    }
+    let mut on: bool = false;
+    // SAFETY: terminal is owned by `VtInner`; `on` is a 1-byte C `_Bool`.
+    let rc = unsafe { ghostty_terminal_mode_get(terminal, mode, &mut on) };
+    rc == 0 && on
+}
+
+fn terminal_alt_screen_active(terminal: GhosttyTerminal) -> bool {
+    terminal_mode_active(terminal, MODE_ALT_SCREEN_LEGACY)
+        || terminal_mode_active(terminal, MODE_ALT_SCREEN)
+        || terminal_mode_active(terminal, MODE_ALT_SCREEN_SAVE_CURSOR)
+}
+
+// Pre-packed DEC private modes the non-macOS renderers query. Keep the
 // numeric values synced with `modes.h`.
 pub const MODE_NORMAL_MOUSE: GhosttyMode = ghostty_mode(1000, false);
 pub const MODE_BUTTON_MOUSE: GhosttyMode = ghostty_mode(1002, false);
@@ -199,6 +215,12 @@ pub const MODE_ANY_MOUSE: GhosttyMode = ghostty_mode(1003, false);
 pub const MODE_X10_MOUSE: GhosttyMode = ghostty_mode(9, false);
 pub const MODE_SGR_MOUSE: GhosttyMode = ghostty_mode(1006, false);
 pub const MODE_ALT_SCROLL: GhosttyMode = ghostty_mode(1007, false);
+/// DEC private mode 47 — legacy alternate-screen buffer.
+pub const MODE_ALT_SCREEN_LEGACY: GhosttyMode = ghostty_mode(47, false);
+/// DEC private mode 1047 — alternate-screen buffer.
+pub const MODE_ALT_SCREEN: GhosttyMode = ghostty_mode(1047, false);
+/// DEC private mode 1049 — alternate-screen buffer with cursor save/restore.
+pub const MODE_ALT_SCREEN_SAVE_CURSOR: GhosttyMode = ghostty_mode(1049, false);
 /// DEC private mode 2004 — bracketed paste. Apps that set this want
 /// pasted text wrapped in `ESC[200~ … ESC[201~` so the line editor can
 /// distinguish typed-from-pasted input (e.g. to bypass auto-indent).
@@ -618,6 +640,7 @@ struct VtInner {
     scratch_rows: u16,
     scratch: Vec<Cell>,
     last_cursor: Cursor,
+    last_alt_screen: bool,
 }
 
 unsafe impl Send for VtInner {}
@@ -801,6 +824,7 @@ impl VtScreen {
                 scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
                 last_cursor: Cursor::default(),
+                last_alt_screen: false,
             })),
         })
     }
@@ -835,6 +859,11 @@ impl VtScreen {
         let mut inner = self.inner.lock();
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
+        let alt_screen = terminal_alt_screen_active(inner.terminal);
+        if alt_screen != inner.last_alt_screen {
+            inner.last_alt_screen = alt_screen;
+            inner.force_full_snapshot = true;
+        }
         inner.generation = inner.generation.wrapping_add(1);
     }
 
@@ -1217,13 +1246,7 @@ impl VtScreen {
     /// or the mode isn't set. Never panics.
     pub fn mode_active(&self, mode: GhosttyMode) -> bool {
         let inner = self.inner.lock();
-        if inner.terminal.is_null() {
-            return false;
-        }
-        let mut on: bool = false;
-        // SAFETY: terminal valid; `on` is a 1-byte C `_Bool`.
-        let rc = unsafe { ghostty_terminal_mode_get(inner.terminal, mode, &mut on) };
-        rc == 0 && on
+        terminal_mode_active(inner.terminal, mode)
     }
 }
 
