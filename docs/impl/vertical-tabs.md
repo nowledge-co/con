@@ -45,7 +45,7 @@ Naming priority becomes:
 
 The engine lives in `con-core::tab_summary` and is constructed via `AgentHarness::tab_summary_engine()` — same `suggestion_agent_config()` the inline shell completions use, gated by the same `agent.suggestion_model.enabled` toggle. Users who turned suggestions off get **no extra LLM traffic** for tab labels.
 
-**Prompt contract.** The model is told to return one line `LABEL|ICON` where `LABEL` is 1–3 words Title Case (no emoji, no quotes, no "tab" in the name) and `ICON` is one of the six closed-set keywords: `terminal | code | pulse | book | file | globe`. Anything that doesn't parse cleanly is dropped — the row falls back to the heuristic name and we never silently render garbage.
+**Prompt contract.** The model is told to return a JSON object like `{"label":"...","icon":"..."}` where `label` is 1–3 words Title Case (no emoji, no quotes, no "tab" in the name) and `icon` is one of the six closed-set keywords: `terminal | code | pulse | book-open | file-code | globe`. A tolerant bracket-balanced JSON extractor recovers fenced or prose-wrapped answers. Anything that doesn't parse cleanly is dropped — the row falls back to the heuristic name and we never silently render garbage.
 
 **Throttling.** Per-tab cache keyed on `(cwd, top-3-recent-commands, title)` so we don't re-ask while context hasn't moved. At most one in-flight request per tab. At most one request per 5 s per tab as a budget guard against chatty PROMPT_COMMAND cwd updates.
 
@@ -80,18 +80,19 @@ The engine lives in `con-core::tab_summary` and is constructed via `AgentHarness
 - **Three states** in vertical mode:
   - **Collapsed (default).** Narrow icon rail (~44 px). Per-tab
     terminal-prompt icon stacked vertically, active pill highlighted
-    with `theme.background`, needs-attention dot in the corner. `+`
-    button at the top, sidebar-toggle icon at the bottom.
-  - **Hover-peek.** When the cursor enters the rail in collapsed
-    mode, a panel (~220 px) floats out as an absolute overlay ABOVE
-    the terminal pane. Mouse leave returns to the rail. **The peek
-    overlay does not displace the terminal area** — terminal columns
-    don't reflow when the user is just glancing at tab titles. This
-    matches Chrome's behavior.
-  - **Pinned.** Click the sidebar-toggle in either the rail (bottom)
-    or the panel header (top-right) to pin the panel open. The panel
-    stops floating and starts taking 220 px out of the terminal
-    area's flex row. Pinned state persists across restarts via
+    with an opacity-based elevated fill, needs-attention dot in the
+    corner. A `caret-line-right` unfold control and `+` button sit at
+    the top.
+  - **Hover card.** When the cursor enters a rail icon in collapsed
+    mode, a compact card (~240 px) floats beside the rail as an
+    absolute overlay ABOVE the terminal pane. Mouse leave returns to
+    the rail. **The card does not displace the terminal area** —
+    terminal columns don't reflow when the user is just glancing at tab
+    titles.
+  - **Pinned.** Click the unfold control in the rail or the
+    sidebar-toggle in the panel header (top-right) to pin the panel
+    open. The panel stops floating and starts taking 220 px out of the
+    terminal area's flex row. Pinned state persists across restarts via
     `vertical_tabs_pinned` in `~/.local/share/con/session.json`.
 - **Interactions:** click activates a tab; middle-click closes it;
   pinned-mode rows expose a hover-only `X` close affordance. The `+`
@@ -107,11 +108,11 @@ crates/con-core/src/session.rs
   + Session.vertical_tabs_pinned: bool (persists pin state)
 
 crates/con-app/src/sidebar.rs       (renamed conceptually: VerticalTabsPanel)
-  - SessionEntry { name, is_ssh, needs_attention }  ← was missing needs_attention
-  - SessionSidebar with PanelMode = Collapsed | Pinned + bool hover_peek
+  - SessionEntry { id, name, subtitle, icon, needs_attention, pane_count }
+  - SessionSidebar with PanelMode = Collapsed | Pinned + cursor-anchored hover card
   - render() returns the in-flow piece (rail or pinned body)
-  - render_peek_overlay(cx) returns Option<AnyElement> for the
-    floating overlay element (used only in collapsed-with-hover state)
+  - render_hover_card_overlay(window, cx) returns Option<AnyElement>
+    for the floating card element (used only in collapsed-with-hover state)
   + SidebarCloseTab event (per-tab close from the panel)
   + surface_tone(theme, intensity) helper — blends a desaturated
     extreme-luminance overlay into theme.background so the panel
@@ -123,9 +124,9 @@ crates/con-app/src/workspace.rs
   - horizontal_tabs_visible() / vertical_tabs_active() helpers
   - sync_tab_strip_motion now respects orientation (horizontal strip
     collapses in vertical mode regardless of tab count)
-  - main_area is .relative(); vertical-tabs sidebar prepended; peek
-    overlay appended last so it stacks above the terminal pane
-  - on_settings_saved propagates orientation changes; observe(sidebar)
+  - main_area is .relative(); vertical-tabs sidebar prepended; hover
+    card appended last so it stacks above the terminal pane
+  - on_tabs_orientation_changed propagates orientation changes; observe(sidebar)
     saves session whenever pin state changes
   - sync_sidebar now forwards needs_attention
   - Pane drag-resize math subtracts the vertical-tabs panel width
@@ -144,7 +145,7 @@ subtree. If it does, GPUI paints it as an absolute child of a
 ~30% effective alpha through the translucent terminal bg, looking
 washed out.
 
-Instead the overlay is built by `SessionSidebar::render_peek_overlay()`
+Instead the overlay is built by `SessionSidebar::render_hover_card_overlay()`
 and appended by the workspace as the last child of `main_area` (which
 is `.relative()`). That makes it a sibling of the terminal pane and
 the agent panel, painted strictly after both, and therefore stacked
@@ -157,26 +158,27 @@ full debug story.
 
 Follows `docs/design/con-design-language.md` and `CLAUDE.md`:
 
-- **No borders.** Surface separation comes from `surface_tone`
-  (foreground blended into background at 8 / 14 / 18% intensity for
-  rail / body hover / panel body). The 1-px strip on the panel's
-  right edge is itself an opacity-based fill, not a CSS border.
+- **No borders.** Surface separation comes from theme-derived
+  opacity fills, including the user-configured UI opacity. The 1-px
+  strip on the panel's right edge is itself an opacity-based fill, not
+  a CSS border.
 - **No shadows.** Same opacity-based approach.
-- **Mono font** (Ioskeley Mono) for tab labels — terminal chrome
-  consistency with the existing horizontal strip.
+- **System font** for tab labels; mono font is reserved for technical
+  subtitles like `~/proj/path` and `user@host`.
 - **Phosphor icons only.** Used: `terminal.svg` (active tab pill),
-  `globe.svg` (SSH session pill, future), `plus.svg` (new tab),
-  `sidebar-simple.svg` (collapse/expand toggle), `x.svg` (close).
-- **Mono-by-context.** Terminal-chrome surfaces (rail, panel header,
-  tab labels) use the mono font; settings panel and agent panel
-  remain on the system UI font.
+  `globe.svg` (SSH session pill), `plus.svg` (new tab),
+  `caret-line-right.svg` (rail unfold), `sidebar-simple.svg`
+  (panel collapse), `x.svg` (close).
+- **Mono-by-context.** Terminal-path and remote-host details use the
+  mono font; settings panel, agent panel, and tab names remain on the
+  system UI font.
 
 ## Validation
 
 - `cargo check --workspace --all-targets` clean (including
   `RUSTFLAGS="-D warnings"`).
-- `cargo test --workspace`: 127 tests pass, 0 fail (119 baseline +
-  8 in `con-core::tab_summary::tests`).
+- `cargo test --workspace` passes, including the `con-core::tab_summary`
+  parser/cache/reorder coverage.
 - Visual proof on Linux (XFCE / X11 / `llvmpipe` Vulkan): captured
   during development but not committed — `docs/**/*.png` is
   gitignored. Screenshots live in PR comments instead so they don't
@@ -190,7 +192,8 @@ Follows `docs/design/con-design-language.md` and `CLAUDE.md`:
 
 ## Not in scope (follow-ups)
 
-- Drag-to-reorder tabs (neither orientation supports it today).
+- Drag-to-reorder for the horizontal tab strip. Vertical rail and
+  pinned-panel reordering ship in this PR.
 - Tab groups / collapsed groups / pinned tabs (Chrome's other
   vertical-tabs features).
 - Hover-peek on the right side for a future vertical agent-panel

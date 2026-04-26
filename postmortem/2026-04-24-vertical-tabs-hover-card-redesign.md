@@ -8,7 +8,7 @@ Branch: `vertical-tab`
 
 The first iteration of vertical tabs auto-expanded a 240 px panel on
 rail hover (Microsoft Edge–style). After actually using it for a
-session-and-a-half, two problems surfaced:
+session-and-a-half, a few problems surfaced:
 
 1. **Drag from collapsed broke.** User clicks a rail icon to drag,
    cursor leaves the icon to start the drag, the peek panel folds,

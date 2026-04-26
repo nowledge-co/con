@@ -69,12 +69,15 @@ const RAIL_ICON_SIZE: f32 = 32.0;
 /// Vertical gap between rail icons. Used to compute the icon's
 /// y-center for hover-card anchoring.
 const RAIL_ICON_GAP: f32 = 2.0;
+const RAIL_TOP_CONTROLS_HEIGHT: f32 =
+    28.0 + RAIL_ICON_GAP + 28.0 + RAIL_ICON_GAP + 5.0 + RAIL_ICON_GAP;
 
 /// Cubic ease-out feel for the panel width animation.
 const PANEL_TWEEN: Duration = Duration::from_millis(220);
 
 /// One row in the vertical tabs panel.
 pub struct SessionEntry {
+    pub id: u64,
     pub name: String,
     pub subtitle: Option<String>,
     pub is_ssh: bool,
@@ -97,6 +100,7 @@ enum PanelMode {
 /// Per-tab transient state — the inline-rename input.
 struct RenameState {
     index: usize,
+    session_id: u64,
     input: Entity<InputState>,
 }
 
@@ -152,6 +156,14 @@ pub struct SessionSidebar {
     /// Without that "after-last" affordance there's no way to drag
     /// a tab to the bottom of the list.
     drop_slot: Option<usize>,
+    /// Last rail bounds origin observed during a drag. GPUI's rail
+    /// `on_drop` gives us the window mouse position but not the
+    /// element bounds, so we cache this from `on_drag_move`.
+    rail_drag_origin_y: Option<f32>,
+    /// Effective UI opacity from the workspace appearance settings.
+    /// Lower values let the window/terminal backdrop treatment show
+    /// through, matching the rest of con's chrome.
+    ui_opacity: f32,
 }
 
 pub struct SidebarSelect {
@@ -163,6 +175,7 @@ pub struct SidebarCloseTab {
 }
 pub struct SidebarRename {
     pub index: usize,
+    pub session_id: u64,
     /// `None` clears the user override and falls back to smart naming.
     pub label: Option<String>,
 }
@@ -191,11 +204,26 @@ impl SessionSidebar {
             mode: PanelMode::Collapsed,
             sessions: Vec::new(),
             active_session: 0,
-            leading_top_pad: if cfg!(target_os = "macos") { 36.0 } else { 6.0 },
+            // The workspace top bar already reserves the macOS
+            // traffic-light/titlebar area before the sidebar is
+            // rendered. Keep only a small visual inset here; a
+            // platform titlebar inset creates a dead band above the
+            // vertical-tab controls.
+            leading_top_pad: 6.0,
             width_motion: MotionValue::new(0.0),
             rename: None,
             hovered_rail: None,
             drop_slot: None,
+            rail_drag_origin_y: None,
+            ui_opacity: 0.92,
+        }
+    }
+
+    pub fn set_ui_opacity(&mut self, opacity: f32, cx: &mut Context<Self>) {
+        let opacity = opacity.clamp(0.55, 0.98);
+        if (self.ui_opacity - opacity).abs() > f32::EPSILON {
+            self.ui_opacity = opacity;
+            cx.notify();
         }
     }
 
@@ -241,7 +269,7 @@ impl SessionSidebar {
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = &self.rename {
-            if state.index >= sessions.len() {
+            if state.index >= sessions.len() || sessions[state.index].id != state.session_id {
                 self.rename = None;
             }
         }
@@ -254,6 +282,7 @@ impl SessionSidebar {
         if index >= self.sessions.len() {
             return;
         }
+        let session_id = self.sessions[index].id;
         let initial = self.sessions[index].name.clone();
         let input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
@@ -272,7 +301,11 @@ impl SessionSidebar {
                     } else {
                         Some(value.to_string())
                     };
-                    cx.emit(SidebarRename { index, label });
+                    cx.emit(SidebarRename {
+                        index,
+                        session_id,
+                        label,
+                    });
                     this.rename = None;
                     cx.notify();
                 }
@@ -282,7 +315,11 @@ impl SessionSidebar {
         .detach();
 
         input.update(cx, |state, cx| state.focus(window, cx));
-        self.rename = Some(RenameState { index, input });
+        self.rename = Some(RenameState {
+            index,
+            session_id,
+            input,
+        });
         cx.notify();
     }
 
@@ -306,7 +343,7 @@ impl SessionSidebar {
 
     fn render_rail(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
-        let rail_bg = surface_tone(theme, 0.10);
+        let rail_bg = sidebar_surface(theme, self.ui_opacity, 0.035);
         let session_count = self.sessions.len();
         let mut rail = div()
             .id("vertical-tabs-rail")
@@ -337,6 +374,7 @@ impl SessionSidebar {
             // is squarely on a pill; this fallback covers the gaps.
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    this.rail_drag_origin_y = Some(f32::from(event.bounds.origin.y));
                     if let Some(slot) =
                         rail_slot_for_cursor(event, session_count, this.leading_top_pad)
                     {
@@ -358,16 +396,25 @@ impl SessionSidebar {
                 let to = this.drop_slot.or_else(|| {
                     rail_slot_for_cursor_position(
                         window.mouse_position(),
+                        this.rail_drag_origin_y,
                         session_count,
                         this.leading_top_pad,
                     )
                 });
                 this.drop_slot = None;
+                this.rail_drag_origin_y = None;
                 if let Some(to) = to {
                     cx.emit(SidebarReorder { from, to });
                 }
                 cx.notify();
             }))
+            .child(rail_icon_button(
+                "vertical-tabs-rail-expand",
+                "phosphor/caret-line-right.svg",
+                theme.muted_foreground.opacity(0.78),
+                theme,
+                cx.listener(|this, _, _, cx| this.toggle_pinned(cx)),
+            ))
             .child(rail_icon_button(
                 "vertical-tabs-rail-new",
                 "phosphor/plus.svg",
@@ -385,8 +432,8 @@ impl SessionSidebar {
 
         for (i, session) in self.sessions.iter().enumerate() {
             let is_active = i == self.active_session;
-            let active_bg = surface_tone(theme, 0.22);
-            let hover_bg = surface_tone(theme, 0.08);
+            let active_bg = elevated_surface(theme, self.ui_opacity);
+            let hover_bg = sidebar_surface(theme, self.ui_opacity, 0.075);
             // Drop indicator — a 2px primary-color line above this
             // pill if drop_slot == i, or below the last pill if
             // drop_slot == N. Both states share the same indicator
@@ -476,14 +523,7 @@ impl SessionSidebar {
             rail = rail.child(pill);
         }
 
-        rail = rail.child(div().flex_1());
-        rail.child(rail_icon_button(
-            "vertical-tabs-rail-expand",
-            "phosphor/sidebar-simple.svg",
-            theme.muted_foreground.opacity(0.7),
-            theme,
-            cx.listener(|this, _, _, cx| this.toggle_pinned(cx)),
-        ))
+        rail.child(div().flex_1())
     }
 
     /// Floating hover card shown next to the hovered rail icon.
@@ -510,14 +550,15 @@ impl SessionSidebar {
         }
         let session = self.sessions.get(i)?;
         let theme = cx.theme();
-        let bg = surface_tone(theme, 0.22);
-        let edge = surface_tone(theme, 0.32);
+        let bg = elevated_surface(theme, self.ui_opacity);
+        let edge = sidebar_surface(theme, self.ui_opacity, 0.10);
 
         // Anchor the card vertically on the cursor — its row IS the
         // icon under the cursor by construction.
         let cursor = window.mouse_position();
         let card_height = if session.subtitle.is_some() { 64.0 } else { 44.0 };
-        let top = (f32::from(cursor.y) - card_height / 2.0).max(self.leading_top_pad);
+        let min_top = self.leading_top_pad + RAIL_TOP_CONTROLS_HEIGHT + 8.0;
+        let top = (f32::from(cursor.y) - card_height / 2.0).max(min_top);
 
         let name_color = theme.foreground;
         let sub_color = theme.muted_foreground.opacity(0.65);
@@ -621,7 +662,7 @@ impl SessionSidebar {
         let toggle_btn;
         {
             let theme = cx.theme();
-            body_bg = surface_tone(theme, 0.18);
+            body_bg = sidebar_surface(theme, self.ui_opacity, 0.045);
             header_color = theme.muted_foreground.opacity(0.55);
             header_font = theme.font_family.clone();
             new_btn = panel_icon_button(
@@ -642,22 +683,29 @@ impl SessionSidebar {
             );
         }
 
+        let header_top = self.leading_top_pad.max(0.0);
         let header = div()
             .flex()
-            .items_center()
-            .justify_between()
-            .h(px(36.0))
-            .px(px(12.0))
-            .pt(px(self.leading_top_pad.max(0.0)))
+            .flex_col()
+            .h(px(header_top + 42.0))
+            .pt(px(header_top))
             .child(
                 div()
-                    .text_size(px(10.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(header_color)
-                    .font_family(header_font)
-                    .child(format!("{} TABS", self.sessions.len())),
-            )
-            .child(div().flex().gap(px(2.0)).child(new_btn).child(toggle_btn));
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(px(34.0))
+                    .px(px(12.0))
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(header_color)
+                            .font_family(header_font)
+                            .child(format!("{} TABS", self.sessions.len())),
+                    )
+                    .child(div().flex().gap(px(2.0)).child(new_btn).child(toggle_btn)),
+            );
 
         let total = self.sessions.len();
         // Body-level drag fallback: per-row drag_move + on_drop only
@@ -698,7 +746,7 @@ impl SessionSidebar {
                     // where the last row could plausibly be —
                     // `total * ROW_HEIGHT + gaps` from the top of
                     // the list bounds.
-                    let approx_row_h = ROW_HEIGHT_NO_SUBTITLE;
+                    let approx_row_h = ROW_HEIGHT;
                     let last_row_bottom_estimate = f32::from(event.bounds.origin.y)
                         + (total as f32) * (approx_row_h + 2.0);
                     if f32::from(event.event.position.y) >= last_row_bottom_estimate
@@ -729,6 +777,7 @@ impl SessionSidebar {
 
         for i in 0..total {
             let session_clone = SessionEntry {
+                id: self.sessions[i].id,
                 name: self.sessions[i].name.clone(),
                 subtitle: self.sessions[i].subtitle.clone(),
                 is_ssh: self.sessions[i].is_ssh,
@@ -892,11 +941,11 @@ impl SessionSidebar {
             });
 
         let row_bg = if is_active {
-            theme.background
+            elevated_surface(theme, self.ui_opacity)
         } else {
             gpui::transparent_black()
         };
-        let hover_bg = surface_tone(theme, 0.10);
+        let hover_bg = sidebar_surface(theme, self.ui_opacity, 0.075);
 
         let dragged = DraggedTab {
             index: i,
@@ -995,10 +1044,11 @@ impl SessionSidebar {
             }))
             .context_menu({
                 let total = total;
+                let session_id = session.id;
                 let has_user_label = session.has_user_label;
                 let weak = cx.weak_entity();
                 move |menu, _window, _cx| {
-                    build_row_context_menu(menu, weak.clone(), i, total, has_user_label)
+                    build_row_context_menu(menu, weak.clone(), i, session_id, total, has_user_label)
                 }
             })
             .child(drop_line_above)
@@ -1058,6 +1108,16 @@ fn surface_tone(theme: &gpui_component::Theme, intensity: f32) -> Hsla {
     theme.background.blend(over)
 }
 
+fn sidebar_surface(theme: &gpui_component::Theme, opacity: f32, intensity: f32) -> Hsla {
+    let mut color = surface_tone(theme, intensity);
+    color.a = opacity.clamp(0.55, 0.98);
+    color
+}
+
+fn elevated_surface(theme: &gpui_component::Theme, opacity: f32) -> Hsla {
+    theme.background.opacity((opacity + 0.06).min(0.98))
+}
+
 /// 2-px horizontal drop indicator drawn above (`above=true`) or
 /// below the rail pill it's attached to. Used during a drag to mark
 /// the slot the dragged tab will land in if the user releases now.
@@ -1107,14 +1167,17 @@ fn rail_slot_for_cursor(
     rail_slot_from_local_y(local_y, session_count, leading_top_pad)
 }
 
-/// On-drop fallback — we don't have the rail's bounds here, only
-/// the cursor's window-coords position, so use absolute y.
+/// On-drop fallback — GPUI gives us the cursor's window-coords
+/// position here, so subtract the rail origin cached during
+/// `on_drag_move` before applying the rail-local layout math.
 fn rail_slot_for_cursor_position(
     cursor: gpui::Point<gpui::Pixels>,
+    rail_origin_y: Option<f32>,
     session_count: usize,
     leading_top_pad: f32,
 ) -> Option<usize> {
-    rail_slot_from_local_y(f32::from(cursor.y), session_count, leading_top_pad)
+    let local_y = f32::from(cursor.y) - rail_origin_y?;
+    rail_slot_from_local_y(local_y, session_count, leading_top_pad)
 }
 
 fn rail_slot_from_local_y(local_y: f32, session_count: usize, leading_top_pad: f32) -> Option<usize> {
@@ -1123,10 +1186,11 @@ fn rail_slot_from_local_y(local_y: f32, session_count: usize, leading_top_pad: f
     }
     // Mirror the rail layout in render_rail:
     //   pt(leading_top_pad)
+    //   + expand button (28 px) + RAIL_ICON_GAP
     //   + new-tab button (28 px) + RAIL_ICON_GAP
     //   + separator h(1) + my(2)*2 = 5 px + RAIL_ICON_GAP
     //   + i * (RAIL_ICON_SIZE + RAIL_ICON_GAP)
-    let header = leading_top_pad + 28.0 + RAIL_ICON_GAP + 5.0 + RAIL_ICON_GAP;
+    let header = leading_top_pad + RAIL_TOP_CONTROLS_HEIGHT;
     let stride = RAIL_ICON_SIZE + RAIL_ICON_GAP;
     if local_y < header {
         return Some(0);
@@ -1154,7 +1218,7 @@ fn rail_icon_button<F>(
 where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
-    let hover_bg = surface_tone(theme, 0.10);
+    let hover_bg = surface_tone(theme, 0.065);
     div()
         .id(id)
         .size(px(28.0))
@@ -1177,7 +1241,7 @@ fn panel_icon_button<F>(
 where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
-    let hover_bg = surface_tone(theme, 0.10);
+    let hover_bg = surface_tone(theme, 0.065);
     div()
         .id(id)
         .size(px(24.0))
@@ -1200,6 +1264,7 @@ fn build_row_context_menu(
     menu: PopupMenu,
     weak: WeakEntity<SessionSidebar>,
     index: usize,
+    session_id: u64,
     total: usize,
     has_user_label: bool,
 ) -> PopupMenu {
@@ -1228,6 +1293,7 @@ fn build_row_context_menu(
                     entity.update(cx, |_, cx| {
                         cx.emit(SidebarRename {
                             index,
+                            session_id,
                             label: None,
                         })
                     });
@@ -1259,7 +1325,7 @@ fn build_row_context_menu(
                     entity.update(cx, |_, cx| {
                         cx.emit(SidebarReorder {
                             from: index,
-                            to: index + 1,
+                            to: index + 2,
                         })
                     });
                 }
@@ -1298,7 +1364,7 @@ fn panel_icon_button_small<F>(
 where
     F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
-    let hover_bg = surface_tone(theme, 0.16);
+    let hover_bg = surface_tone(theme, 0.08);
     div()
         .id(id)
         .size(px(20.0))

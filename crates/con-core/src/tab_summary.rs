@@ -18,11 +18,11 @@
 //!
 //! Contract with the model
 //! ---
-//! The prompt forces a single-line `LABEL|ICON` format with `ICON`
-//! constrained to one of the six [`TabIconKind`] variants. Anything
-//! that doesn't parse cleanly is dropped on the floor — the panel
-//! falls back to the heuristic name and we never silently render a
-//! garbage label.
+//! The prompt asks for a JSON object shaped like
+//! `{"label":"...","icon":"..."}` with `icon` constrained to one of
+//! the six [`TabIconKind`] variants. Anything that doesn't parse
+//! cleanly is dropped on the floor — the panel falls back to the
+//! heuristic name and we never silently render a garbage label.
 //!
 //! Throttling
 //! ---
@@ -214,10 +214,13 @@ impl TabSummaryEngine {
             // Use the host's first label as the short name (e.g.
             // `prod-1.example.com` -> `prod-1`).
             let short = host.split('.').next().unwrap_or(host).to_string();
-            callback(TabSummary {
+            let summary = TabSummary {
                 tab_id: req.tab_id,
                 label: truncate_label(&short),
                 icon: TabIconKind::Globe,
+            };
+            self.runtime.spawn(async move {
+                callback(summary);
             });
             return;
         }
@@ -490,39 +493,47 @@ async fn request_summary(
 }
 
 /// Tolerant JSON extractor for LLM output. Walks the response with
-/// a string-aware bracket-balance scanner and parses the first
+/// a string-aware bracket-balance scanner and parses the first valid
 /// `{...}` object it finds. This naturally skips markdown code
-/// fences (```json … ```), reasoning preamble, and trailing
-/// commentary that models commonly emit around the JSON answer.
+/// fences (```json … ```), reasoning preamble, malformed brace
+/// examples, and trailing commentary that models commonly emit around
+/// the JSON answer.
 fn parse_summary_json(raw: &str) -> Option<TabSummaryJson> {
     let bytes = raw.as_bytes();
-    let start = raw.find('{')?;
-    let mut depth = 0i32;
-    let mut in_string = false;
-    let mut escape = false;
-    let mut end = None;
-    for (i, &b) in bytes[start..].iter().enumerate() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        match b {
-            b'\\' if in_string => escape = true,
-            b'"' => in_string = !in_string,
-            b'{' if !in_string => depth += 1,
-            b'}' if !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    end = Some(start + i + 1);
-                    break;
-                }
+    let mut cursor = 0;
+    while let Some(relative_start) = raw[cursor..].find('{') {
+        let start = cursor + relative_start;
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut escape = false;
+        let mut end = None;
+        for (i, &b) in bytes[start..].iter().enumerate() {
+            if escape {
+                escape = false;
+                continue;
             }
-            _ => {}
+            match b {
+                b'\\' if in_string => escape = true,
+                b'"' => in_string = !in_string,
+                b'{' if !in_string => depth += 1,
+                b'}' if !in_string => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(start + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
         }
+        let end = end?;
+        let json = &raw[start..end];
+        if let Ok(parsed) = serde_json::from_str(json) {
+            return Some(parsed);
+        }
+        cursor = end;
     }
-    let end = end?;
-    let json = &raw[start..end];
-    serde_json::from_str(json).ok()
+    None
 }
 
 #[cfg(test)]
@@ -558,6 +569,15 @@ mod tests {
         let raw = "Sure, here is the answer:\n{\"label\": \"Test Run\", \"icon\": \"terminal\"}\nLet me know if you need more.";
         let v = parse_summary_json(raw).unwrap();
         assert_eq!(v.label, "Test Run");
+        assert_eq!(v.icon, "terminal");
+    }
+
+    #[test]
+    fn parse_json_skips_invalid_brace_block_before_answer() {
+        let raw =
+            "Use {label, icon} as fields.\n{\"label\": \"Build\", \"icon\": \"terminal\"}";
+        let v = parse_summary_json(raw).unwrap();
+        assert_eq!(v.label, "Build");
         assert_eq!(v.icon, "terminal");
     }
 
