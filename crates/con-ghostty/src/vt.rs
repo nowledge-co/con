@@ -31,7 +31,7 @@
 use std::os::raw::{c_int, c_void};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
@@ -40,6 +40,13 @@ fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
+fn perf_trace_verbose() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE_VERBOSE").is_some_and(|v| !v.is_empty() && v != "0")
     })
 }
 
@@ -1093,17 +1100,32 @@ impl VtScreen {
         };
 
         if let Some(started) = snapshot_started {
-            log::info!(
-                target: "con::perf",
-                "vt_snapshot rows={} cols={} dirty_rows={} full_redraw={} cells={} clone_ms={:.3} total_ms={:.3}",
-                rows,
-                cols,
-                snapshot.dirty_rows.len(),
-                full_redraw,
-                snapshot.cells.len(),
-                clone_elapsed_ms.unwrap_or_default(),
-                started.elapsed().as_secs_f64() * 1000.0
-            );
+            let total_ms = started.elapsed().as_secs_f64() * 1000.0;
+            static LAST_LOGGED_GENERATION: AtomicU64 = AtomicU64::new(u64::MAX);
+            let previous = LAST_LOGGED_GENERATION.load(Ordering::Relaxed);
+            let generation_changed = previous != snapshot.generation
+                && LAST_LOGGED_GENERATION
+                    .compare_exchange(
+                        previous,
+                        snapshot.generation,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok();
+            let should_log = perf_trace_verbose() || generation_changed || total_ms >= 2.0;
+            if should_log {
+                log::info!(
+                    target: "con::perf",
+                    "vt_snapshot rows={} cols={} dirty_rows={} full_redraw={} cells={} clone_ms={:.3} total_ms={:.3}",
+                    rows,
+                    cols,
+                    snapshot.dirty_rows.len(),
+                    full_redraw,
+                    snapshot.cells.len(),
+                    clone_elapsed_ms.unwrap_or_default(),
+                    total_ms
+                );
+            }
         }
 
         snapshot

@@ -826,6 +826,13 @@ fn perf_trace_enabled() -> bool {
     })
 }
 
+fn perf_trace_verbose() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE_VERBOSE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn log_render_profile(
     started: Option<Instant>,
@@ -847,6 +854,17 @@ fn log_render_profile(
     let Some(started) = started else {
         return;
     };
+    let total_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let should_log = perf_trace_verbose()
+        || outcome != "unchanged"
+        || needs_draw
+        || prefer_latest
+        || in_flight_before_submit > 0
+        || backlog
+        || total_ms >= 2.0;
+    if !should_log {
+        return;
+    }
     log::info!(
         target: "con::perf",
         "win_renderer generation={} rows={} cols={} prefer_latest={} needs_draw={} in_flight_before={} drain_target={:?} drained_ready={} backlog={} submitted_idx={:?} replaced_in_flight={} draw_ms={:.3} submit_ms={:.3} drain_ms={:.3} block_drain_ms={:.3} outcome={} source={} total_ms={:.3}",
@@ -867,7 +885,7 @@ fn log_render_profile(
         block_drain_ms,
         outcome,
         outcome_source,
-        started.elapsed().as_secs_f64() * 1000.0,
+        total_ms,
     );
 }
 

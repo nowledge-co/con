@@ -173,23 +173,30 @@ impl RenderSession {
                 .store(0, Ordering::Release);
         }
         if let Some(started) = prof_started {
+            let total_ms = started.elapsed().as_secs_f64() * 1000.0;
             let outcome_name = match &outcome {
                 RenderOutcome::Rendered(_) => "rendered",
                 RenderOutcome::Pending => "pending",
                 RenderOutcome::Unchanged => "unchanged",
             };
-            log::info!(
-                target: "con::perf",
-                "win_render_frame generation={} rows={} cols={} prefer_latest={} outcome={} snapshot_ms={:.3} render_ms={:.3} total_ms={:.3}",
-                snapshot.generation,
-                snapshot.rows,
-                snapshot.cols,
-                prefer_latest,
-                outcome_name,
-                snapshot_ms,
-                render_ms,
-                started.elapsed().as_secs_f64() * 1000.0,
-            );
+            let should_log = perf_trace_verbose()
+                || !matches!(outcome, RenderOutcome::Unchanged)
+                || prefer_latest
+                || total_ms >= 2.0;
+            if should_log {
+                log::info!(
+                    target: "con::perf",
+                    "win_render_frame generation={} rows={} cols={} prefer_latest={} outcome={} snapshot_ms={:.3} render_ms={:.3} total_ms={:.3}",
+                    snapshot.generation,
+                    snapshot.rows,
+                    snapshot.cols,
+                    prefer_latest,
+                    outcome_name,
+                    snapshot_ms,
+                    render_ms,
+                    total_ms,
+                );
+            }
         }
         Ok(outcome)
     }
@@ -514,6 +521,13 @@ fn perf_trace_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var_os("CON_GHOSTTY_PROFILE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
+fn perf_trace_verbose() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("CON_GHOSTTY_PROFILE_VERBOSE").is_some_and(|v| !v.is_empty() && v != "0")
     })
 }
 
