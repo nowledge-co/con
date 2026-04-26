@@ -76,7 +76,7 @@ Or download the DMG directly from [Releases](https://github.com/nowledge-co/con-
 curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 ```
 
-Same one-liner as macOS — `install.sh` detects the OS and routes to either the macOS DMG or the Linux tarball. Installs `con` into `~/.local/bin` and drops a `.desktop` entry into `~/.local/share/applications` so it shows up in your launcher. Or download `con-<version>-linux-x86_64.tar.gz` from the latest [Release](https://github.com/nowledge-co/con-terminal/releases).
+Or download `con-<version>-linux-x86_64.tar.gz` from the latest [Release](https://github.com/nowledge-co/con-terminal/releases).
 
 **Windows**
 
