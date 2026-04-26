@@ -1620,39 +1620,69 @@ impl AgentProvider {
             P: rig::agent::PromptHook<M> + 'static,
         {
             let mut stream = agent.stream_prompt(prompt.to_owned()).await;
-            // Accumulate visible text deltas as we go. The multi-turn
-            // FinalResponse already concatenates visible text, but
-            // some providers emit it with an empty `response` field
-            // when the text arrived only via per-chunk deltas — so
-            // we keep a backstop.
-            let mut accumulated = String::new();
+            // Accumulate visible content + reasoning content
+            // separately. Most models emit their answer to
+            // `content`; some reasoning models — Kimi K2.6 / k2-
+            // thinking, DeepSeek-R1 via openai-compatible — emit
+            // EVERYTHING (including the final answer) into
+            // `reasoning_content` and leave `content` empty. For
+            // short structured prompts like ours (LABEL|ICON, ≤30
+            // chars total), the right policy is: prefer `content`
+            // when present, fall back to `reasoning_content` when
+            // it's the only thing the model produced.
+            let mut visible_text = String::new();
+            let mut reasoning_text = String::new();
+            let mut final_response_text: Option<String> = None;
             while let Some(item) = stream.next().await {
                 match item {
-                    Ok(MultiTurnStreamItem::StreamAssistantItem(
-                        StreamedAssistantContent::Text(text),
-                    )) => {
-                        accumulated.push_str(&text.text);
-                    }
+                    Ok(MultiTurnStreamItem::StreamAssistantItem(content)) => match content {
+                        StreamedAssistantContent::Text(text) => {
+                            visible_text.push_str(&text.text);
+                        }
+                        StreamedAssistantContent::Reasoning(reasoning) => {
+                            // Full reasoning block — drain its
+                            // text payload into our reasoning
+                            // backstop.
+                            reasoning_text.push_str(&reasoning.display_text());
+                        }
+                        StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                            reasoning_text.push_str(&reasoning);
+                        }
+                        // Tool deltas / tool calls / user items
+                        // are irrelevant for these single-turn
+                        // structured prompts.
+                        _ => {}
+                    },
                     Ok(MultiTurnStreamItem::FinalResponse(fin)) => {
                         let resp = fin.response();
                         if !resp.is_empty() {
-                            return Ok(resp.to_string());
+                            final_response_text = Some(resp.to_string());
                         }
                         break;
                     }
-                    Ok(_) => {
-                        // Reasoning / tool deltas / tool calls /
-                        // user items — irrelevant for the
-                        // single-turn structured prompts that go
-                        // through this method.
-                    }
+                    Ok(_) => {}
                     Err(e) => {
                         return Err(anyhow::anyhow!("Completion error: {e}"));
                     }
                 }
             }
-            if !accumulated.is_empty() {
-                return Ok(accumulated);
+            if let Some(text) = final_response_text {
+                return Ok(text);
+            }
+            if !visible_text.is_empty() {
+                return Ok(visible_text);
+            }
+            if !reasoning_text.is_empty() {
+                // Reasoning-only models (Kimi K2.6 etc.) put their
+                // visible answer here. Caller's parser will reject
+                // anything that isn't well-formed, so this is safe
+                // even when the model genuinely thought out loud.
+                log::debug!(
+                    target: "con_agent::provider",
+                    "complete_with_options: using reasoning_content as final answer ({} chars) — content was empty",
+                    reasoning_text.len(),
+                );
+                return Ok(reasoning_text);
             }
             Err(anyhow::anyhow!(
                 "Completion error: streaming completion produced no visible text"
