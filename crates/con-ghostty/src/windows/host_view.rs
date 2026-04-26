@@ -76,7 +76,7 @@ pub struct MouseEventMods {
 }
 
 impl RenderSession {
-    const LOW_LATENCY_BURST_WINDOW: Duration = Duration::from_millis(100);
+    const LOW_LATENCY_BURST_WINDOW: Duration = Duration::from_millis(750);
 
     /// Build a renderer + VT parser + ConPTY child shell.
     ///
