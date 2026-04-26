@@ -5388,6 +5388,8 @@ impl ConWorkspace {
     fn focus_input_bar_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.input_bar_visible {
             self.input_bar_visible = true;
+            self.input_bar_motion
+                .set_target(1.0, std::time::Duration::from_millis(180));
             self.save_session(cx);
         }
         self.input_bar.focus_handle(cx).focus(window, cx);

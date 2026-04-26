@@ -31,7 +31,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed macOS IME English-mode commits in the terminal so direct ASCII input keeps the normal shell key path and does not disable shell ghost suggestions, while marked CJK composition still uses the IME text path. Buffered ASCII commits are now replayed as per-character key events instead of one synthetic multi-character key.
 
 **Keyboard**
-- Fixed the Input / Terminal toggle fallback so Cmd+I still lands on the bottom input bar if the agent-panel inline input has not initialized yet.
+- Fixed the Input / Terminal toggle fallback so Cmd+I never focuses a hidden input surface. If neither the agent-panel input nor the bottom input bar is visible, Cmd+I now reveals and focuses the bottom input bar.
 
 ## `v0.1.0-beta.39` - 2026-04-26
 
