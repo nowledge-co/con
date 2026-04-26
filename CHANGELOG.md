@@ -6,6 +6,11 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+### Fixed
+
+**Interface — macOS**
+- Reduced light-background flashes at fast chrome seams by masking agent-panel resize and bottom input-bar transitions with the active terminal background while those surfaces move.
+
 ------
 
 ## `v0.1.0-beta.40` - 2026-04-26

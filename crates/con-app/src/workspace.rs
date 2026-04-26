@@ -21,6 +21,7 @@ const TERMINAL_MIN_CONTENT_WIDTH: f32 = 360.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
+const MACOS_COMPOSITOR_SEAM_COVER: f32 = 6.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
@@ -603,6 +604,17 @@ impl ConWorkspace {
 
     fn elevated_ui_surface_opacity(&self) -> f32 {
         (self.ui_surface_opacity() + 0.02).min(0.98)
+    }
+
+    fn terminal_background_hsla(&self) -> Hsla {
+        let background = self.terminal_theme.background;
+        Rgba {
+            r: background.r as f32 / 255.0,
+            g: background.g as f32 / 255.0,
+            b: background.b as f32 / 255.0,
+            a: 1.0,
+        }
+        .into()
     }
 
     pub fn from_session(
@@ -6967,6 +6979,7 @@ impl Render for ConWorkspace {
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
+        let macos_compositor_seam_matte = self.terminal_background_hsla();
         let agent_panel_content_progress = ((agent_panel_progress - 0.16) / 0.84)
             .clamp(0.0, 1.0)
             .powf(0.9);
@@ -7650,27 +7663,51 @@ impl Render for ConWorkspace {
             .child(top_bar)
             .child(main_area);
 
-        if agent_panel_transitioning && agent_panel_progress > 0.01 {
+        if agent_panel_progress > 0.01
+            && (agent_panel_transitioning
+                || (cfg!(target_os = "macos") && self.agent_panel_drag.is_some()))
+        {
+            let (cover_width, cover_color, cover_right) = if cfg!(target_os = "macos") {
+                (
+                    MACOS_COMPOSITOR_SEAM_COVER,
+                    macos_compositor_seam_matte,
+                    (animated_panel_width - 1.0).max(0.0),
+                )
+            } else {
+                (
+                    CHROME_TRANSITION_SEAM_COVER,
+                    theme.background.opacity(elevated_ui_surface_opacity),
+                    animated_panel_width,
+                )
+            };
             root = root.child(
                 div()
                     .absolute()
                     .top(px(top_bar_height))
                     .bottom(px(43.0 * input_bar_progress))
-                    .right(px(animated_panel_width))
-                    .w(px(CHROME_TRANSITION_SEAM_COVER))
-                    .bg(theme.background.opacity(elevated_ui_surface_opacity)),
+                    .right(px(cover_right))
+                    .w(px(cover_width))
+                    .bg(cover_color),
             );
         }
 
         if input_bar_transitioning && input_bar_progress > 0.01 {
+            let (cover_height, cover_color) = if cfg!(target_os = "macos") {
+                (MACOS_COMPOSITOR_SEAM_COVER, macos_compositor_seam_matte)
+            } else {
+                (
+                    CHROME_TRANSITION_SEAM_COVER,
+                    theme.title_bar.opacity(ui_surface_opacity),
+                )
+            };
             root = root.child(
                 div()
                     .absolute()
                     .left_0()
                     .right_0()
                     .bottom(px(43.0 * input_bar_progress))
-                    .h(px(CHROME_TRANSITION_SEAM_COVER))
-                    .bg(theme.title_bar.opacity(ui_surface_opacity)),
+                    .h(px(cover_height))
+                    .bg(cover_color),
             );
         }
 
