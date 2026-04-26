@@ -145,10 +145,13 @@ pub struct SessionSidebar {
     /// The rail-icon index currently under the cursor. Drives the
     /// floating hover card. Cleared on rail mouse-leave.
     hovered_rail: Option<usize>,
-    /// Tab index the user is currently hovering as a drop target
-    /// while a `DraggedTab` is in flight. Resets once the drop
-    /// fires (or on the next render after the drag completes).
-    drop_target: Option<usize>,
+    /// Drop slot (0..=N) the user is currently hovering while a
+    /// `DraggedTab` is in flight. `0` = before the first row,
+    /// `N` = after the last row. The indicator line appears above
+    /// row `slot` for slot < N, and below row N-1 for slot == N.
+    /// Without that "after-last" affordance there's no way to drag
+    /// a tab to the bottom of the list.
+    drop_slot: Option<usize>,
 }
 
 pub struct SidebarSelect {
@@ -192,7 +195,7 @@ impl SessionSidebar {
             width_motion: MotionValue::new(0.0),
             rename: None,
             hovered_rail: None,
-            drop_target: None,
+            drop_slot: None,
         }
     }
 
@@ -334,11 +337,11 @@ impl SessionSidebar {
             // is squarely on a pill; this fallback covers the gaps.
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                    if let Some(target) =
-                        rail_row_for_cursor(event, session_count, this.leading_top_pad)
+                    if let Some(slot) =
+                        rail_slot_for_cursor(event, session_count, this.leading_top_pad)
                     {
-                        if this.drop_target != Some(target) {
-                            this.drop_target = Some(target);
+                        if this.drop_slot != Some(slot) {
+                            this.drop_slot = Some(slot);
                             this.hovered_rail = None;
                             cx.notify();
                         }
@@ -352,18 +355,15 @@ impl SessionSidebar {
             // to reorder, which is unforgiving on a 44-px rail.
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
                 let from = dragged.index;
-                let to = this
-                    .drop_target
-                    .or_else(|| {
-                        rail_row_for_cursor_position(
-                            window.mouse_position(),
-                            session_count,
-                            this.leading_top_pad,
-                        )
-                    })
-                    .unwrap_or(from);
-                this.drop_target = None;
-                if from != to {
+                let to = this.drop_slot.or_else(|| {
+                    rail_slot_for_cursor_position(
+                        window.mouse_position(),
+                        session_count,
+                        this.leading_top_pad,
+                    )
+                });
+                this.drop_slot = None;
+                if let Some(to) = to {
                     cx.emit(SidebarReorder { from, to });
                 }
                 cx.notify();
@@ -387,9 +387,14 @@ impl SessionSidebar {
             let is_active = i == self.active_session;
             let active_bg = surface_tone(theme, 0.22);
             let hover_bg = surface_tone(theme, 0.08);
-            let drop_bg = surface_tone(theme, 0.18);
-            let is_drop_target =
-                self.drop_target == Some(i) && cx.has_active_drag();
+            // Drop indicator — a 2px primary-color line above this
+            // pill if drop_slot == i, or below the last pill if
+            // drop_slot == N. Both states share the same indicator
+            // primitive; positioning is the only difference.
+            let show_indicator_above = self.drop_slot == Some(i) && cx.has_active_drag();
+            let show_indicator_below = i + 1 == session_count
+                && self.drop_slot == Some(session_count)
+                && cx.has_active_drag();
             let dragged = DraggedTab {
                 index: i,
                 label: session.name.clone().into(),
@@ -405,9 +410,7 @@ impl SessionSidebar {
                 .size(px(RAIL_ICON_SIZE))
                 .rounded(px(8.0))
                 .cursor_pointer()
-                .bg(if is_drop_target {
-                    drop_bg
-                } else if is_active {
+                .bg(if is_active {
                     active_bg
                 } else {
                     gpui::transparent_black()
@@ -435,35 +438,12 @@ impl SessionSidebar {
                         cx.notify();
                     }
                 }))
+                // Drag origin only — drag_move + drop live on the
+                // rail container so they cover gaps between pills
+                // and the slot above the first / below the last row.
                 .on_drag(dragged, |dragged, _offset, _window, cx| {
                     cx.new(|_| dragged.clone())
                 })
-                .on_drag_move::<DraggedTab>(cx.listener(
-                    move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                        // GPUI fires drag_move on EVERY listener of a
-                        // matching type — filter by element bounds.
-                        if !point_in_bounds(&event.event.position, &event.bounds) {
-                            return;
-                        }
-                        if this.drop_target != Some(i) {
-                            this.drop_target = Some(i);
-                            // Hide the hover card while a drag is in
-                            // flight — it would just clutter the
-                            // drop-target indicator.
-                            this.hovered_rail = None;
-                            cx.notify();
-                        }
-                    },
-                ))
-                .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
-                    let from = dragged.index;
-                    let to = i;
-                    this.drop_target = None;
-                    if from != to {
-                        cx.emit(SidebarReorder { from, to });
-                    }
-                    cx.notify();
-                }))
                 .child(
                     svg()
                         .path(session.icon)
@@ -486,21 +466,11 @@ impl SessionSidebar {
                         .bg(theme.primary),
                 );
             }
-            if is_drop_target {
-                // Primary-color tick on the leading edge so the drop
-                // target is unambiguous during a drag (the rail is
-                // too narrow for a horizontal indicator line of the
-                // kind the pinned panel uses).
-                pill = pill.child(
-                    div()
-                        .absolute()
-                        .left(px(-6.0))
-                        .top(px(8.0))
-                        .bottom(px(8.0))
-                        .w(px(3.0))
-                        .rounded(px(2.0))
-                        .bg(theme.primary),
-                );
+            if show_indicator_above {
+                pill = pill.child(rail_drop_indicator(theme, true));
+            }
+            if show_indicator_below {
+                pill = pill.child(rail_drop_indicator(theme, false));
             }
 
             rail = rail.child(pill);
@@ -535,7 +505,7 @@ impl SessionSidebar {
             return None;
         }
         let i = self.hovered_rail?;
-        if self.drop_target.is_some() {
+        if self.drop_slot.is_some() {
             return None;
         }
         let session = self.sessions.get(i)?;
@@ -700,7 +670,7 @@ impl SessionSidebar {
 
         let renaming_index = self.rename.as_ref().map(|r| r.index);
         let rename_input = self.rename.as_ref().map(|r| r.input.clone());
-        let drop_target = self.drop_target;
+        let drop_slot = self.drop_slot;
 
         let total = self.sessions.len();
         for i in 0..total {
@@ -718,7 +688,7 @@ impl SessionSidebar {
                 &session_clone,
                 renaming_index,
                 rename_input.clone(),
-                drop_target,
+                drop_slot,
                 total,
                 window,
                 cx,
@@ -744,7 +714,7 @@ impl SessionSidebar {
         session: &SessionEntry,
         renaming_index: Option<usize>,
         rename_input: Option<Entity<InputState>>,
-        drop_target: Option<usize>,
+        drop_slot: Option<usize>,
         total: usize,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -754,7 +724,13 @@ impl SessionSidebar {
 
         let is_active = i == self.active_session;
         let is_renaming = renaming_index == Some(i);
-        let is_drop_target = drop_target == Some(i) && drop_target != Some(self.active_session);
+        // Indicator above this row when drop_slot == i, and below
+        // the last row (i == total-1) when drop_slot == total. Slot
+        // semantics: K means "insert at index K"; slot N means "at
+        // the bottom".
+        let drop_above = drop_slot == Some(i) && cx.has_active_drag();
+        let drop_below =
+            i + 1 == total && drop_slot == Some(total) && cx.has_active_drag();
 
         let row_h = if session.subtitle.is_some() {
             ROW_HEIGHT
@@ -836,14 +812,26 @@ impl SessionSidebar {
         .invisible()
         .group_hover(row_group.clone(), |s| s.visible());
 
-        let drop_line = div()
+        let drop_line_above = div()
             .absolute()
             .left(px(8.0))
             .right(px(8.0))
             .top(px(-1.0))
             .h(px(2.0))
             .rounded(px(1.0))
-            .bg(if is_drop_target {
+            .bg(if drop_above {
+                theme.primary
+            } else {
+                gpui::transparent_black()
+            });
+        let drop_line_below = div()
+            .absolute()
+            .left(px(8.0))
+            .right(px(8.0))
+            .bottom(px(-1.0))
+            .h(px(2.0))
+            .rounded(px(1.0))
+            .bg(if drop_below {
                 theme.primary
             } else {
                 gpui::transparent_black()
@@ -929,19 +917,26 @@ impl SessionSidebar {
                     if !point_in_bounds(&event.event.position, &event.bounds) {
                         return;
                     }
-                    if this.drop_target != Some(i) {
-                        this.drop_target = Some(i);
+                    // Top half of row → drop slot = i (insert above
+                    // this row). Bottom half → drop slot = i + 1
+                    // (insert below). Without the bottom-half rule
+                    // the deepest slot reachable from row N-1 was
+                    // N-1, leaving no way to drag a tab to the
+                    // bottom of the list.
+                    let local_y = event.event.position.y - event.bounds.origin.y;
+                    let half = event.bounds.size.height / 2.0;
+                    let slot = if local_y < half { i } else { i + 1 };
+                    if this.drop_slot != Some(slot) {
+                        this.drop_slot = Some(slot);
                         cx.notify();
                     }
                 },
             ))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
                 let from = dragged.index;
-                let to = i;
-                this.drop_target = None;
-                if from != to {
-                    cx.emit(SidebarReorder { from, to });
-                }
+                let to = this.drop_slot.unwrap_or(i);
+                this.drop_slot = None;
+                cx.emit(SidebarReorder { from, to });
                 cx.notify();
             }))
             .context_menu({
@@ -952,7 +947,8 @@ impl SessionSidebar {
                     build_row_context_menu(menu, weak.clone(), i, total, has_user_label)
                 }
             })
-            .child(drop_line)
+            .child(drop_line_above)
+            .child(drop_line_below)
             .child(icon_stack)
             .child(label_block)
             .child(
@@ -971,8 +967,8 @@ impl Render for SessionSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Clear stale drop indicator after the drag completes — GPUI
         // doesn't expose an on_drag_end hook for the source element.
-        if self.drop_target.is_some() && !cx.has_active_drag() {
-            self.drop_target = None;
+        if self.drop_slot.is_some() && !cx.has_active_drag() {
+            self.drop_slot = None;
         }
         // Drive the width-tween animation frame.
         let _progress = self.width_motion.value(window);
@@ -1008,6 +1004,24 @@ fn surface_tone(theme: &gpui_component::Theme, intensity: f32) -> Hsla {
     theme.background.blend(over)
 }
 
+/// 2-px horizontal drop indicator drawn above (`above=true`) or
+/// below the rail pill it's attached to. Used during a drag to mark
+/// the slot the dragged tab will land in if the user releases now.
+fn rail_drop_indicator(theme: &gpui_component::Theme, above: bool) -> Div {
+    let bar = div()
+        .absolute()
+        .left(px(4.0))
+        .right(px(4.0))
+        .h(px(2.0))
+        .rounded(px(1.0))
+        .bg(theme.primary);
+    if above {
+        bar.top(px(-2.0))
+    } else {
+        bar.bottom(px(-2.0))
+    }
+}
+
 fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>) -> bool {
     p.x >= b.origin.x
         && p.x < b.origin.x + b.size.width
@@ -1015,11 +1029,19 @@ fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>
         && p.y < b.origin.y + b.size.height
 }
 
-/// Map the cursor's current y-position (during a rail drag) to the
-/// 0-based row index of the closest pill. Used so the user can drop
-/// anywhere in the rail's vertical column — including the 2-px gaps
-/// between pills — without losing the drop target.
-fn rail_row_for_cursor(
+/// Map the cursor's y-position during a rail drag to a drop slot
+/// `0..=N` where N == session_count. Slot K means "insert before
+/// row K" (so slot N means "after the last row"). The user can
+/// hover anywhere in the rail's vertical column — including the
+/// 2-px gaps between pills, the slot above the first pill, and the
+/// slot below the last pill — and get a meaningful drop target.
+///
+/// Splits each row's y-range in half: top half → slot K (above K),
+/// bottom half → slot K+1 (below K). That's what makes the
+/// "drag-to-last-position" gesture work — without the bottom-half
+/// rule, the deepest reachable slot was N-1 and there was no way
+/// to land below the last row.
+fn rail_slot_for_cursor(
     event: &gpui::DragMoveEvent<DraggedTab>,
     session_count: usize,
     leading_top_pad: f32,
@@ -1027,24 +1049,21 @@ fn rail_row_for_cursor(
     if !point_in_bounds(&event.event.position, &event.bounds) {
         return None;
     }
-    rail_row_for_cursor_position_in_bounds(
-        event.event.position,
-        event.bounds,
-        session_count,
-        leading_top_pad,
-    )
+    let local_y = f32::from(event.event.position.y - event.bounds.origin.y);
+    rail_slot_from_local_y(local_y, session_count, leading_top_pad)
 }
 
-/// Same idea, but called from `on_drop` where we don't get a
-/// `DragMoveEvent` — just the cursor position. The bounds aren't
-/// available there either, so we have to reconstruct the rail's row
-/// y-positions arithmetically. Returns `None` if the cursor isn't
-/// inside any plausible row band.
-fn rail_row_for_cursor_position(
+/// On-drop fallback — we don't have the rail's bounds here, only
+/// the cursor's window-coords position, so use absolute y.
+fn rail_slot_for_cursor_position(
     cursor: gpui::Point<gpui::Pixels>,
     session_count: usize,
     leading_top_pad: f32,
 ) -> Option<usize> {
+    rail_slot_from_local_y(f32::from(cursor.y), session_count, leading_top_pad)
+}
+
+fn rail_slot_from_local_y(local_y: f32, session_count: usize, leading_top_pad: f32) -> Option<usize> {
     if session_count == 0 {
         return None;
     }
@@ -1055,40 +1074,20 @@ fn rail_row_for_cursor_position(
     //   + i * (RAIL_ICON_SIZE + RAIL_ICON_GAP)
     let header = leading_top_pad + 28.0 + RAIL_ICON_GAP + 5.0 + RAIL_ICON_GAP;
     let stride = RAIL_ICON_SIZE + RAIL_ICON_GAP;
-    let y = f32::from(cursor.y);
-    if y < header {
-        return Some(0);
-    }
-    let raw = ((y - header) / stride).floor() as i64;
-    if raw < 0 {
-        return Some(0);
-    }
-    let idx = (raw as usize).min(session_count.saturating_sub(1));
-    Some(idx)
-}
-
-fn rail_row_for_cursor_position_in_bounds(
-    cursor: gpui::Point<gpui::Pixels>,
-    bounds: gpui::Bounds<gpui::Pixels>,
-    session_count: usize,
-    leading_top_pad: f32,
-) -> Option<usize> {
-    if session_count == 0 {
-        return None;
-    }
-    // Coordinate of the cursor relative to the rail's top edge.
-    let local_y = f32::from(cursor.y - bounds.origin.y);
-    let header = leading_top_pad + 28.0 + RAIL_ICON_GAP + 5.0 + RAIL_ICON_GAP;
-    let stride = RAIL_ICON_SIZE + RAIL_ICON_GAP;
     if local_y < header {
         return Some(0);
     }
-    let raw = ((local_y - header) / stride).floor() as i64;
-    if raw < 0 {
-        return Some(0);
+    let offset = local_y - header;
+    let row_f = offset / stride;
+    let row = (row_f.floor() as i64).max(0) as usize;
+    if row >= session_count {
+        return Some(session_count);
     }
-    let idx = (raw as usize).min(session_count.saturating_sub(1));
-    Some(idx)
+    // Within-row position: 0.0..1.0. < 0.5 → above this row,
+    // ≥ 0.5 → below this row (= above row+1).
+    let frac = row_f - row_f.floor();
+    let slot = if frac < 0.5 { row } else { row + 1 };
+    Some(slot.min(session_count))
 }
 
 fn rail_icon_button<F>(

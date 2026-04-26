@@ -361,7 +361,14 @@ async fn request_summary(
         req.cwd.as_deref().unwrap_or(""),
         req.title.as_deref().unwrap_or(""),
     );
-    let raw = match provider.complete(&prompt).await {
+    // Override the default `complete()` preamble — that one tells
+    // the model it's a shell-completion assistant, which fights
+    // the LABEL|ICON instruction in our user prompt and made every
+    // Moonshot/OpenAI-style provider return empty text. A short,
+    // task-aligned preamble fixes that.
+    let preamble = "You label terminal tabs in a developer's IDE-style sidebar. \
+                    Output exactly one line in the format LABEL|ICON. Nothing else.";
+    let raw = match provider.complete_with_options(&prompt, preamble, 64).await {
         Ok(s) => s,
         Err(e) => {
             log::warn!(
@@ -490,5 +497,84 @@ mod tests {
         let out = truncate_label(&long);
         assert!(out.chars().count() <= LABEL_MAX_LEN);
         assert!(out.ends_with('…'));
+    }
+
+    /// Tab reorder math (mirrors `on_sidebar_reorder` in workspace.rs).
+    ///
+    /// Slot semantics: `to ∈ 0..=tabs.len()`. Slot K with K < len
+    /// means "insert before row K"; slot len means "after the last
+    /// row". After `Vec::remove(from)` shifts subsequent indexes
+    /// down by one, the resulting insert index is:
+    ///   from < to → to - 1
+    ///   from > to → to
+    /// from == to or from + 1 == to → no-op (drop on the same row's
+    /// top-half slot, or the slot just below — same place).
+    ///
+    /// Kept here because workspace.rs is too large to compile as a
+    /// test target on this machine without bumping rustc's stack
+    /// (we hit that earlier). The helper itself is pure so testing
+    /// it next to other con-core logic is fine.
+    fn apply_reorder<T: Clone>(items: &mut Vec<T>, from: usize, to: usize) {
+        if from >= items.len() || to > items.len() {
+            return;
+        }
+        if from == to || from + 1 == to {
+            return;
+        }
+        let insert_at = if from < to { to - 1 } else { to };
+        let item = items.remove(from);
+        items.insert(insert_at, item);
+    }
+
+    #[test]
+    fn reorder_drag_to_top_from_middle() {
+        let mut v = vec!["a", "b", "c"];
+        apply_reorder(&mut v, 1, 0);
+        assert_eq!(v, vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn reorder_drag_to_top_from_bottom() {
+        let mut v = vec!["a", "b", "c"];
+        apply_reorder(&mut v, 2, 0);
+        assert_eq!(v, vec!["c", "a", "b"]);
+    }
+
+    #[test]
+    fn reorder_drag_to_bottom_from_top() {
+        // Slot 3 == "after the last row" — this is the case that
+        // didn't work before the half-row scheme.
+        let mut v = vec!["a", "b", "c"];
+        apply_reorder(&mut v, 0, 3);
+        assert_eq!(v, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn reorder_drag_to_bottom_from_middle() {
+        let mut v = vec!["a", "b", "c"];
+        apply_reorder(&mut v, 1, 3);
+        assert_eq!(v, vec!["a", "c", "b"]);
+    }
+
+    #[test]
+    fn reorder_self_drop_top_half_is_noop() {
+        let mut v = vec!["a", "b", "c"];
+        apply_reorder(&mut v, 1, 1);
+        assert_eq!(v, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn reorder_self_drop_bottom_half_is_noop() {
+        // Slot 2 from row 1 means "below row 1" — same place.
+        let mut v = vec!["a", "b", "c"];
+        apply_reorder(&mut v, 1, 2);
+        assert_eq!(v, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn reorder_drag_middle_to_one_below() {
+        let mut v = vec!["a", "b", "c", "d"];
+        apply_reorder(&mut v, 1, 3);
+        assert_eq!(v, vec!["a", "c", "b", "d"]);
     }
 }

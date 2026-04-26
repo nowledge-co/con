@@ -1545,18 +1545,38 @@ impl AgentProvider {
     }
 
     /// Lightweight completion — no tools, no history, just a simple prompt→response.
-    /// Used for suggestions and other quick completions.
+    /// Used for shell-suggestion-style quick completions. Hardcodes a
+    /// preamble that tells the model it's a shell completion bot.
     pub async fn complete(&self, prompt: &str) -> Result<String> {
+        self.complete_with_options(
+            prompt,
+            "You are a shell command completion assistant. Be extremely concise.",
+            100,
+        )
+        .await
+    }
+
+    /// Same plumbing as `complete`, but lets the caller pick its own
+    /// preamble + token budget. Use when the default
+    /// shell-completion preamble would mislead the model — e.g.
+    /// vertical-tabs uses this to ask for a `LABEL|ICON` summary;
+    /// the shell-completion preamble fights that prompt and most
+    /// providers respond with empty text.
+    pub async fn complete_with_options(
+        &self,
+        prompt: &str,
+        preamble: &str,
+        max_tokens: u64,
+    ) -> Result<String> {
         use rig::completion::Prompt;
 
         let kind = &self.config.provider;
-        let preamble = "You are a shell command completion assistant. Be extremely concise.";
 
         macro_rules! do_complete {
             ($client:expr) => {{
                 let mut builder = $client.agent(self.config.effective_model(kind));
                 builder = builder.preamble(preamble);
-                builder = builder.max_tokens(100);
+                builder = builder.max_tokens(max_tokens);
                 if let Some(temp) = self.config.temperature {
                     builder = builder.temperature(temp);
                 }

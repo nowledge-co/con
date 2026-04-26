@@ -3237,30 +3237,32 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         let from = event.from;
-        let target = event.to;
-        if from == target || from >= self.tabs.len() || target >= self.tabs.len() {
+        // Sidebar emits `to` as a *slot* in `0..=tabs.len()`:
+        //   slot K with K < tabs.len() == "insert before row K"
+        //   slot tabs.len()             == "after the last row"
+        // After `Vec::remove(from)` shifts every subsequent index
+        // down by one, the resulting insert index is:
+        //   from < to → to - 1 (the slot moved down with the rest)
+        //   from > to → to     (the slot was above the source)
+        //   from == to or from + 1 == to → no-op (drop on the same
+        //     row's top half, or the slot just below — same place).
+        let to = event.to;
+        if from >= self.tabs.len() || to > self.tabs.len() {
+            return;
+        }
+        if from == to || from + 1 == to {
             return;
         }
         let active_id = self.tabs[self.active_tab].summary_id;
-
-        // Semantics: `target` is the row index the user dropped ON
-        // (the row the cursor was hovering at mouseup). The dragged
-        // tab takes that row's slot, pushing it (and rows below)
-        // down. With Vec::remove + Vec::insert, the naive
-        // `insert(target, ...)` is wrong when `from < target`
-        // because removing the source first shifted every index
-        // above it down by one — so the dragged tab ends up one
-        // slot lower than the user expected. Correct by clamping:
-        //   from < target → insert at target - 1
-        //   from > target → insert at target
-        let insert_at = if from < target { target - 1 } else { target };
+        let insert_at = if from < to { to - 1 } else { to };
         let tab = self.tabs.remove(from);
+        // Vec::insert clamps via assert; insert_at is guaranteed
+        // ≤ tabs.len() (post-remove) by construction above.
         self.tabs.insert(insert_at, tab);
 
-        // Keep the active tab pointer pointing at the same `Tab`
-        // entity through the swap by re-locating it via the stable
-        // summary_id rather than fiddling with index arithmetic
-        // (which had its own off-by-one in the previous version).
+        // Re-locate the active tab by stable summary_id rather than
+        // index arithmetic (which had its own off-by-one in the
+        // previous version).
         if let Some(new_active) = self.tabs.iter().position(|t| t.summary_id == active_id) {
             self.active_tab = new_active;
         }
@@ -5311,6 +5313,16 @@ impl ConWorkspace {
             self.workspace_handle.clone(),
             cx,
         );
+        // Push the new tab into the vertical-tabs panel right away.
+        // Without this the new row only appears the next time some
+        // *other* event triggers sync_sidebar (a title change, a
+        // close, or a manual switch), which is jarring — the user
+        // hits Cmd+T and the panel stays at N tabs for several
+        // seconds. Same for the AI summarizer: kick off a request
+        // now so the new tab has a chance at a real label before
+        // the user starts typing.
+        self.sync_sidebar(cx);
+        self.request_tab_summaries(cx);
         self.save_session(cx);
         cx.notify();
     }
