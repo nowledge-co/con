@@ -953,9 +953,26 @@ fn main() {
     if std::env::var_os("RUST_LOG").is_none() {
         builder.filter_level(log::LevelFilter::Info);
     }
+    if let Some(path) = std::env::var_os("CON_LOG_FILE") {
+        match std::fs::File::create(&path) {
+            Ok(file) => {
+                builder.target(env_logger::Target::Pipe(Box::new(file)));
+                builder.write_style(env_logger::WriteStyle::Never);
+            }
+            Err(err) => {
+                eprintln!(
+                    "con: failed to open CON_LOG_FILE={}: {err}",
+                    std::path::Path::new(&path).display()
+                );
+            }
+        }
+    }
     builder.init();
 
     log::info!("con starting (pid {})", std::process::id());
+    if let Some(path) = std::env::var_os("CON_LOG_FILE") {
+        log::info!("logging to {}", std::path::Path::new(&path).display());
+    }
     apply_linux_platform_override();
 
     let config = con_core::Config::load().unwrap_or_default();

@@ -9,6 +9,7 @@ con is still pre-release, so entries may group related beta work while the produ
 ### Improved
 
 **Terminal — Windows Backend (preview)**
+- Added `CON_LOG_FILE` so Windows terminal profiling can write con's own logs directly to a file without PowerShell `*>` redirection, avoiding redirected standard handles that can steal shell output away from the ConPTY pane.
 - Fixed Windows ConPTY child process creation so shells do not inherit con's redirected stdout/stderr handles during profiling, which could send the PowerShell banner/prompt into `con-profile.log` instead of the terminal pane.
 - Reduced redundant Windows pre-echo repaint work by letting handled keyboard input wait for actual VT/ConPTY progress instead of forcing a speculative GPUI repaint on every key press.
 - Reduced Windows output batching by preserving successive ConPTY wake signals instead of draining them into a single repaint request before GPUI has had a chance to present intermediate progress.
