@@ -36,6 +36,9 @@ In short:
   - background color
   - adjusted foreground color
 - Added inline render caches for paragraphs, headings, and table cells so repeated rich-render passes can reuse flattened `SharedString` + `TextRun` output instead of rebuilding those transforms every time.
+- Moved assistant message bodies behind their own markdown-document entities so unrelated agent-panel updates do not force a full message-body rerender.
+- Kept whole-document view caching out of the final design. A prior attempt at caching the entire markdown subtree at the wrong boundary caused overlap/layout regressions with tool cards.
+- Collapsed fenced code blocks from one GPUI row per line down to one highlighted `StyledText` layout per block, which sharply reduces render-tree size for long command/code-heavy replies.
 
 This keeps the semantic styling while collapsing the render tree back down to one text layout per paragraph/list cell/table cell instead of many small child elements.
 
@@ -44,10 +47,12 @@ This keeps the semantic styling while collapsing the render tree back down to on
 - UI-thread parsing and render-tree cardinality are separate performance layers. Fixing one does not automatically fix the other.
 - “Pretty” inline chips are not free. For long-form assistant output, they are the wrong primitive if they require many independently laid out elements.
 - GPUI view caching is not a universal answer. Caching an intrinsic-height rich-text subtree at the wrong boundary can create layout bugs. Data-transform caches are the safer first move.
+- Entity isolation is often a better boundary than cached views for large document subtrees. It narrows invalidation without lying about layout.
 - In chat surfaces, dense markdown should prefer:
   - parsed IR caching
   - async parse for large bodies
   - single text layouts with styled runs
+  - single highlighted text layouts for fenced code blocks
   - cached inline/text-run transforms for repeated rich renders
 
 The durable rule is simple:

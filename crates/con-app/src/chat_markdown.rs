@@ -2,13 +2,14 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use gpui::{
-    AbsoluteLength, AnyElement, DefiniteLength, FontStyle, FontWeight, Hsla, InteractiveElement,
-    IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, StyledText,
-    TextStyle, TextRun, UnderlineStyle, WhiteSpace, div, px, relative,
+    AbsoluteLength, AnyElement, AnyView, AppContext, Context, DefiniteLength, Entity, FontStyle,
+    FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, StyledText, TextStyle, TextRun, UnderlineStyle,
+    WhiteSpace, div, px, relative,
 };
 use gpui_component::clipboard::Clipboard;
 use gpui_component::highlighter::SyntaxHighlighter;
-use gpui_component::{Colorize, Theme};
+use gpui_component::{ActiveTheme, Colorize, Theme};
 use markdown::{ParseOptions, mdast};
 use ropey::Rope;
 
@@ -153,7 +154,8 @@ struct CodeHighlightCacheKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CachedCodeHighlightRuns {
     key: CodeHighlightCacheKey,
-    runs: Option<Vec<Vec<TextRun>>>,
+    text: SharedString,
+    runs: Vec<TextRun>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,6 +335,81 @@ impl ParsedChatMarkdown {
         Self {
             blocks: parse_markdown(source),
         }
+    }
+}
+
+pub struct MarkdownDocumentView {
+    document: ParsedChatMarkdown,
+    tone: ChatMarkdownTone,
+    block_views: Vec<Entity<MarkdownBlockView>>,
+}
+
+struct MarkdownBlockView {
+    block: MarkdownBlock,
+    index: usize,
+    tone: ChatMarkdownTone,
+}
+
+impl MarkdownDocumentView {
+    pub fn new(document: ParsedChatMarkdown, tone: ChatMarkdownTone) -> Self {
+        Self {
+            document,
+            tone,
+            block_views: Vec::new(),
+        }
+    }
+
+    pub fn update_document(
+        &mut self,
+        document: ParsedChatMarkdown,
+        tone: ChatMarkdownTone,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document != document || self.tone != tone {
+            self.document = document;
+            self.tone = tone;
+            self.block_views.clear();
+            cx.notify();
+        }
+    }
+
+    fn sync_block_views(&mut self, cx: &mut Context<Self>) {
+        if self.block_views.len() == self.document.blocks.len() {
+            return;
+        }
+
+        self.block_views = self
+            .document
+            .blocks
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, block)| cx.new(|_| MarkdownBlockView {
+                block,
+                index,
+                tone: self.tone,
+            }))
+            .collect();
+    }
+}
+
+impl Render for MarkdownDocumentView {
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_block_views(cx);
+        let style = ChatMarkdownStyle::new(cx.theme(), self.tone);
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(style.block_gap)
+            .children(self.block_views.iter().cloned().map(AnyView::from))
+    }
+}
+
+impl Render for MarkdownBlockView {
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let style = ChatMarkdownStyle::new(cx.theme(), self.tone);
+        render_block_with_width(&self.block, self.index, &style)
     }
 }
 
@@ -904,9 +981,6 @@ fn render_code_block(
     highlight_cache: &RefCell<Option<CachedCodeHighlightRuns>>,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
-    let mono_style = style.code_text_style();
-    let lines: Vec<&str> = code.lines().collect();
-    let has_trailing_newline = code.ends_with('\n');
     let header_label = language
         .as_deref()
         .filter(|lang| !lang.trim().is_empty())
@@ -959,39 +1033,14 @@ fn render_code_block(
                 ),
         );
 
-    let mut code_column = div().flex().flex_col().gap(px(0.0)).w_full();
-    let syntax_runs = cached_highlighted_code_runs(code, language, highlight_cache, style);
-
-    for (line_idx, line) in lines.iter().enumerate() {
-        let display_line = if line.is_empty() { "\u{200B}" } else { line };
-        code_column = code_column.child(
-            div()
-                .w_full()
-                .min_h(style.code_line_height)
-                .font_family(style.theme.mono_font_family.clone())
-                .text_size(style.code_font_size)
-                .line_height(style.code_line_height)
-                .text_color(style.text_color.opacity(0.96))
-                .child(
-                    match syntax_runs
-                        .as_ref()
-                        .and_then(|runs| runs.get(line_idx).cloned())
-                    {
-                        Some(runs) => StyledText::new(display_line.to_string()).with_runs(runs),
-                        None => StyledText::new(display_line.to_string())
-                            .with_runs(vec![mono_style.to_run(display_line.len())]),
-                    },
-                ),
-        );
-    }
-
-    if lines.is_empty() || has_trailing_newline {
-        code_column = code_column.child(
-            div()
-                .h(style.code_line_height)
-                .font_family(style.theme.mono_font_family.clone()),
-        );
-    }
+    let (code_text, code_runs) = cached_highlighted_code_runs(code, language, highlight_cache, style);
+    let code_column = div()
+        .w_full()
+        .font_family(style.theme.mono_font_family.clone())
+        .text_size(style.code_font_size)
+        .line_height(style.code_line_height)
+        .text_color(style.text_color.opacity(0.96))
+        .child(StyledText::new(code_text).with_runs(code_runs));
 
     block
         .child(
@@ -1012,7 +1061,7 @@ fn cached_highlighted_code_runs(
     language: &Option<String>,
     cache: &RefCell<Option<CachedCodeHighlightRuns>>,
     style: &ChatMarkdownStyle<'_>,
-) -> Option<Vec<Vec<TextRun>>> {
+) -> (SharedString, Vec<TextRun>) {
     let key = CodeHighlightCacheKey {
         highlight_theme_ptr: Arc::as_ptr(&style.theme.highlight_theme) as usize,
         mono_font_family: style.theme.mono_font_family.clone(),
@@ -1027,50 +1076,43 @@ fn cached_highlighted_code_runs(
         if let Some(cached) = cached.as_ref()
             && cached.key == key
         {
-            return cached.runs.clone();
+            return (cached.text.clone(), cached.runs.clone());
         }
     }
 
-    let runs = highlighted_code_runs(code, language, style);
+    let (text, runs) = highlighted_code_runs(code, language, style);
     *cache.borrow_mut() = Some(CachedCodeHighlightRuns {
         key,
+        text: text.clone(),
         runs: runs.clone(),
     });
-    runs
+    (text, runs)
 }
 
 fn highlighted_code_runs(
     code: &str,
     language: &Option<String>,
     style: &ChatMarkdownStyle<'_>,
-) -> Option<Vec<Vec<gpui::TextRun>>> {
-    let lang = canonical_highlighter_language(language.as_deref()?);
-    if lang.is_empty() || suppress_syntax_highlighting(lang) {
-        return None;
-    }
+) -> (SharedString, Vec<gpui::TextRun>) {
+    let display_text = code_display_text(code);
+    let base_style = style.code_text_style();
+    let display_len = display_text.len();
+    let lang = language
+        .as_deref()
+        .map(canonical_highlighter_language)
+        .filter(|lang| !lang.is_empty() && !suppress_syntax_highlighting(lang));
 
     let rope = Rope::from_str(code);
-    let mut highlighter = SyntaxHighlighter::new(lang);
-    highlighter.update(None, &rope, None);
-    let highlights = highlighter.styles(&(0..code.len()), &style.theme.highlight_theme);
-
-    let base_style = style.code_text_style();
-    let mut line_runs = Vec::new();
-    let mut line_start = 0usize;
-
-    for line in code.lines() {
-        let line_end = line_start + line.len();
-        let display_len = if line.is_empty() {
-            "\u{200B}".len()
-        } else {
-            line.len()
-        };
+    let mut runs = if let Some(lang) = lang {
+        let mut highlighter = SyntaxHighlighter::new(lang);
+        highlighter.update(None, &rope, None);
+        let highlights = highlighter.styles(&(0..code.len()), &style.theme.highlight_theme);
         let mut runs = Vec::new();
-        let mut cursor = line_start;
+        let mut cursor = 0usize;
 
         for (range, highlight) in &highlights {
-            let start = range.start.max(line_start);
-            let end = range.end.min(line_end);
+            let start = range.start.min(code.len());
+            let end = range.end.min(code.len());
             if start >= end {
                 continue;
             }
@@ -1085,19 +1127,34 @@ fn highlighted_code_runs(
             cursor = end;
         }
 
-        if cursor < line_end {
-            runs.push(base_style.to_run(line_end - cursor));
+        if cursor < code.len() {
+            runs.push(base_style.to_run(code.len() - cursor));
         }
 
-        if runs.is_empty() {
-            runs.push(base_style.to_run(display_len));
-        }
+        runs
+    } else {
+        vec![base_style.to_run(code.len())]
+    };
 
-        line_runs.push(runs);
-        line_start = line_end + 1;
+    if runs.is_empty() {
+        runs.push(base_style.to_run(display_len.max(1)));
+    } else if display_len > code.len() {
+        runs.push(base_style.to_run(display_len - code.len()));
     }
 
-    Some(line_runs)
+    (display_text.into(), runs)
+}
+
+fn code_display_text(code: &str) -> String {
+    if code.is_empty() {
+        return "\u{200B}".to_string();
+    }
+
+    let mut text = code.to_string();
+    if code.ends_with('\n') {
+        text.push('\u{200B}');
+    }
+    text
 }
 
 fn canonical_highlighter_language(language: &str) -> &str {
@@ -1359,13 +1416,11 @@ mod tests {
     fn highlighted_code_runs_cover_empty_lines() {
         let theme = Theme::default();
         let style = ChatMarkdownStyle::new(&theme, ChatMarkdownTone::Message);
-        let runs = highlighted_code_runs("print(1)\n\nprint(2)", &Some("python".into()), &style)
-            .expect("expected syntax runs");
+        let code = "print(1)\n\nprint(2)";
+        let (text, runs) = highlighted_code_runs(code, &Some("python".into()), &style);
 
-        assert_eq!(runs.len(), 3);
-        assert_eq!(
-            runs[1].iter().map(|run| run.len).sum::<usize>(),
-            "\u{200B}".len()
-        );
+        assert_eq!(text.as_ref(), code);
+        assert!(!runs.is_empty());
+        assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), code.len());
     }
 }
