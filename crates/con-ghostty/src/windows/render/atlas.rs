@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use etagere::{AllocId, AtlasAllocator, size2};
+use unicode_width::UnicodeWidthChar;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
@@ -1144,58 +1145,35 @@ fn family_exists_in(collection: &IDWriteFontCollection, family: &str) -> bool {
 }
 
 fn is_wide_codepoint(codepoint: u32) -> bool {
-    matches!(
-        codepoint,
-        0x1100..=0x115F
-            | 0x231A..=0x231B
-            | 0x2329..=0x232A
-            | 0x23E9..=0x23EC
-            | 0x23F0
-            | 0x23F3
-            | 0x25FD..=0x25FE
-            | 0x2614..=0x2615
-            | 0x2648..=0x2653
-            | 0x267F
-            | 0x2693
-            | 0x26A1
-            | 0x26AA..=0x26AB
-            | 0x26BD..=0x26BE
-            | 0x26C4..=0x26C5
-            | 0x26CE
-            | 0x26D4
-            | 0x26EA
-            | 0x26F2..=0x26F3
-            | 0x26F5
-            | 0x26FA
-            | 0x26FD
-            | 0x2705
-            | 0x270A..=0x270B
-            | 0x2728
-            | 0x274C
-            | 0x274E
-            | 0x2753..=0x2755
-            | 0x2757
-            | 0x2795..=0x2797
-            | 0x27B0
-            | 0x27BF
-            | 0x2B1B..=0x2B1C
-            | 0x2B50
-            | 0x2B55
-            | 0x2E80..=0xA4CF
-            | 0xAC00..=0xD7A3
-            | 0xF900..=0xFAFF
-            | 0xFE10..=0xFE19
-            | 0xFE30..=0xFE6F
-            | 0xFF00..=0xFF60
-            | 0xFFE0..=0xFFE6
-            | 0x1F004
-            | 0x1F0CF
-            | 0x1F18E
-            | 0x1F191..=0x1F19A
-            | 0x1F200..=0x1F251
-            | 0x1F300..=0x1F64F
-            | 0x1F680..=0x1F6FF
-            | 0x1F900..=0x1F9FF
-            | 0x20000..=0x3FFFD
-    )
+    char::from_u32(codepoint)
+        .and_then(UnicodeWidthChar::width)
+        .is_some_and(|width| width >= 2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_wide_codepoint;
+
+    #[test]
+    fn wide_codepoint_uses_unicode_width_instead_of_local_ranges() {
+        // These ranges were easy to miss in a hand-written East Asian
+        // Width table. Keep the atlas decision delegated to
+        // unicode-width so newly covered Unicode ranges do not regress
+        // into one-cell clipped glyphs.
+        for codepoint in [
+            0x4E00,  // CJK Unified Ideograph
+            0xA960,  // Hangul Jamo Extended-A
+            0xD7B0,  // Hangul Jamo Extended-B
+            0x1B000, // Kana Supplement
+            0x16FE0, // Tangut / ideographic marks
+            0x1B170, // Nushu
+            0x1FA70, // Symbols and Pictographs Extended-A
+        ] {
+            assert!(is_wide_codepoint(codepoint), "U+{codepoint:04X}");
+        }
+
+        // Ambiguous-width punctuation should stay one cell unless the
+        // terminal layer explicitly gains a CJK-ambiguous-width mode.
+        assert!(!is_wide_codepoint(0x00B7));
+    }
 }

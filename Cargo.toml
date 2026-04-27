@@ -54,6 +54,7 @@ ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf", "metric_utf1
 sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
 rust-i18n = "3"
 lsp-types = { version = "0.97.0", features = ["proposed"] }
+unicode-width = "0.2"
 
 # Utilities
 anyhow = "1"

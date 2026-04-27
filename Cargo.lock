@@ -1365,6 +1365,7 @@ dependencies = [
  "portable-pty",
  "raw-window-handle",
  "serde_json",
+ "unicode-width",
  "windows 0.61.3",
  "windows-numerics 0.2.0",
 ]
