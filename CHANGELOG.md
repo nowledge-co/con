@@ -12,6 +12,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Reduced light-background flashes at fast macOS chrome seams with transient native seam guards around embedded terminal views, covering agent-panel, input-bar, and vertical-tab sidebar motion without adding visible steady-state borders or changing Windows/Linux rendering.
 
+**Terminal, Windows Backend (preview)**
+
+- Fixed custom terminal fonts on Windows resolving through the wrong DirectWrite collection, which could make glyphs appear incomplete or spaced apart when a system font such as JetBrains Maple Mono was selected.
+
 ------
 
 ## `v0.1.0-beta.40` - 2026-04-26
