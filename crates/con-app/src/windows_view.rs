@@ -300,7 +300,8 @@ impl GhosttyView {
             }
         };
 
-        match RenderSession::new(width_px, height_px, dpi, config, wake) {
+        let cwd = self.initial_cwd.as_deref().map(std::path::PathBuf::from);
+        match RenderSession::new(width_px, height_px, dpi, config, cwd, wake) {
             Ok(session) => {
                 if let Some(terminal) = &self.terminal {
                     terminal.attach(session);
@@ -308,7 +309,6 @@ impl GhosttyView {
                 self.initialized = true;
                 self.last_physical_size = Some((width_px, height_px));
                 self.last_scale_factor = dpi as f32 / 96.0;
-                let _ = &self.initial_cwd; // TODO: honour cwd in ConPTY spawn.
             }
             Err(err) => {
                 log::error!("RenderSession::new failed: {:#}", err);

@@ -134,7 +134,12 @@ pub struct PtySize {
 impl ConPty {
     /// Spawn a child shell, wire up ConPTY, and start a background reader
     /// that calls `on_output` for each chunk of bytes the shell writes.
-    pub fn spawn<F>(command_line: &str, size: PtySize, on_output: F) -> Result<Self>
+    pub fn spawn<F>(
+        command_line: &str,
+        cwd: Option<&Path>,
+        size: PtySize,
+        on_output: F,
+    ) -> Result<Self>
     where
         F: FnMut(&[u8]) + Send + 'static,
     {
@@ -189,7 +194,21 @@ impl ConPty {
         // redirected logs (`*> con-profile.log`): inheriting those
         // handles lets PowerShell write its banner/prompt to the log
         // instead of through ConPTY, leaving the pane blank.
-        log::info!("ConPTY CreateProcess: inherit_handles=false shell={command_line}");
+        let cwd_w: Option<Vec<u16>> = cwd.map(|path| {
+            path.as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
+        });
+        let cwd_ptr = cwd_w
+            .as_ref()
+            .map(|wide| windows::core::PCWSTR(wide.as_ptr()))
+            .unwrap_or(windows::core::PCWSTR::null());
+
+        log::info!(
+            "ConPTY CreateProcess: inherit_handles=false shell={command_line} cwd={:?}",
+            cwd
+        );
         let create_result = unsafe {
             CreateProcessW(
                 None,
@@ -199,7 +218,7 @@ impl ConPty {
                 false,
                 creation_flags,
                 None,
-                None,
+                cwd_ptr,
                 &startup_info.StartupInfo as *const _,
                 &mut process_info,
             )
