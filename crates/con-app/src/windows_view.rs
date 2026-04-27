@@ -65,6 +65,12 @@ struct ScrollbarDrag {
     thumb_height_px: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ScrollbarCache {
+    generation: u64,
+    state: Option<GhosttyScrollbar>,
+}
+
 fn mouse_mods_from(modifiers: &Modifiers) -> MouseEventMods {
     MouseEventMods {
         shift: modifiers.shift,
@@ -118,6 +124,10 @@ pub struct GhosttyView {
     /// stale text instead of erasing it.
     cached_frame: Option<Vec<u8>>,
     cached_frame_size: Option<(u32, u32)>,
+    /// `GHOSTTY_TERMINAL_DATA_SCROLLBAR` is an expensive VT query.
+    /// Cache it by VT generation so render can draw the scrollbar
+    /// without polling libghostty-vt every frame.
+    scrollbar_cache: Option<ScrollbarCache>,
     /// Replaced images, kept live until the next prepaint so the paint
     /// that referenced them has finished. Dropped after via
     /// `Window::drop_image` to evict sprite-atlas tiles.
@@ -191,6 +201,7 @@ impl GhosttyView {
             cached_image: None,
             cached_frame: None,
             cached_frame_size: None,
+            scrollbar_cache: None,
             images_to_drop: Vec::new(),
             scrollbar_drag: None,
             wake_tx,
@@ -240,6 +251,8 @@ impl GhosttyView {
         self.cached_image = None;
         self.cached_frame = None;
         self.cached_frame_size = None;
+        self.scrollbar_cache = None;
+        self.scrollbar_drag = None;
         self.images_to_drop.clear();
         self.last_physical_size = None;
     }
@@ -330,6 +343,7 @@ impl GhosttyView {
                 self.initialized = true;
                 self.last_physical_size = Some((width_px, height_px));
                 self.last_scale_factor = dpi as f32 / 96.0;
+                self.scrollbar_cache = None;
             }
             Err(err) => {
                 log::error!("RenderSession::new failed: {:#}", err);
@@ -402,7 +416,7 @@ impl GhosttyView {
         }
 
         let render_started = perf_trace_enabled().then(Instant::now);
-        match session.render_frame() {
+        let outcome = match session.render_frame() {
             Ok(RenderOutcome::Unchanged) => SyncRenderResult::Unchanged,
             Ok(RenderOutcome::Rendered(frame)) => {
                 let render_frame_ms = render_started
@@ -451,7 +465,22 @@ impl GhosttyView {
                 log::warn!("RenderSession::render_frame failed: {err:#}");
                 SyncRenderResult::Unchanged
             }
+        };
+
+        self.refresh_scrollbar_cache_from_session(session);
+        outcome
+    }
+
+    fn refresh_scrollbar_cache_from_session(&mut self, session: &RenderSession) {
+        let generation = session.generation();
+        if self
+            .scrollbar_cache
+            .is_some_and(|cache| cache.generation == generation)
+        {
+            return;
         }
+        let state = session.scrollbar().filter(Self::scrollbar_visible);
+        self.scrollbar_cache = Some(ScrollbarCache { generation, state });
     }
 
     fn cache_rendered_frame(&mut self, frame: FrameBgra) -> bool {
@@ -673,10 +702,12 @@ impl GhosttyView {
         session.forward_wheel(col0 + 1, row0 + 1, delta_y_px, mods);
     }
 
-    fn scrollbar_state(&self) -> Option<GhosttyScrollbar> {
-        self.terminal.as_ref()?.scrollbar().filter(|scrollbar| {
-            scrollbar.total > scrollbar.len && scrollbar.len > 0 && scrollbar.total > 0
-        })
+    fn scrollbar_visible(scrollbar: &GhosttyScrollbar) -> bool {
+        scrollbar.total > scrollbar.len && scrollbar.len > 0 && scrollbar.total > 0
+    }
+
+    fn cached_scrollbar_state(&self) -> Option<GhosttyScrollbar> {
+        self.scrollbar_cache.and_then(|cache| cache.state)
     }
 
     fn scrollbar_layout(&self, scrollbar: GhosttyScrollbar) -> Option<(f32, f32, f32)> {
@@ -696,7 +727,8 @@ impl GhosttyView {
     }
 
     fn start_scrollbar_drag(&mut self, pos: Point<Pixels>) {
-        let Some(scrollbar) = self.scrollbar_state() else {
+        self.refresh_scrollbar_cache();
+        let Some(scrollbar) = self.cached_scrollbar_state() else {
             return;
         };
         let Some((track_height_px, thumb_height_px, _)) = self.scrollbar_layout(scrollbar) else {
@@ -729,8 +761,9 @@ impl GhosttyView {
         self.scroll_viewport_to_offset(target);
     }
 
-    fn page_scrollbar_toward(&self, pos: Point<Pixels>) {
-        let Some(scrollbar) = self.scrollbar_state() else {
+    fn page_scrollbar_toward(&mut self, pos: Point<Pixels>) {
+        self.refresh_scrollbar_cache();
+        let Some(scrollbar) = self.cached_scrollbar_state() else {
             return;
         };
         let Some((_, thumb_height, thumb_top)) = self.scrollbar_layout(scrollbar) else {
@@ -749,28 +782,44 @@ impl GhosttyView {
         }
     }
 
-    fn scroll_viewport_rows(&self, rows: isize) {
-        let Some(terminal) = &self.terminal else {
+    fn scroll_viewport_rows(&mut self, rows: isize) {
+        let Some(terminal) = self.terminal.clone() else {
             return;
         };
         let inner = terminal.inner();
         if let Some(session) = inner.lock().as_ref() {
             session.scroll_viewport_rows(rows);
+            self.refresh_scrollbar_cache_from_session(session);
         }
     }
 
-    fn scroll_viewport_to_offset(&self, offset: u64) {
-        let Some(terminal) = &self.terminal else {
+    fn scroll_viewport_to_offset(&mut self, offset: u64) {
+        let Some(terminal) = self.terminal.clone() else {
             return;
         };
         let inner = terminal.inner();
         if let Some(session) = inner.lock().as_ref() {
             session.scroll_viewport_to_offset(offset);
+            self.refresh_scrollbar_cache_from_session(session);
         }
     }
 
+    fn refresh_scrollbar_cache(&mut self) {
+        let Some(terminal) = self.terminal.clone() else {
+            self.scrollbar_cache = None;
+            return;
+        };
+        let inner = terminal.inner();
+        let guard = inner.lock();
+        let Some(session) = guard.as_ref() else {
+            self.scrollbar_cache = None;
+            return;
+        };
+        self.refresh_scrollbar_cache_from_session(session);
+    }
+
     fn render_terminal_scrollbar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let scrollbar = self.scrollbar_state()?;
+        let scrollbar = self.cached_scrollbar_state()?;
         let (_, thumb_height, thumb_top) = self.scrollbar_layout(scrollbar)?;
         let theme = cx.theme();
         let thumb_color = theme.foreground.opacity(0.28);
@@ -1139,6 +1188,11 @@ impl Render for GhosttyView {
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 if this.scrollbar_drag.is_some() {
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        this.scrollbar_drag = None;
+                        cx.notify();
+                        return;
+                    }
                     this.drag_scrollbar(event.position);
                     cx.notify();
                     return;

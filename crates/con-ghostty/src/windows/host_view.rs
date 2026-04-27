@@ -556,6 +556,10 @@ impl RenderSession {
         self.vt.scrollbar()
     }
 
+    pub fn generation(&self) -> u64 {
+        self.vt.generation()
+    }
+
     pub fn scroll_viewport_rows(&self, rows: isize) {
         self.scroll_remainder.lock().reset();
         if self.vt.scroll_viewport_delta(rows) {

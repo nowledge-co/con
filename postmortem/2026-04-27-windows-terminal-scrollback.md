@@ -15,6 +15,8 @@ Unlike macOS, there was no native Ghostty surface underneath to perform viewport
 - Exposed `ghostty_terminal_scroll_viewport` through the Rust VT wrapper.
 - Exposed `GhosttyTerminalScrollbar` state through the Windows backend.
 - Added a lightweight borderless GPUI scrollbar overlay with page-click and drag-to-scroll behavior.
+- Cached scrollbar state by VT generation so render uses the last known scrollbar state instead of querying libghostty-vt on every paint.
+- Cleared scrollbar drag state when the left mouse button is no longer pressed, covering releases that happen outside the terminal pane.
 - Routed non-mouse-tracking wheel gestures to libghostty-vt viewport scrolling.
 - Accumulated high-resolution touchpad deltas so fractional pixel scrolls become whole terminal-row scrolls without jumping one row per tiny event.
 - Mirrored Ghostty's alternate-screen behavior by converting wheel gestures to cursor keys when alternate-scroll mode is active and mouse tracking is not, using the same fractional row accumulator as primary scrollback.
@@ -24,3 +26,5 @@ Unlike macOS, there was no native Ghostty surface underneath to perform viewport
 Windows and Linux cannot assume Ghostty surface behavior exists just because the VT parser is Ghostty. Any host interaction that the macOS embedded surface handles natively must be deliberately re-exposed through the carved-out VT API and wired in the platform view.
 
 Precision scrolling has to be mode-aware. Primary scrollback and alternate-screen cursor-key emulation both consume pixel deltas as terminal rows, but their fractional remainders must reset when switching between screen modes so a partial trackpad gesture in one mode cannot leak into the other.
+
+Scrollbar state should be treated as terminal state, not paint state. Querying it from the render path couples a potentially expensive VT data request to every repaint; cache it at generation boundaries and update eagerly after explicit scroll actions.
