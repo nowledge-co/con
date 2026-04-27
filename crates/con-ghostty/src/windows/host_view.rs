@@ -56,6 +56,11 @@ pub struct RenderSession {
     /// follow-on echoed generations don't fall back to the stale-frame
     /// path in the middle of one interactive run.
     low_latency_burst_until: Mutex<Option<Instant>>,
+    /// Pixel remainder from high-resolution wheels / trackpads. We only
+    /// ask libghostty-vt to scroll whole terminal rows, so fractional
+    /// deltas accumulate here instead of turning every tiny touchpad
+    /// event into a full-row jump.
+    scroll_remainder_px: Mutex<f32>,
     drag_anchor: Mutex<Option<(u16, u16)>>,
 }
 
@@ -153,6 +158,7 @@ impl RenderSession {
             low_latency_requested: AtomicBool::new(false),
             low_latency_generation_target: AtomicU64::new(0),
             low_latency_burst_until: Mutex::new(None),
+            scroll_remainder_px: Mutex::new(0.0),
             drag_anchor: Mutex::new(None),
         })
     }
@@ -474,6 +480,59 @@ impl RenderSession {
         let row = row.max(1);
         let seq = format!("\x1b[<{button};{col};{row}M");
         let _ = self.conpty.write(seq.as_bytes());
+    }
+
+    /// Scroll the terminal viewport when the shell did not request
+    /// mouse-wheel events. Mirrors Ghostty's native behavior:
+    ///
+    /// - alternate screen + alternate-scroll mode sends cursor keys to
+    ///   apps such as less/vim that did not enable explicit mouse
+    ///   tracking
+    /// - otherwise the primary-screen viewport scrolls through
+    ///   libghostty-vt's scrollback
+    pub fn scroll_viewport_or_alt_screen(&self, delta_y_px: f32, allow_alt_screen_keys: bool) {
+        if delta_y_px.abs() < f32::EPSILON {
+            return;
+        }
+
+        if allow_alt_screen_keys && self.vt.is_alternate_screen() && self.vt.is_alt_scroll() {
+            self.send_scroll_as_cursor_keys(delta_y_px);
+            return;
+        }
+
+        let cell_h = self.metrics().cell_height_px.max(1) as f32;
+        let mut remainder = self.scroll_remainder_px.lock();
+        *remainder += delta_y_px;
+        let rows = (*remainder / cell_h).trunc() as isize;
+        if rows == 0 {
+            return;
+        }
+        *remainder -= rows as f32 * cell_h;
+        drop(remainder);
+
+        if self.vt.scroll_viewport_delta(rows) {
+            self.request_low_latency_present();
+        }
+    }
+
+    fn send_scroll_as_cursor_keys(&self, delta_y_px: f32) {
+        let cell_h = self.metrics().cell_height_px.max(1) as f32;
+        let rows = (delta_y_px.abs() / cell_h).ceil().max(1.0).min(10.0) as usize;
+        let seq = if delta_y_px < 0.0 {
+            if self.vt.is_decckm() {
+                "\x1bOA"
+            } else {
+                "\x1b[A"
+            }
+        } else if self.vt.is_decckm() {
+            "\x1bOB"
+        } else {
+            "\x1b[B"
+        };
+        self.request_low_latency_after_next_generation();
+        for _ in 0..rows {
+            let _ = self.conpty.write(seq.as_bytes());
+        }
     }
 
     pub fn has_selection(&self) -> bool {

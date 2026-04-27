@@ -73,8 +73,44 @@ pub enum GhosttyTerminalData {
     Rows = 2,
     CursorX = 3,
     CursorY = 4,
+    CursorPendingWrap = 5,
+    ActiveScreen = 6,
     CursorVisible = 7,
     Title = 12,
+}
+
+/// `GHOSTTY_TERMINAL_SCREEN_*` values.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyTerminalScreen {
+    Primary = 0,
+    Alternate = 1,
+}
+
+/// `GHOSTTY_SCROLL_VIEWPORT_*` values.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyTerminalScrollViewportTag {
+    Top = 0,
+    Bottom = 1,
+    Delta = 2,
+}
+
+/// Payload for `GHOSTTY_SCROLL_VIEWPORT_DELTA`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union GhosttyTerminalScrollViewportValue {
+    /// Row delta. Up is negative, down is positive.
+    pub delta: isize,
+    pub _padding: [u64; 2],
+}
+
+/// Tagged viewport scroll request.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyTerminalScrollViewport {
+    pub tag: GhosttyTerminalScrollViewportTag,
+    pub value: GhosttyTerminalScrollViewportValue,
 }
 
 /// `GHOSTTY_TERMINAL_OPT_*` keys for `ghostty_terminal_set`.
@@ -397,6 +433,10 @@ unsafe extern "C" {
         value: *const c_void,
     ) -> GhosttyResult;
     pub fn ghostty_terminal_vt_write(terminal: GhosttyTerminal, data: *const u8, len: usize);
+    pub fn ghostty_terminal_scroll_viewport(
+        terminal: GhosttyTerminal,
+        behavior: GhosttyTerminalScrollViewport,
+    );
     pub fn ghostty_terminal_get(
         terminal: GhosttyTerminal,
         key: GhosttyTerminalData,
@@ -1197,6 +1237,43 @@ impl VtScreen {
     /// reports. Apps like less / vim opt in.
     pub fn is_alt_scroll(&self) -> bool {
         self.mode_active(MODE_ALT_SCROLL)
+    }
+
+    /// Returns `true` while the alternate screen buffer is active.
+    pub fn is_alternate_screen(&self) -> bool {
+        let inner = self.inner.lock();
+        if inner.terminal.is_null() {
+            return false;
+        }
+        let mut screen = GhosttyTerminalScreen::Primary;
+        let rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::ActiveScreen,
+                &mut screen as *mut _ as *mut c_void,
+            )
+        };
+        rc == 0 && screen == GhosttyTerminalScreen::Alternate
+    }
+
+    /// Scroll the visible viewport by terminal rows. Negative is up;
+    /// positive is down. Returns `true` when a scroll request was sent.
+    pub fn scroll_viewport_delta(&self, delta_rows: isize) -> bool {
+        if delta_rows == 0 {
+            return false;
+        }
+        let mut inner = self.inner.lock();
+        if inner.terminal.is_null() {
+            return false;
+        }
+        let behavior = GhosttyTerminalScrollViewport {
+            tag: GhosttyTerminalScrollViewportTag::Delta,
+            value: GhosttyTerminalScrollViewportValue { delta: delta_rows },
+        };
+        unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
+        inner.force_full_snapshot = true;
+        inner.generation = inner.generation.wrapping_add(1);
+        true
     }
 
     /// Bracketed-paste mode (2004). When `true`, paste operations

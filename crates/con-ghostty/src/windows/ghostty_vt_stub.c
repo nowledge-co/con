@@ -29,6 +29,16 @@ struct GhosttyTerminalOptions {
     size_t   max_scrollback;
 };
 
+union GhosttyTerminalScrollViewportValue {
+    intptr_t delta;
+    uint64_t _padding[2];
+};
+
+struct GhosttyTerminalScrollViewport {
+    int tag;
+    union GhosttyTerminalScrollViewportValue value;
+};
+
 /* ── Terminal lifecycle ─────────────────────────────────────────── */
 
 GhosttyResult ghostty_terminal_new(
@@ -54,6 +64,13 @@ GhosttyResult ghostty_terminal_resize(
 
 void ghostty_terminal_vt_write(GhosttyTerminal terminal, const uint8_t* data, size_t len) {
     (void)terminal; (void)data; (void)len;
+}
+
+void ghostty_terminal_scroll_viewport(
+    GhosttyTerminal terminal,
+    struct GhosttyTerminalScrollViewport behavior
+) {
+    (void)terminal; (void)behavior;
 }
 
 GhosttyResult ghostty_terminal_get(

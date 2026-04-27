@@ -624,18 +624,6 @@ impl GhosttyView {
         let Some(session) = guard.as_ref() else {
             return;
         };
-        // Only report wheel to the shell when it has explicitly enabled
-        // mouse tracking (SGR). Otherwise modern TUIs expect the scroll
-        // to move their own scrollback buffer via shell keybinds, not
-        // arrive as mouse events. Shift bypasses reporting per xterm
-        // convention so the user can scroll Con's scrollback even when
-        // a TUI has `set mouse=a`.
-        if !session.mouse_tracking_active() || mods.shift {
-            return;
-        }
-        let Some((col0, row0)) = self.cell_from_event_position(pos) else {
-            return;
-        };
         let delta_y_px = match delta {
             ScrollDelta::Pixels(p) => f32::from(p.y),
             ScrollDelta::Lines(p) => {
@@ -646,6 +634,20 @@ impl GhosttyView {
         if delta_y_px.abs() < f32::EPSILON {
             return;
         }
+
+        // Only report wheel to the shell when it has explicitly enabled
+        // mouse tracking (SGR). Otherwise scroll Con's own viewport via
+        // libghostty-vt. Shift bypasses reporting per xterm convention
+        // so the user can scroll Con's scrollback even when a TUI has
+        // `set mouse=a`.
+        if !session.mouse_tracking_active() || mods.shift {
+            session.scroll_viewport_or_alt_screen(delta_y_px, !mods.shift);
+            return;
+        }
+
+        let Some((col0, row0)) = self.cell_from_event_position(pos) else {
+            return;
+        };
         // `forward_wheel` expects 1-based SGR coordinates.
         session.forward_wheel(col0 + 1, row0 + 1, delta_y_px, mods);
     }
