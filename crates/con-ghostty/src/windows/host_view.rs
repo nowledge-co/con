@@ -560,6 +560,12 @@ impl RenderSession {
         self.vt.generation()
     }
 
+    /// Scroll by `rows` in libghostty-vt's viewport convention.
+    ///
+    /// `vt.scroll_viewport_delta` treats negative rows as up / older history
+    /// and positive rows as down / newer history. GPUI wheel rows use the
+    /// opposite sign, so GPUI callers must convert with
+    /// `viewport_delta_for_scroll_rows` before calling this method.
     pub fn scroll_viewport_rows(&self, rows: isize) {
         self.scroll_remainder.lock().reset();
         if self.vt.scroll_viewport_delta(rows) {
@@ -567,6 +573,11 @@ impl RenderSession {
         }
     }
 
+    /// Snap to a scrollbar offset and forward the resulting libghostty-vt
+    /// signed delta through `scroll_viewport_rows`.
+    ///
+    /// Offsets use scrollbar coordinates: `0` is oldest scrollback and
+    /// `total - len` is the live tail.
     pub fn scroll_viewport_to_offset(&self, target_offset: u64) {
         let Some(scrollbar) = self.vt.scrollbar() else {
             return;
