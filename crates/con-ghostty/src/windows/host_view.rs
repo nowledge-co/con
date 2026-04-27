@@ -16,6 +16,7 @@
 //!   (`conpty.rs`) and snapshotted read-only on the main thread under
 //!   its own Mutex.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -94,6 +95,7 @@ impl RenderSession {
         height_px: u32,
         dpi: u32,
         config: RendererConfig,
+        cwd: Option<PathBuf>,
         wake: W,
     ) -> Result<Self>
     where
@@ -127,11 +129,17 @@ impl RenderSession {
         let vt_for_pty = vt.clone();
         let wake_for_pty: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
         let shell = super::conpty::default_shell_command();
-        log::info!("RenderSession: spawning ConPTY shell={shell}");
-        let conpty = ConPty::spawn(&shell, PtySize { cols, rows }, move |bytes| {
-            vt_for_pty.feed(bytes);
-            wake_for_pty();
-        })
+        let shell_cwd = resolve_shell_cwd(cwd);
+        log::info!("RenderSession: spawning ConPTY shell={shell} cwd={shell_cwd:?}");
+        let conpty = ConPty::spawn(
+            &shell,
+            shell_cwd.as_deref(),
+            PtySize { cols, rows },
+            move |bytes| {
+                vt_for_pty.feed(bytes);
+                wake_for_pty();
+            },
+        )
         .context("ConPty::spawn failed")?;
         let conpty = Arc::new(conpty);
 
@@ -517,6 +525,30 @@ impl RenderSession {
             None => false,
         }
     }
+}
+
+fn resolve_shell_cwd(cwd: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(cwd) = cwd {
+        if cwd.is_dir() {
+            return Some(cwd);
+        }
+        log::warn!("Ignoring invalid ConPTY cwd: {cwd:?}");
+    }
+    default_shell_cwd()
+}
+
+fn default_shell_cwd() -> Option<PathBuf> {
+    let home = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let drive = std::env::var_os("HOMEDRIVE")?;
+            let path = std::env::var_os("HOMEPATH")?;
+            let mut full = PathBuf::from(drive);
+            full.push(Path::new(&path));
+            Some(full)
+        })
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+    home.filter(|path| path.exists())
 }
 
 fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
