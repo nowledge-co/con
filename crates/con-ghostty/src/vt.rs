@@ -34,6 +34,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
+use crate::stub::GhosttyScrollbar;
+
 use parking_lot::Mutex;
 
 fn perf_trace_enabled() -> bool {
@@ -76,7 +78,18 @@ pub enum GhosttyTerminalData {
     CursorPendingWrap = 5,
     ActiveScreen = 6,
     CursorVisible = 7,
+    Scrollbar = 9,
     Title = 12,
+}
+
+/// `GhosttyTerminalScrollbar` — current viewport position in the full
+/// active screen including scrollback.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GhosttyTerminalScrollbar {
+    pub total: u64,
+    pub offset: u64,
+    pub len: u64,
 }
 
 /// `GHOSTTY_TERMINAL_SCREEN_*` values.
@@ -1237,6 +1250,28 @@ impl VtScreen {
     /// reports. Apps like less / vim opt in.
     pub fn is_alt_scroll(&self) -> bool {
         self.mode_active(MODE_ALT_SCROLL)
+    }
+
+    /// Current viewport scrollbar state. Returns `None` when the C API
+    /// query fails; callers should hide scrollbar UI in that case.
+    pub fn scrollbar(&self) -> Option<GhosttyScrollbar> {
+        let inner = self.inner.lock();
+        if inner.terminal.is_null() {
+            return None;
+        }
+        let mut scrollbar = GhosttyTerminalScrollbar::default();
+        let rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::Scrollbar,
+                &mut scrollbar as *mut _ as *mut c_void,
+            )
+        };
+        (rc == 0).then_some(GhosttyScrollbar {
+            total: scrollbar.total,
+            offset: scrollbar.offset,
+            len: scrollbar.len,
+        })
     }
 
     /// Returns `true` while the alternate screen buffer is active.

@@ -12,8 +12,8 @@ use parking_lot::Mutex;
 use super::host_view::RenderSession;
 use super::render::{RendererConfig, ThemeColors};
 use crate::stub::{
-    CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
-    GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
+    CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttyScrollbar,
+    GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 
 fn theme_from_colors(colors: &TerminalColors) -> ThemeColors {
@@ -167,6 +167,10 @@ impl WindowsGhosttyTerminal {
             cell_width_px: 0,
             cell_height_px: 0,
         }
+    }
+
+    pub fn scrollbar(&self) -> Option<GhosttyScrollbar> {
+        self.inner.lock().as_ref().and_then(|s| s.scrollbar())
     }
 
     pub fn set_content_scale(&self, _scale: f64) {}

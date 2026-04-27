@@ -77,6 +77,13 @@ pub struct SurfaceSize {
     pub cell_height_px: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GhosttyScrollbar {
+    pub total: u64,
+    pub offset: u64,
+    pub len: u64,
+}
+
 pub struct CommandFinishedSignal {
     pub exit_code: Option<i32>,
     pub duration: Duration,
