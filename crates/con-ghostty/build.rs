@@ -56,18 +56,24 @@ fn main() {
 fn build_macos() {
     let ghostty_dir = resolve_ghostty_source();
     let optimize = ghostty_optimize();
+    let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
 
-    let status = Command::new("zig")
-        .args([
-            "build",
-            "-Dapp-runtime=none",
-            "-Dxcframework-target=native",
-            "-Demit-macos-app=false",
-            &format!("-Doptimize={optimize}"),
-        ])
-        .current_dir(&ghostty_dir)
-        .status()
-        .expect("failed to run zig build — is zig installed?");
+    let mut cmd = Command::new(&zig_bin);
+    cmd.args([
+        "build",
+        "-Dapp-runtime=none",
+        "-Dxcframework-target=native",
+        "-Demit-macos-app=false",
+        &format!("-Doptimize={optimize}"),
+    ])
+    .current_dir(&ghostty_dir);
+
+    let status = cmd.status().unwrap_or_else(|err| {
+        panic!(
+            "failed to run `{}` build for libghostty: {err}",
+            zig_bin.to_string_lossy()
+        )
+    });
 
     if !status.success() {
         panic!("zig build failed for libghostty");
