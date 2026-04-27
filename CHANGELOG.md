@@ -6,6 +6,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+### Fixed
+
+**Terminal, Windows Backend (preview)**
+
+- Fixed custom terminal fonts on Windows resolving through the wrong DirectWrite collection, which could make glyphs appear incomplete or spaced apart when a system font such as JetBrains Maple Mono was selected.
+
 ------
 
 ## `v0.1.0-beta.40` - 2026-04-26

@@ -87,10 +87,10 @@ pub struct GlyphCache {
     device: ID3D11Device,
     _context: ID3D11DeviceContext,
     dwrite: IDWriteFactory,
-    /// Bundled private collection (IoskeleyMono). `None` when the
-    /// runtime didn't support IDWriteFactory5; CreateTextFormat then
-    /// resolves through the system collection.
-    bundled_collection: Option<IDWriteFontCollection>,
+    /// Font collection that owns `font_family`. `Some` only for our
+    /// bundled IoskeleyMono collection; `None` means DirectWrite should
+    /// resolve the family from the system collection.
+    font_collection: Option<IDWriteFontCollection>,
     /// System font-fallback cascade. Attached to each
     /// `IDWriteTextFormat1` so DirectWrite transparently swaps in
     /// Segoe UI Emoji / Symbol / CJK fonts for codepoints the bundled
@@ -149,21 +149,21 @@ impl GlyphCache {
         // once here and shared across all four text-format weights.
         let font_fallback = super::font_loader::system_font_fallback(dwrite);
 
-        // Resolve the family name against the bundled collection up
-        // front. GPUI / config use the display form "Ioskeley Mono"
-        // (with a space), but the bundled TTFs advertise the
-        // PostScript-style one-word name "IoskeleyMono". DirectWrite
-        // does strict family-name matching, so asking for
-        // "Ioskeley Mono" misses the bundled collection entirely and
-        // cascades to Segoe UI for both metrics AND glyph rasterization
-        // — cells sized for a 9/10-em Segoe 'M' advance, and glyphs
-        // drawn from Segoe UI rather than IoskeleyMono. Use the name
-        // that actually resolves in our bundled collection.
-        let resolved_family = resolve_bundled_family(bundled_collection.as_ref(), font_family);
+        // Resolve the family and the collection as a pair. Passing the
+        // bundled collection for a user-selected system font makes
+        // DirectWrite fail the primary lookup inside `CreateTextFormat`
+        // while `measure_cell` may still measure the system face. That
+        // split produces visibly wide cells with narrow glyph ink. Keep
+        // text formats, cell metrics, and primary-face probing on the
+        // same resolved source.
+        let resolved = resolve_font_family(dwrite, bundled_collection.as_ref(), font_family)?;
+        let resolved_family = resolved.family;
+        let text_collection = resolved.collection;
+        let font_collection = text_collection.cloned();
 
         let text_format_regular = make_text_format(
             dwrite,
-            bundled_collection.as_ref(),
+            text_collection,
             font_fallback.as_ref(),
             &resolved_family,
             font_size_px,
@@ -172,7 +172,7 @@ impl GlyphCache {
         )?;
         let text_format_bold = make_text_format(
             dwrite,
-            bundled_collection.as_ref(),
+            text_collection,
             font_fallback.as_ref(),
             &resolved_family,
             font_size_px,
@@ -181,7 +181,7 @@ impl GlyphCache {
         )?;
         let text_format_italic = make_text_format(
             dwrite,
-            bundled_collection.as_ref(),
+            text_collection,
             font_fallback.as_ref(),
             &resolved_family,
             font_size_px,
@@ -190,7 +190,7 @@ impl GlyphCache {
         )?;
         let text_format_bold_italic = make_text_format(
             dwrite,
-            bundled_collection.as_ref(),
+            text_collection,
             font_fallback.as_ref(),
             &resolved_family,
             font_size_px,
@@ -198,12 +198,7 @@ impl GlyphCache {
             true,
         )?;
 
-        let metrics = measure_cell(
-            dwrite,
-            bundled_collection.as_ref(),
-            &resolved_family,
-            font_size_px,
-        )?;
+        let metrics = measure_cell(dwrite, text_collection, &resolved_family, font_size_px)?;
 
         // Resolve a face for per-glyph design-metrics lookups. The face
         // comes from the same collection `measure_cell` walked, so
@@ -211,7 +206,7 @@ impl GlyphCache {
         // errors here — on failure `primary_face` stays `None` and the
         // rasterize path skips scale-to-fit, matching pre-fix behavior.
         let (primary_face, primary_upm) =
-            match resolve_font_face(dwrite, bundled_collection.as_ref(), &resolved_family) {
+            match resolve_font_face(dwrite, text_collection, &resolved_family) {
                 Ok((face, _src)) => {
                     let mut fm = DWRITE_FONT_METRICS::default();
                     // SAFETY: windows-rs writes through the out pointer.
@@ -379,7 +374,7 @@ impl GlyphCache {
             device: device.clone(),
             _context: context.clone(),
             dwrite: dwrite.clone(),
-            bundled_collection,
+            font_collection,
             font_fallback,
             _d2d_factory: d2d_factory,
             atlas_size,
@@ -398,9 +393,9 @@ impl GlyphCache {
             primary_upm,
             metrics,
             font_size_px,
-            // Store the RESOLVED family — downstream callers (rebuild,
-            // font-size changes) go through the same make_text_format /
-            // measure_cell path and must keep using the bundled name.
+            // Store the RESOLVED family and collection — downstream
+            // rebuilds must use the same source to keep metrics and
+            // rasterization in lockstep.
             font_family: resolved_family,
         })
     }
@@ -703,7 +698,7 @@ impl GlyphCache {
         self.allocator = AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
         self.text_format_regular = make_text_format(
             &self.dwrite,
-            self.bundled_collection.as_ref(),
+            self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
             &self.font_family,
             font_size_px,
@@ -712,7 +707,7 @@ impl GlyphCache {
         )?;
         self.text_format_bold = make_text_format(
             &self.dwrite,
-            self.bundled_collection.as_ref(),
+            self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
             &self.font_family,
             font_size_px,
@@ -721,7 +716,7 @@ impl GlyphCache {
         )?;
         self.text_format_italic = make_text_format(
             &self.dwrite,
-            self.bundled_collection.as_ref(),
+            self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
             &self.font_family,
             font_size_px,
@@ -730,7 +725,7 @@ impl GlyphCache {
         )?;
         self.text_format_bold_italic = make_text_format(
             &self.dwrite,
-            self.bundled_collection.as_ref(),
+            self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
             &self.font_family,
             font_size_px,
@@ -739,7 +734,7 @@ impl GlyphCache {
         )?;
         self.metrics = measure_cell(
             &self.dwrite,
-            self.bundled_collection.as_ref(),
+            self.font_collection.as_ref(),
             &self.font_family,
             font_size_px,
         )?;
@@ -749,7 +744,7 @@ impl GlyphCache {
         // with the current collection / family).
         match resolve_font_face(
             &self.dwrite,
-            self.bundled_collection.as_ref(),
+            self.font_collection.as_ref(),
             &self.font_family,
         ) {
             Ok((face, _src)) => {
@@ -818,9 +813,10 @@ fn make_text_format(
         DWRITE_FONT_STYLE_NORMAL
     };
 
-    // Pass the bundled collection when we have one so DWrite resolves
-    // the family name against our IoskeleyMono blobs instead of the
-    // system font table. `None` falls back to the system collection.
+    // Pass a private collection only when the resolved family lives
+    // there. User-selected system fonts must use `None`; otherwise
+    // DirectWrite looks only inside our bundled collection and silently
+    // falls through a different fallback path than the metrics probe.
     // SAFETY: both buffers are NUL-terminated wide strings.
     let format = unsafe {
         dwrite.CreateTextFormat(
@@ -856,7 +852,7 @@ fn make_text_format(
 
 fn measure_cell(
     dwrite: &IDWriteFactory,
-    bundled: Option<&IDWriteFontCollection>,
+    collection: Option<&IDWriteFontCollection>,
     family: &str,
     font_size_px: f32,
 ) -> Result<CellMetrics> {
@@ -879,7 +875,7 @@ fn measure_cell(
     // monospace font every glyph has the same advance, so measuring
     // 'M' is representative; a missing-glyph fallback doesn't factor
     // in.
-    let (face, resolved) = resolve_font_face(dwrite, bundled, family)?;
+    let (face, resolved) = resolve_font_face(dwrite, collection, family)?;
 
     // Font-level design metrics (UPM, ascent, descent, lineGap).
     // SAFETY: windows-rs signature takes a raw out pointer; we pass a
@@ -932,8 +928,8 @@ fn measure_cell(
 /// Resolve `family` to a concrete [`IDWriteFontFace`] for measurement.
 ///
 /// Order:
-/// 1. Bundled collection (our IoskeleyMono blobs).
-/// 2. System collection (for unbundled hosts).
+/// 1. The resolved private collection, if any (our IoskeleyMono blobs).
+/// 2. System collection.
 /// 3. System collection → "Segoe UI" (last-resort so we return *some*
 ///    metrics instead of bailing the entire render setup).
 ///
@@ -942,25 +938,20 @@ fn measure_cell(
 /// "cells are twice as wide as they should be" issues.
 fn resolve_font_face(
     dwrite: &IDWriteFactory,
-    bundled: Option<&IDWriteFontCollection>,
+    collection: Option<&IDWriteFontCollection>,
     family: &str,
 ) -> Result<(IDWriteFontFace, String)> {
-    if let Some(coll) = bundled {
+    if let Some(coll) = collection {
         if let Some(face) = find_face_in_collection(coll, family)? {
-            return Ok((face, format!("{family} (bundled)")));
+            return Ok((face, format!("{family} (private collection)")));
         }
         log::warn!(
-            "measure_cell: '{family}' not found in bundled collection; \
+            "measure_cell: '{family}' not found in private font collection; \
              falling back to system collection"
         );
     }
 
-    let mut sys: Option<IDWriteFontCollection> = None;
-    // SAFETY: out param owned by us; `checkforupdates=false` is the
-    // cheap path — we don't care if the system font list changed.
-    unsafe { dwrite.GetSystemFontCollection(&mut sys, false) }
-        .context("IDWriteFactory::GetSystemFontCollection failed")?;
-    let sys = sys.context("GetSystemFontCollection returned None")?;
+    let sys = system_font_collection(dwrite)?;
 
     if let Some(face) = find_face_in_collection(&sys, family)? {
         return Ok((face, format!("{family} (system)")));
@@ -1017,35 +1008,93 @@ fn find_face_in_collection(
     Ok(Some(face))
 }
 
-/// Pick a family name that actually exists in the bundled collection.
+struct ResolvedFontFamily<'a> {
+    family: String,
+    collection: Option<&'a IDWriteFontCollection>,
+}
+
+/// Pick the concrete DirectWrite family and collection used by both
+/// `CreateTextFormat` and metric probing.
 ///
-/// The GPUI / config layer uses "Ioskeley Mono" (display form), but the
-/// bundled TTF `name` table advertises "IoskeleyMono" (one word). Try
-/// the verbatim name first, then the whitespace-stripped variant, then
-/// give up and return the input — the downstream code will hit the
-/// system-cascade fallback path and log a warning.
-fn resolve_bundled_family(bundled: Option<&IDWriteFontCollection>, family: &str) -> String {
-    let Some(coll) = bundled else {
-        return family.to_string();
+/// The config/UI default is the display name `"Ioskeley Mono"`, while
+/// the bundled TTFs advertise `"IoskeleyMono"`. For bundled fonts we
+/// must pass the private collection. For every user-selected system
+/// font we must pass `None`, otherwise DirectWrite searches only the
+/// bundled collection and draws via a fallback that no longer matches
+/// the metrics.
+fn resolve_font_family<'a>(
+    dwrite: &IDWriteFactory,
+    bundled: Option<&'a IDWriteFontCollection>,
+    family: &str,
+) -> Result<ResolvedFontFamily<'a>> {
+    let trimmed = family.trim();
+    let requested = if trimmed.is_empty() {
+        "Segoe UI"
+    } else {
+        trimmed
     };
-    if family_exists_in(coll, family) {
-        log::info!("resolve_bundled_family: '{family}' matched bundled collection verbatim");
-        return family.to_string();
+    let stripped: String = requested.chars().filter(|c| !c.is_whitespace()).collect();
+
+    if let Some(coll) = bundled {
+        if family_exists_in(coll, requested) {
+            log::info!("resolve_font_family: '{requested}' matched bundled collection");
+            return Ok(ResolvedFontFamily {
+                family: requested.to_string(),
+                collection: Some(coll),
+            });
+        }
+        if stripped != requested && family_exists_in(coll, &stripped) {
+            log::info!(
+                "resolve_font_family: '{requested}' missed; '{stripped}' matched bundled \
+                 collection — using that for DWrite lookups"
+            );
+            return Ok(ResolvedFontFamily {
+                family: stripped,
+                collection: Some(coll),
+            });
+        }
     }
-    let stripped: String = family.chars().filter(|c| !c.is_whitespace()).collect();
-    if stripped != family && family_exists_in(coll, &stripped) {
+
+    let sys = system_font_collection(dwrite)?;
+    if family_exists_in(&sys, requested) {
+        log::info!("resolve_font_family: '{requested}' matched system collection");
+        return Ok(ResolvedFontFamily {
+            family: requested.to_string(),
+            collection: None,
+        });
+    }
+    if stripped != requested && family_exists_in(&sys, &stripped) {
         log::info!(
-            "resolve_bundled_family: '{family}' missed; '{stripped}' matched bundled \
-             collection — using that for DWrite lookups"
+            "resolve_font_family: '{requested}' missed; '{stripped}' matched system collection"
         );
-        return stripped;
+        return Ok(ResolvedFontFamily {
+            family: stripped,
+            collection: None,
+        });
     }
-    log::warn!(
-        "resolve_bundled_family: neither '{family}' nor its no-space form resolved \
-         in the bundled collection; downstream make_text_format / measure_cell will \
-         fall back to the system cascade"
-    );
-    family.to_string()
+
+    let fallback = "Segoe UI";
+    if family_exists_in(&sys, fallback) {
+        log::warn!(
+            "resolve_font_family: '{requested}' not found in bundled or system collections; \
+             using '{fallback}' so text formats and metrics stay consistent"
+        );
+        return Ok(ResolvedFontFamily {
+            family: fallback.to_string(),
+            collection: None,
+        });
+    }
+
+    anyhow::bail!("resolve_font_family: neither '{requested}' nor fallback '{fallback}' resolved");
+}
+
+fn system_font_collection(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
+    let mut sys: Option<IDWriteFontCollection> = None;
+    // SAFETY: out param owned by us; `checkforupdates=false` is the
+    // cheap path — we don't care if the system font list changed.
+    unsafe { dwrite.GetSystemFontCollection(&mut sys, false) }
+        .context("IDWriteFactory::GetSystemFontCollection failed")?;
+    sys.context("GetSystemFontCollection returned None")
 }
 
 fn family_exists_in(collection: &IDWriteFontCollection, family: &str) -> bool {
