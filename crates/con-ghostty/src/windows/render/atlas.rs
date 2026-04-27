@@ -447,6 +447,7 @@ impl GlyphCache {
         let codepoint = key.codepoint;
         let is_scalable_pua =
             matches!(codepoint, 0xE000..=0xF8FF) && !matches!(codepoint, 0xE0A0..=0xE0D4);
+        let is_wide_text = is_wide_codepoint(codepoint);
         let metrics = if is_scalable_pua {
             self.primary_glyph_metrics_px(codepoint)
         } else {
@@ -485,6 +486,7 @@ impl GlyphCache {
                     (w, 0.0, Some(scale))
                 }
             }
+            None if is_wide_text => (cell_w.saturating_mul(2), 0.0, None),
             None => (cell_w, 0.0, None),
         };
         let alloc = self.allocator.allocate(size2(glyph_w, cell_h))?;
@@ -601,6 +603,20 @@ impl GlyphCache {
                     utf16_slice,
                     format,
                     &shifted,
+                    &self.white_brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+            } else if is_wide_text {
+                // CJK fallback glyphs need the two terminal cells the VT
+                // reserves for them. Drawing into a one-cell layout rect
+                // clips or visually narrows the fallback font, then the
+                // second spacer cell makes the text look like it has
+                // inserted spaces.
+                self.d2d_rt.DrawText(
+                    utf16_slice,
+                    format,
+                    &slot_rect,
                     &self.white_brush,
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
@@ -1073,7 +1089,7 @@ fn resolve_font_family<'a>(
         });
     }
 
-    let fallback = "Segoe UI";
+    let fallback = system_monospace_fallback(&sys).unwrap_or("Segoe UI");
     if family_exists_in(&sys, fallback) {
         log::warn!(
             "resolve_font_family: '{requested}' not found in bundled or system collections; \
@@ -1086,6 +1102,19 @@ fn resolve_font_family<'a>(
     }
 
     anyhow::bail!("resolve_font_family: neither '{requested}' nor fallback '{fallback}' resolved");
+}
+
+fn system_monospace_fallback(sys: &IDWriteFontCollection) -> Option<&'static str> {
+    [
+        "Cascadia Mono",
+        "Cascadia Code",
+        "Consolas",
+        "Lucida Console",
+        "Courier New",
+        "Segoe UI",
+    ]
+    .into_iter()
+    .find(|family| family_exists_in(sys, family))
 }
 
 fn system_font_collection(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
@@ -1112,4 +1141,61 @@ fn family_exists_in(collection: &IDWriteFontCollection, family: &str) -> bool {
         )
     };
     hr.is_ok() && exists.as_bool()
+}
+
+fn is_wide_codepoint(codepoint: u32) -> bool {
+    matches!(
+        codepoint,
+        0x1100..=0x115F
+            | 0x231A..=0x231B
+            | 0x2329..=0x232A
+            | 0x23E9..=0x23EC
+            | 0x23F0
+            | 0x23F3
+            | 0x25FD..=0x25FE
+            | 0x2614..=0x2615
+            | 0x2648..=0x2653
+            | 0x267F
+            | 0x2693
+            | 0x26A1
+            | 0x26AA..=0x26AB
+            | 0x26BD..=0x26BE
+            | 0x26C4..=0x26C5
+            | 0x26CE
+            | 0x26D4
+            | 0x26EA
+            | 0x26F2..=0x26F3
+            | 0x26F5
+            | 0x26FA
+            | 0x26FD
+            | 0x2705
+            | 0x270A..=0x270B
+            | 0x2728
+            | 0x274C
+            | 0x274E
+            | 0x2753..=0x2755
+            | 0x2757
+            | 0x2795..=0x2797
+            | 0x27B0
+            | 0x27BF
+            | 0x2B1B..=0x2B1C
+            | 0x2B50
+            | 0x2B55
+            | 0x2E80..=0xA4CF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE10..=0xFE19
+            | 0xFE30..=0xFE6F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x1F004
+            | 0x1F0CF
+            | 0x1F18E
+            | 0x1F191..=0x1F19A
+            | 0x1F200..=0x1F251
+            | 0x1F300..=0x1F64F
+            | 0x1F680..=0x1F6FF
+            | 0x1F900..=0x1F9FF
+            | 0x20000..=0x3FFFD
+    )
 }
