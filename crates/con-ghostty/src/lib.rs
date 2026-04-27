@@ -48,8 +48,8 @@ pub use terminal::{
 
 #[cfg(target_os = "windows")]
 pub use stub::{
-    CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
-    GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
+    CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttyScrollbar,
+    GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 #[cfg(target_os = "windows")]
 pub use windows::{WindowsGhosttyApp as GhosttyApp, WindowsGhosttyTerminal as GhosttyTerminal};
@@ -58,8 +58,8 @@ pub use windows::{WindowsGhosttyApp as GhosttyApp, WindowsGhosttyTerminal as Gho
 pub use linux::{LinuxGhosttyApp as GhosttyApp, LinuxGhosttyTerminal as GhosttyTerminal};
 #[cfg(target_os = "linux")]
 pub use stub::{
-    CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
-    GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
+    CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttyScrollbar,
+    GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 /// Re-exports for the Linux GPUI-owned terminal renderer in
 /// `con-app/src/linux_view.rs`. These types are part of the cross-
@@ -77,6 +77,7 @@ pub use vt::{
     not(target_os = "linux")
 ))]
 pub use stub::{
-    CommandFinishedSignal, CommandRecord, GhosttyApp, GhosttyConfigPatch, GhosttySplitDirection,
-    GhosttySurfaceEvent, GhosttyTerminal, MouseButton, SurfaceSize, TerminalColors,
+    CommandFinishedSignal, CommandRecord, GhosttyApp, GhosttyConfigPatch, GhosttyScrollbar,
+    GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton, SurfaceSize,
+    TerminalColors,
 };

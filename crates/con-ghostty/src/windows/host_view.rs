@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
+use crate::stub::GhosttyScrollbar;
+
 use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
 use super::render::{RenderOutcome, Renderer, RendererConfig, Selection, ThemeColors};
@@ -513,6 +515,31 @@ impl RenderSession {
         if self.vt.scroll_viewport_delta(rows) {
             self.request_low_latency_present();
         }
+    }
+
+    pub fn scrollbar(&self) -> Option<GhosttyScrollbar> {
+        self.vt.scrollbar()
+    }
+
+    pub fn scroll_viewport_rows(&self, rows: isize) {
+        *self.scroll_remainder_px.lock() = 0.0;
+        if self.vt.scroll_viewport_delta(rows) {
+            self.request_low_latency_present();
+        }
+    }
+
+    pub fn scroll_viewport_to_offset(&self, target_offset: u64) {
+        let Some(scrollbar) = self.vt.scrollbar() else {
+            return;
+        };
+        let max_offset = scrollbar.total.saturating_sub(scrollbar.len);
+        let target = target_offset.min(max_offset);
+        let delta = target as i128 - scrollbar.offset.min(max_offset) as i128;
+        if delta == 0 {
+            return;
+        }
+        let rows = delta.clamp(isize::MIN as i128, isize::MAX as i128) as isize;
+        self.scroll_viewport_rows(rows);
     }
 
     fn send_scroll_as_cursor_keys(&self, delta_y_px: f32) {

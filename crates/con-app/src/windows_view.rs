@@ -40,7 +40,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use con_ghostty::{GhosttyApp, GhosttySplitDirection, GhosttyTerminal};
+use con_ghostty::{GhosttyApp, GhosttyScrollbar, GhosttySplitDirection, GhosttyTerminal};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui::*;
@@ -50,6 +50,20 @@ use smallvec::SmallVec;
 
 use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
 use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
+
+const SCROLLBAR_INSET_PX: f32 = 4.0;
+const SCROLLBAR_WIDTH_PX: f32 = 6.0;
+const SCROLLBAR_MIN_THUMB_PX: f32 = 28.0;
+
+#[derive(Debug, Clone, Copy)]
+struct ScrollbarDrag {
+    start_y_px: f32,
+    start_offset: u64,
+    total: u64,
+    len: u64,
+    track_height_px: f32,
+    thumb_height_px: f32,
+}
 
 fn mouse_mods_from(modifiers: &Modifiers) -> MouseEventMods {
     MouseEventMods {
@@ -108,6 +122,7 @@ pub struct GhosttyView {
     /// that referenced them has finished. Dropped after via
     /// `Window::drop_image` to evict sprite-atlas tiles.
     images_to_drop: Vec<Arc<RenderImage>>,
+    scrollbar_drag: Option<ScrollbarDrag>,
     /// Cloned and handed to `RenderSession::new`; the ConPTY reader
     /// thread sends at most one queued signal while a repaint wake is
     /// pending. The coalescer task spawned in `new()` consumes that
@@ -172,6 +187,7 @@ impl GhosttyView {
             cached_frame: None,
             cached_frame_size: None,
             images_to_drop: Vec::new(),
+            scrollbar_drag: None,
             wake_tx,
             wake_pending,
         }
@@ -652,6 +668,150 @@ impl GhosttyView {
         session.forward_wheel(col0 + 1, row0 + 1, delta_y_px, mods);
     }
 
+    fn scrollbar_state(&self) -> Option<GhosttyScrollbar> {
+        self.terminal.as_ref()?.scrollbar().filter(|scrollbar| {
+            scrollbar.total > scrollbar.len && scrollbar.len > 0 && scrollbar.total > 0
+        })
+    }
+
+    fn scrollbar_layout(&self, scrollbar: GhosttyScrollbar) -> Option<(f32, f32, f32)> {
+        let bounds = self.pane_bounds?;
+        let height = f32::from(bounds.size.height);
+        let track_height = (height - (SCROLLBAR_INSET_PX * 2.0)).max(0.0);
+        if track_height <= 0.0 || scrollbar.total <= scrollbar.len || scrollbar.len == 0 {
+            return None;
+        }
+        let thumb_height = ((scrollbar.len as f32 / scrollbar.total as f32) * track_height)
+            .clamp(SCROLLBAR_MIN_THUMB_PX.min(track_height), track_height);
+        let travel = (track_height - thumb_height).max(0.0);
+        let max_offset = scrollbar.total.saturating_sub(scrollbar.len).max(1);
+        let offset = scrollbar.offset.min(max_offset);
+        let thumb_top = SCROLLBAR_INSET_PX + (offset as f32 / max_offset as f32) * travel;
+        Some((track_height, thumb_height, thumb_top))
+    }
+
+    fn start_scrollbar_drag(&mut self, pos: Point<Pixels>) {
+        let Some(scrollbar) = self.scrollbar_state() else {
+            return;
+        };
+        let Some((track_height_px, thumb_height_px, _)) = self.scrollbar_layout(scrollbar) else {
+            return;
+        };
+        self.scrollbar_drag = Some(ScrollbarDrag {
+            start_y_px: f32::from(pos.y),
+            start_offset: scrollbar.offset,
+            total: scrollbar.total,
+            len: scrollbar.len,
+            track_height_px,
+            thumb_height_px,
+        });
+    }
+
+    fn drag_scrollbar(&mut self, pos: Point<Pixels>) {
+        let Some(drag) = self.scrollbar_drag else {
+            return;
+        };
+        let max_offset = drag.total.saturating_sub(drag.len);
+        if max_offset == 0 {
+            return;
+        }
+        let travel = (drag.track_height_px - drag.thumb_height_px).max(1.0);
+        let delta_px = f32::from(pos.y) - drag.start_y_px;
+        let delta_rows = (delta_px / travel) * max_offset as f32;
+        let target = (drag.start_offset as f32 + delta_rows)
+            .round()
+            .clamp(0.0, max_offset as f32) as u64;
+        self.scroll_viewport_to_offset(target);
+    }
+
+    fn page_scrollbar_toward(&self, pos: Point<Pixels>) {
+        let Some(scrollbar) = self.scrollbar_state() else {
+            return;
+        };
+        let Some((_, thumb_height, thumb_top)) = self.scrollbar_layout(scrollbar) else {
+            return;
+        };
+        let Some(bounds) = self.pane_bounds else {
+            return;
+        };
+        let local_y = f32::from(pos.y) - f32::from(bounds.origin.y);
+        let thumb_bottom = thumb_top + thumb_height;
+        let rows = scrollbar.len.max(1) as isize;
+        if local_y < thumb_top {
+            self.scroll_viewport_rows(-rows);
+        } else if local_y > thumb_bottom {
+            self.scroll_viewport_rows(rows);
+        }
+    }
+
+    fn scroll_viewport_rows(&self, rows: isize) {
+        let Some(terminal) = &self.terminal else {
+            return;
+        };
+        let inner = terminal.inner();
+        if let Some(session) = inner.lock().as_ref() {
+            session.scroll_viewport_rows(rows);
+        }
+    }
+
+    fn scroll_viewport_to_offset(&self, offset: u64) {
+        let Some(terminal) = &self.terminal else {
+            return;
+        };
+        let inner = terminal.inner();
+        if let Some(session) = inner.lock().as_ref() {
+            session.scroll_viewport_to_offset(offset);
+        }
+    }
+
+    fn render_terminal_scrollbar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let scrollbar = self.scrollbar_state()?;
+        let (_, thumb_height, thumb_top) = self.scrollbar_layout(scrollbar)?;
+        let theme = cx.theme();
+        let thumb_color = theme.foreground.opacity(0.28);
+        let thumb_hover_color = theme.foreground.opacity(0.42);
+
+        Some(
+            div()
+                .absolute()
+                .top(px(SCROLLBAR_INSET_PX))
+                .right(px(2.0))
+                .bottom(px(SCROLLBAR_INSET_PX))
+                .w(px(SCROLLBAR_WIDTH_PX + 4.0))
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        this.page_scrollbar_toward(event.position);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(thumb_top - SCROLLBAR_INSET_PX))
+                        .right(px(2.0))
+                        .w(px(SCROLLBAR_WIDTH_PX))
+                        .h(px(thumb_height))
+                        .rounded(px(SCROLLBAR_WIDTH_PX / 2.0))
+                        .bg(thumb_color)
+                        .hover(|style| style.bg(thumb_hover_color))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                window.prevent_default();
+                                this.start_scrollbar_drag(event.position);
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// Translate a GPUI `KeyDownEvent` into bytes and forward to the
     /// ConPTY. Returns `true` if the key was handled (so GPUI can stop
     /// propagation).
@@ -921,7 +1081,10 @@ impl Render for GhosttyView {
             None
         };
         let entity = cx.entity().downgrade();
-        let image_children = self.image_children();
+        let mut terminal_children = self.image_children();
+        if let Some(scrollbar) = self.render_terminal_scrollbar(cx) {
+            terminal_children.push(scrollbar);
+        }
 
         let focus = self.focus_handle.clone();
 
@@ -952,6 +1115,11 @@ impl Render for GhosttyView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                if this.scrollbar_drag.is_some() {
+                    this.drag_scrollbar(event.position);
+                    cx.notify();
+                    return;
+                }
                 if event.pressed_button == Some(MouseButton::Left) {
                     this.forward_mouse_drag(event.position, mouse_mods_from(&event.modifiers));
                     cx.notify();
@@ -960,6 +1128,10 @@ impl Render for GhosttyView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    if this.scrollbar_drag.take().is_some() {
+                        cx.notify();
+                        return;
+                    }
                     this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers));
                     cx.notify();
                 }),
@@ -1001,7 +1173,7 @@ impl Render for GhosttyView {
                             .relative()
                             .size_full()
                             .overflow_hidden()
-                            .children(image_children),
+                            .children(terminal_children),
                     ),
             )
     }
