@@ -15,6 +15,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed custom terminal fonts on Windows resolving through the wrong DirectWrite collection, which could make glyphs appear incomplete or spaced apart when a system font such as JetBrains Maple Mono was selected.
 - Fixed Windows fallback rendering for CJK and missing default fonts by reserving Unicode-derived two-cell atlas slots for wide glyphs and falling back to installed monospace system fonts before proportional UI fonts.
 - Fixed new Windows terminals starting in con's install directory. New panes now honor an explicit cwd when provided and otherwise start from the user's home directory.
+- Fixed mouse-wheel scrolling on Windows primary-screen terminals by wiring wheel gestures to libghostty-vt's viewport scrollback path when the shell has not requested mouse tracking.
 
 ------
 
