@@ -13,6 +13,10 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed Windows terminal scroll direction so wheel and touchpad gestures follow the platform scroll intent instead of feeling reversed against classic scrolling setups.
 - Fixed Tab and Shift+Tab in the Windows terminal so shells and TUIs receive completion/navigation keys instead of GPUI focus navigation swallowing them.
 
+**Terminal, Linux Backend (preview)**
+
+- Fixed Tab and Shift+Tab in the Linux terminal preview with the same terminal-local key capture used on macOS and Windows, preventing GPUI focus navigation from swallowing shell completion keys.
+
 ## `v0.1.0-beta.41` - 2026-04-27
 
 ### Fixed
