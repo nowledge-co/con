@@ -11,6 +11,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, Windows Backend (preview)**
 
 - Fixed Windows terminal scroll direction so wheel and touchpad gestures follow the platform scroll intent instead of feeling reversed against classic scrolling setups.
+- Fixed Tab and Shift+Tab in the Windows terminal so shells and TUIs receive completion/navigation keys instead of GPUI focus navigation swallowing them.
 
 ## `v0.1.0-beta.41` - 2026-04-27
 
