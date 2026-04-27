@@ -139,9 +139,14 @@ enum SyncRenderResult {
     Pending,
 }
 
-pub fn init(_cx: &mut App) {
-    // Keyboard input on Windows flows through GPUI focus → `on_key_down`
-    // below (no HWND-level WM_CHAR routing), so no bindings are needed.
+pub fn init(cx: &mut App) {
+    // Tab is a focus-navigation key in GPUI Root. Bind it inside the
+    // terminal context so shells receive completion requests instead of
+    // the window moving focus away from the terminal.
+    cx.bind_keys([
+        KeyBinding::new("tab", ConsumeTab, Some("GhosttyTerminal")),
+        KeyBinding::new("shift-tab", ConsumeTabPrev, Some("GhosttyTerminal")),
+    ]);
 }
 
 impl GhosttyView {
@@ -1095,8 +1100,25 @@ impl Render for GhosttyView {
             .size_full()
             .min_w_0()
             .min_h_0()
+            .key_context("GhosttyTerminal")
             .track_focus(&self.focus_handle)
             .bg(background)
+            .on_action(cx.listener(|this, _: &ConsumeTab, window, _cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
+                if let Some(terminal) = &this.terminal {
+                    terminal.send_text("\t");
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ConsumeTabPrev, window, _cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
+                if let Some(terminal) = &this.terminal {
+                    terminal.send_text("\x1b[Z");
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;
