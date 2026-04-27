@@ -59,15 +59,47 @@ pub struct RenderSession {
     /// path in the middle of one interactive run.
     low_latency_burst_until: Mutex<Option<Instant>>,
     /// Pixel remainder from high-resolution wheels / trackpads. We only
-    /// ask libghostty-vt to scroll whole terminal rows, so fractional
-    /// deltas accumulate here instead of turning every tiny touchpad
-    /// event into a full-row jump.
-    scroll_remainder_px: Mutex<f32>,
+    /// ask libghostty-vt or alternate-screen apps to scroll whole rows,
+    /// so fractional deltas accumulate here instead of turning every
+    /// tiny touchpad event into a full-row jump.
+    scroll_remainder: Mutex<ScrollRemainder>,
     drag_anchor: Mutex<Option<(u16, u16)>>,
 }
 
 unsafe impl Send for RenderSession {}
 unsafe impl Sync for RenderSession {}
+
+#[derive(Debug, Default)]
+struct ScrollRemainder {
+    px: f32,
+    alternate_screen: Option<bool>,
+}
+
+impl ScrollRemainder {
+    fn reset(&mut self) {
+        self.px = 0.0;
+        self.alternate_screen = None;
+    }
+
+    fn rows_for_delta(
+        &mut self,
+        delta_y_px: f32,
+        cell_height_px: f32,
+        alternate_screen: bool,
+    ) -> isize {
+        if self.alternate_screen != Some(alternate_screen) {
+            self.px = 0.0;
+            self.alternate_screen = Some(alternate_screen);
+        }
+
+        self.px += delta_y_px;
+        let rows = (self.px / cell_height_px).trunc() as isize;
+        if rows != 0 {
+            self.px -= rows as f32 * cell_height_px;
+        }
+        rows
+    }
+}
 
 /// Keyboard modifiers held at the time of a mouse event.
 ///
@@ -160,7 +192,7 @@ impl RenderSession {
             low_latency_requested: AtomicBool::new(false),
             low_latency_generation_target: AtomicU64::new(0),
             low_latency_burst_until: Mutex::new(None),
-            scroll_remainder_px: Mutex::new(0.0),
+            scroll_remainder: Mutex::new(ScrollRemainder::default()),
             drag_anchor: Mutex::new(None),
         })
     }
@@ -497,20 +529,16 @@ impl RenderSession {
             return;
         }
 
-        if allow_alt_screen_keys && self.vt.is_alternate_screen() && self.vt.is_alt_scroll() {
-            self.send_scroll_as_cursor_keys(delta_y_px);
-            return;
-        }
-
-        let cell_h = self.metrics().cell_height_px.max(1) as f32;
-        let mut remainder = self.scroll_remainder_px.lock();
-        *remainder += delta_y_px;
-        let rows = (*remainder / cell_h).trunc() as isize;
+        let alternate_screen = self.vt.is_alternate_screen();
+        let rows = self.scroll_rows_for_delta(delta_y_px, alternate_screen);
         if rows == 0 {
             return;
         }
-        *remainder -= rows as f32 * cell_h;
-        drop(remainder);
+
+        if allow_alt_screen_keys && alternate_screen && self.vt.is_alt_scroll() {
+            self.send_scroll_as_cursor_keys(rows);
+            return;
+        }
 
         if self.vt.scroll_viewport_delta(rows) {
             self.request_low_latency_present();
@@ -522,7 +550,7 @@ impl RenderSession {
     }
 
     pub fn scroll_viewport_rows(&self, rows: isize) {
-        *self.scroll_remainder_px.lock() = 0.0;
+        self.scroll_remainder.lock().reset();
         if self.vt.scroll_viewport_delta(rows) {
             self.request_low_latency_present();
         }
@@ -542,10 +570,18 @@ impl RenderSession {
         self.scroll_viewport_rows(rows);
     }
 
-    fn send_scroll_as_cursor_keys(&self, delta_y_px: f32) {
+    fn scroll_rows_for_delta(&self, delta_y_px: f32, alternate_screen: bool) -> isize {
         let cell_h = self.metrics().cell_height_px.max(1) as f32;
-        let rows = (delta_y_px.abs() / cell_h).ceil().max(1.0).min(10.0) as usize;
-        let seq = if delta_y_px < 0.0 {
+        self.scroll_remainder
+            .lock()
+            .rows_for_delta(delta_y_px, cell_h, alternate_screen)
+    }
+
+    fn send_scroll_as_cursor_keys(&self, rows: isize) {
+        if rows == 0 {
+            return;
+        }
+        let seq = if rows < 0 {
             if self.vt.is_decckm() {
                 "\x1bOA"
             } else {
@@ -557,7 +593,7 @@ impl RenderSession {
             "\x1b[B"
         };
         self.request_low_latency_after_next_generation();
-        for _ in 0..rows {
+        for _ in 0..rows.unsigned_abs() {
             let _ = self.conpty.write(seq.as_bytes());
         }
     }
@@ -615,7 +651,7 @@ impl RenderSession {
 
 fn resolve_shell_cwd(cwd: Option<PathBuf>) -> Option<PathBuf> {
     if let Some(cwd) = cwd {
-        if cwd.is_dir() {
+        if is_valid_shell_cwd(&cwd) {
             return Some(cwd);
         }
         log::warn!("Ignoring invalid ConPTY cwd: {cwd:?}");
@@ -634,7 +670,14 @@ fn default_shell_cwd() -> Option<PathBuf> {
             Some(full)
         })
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-    home.filter(|path| path.exists())
+    home.filter(|path| is_valid_shell_cwd(path)).or_else(|| {
+        let tmp = std::env::temp_dir();
+        is_valid_shell_cwd(&tmp).then_some(tmp)
+    })
+}
+
+fn is_valid_shell_cwd(path: &Path) -> bool {
+    path.is_absolute() && path.is_dir()
 }
 
 fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
