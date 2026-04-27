@@ -13,6 +13,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, Windows Backend (preview)**
 
 - Fixed custom terminal fonts on Windows resolving through the wrong DirectWrite collection, which could make glyphs appear incomplete or spaced apart when a system font such as JetBrains Maple Mono was selected.
+- Fixed Windows fallback rendering for CJK and missing default fonts by reserving two cells for wide East Asian glyphs and falling back to installed monospace system fonts before proportional UI fonts.
 
 ------
 
