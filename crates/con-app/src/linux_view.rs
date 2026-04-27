@@ -86,7 +86,15 @@ pub struct GhosttyView {
     last_surface_size: Option<(u32, u32, u16, u16)>,
 }
 
-pub fn init(_cx: &mut App) {}
+pub fn init(cx: &mut App) {
+    // Tab is a focus-navigation key in GPUI Root. Bind it inside the
+    // terminal context so shells receive completion requests instead of
+    // the window moving focus away from the terminal.
+    cx.bind_keys([
+        KeyBinding::new("tab", ConsumeTab, Some("GhosttyTerminal")),
+        KeyBinding::new("shift-tab", ConsumeTabPrev, Some("GhosttyTerminal")),
+    ]);
+}
 
 impl GhosttyView {
     pub fn new(
@@ -669,8 +677,29 @@ impl Render for GhosttyView {
             .size_full()
             .min_w_0()
             .min_h_0()
+            .key_context("GhosttyTerminal")
             .track_focus(&self.focus_handle)
             .bg(theme.background.opacity(pane_opacity))
+            .on_action(cx.listener(|this, _: &ConsumeTab, window, cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
+                let _ = this.ensure_session(cx);
+                if let Some(terminal) = &this.terminal {
+                    terminal.send_text("\t");
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ConsumeTabPrev, window, cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
+                let _ = this.ensure_session(cx);
+                if let Some(terminal) = &this.terminal {
+                    terminal.send_text("\x1b[Z");
+                }
+                cx.notify();
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;
