@@ -1074,12 +1074,13 @@ impl Render for GhosttyView {
             SyncRenderResult::Rendered | SyncRenderResult::Unchanged => {}
         }
 
-        let theme = cx.theme();
         let placeholder_background = if self.cached_image.is_none() {
             self.placeholder_background()
         } else {
             None
         };
+        let background =
+            placeholder_background.unwrap_or_else(|| cx.theme().background.opacity(0.0));
         let entity = cx.entity().downgrade();
         let mut terminal_children = self.image_children();
         if let Some(scrollbar) = self.render_terminal_scrollbar(cx) {
@@ -1095,7 +1096,7 @@ impl Render for GhosttyView {
             .min_w_0()
             .min_h_0()
             .track_focus(&self.focus_handle)
-            .bg(placeholder_background.unwrap_or_else(|| theme.background.opacity(0.0)))
+            .bg(background)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;
