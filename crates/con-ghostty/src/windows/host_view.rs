@@ -503,7 +503,7 @@ impl RenderSession {
             return;
         }
         self.request_low_latency_after_next_generation();
-        let mut button: u8 = if delta_y < 0.0 { 64 } else { 65 };
+        let mut button = sgr_wheel_button_for_delta(delta_y);
         if mods.alt {
             button |= 0x08;
         }
@@ -524,6 +524,10 @@ impl RenderSession {
     ///   tracking
     /// - otherwise the primary-screen viewport scrolls through
     ///   libghostty-vt's scrollback
+    ///
+    /// GPUI follows the terminal/editor convention used by Zed: a
+    /// positive vertical scroll delta means "scroll up". libghostty-vt's
+    /// viewport API uses the opposite sign: negative rows are up.
     pub fn scroll_viewport_or_alt_screen(&self, delta_y_px: f32, allow_alt_screen_keys: bool) {
         if delta_y_px.abs() < f32::EPSILON {
             return;
@@ -540,7 +544,10 @@ impl RenderSession {
             return;
         }
 
-        if self.vt.scroll_viewport_delta(rows) {
+        if self
+            .vt
+            .scroll_viewport_delta(viewport_delta_for_scroll_rows(rows))
+        {
             self.request_low_latency_present();
         }
     }
@@ -578,19 +585,8 @@ impl RenderSession {
     }
 
     fn send_scroll_as_cursor_keys(&self, rows: isize) {
-        if rows == 0 {
+        let Some(seq) = cursor_key_for_scroll_rows(rows, self.vt.is_decckm()) else {
             return;
-        }
-        let seq = if rows < 0 {
-            if self.vt.is_decckm() {
-                "\x1bOA"
-            } else {
-                "\x1b[A"
-            }
-        } else if self.vt.is_decckm() {
-            "\x1bOB"
-        } else {
-            "\x1b[B"
         };
         self.request_low_latency_after_next_generation();
         for _ in 0..rows.unsigned_abs() {
@@ -680,6 +676,22 @@ fn is_valid_shell_cwd(path: &Path) -> bool {
     path.is_absolute() && path.is_dir()
 }
 
+fn sgr_wheel_button_for_delta(delta_y: f32) -> u8 {
+    if delta_y > 0.0 { 64 } else { 65 }
+}
+
+fn cursor_key_for_scroll_rows(rows: isize, decckm: bool) -> Option<&'static str> {
+    match rows.cmp(&0) {
+        std::cmp::Ordering::Greater => Some(if decckm { "\x1bOA" } else { "\x1b[A" }),
+        std::cmp::Ordering::Less => Some(if decckm { "\x1bOB" } else { "\x1b[B" }),
+        std::cmp::Ordering::Equal => None,
+    }
+}
+
+fn viewport_delta_for_scroll_rows(rows: isize) -> isize {
+    -rows
+}
+
 fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
     logical_px * (dpi as f32) / 96.0
 }
@@ -725,4 +737,31 @@ fn extract_selection_text(snapshot: &ScreenSnapshot, sel: Selection) -> String {
         out.pop();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sgr_wheel_delta_matches_gpui_scroll_direction() {
+        assert_eq!(sgr_wheel_button_for_delta(1.0), 64);
+        assert_eq!(sgr_wheel_button_for_delta(-1.0), 65);
+    }
+
+    #[test]
+    fn alt_scroll_rows_match_cursor_direction() {
+        assert_eq!(cursor_key_for_scroll_rows(2, false), Some("\x1b[A"));
+        assert_eq!(cursor_key_for_scroll_rows(-2, false), Some("\x1b[B"));
+        assert_eq!(cursor_key_for_scroll_rows(2, true), Some("\x1bOA"));
+        assert_eq!(cursor_key_for_scroll_rows(-2, true), Some("\x1bOB"));
+        assert_eq!(cursor_key_for_scroll_rows(0, false), None);
+    }
+
+    #[test]
+    fn viewport_scroll_inverts_gpui_rows_for_libghostty_vt() {
+        assert_eq!(viewport_delta_for_scroll_rows(3), -3);
+        assert_eq!(viewport_delta_for_scroll_rows(-3), 3);
+        assert_eq!(viewport_delta_for_scroll_rows(0), 0);
+    }
 }

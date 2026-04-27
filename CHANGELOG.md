@@ -6,6 +6,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+### Fixed
+
+**Terminal, Windows Backend (preview)**
+
+- Fixed Windows terminal scroll direction so wheel and touchpad gestures follow the platform scroll intent instead of feeling reversed against classic scrolling setups.
+
 ## `v0.1.0-beta.41` - 2026-04-27
 
 ### Fixed
