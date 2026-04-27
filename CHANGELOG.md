@@ -6,12 +6,16 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+## `v0.1.0-beta.42` - 2026-04-27
+
 ### Fixed
 
 **Terminal, Windows Backend (preview)**
 
 - Fixed Windows terminal scroll direction so wheel and touchpad gestures follow the platform scroll intent instead of feeling reversed against classic scrolling setups.
 - Fixed Tab and Shift+Tab in the Windows terminal so shells and TUIs receive completion/navigation keys instead of GPUI focus navigation swallowing them.
+- Fixed Windows terminal scrollbar rendering to cache libghostty-vt scrollbar state by terminal generation instead of polling the expensive scrollbar query during every paint.
+- Fixed Windows terminal scrollbar dragging so stale drag state is cleared if the mouse is released outside the terminal pane.
 
 **Terminal, Linux Backend (preview)**
 
