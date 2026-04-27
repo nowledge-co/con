@@ -52,6 +52,9 @@ What that gives you:
   per styled span: SGR colors, bold (`FontWeight::BOLD`), italic
   (`FontStyle::Italic`), underline, strikethrough, inverse, and a
   block cursor (fg/bg swap on the cursor cell) all survive
+- terminal-local Tab / Shift+Tab capture, so shell completion and TUI
+  focus/navigation keys reach the Linux pane instead of being swallowed
+  by GPUI focus traversal
 - IoskeleyMono shaping (the user-facing display name `"Ioskeley
   Mono"` is normalized to the registered TTF family `"IoskeleyMono"`
   before lookup so GPUI's CosmicTextSystem resolves the embedded
@@ -265,7 +268,7 @@ can ship.
 | 2c | Architecture decision | pick Linux backend lane | one recommended implementation path, no split-brain plan | ✅ landed |
 | 3 | Linux backend scaffold | `con-ghostty/src/linux/` plus `con-app/src/linux_view.rs` (or equivalent) with real lifecycle types | Linux no longer routes through the generic stub path conceptually | ✅ landed |
 | 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint, real product chrome (no native WM titlebar), embedded mono font, transparent + rounded window with compositor-gated blur | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / italic / underline / strikethrough / inverse, cursor block, theme palette synced from settings, IoskeleyMono shaping, client-side titlebar with min/max/close caption cluster, transparent ARGB window with rounded corners and per-pane / per-surface opacity, real KWin Wayland blur where available, fast paint pipeline (16 ms keystroke-echo round-trip), no placeholder flash on alt-screen TUIs | ✅ landed (preview) |
-| 5 | Input + selection + glyph-atlas grid renderer | keyboard, mouse, clipboard, bracketed paste, DECCKM, selection, plus the long-term GPUI-owned glyph-atlas grid renderer matching the D3D11/DirectWrite path Windows uses | vim/tmux/fzf/less usable on Linux at full speed | 🚧 in progress (DECCKM + bracketed paste already wired through `libghostty-vt` mode tracking; mouse reporting, selection, and the glyph-atlas renderer remain) |
+| 5 | Input + selection + glyph-atlas grid renderer | keyboard, mouse, clipboard, bracketed paste, DECCKM, selection, plus the long-term GPUI-owned glyph-atlas grid renderer matching the D3D11/DirectWrite path Windows uses | vim/tmux/fzf/less usable on Linux at full speed | 🚧 in progress (DECCKM, bracketed paste, and terminal-local Tab / Shift+Tab capture are wired; mouse reporting, selection, and the glyph-atlas renderer remain) |
 | 6 | Packaging | one-line installer, tarball release, desktop entry, icon integration, appcast / notify-only updater, plus native artifact strategy (`.deb`, AppImage, Flatpak, etc.) | tarball installer exists; native package format decision remains | 🚧 partially landed |
 
 ## Immediate next work
@@ -289,7 +292,10 @@ With phase 4 landed (preview), the remaining Linux tasks are:
    selection (mouse drag → SGR 1006 / X10 reports + clipboard
    integration), and scrollback gestures. DECCKM and bracketed
    paste are already wired through `libghostty-vt` mode tracking
-   and exercised by the existing keystroke encoder.
+   and exercised by the existing keystroke encoder; Tab / Shift+Tab
+   now use a terminal-local key context so shell completion and reverse
+   focus traversal are not intercepted by GPUI's app-level focus
+   navigation.
 3. Validate on hardware-accelerated native Linux desktops (Wayland
    on KDE Plasma to confirm `org_kde_kwin_blur`; Wayland on
    GNOME / sway and X11 on each major WM to confirm the

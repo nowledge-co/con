@@ -82,7 +82,10 @@ The produced `con-app.exe` launches into the full UI with a real,
 GPU-rendered terminal pane — libghostty-vt parses the VT stream from a
 ConPTY child, the D3D11/DirectWrite atlas renderer rasterizes glyphs
 (including IoskeleyMono's Nerd-Font icon set), and the grid is drawn
-in a single `DrawIndexedInstanced` per frame.
+in a single `DrawIndexedInstanced` per frame. Current beta builds also
+reserve Unicode-derived two-cell atlas slots for wide CJK glyphs and
+prefer installed monospace fallbacks before proportional UI fonts when
+the requested/default terminal font is unavailable.
 
 ## What works today (macOS)
 
@@ -418,12 +421,15 @@ ConPTY spawns the Windows Terminal default profile shell when its
 settings are readable, libghostty-vt parses the VT
 stream, and the D3D11/DirectWrite atlas renderer draws the grid at
 native refresh rate — IoskeleyMono ASCII, box-drawing, Powerline
-separators, and the Nerd-Font icon set (folder, git, status, …) all
-render correctly, cursor lands on the right column, and typing flows
-through `WM_CHAR` to the shell. Resize works. Window close kills
-the shell. The remaining Windows work is now direct-composition
-presentation, IME / resize / selection polish, and distribution
-hardening rather than basic input/selection bring-up.
+separators, CJK/wide fallback glyphs, and the Nerd-Font icon set
+(folder, git, status, …) all render correctly, cursor lands on the
+right column, Tab / Shift+Tab reach shells and TUIs, wheel gestures
+respect the platform scroll intent, and normal-shell scrollback is
+reachable through both the mouse wheel and the visible scrollbar.
+Resize works. Window close kills the shell. The remaining Windows work
+is now direct-composition presentation, IME input / resize / advanced
+selection polish, and distribution hardening rather than basic
+input/selection bring-up.
 
 Caveats:
 - You must have **Zig 0.15.2+** on `PATH` (one-time install from
