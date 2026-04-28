@@ -100,6 +100,20 @@ If a cached view causes overlap, clipping, or stale layout, the cache boundary i
 - Keep terminal surfaces and heavy side panels isolated.
 - Avoid reading terminal runtime state during ordinary render unless already cached.
 - Be cautious with transparency, animation, and resize interactions; measure before adding visual layers.
+- For hover affordances that only need cursor feedback, prefer a tiny overlay /
+  hitbox and `cursor_pointer()` over repainting terminal text. Keep the overlay
+  state bounded to the hovered link/range.
+
+### GPUI interaction gotchas
+
+- `.hover(|style| ...)` is a style hook on `Div`; `.on_hover(...)` is an
+  enter/exit listener and requires a `Stateful<Div>`.
+- If a view needs `.on_hover(...)`, call `.id(stable_id)` first. Use a stable id
+  such as the pane's `FocusHandle`, not a changing row/index.
+- For platform-selected files (`ghostty_view.rs`, `windows_view.rs`,
+  `linux_view.rs`), a macOS `cargo check -p con` only checks the macOS path.
+  Validate the touched platform path on its target or wait for portable CI
+  before treating the fix as closed.
 
 ## Validation
 
@@ -110,6 +124,8 @@ After a cache-related change:
 - confirm there is no layout regression
 - confirm the cache invalidates on real content/theme changes
 - confirm the cache does not hide stale data
+- if touching Windows/Linux-only view code from macOS, note that local checks are
+  partial unless the target toolchain is installed
 
 ## Anti-Patterns
 
