@@ -366,6 +366,24 @@ pub struct ghostty_action_scrollbar_s {
     pub len: u64,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum ghostty_action_open_url_kind_e {
+    GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN = 0,
+    GHOSTTY_ACTION_OPEN_URL_KIND_TEXT = 1,
+    GHOSTTY_ACTION_OPEN_URL_KIND_HTML = 2,
+}
+
+/// Action payload for OPEN_URL.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_open_url_s {
+    pub kind: ghostty_action_open_url_kind_e,
+    pub url: *const c_char,
+    pub len: usize,
+}
+
 /// Action union — only relevant fields are accessed based on tag.
 #[repr(C)]
 pub union ghostty_action_u {
@@ -376,6 +394,7 @@ pub union ghostty_action_u {
     pub set_title: ghostty_action_set_title_s,
     pub pwd: ghostty_action_pwd_s,
     pub command_finished: ghostty_action_command_finished_s,
+    pub open_url: ghostty_action_open_url_s,
     // The union size is determined by the largest variant in ghostty.h;
     // we pad to ensure correct size.
     pub _pad: [u8; 128],

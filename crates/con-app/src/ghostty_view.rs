@@ -161,6 +161,9 @@ impl GhosttyView {
                 GhosttySurfaceEvent::SplitRequest(direction) => {
                     cx.emit(GhosttySplitRequested(direction));
                 }
+                GhosttySurfaceEvent::OpenUrl(url) => {
+                    cx.open_url(&url);
+                }
             }
         }
 

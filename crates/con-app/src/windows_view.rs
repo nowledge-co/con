@@ -48,6 +48,7 @@ use gpui_component::ActiveTheme;
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
+use crate::terminal_links::{self, TerminalLink};
 use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
 use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
 
@@ -133,6 +134,8 @@ pub struct GhosttyView {
     /// `Window::drop_image` to evict sprite-atlas tiles.
     images_to_drop: Vec<Arc<RenderImage>>,
     scrollbar_drag: Option<ScrollbarDrag>,
+    mouse_down_link: Option<TerminalLink>,
+    suppress_link_mouse_up: bool,
     /// Cloned and handed to `RenderSession::new`; the ConPTY reader
     /// thread sends at most one queued signal while a repaint wake is
     /// pending. The coalescer task spawned in `new()` consumes that
@@ -204,6 +207,8 @@ impl GhosttyView {
             scrollbar_cache: None,
             images_to_drop: Vec::new(),
             scrollbar_drag: None,
+            mouse_down_link: None,
+            suppress_link_mouse_up: false,
             wake_tx,
             wake_pending,
         }
@@ -253,6 +258,8 @@ impl GhosttyView {
         self.cached_frame_size = None;
         self.scrollbar_cache = None;
         self.scrollbar_drag = None;
+        self.mouse_down_link = None;
+        self.suppress_link_mouse_up = false;
         self.images_to_drop.clear();
         self.last_physical_size = None;
     }
@@ -630,6 +637,16 @@ impl GhosttyView {
         let col = (phys_x / metrics.cell_width_px.max(1)) as u16;
         let row = (phys_y / metrics.cell_height_px.max(1)) as u16;
         Some((col, row))
+    }
+
+    fn link_at_position(&self, pos: Point<Pixels>) -> Option<TerminalLink> {
+        let (col, row) = self.cell_from_event_position(pos)?;
+        let terminal = self.terminal.as_ref()?;
+        let inner = terminal.inner();
+        let guard = inner.lock();
+        let session = guard.as_ref()?;
+        let snapshot = session.vt().snapshot();
+        terminal_links::link_at_snapshot(&snapshot, col, row)
     }
 
     fn forward_mouse_down(&self, pos: Point<Pixels>, mods: MouseEventMods) {
@@ -1181,6 +1198,19 @@ impl Render for GhosttyView {
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
+                    this.mouse_down_link = None;
+                    this.suppress_link_mouse_up = false;
+                    if terminal_links::should_open_link(&event.modifiers)
+                        && let Some(link) = this.link_at_position(event.position)
+                    {
+                        this.mouse_down_link = Some(link);
+                        this.suppress_link_mouse_up = true;
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        cx.emit(GhosttyFocusChanged);
+                        cx.notify();
+                        return;
+                    }
                     this.forward_mouse_down(event.position, mouse_mods_from(&event.modifiers));
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -1197,6 +1227,21 @@ impl Render for GhosttyView {
                     cx.notify();
                     return;
                 }
+                if this.suppress_link_mouse_up {
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        this.mouse_down_link = None;
+                        this.suppress_link_mouse_up = false;
+                    } else if let Some(down_link) = this.mouse_down_link.as_ref() {
+                        let still_on_same_link =
+                            this.link_at_position(event.position).as_ref() == Some(down_link);
+                        if !still_on_same_link {
+                            this.mouse_down_link = None;
+                        }
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
                 if event.pressed_button == Some(MouseButton::Left) {
                     this.forward_mouse_drag(event.position, mouse_mods_from(&event.modifiers));
                     cx.notify();
@@ -1204,8 +1249,21 @@ impl Render for GhosttyView {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
                     if this.scrollbar_drag.take().is_some() {
+                        cx.notify();
+                        return;
+                    }
+                    if this.suppress_link_mouse_up {
+                        let down_link = this.mouse_down_link.take();
+                        this.suppress_link_mouse_up = false;
+                        if let Some(down_link) = down_link
+                            && this.link_at_position(event.position).as_ref() == Some(&down_link)
+                        {
+                            cx.open_url(&down_link.url);
+                        }
+                        window.prevent_default();
+                        cx.stop_propagation();
                         cx.notify();
                         return;
                     }

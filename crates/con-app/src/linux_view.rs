@@ -24,10 +24,14 @@ use futures::channel::mpsc::unbounded;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
+use crate::terminal_links::{self, TerminalLink};
+
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const MIN_FONT_SIZE_PX: f32 = 12.0;
 const DEFAULT_CELL_WIDTH_RATIO: f32 = 0.62;
 const DEFAULT_CELL_HEIGHT_RATIO: f32 = 1.45;
+const TERMINAL_PADDING_X_PX: f32 = 12.0;
+const TERMINAL_PADDING_Y_PX: f32 = 10.0;
 
 /// Resolved logical font size used for both the cell-grid estimate
 /// (`estimate_surface_size`) and the actual paint (`render`). Both
@@ -84,6 +88,8 @@ pub struct GhosttyView {
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
     last_surface_size: Option<(u32, u32, u16, u16)>,
+    mouse_down_link: Option<TerminalLink>,
+    suppress_link_mouse_up: bool,
 }
 
 pub fn init(cx: &mut App) {
@@ -153,6 +159,8 @@ impl GhosttyView {
             pane_bounds: None,
             scale_factor: 1.0,
             last_surface_size: None,
+            mouse_down_link: None,
+            suppress_link_mouse_up: false,
         }
     }
 
@@ -215,6 +223,8 @@ impl GhosttyView {
         self.row_cache_shape = None;
         self.seen_any_output = false;
         self.last_surface_size = None;
+        self.mouse_down_link = None;
+        self.suppress_link_mouse_up = false;
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
@@ -416,6 +426,33 @@ impl GhosttyView {
             cell_width_px,
             cell_height_px,
         }
+    }
+
+    fn cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
+        let bounds = self.pane_bounds?;
+        let snapshot = self.snapshot.as_ref()?;
+        let font_size_px = effective_font_size(self.initial_font_size);
+        let cell_width_px = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0);
+        let cell_height_px = (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0);
+
+        let local_x = f32::from(pos.x) - f32::from(bounds.origin.x) - TERMINAL_PADDING_X_PX;
+        let local_y = f32::from(pos.y) - f32::from(bounds.origin.y) - TERMINAL_PADDING_Y_PX;
+        if local_x < 0.0 || local_y < 0.0 {
+            return None;
+        }
+
+        let col = (local_x / cell_width_px).floor() as u16;
+        let row = (local_y / cell_height_px).floor() as u16;
+        if col >= snapshot.cols || row >= snapshot.rows {
+            return None;
+        }
+        Some((col, row))
+    }
+
+    fn link_at_position(&self, pos: Point<Pixels>) -> Option<TerminalLink> {
+        let (col, row) = self.cell_from_event_position(pos)?;
+        let snapshot = self.snapshot.as_ref()?;
+        terminal_links::link_at_snapshot(snapshot, col, row)
     }
 
     fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
@@ -664,8 +701,8 @@ impl Render for GhosttyView {
             .min_h_0()
             .overflow_hidden()
             .bg(theme.background.opacity(pane_opacity))
-            .px(px(12.0))
-            .py(px(10.0))
+            .px(px(TERMINAL_PADDING_X_PX))
+            .py(px(TERMINAL_PADDING_Y_PX))
             .text_color(foreground)
             .items_start()
             .justify_start()
@@ -713,11 +750,54 @@ impl Render for GhosttyView {
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
                     let _ = this.ensure_session(cx);
+                    this.mouse_down_link = None;
+                    this.suppress_link_mouse_up = false;
+                    if terminal_links::should_open_link(&event.modifiers)
+                        && let Some(link) = this.link_at_position(event.position)
+                    {
+                        this.mouse_down_link = Some(link);
+                        this.suppress_link_mouse_up = true;
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                if this.suppress_link_mouse_up {
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        this.mouse_down_link = None;
+                        this.suppress_link_mouse_up = false;
+                    } else if let Some(down_link) = this.mouse_down_link.as_ref() {
+                        let still_on_same_link =
+                            this.link_at_position(event.position).as_ref() == Some(down_link);
+                        if !still_on_same_link {
+                            this.mouse_down_link = None;
+                        }
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    if this.suppress_link_mouse_up {
+                        let down_link = this.mouse_down_link.take();
+                        this.suppress_link_mouse_up = false;
+                        if let Some(down_link) = down_link
+                            && this.link_at_position(event.position).as_ref() == Some(&down_link)
+                        {
+                            cx.open_url(&down_link.url);
+                        }
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
                 }),
             )
             .child(

@@ -255,6 +255,7 @@ pub enum GhosttySplitDirection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GhosttySurfaceEvent {
     SplitRequest(GhosttySplitDirection),
+    OpenUrl(String),
 }
 
 /// Terminal state received via ghostty action callbacks.
@@ -1327,6 +1328,20 @@ unsafe extern "C" fn action_callback(
                     .lock()
                     .pending_events
                     .push_back(GhosttySurfaceEvent::SplitRequest(direction));
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_OPEN_URL => {
+                let open_url = action.action.open_url;
+                if open_url.url.is_null() || open_url.len == 0 {
+                    return false;
+                }
+
+                let bytes = std::slice::from_raw_parts(open_url.url as *const u8, open_url.len);
+                let url = String::from_utf8_lossy(bytes).into_owned();
+                state
+                    .lock()
+                    .pending_events
+                    .push_back(GhosttySurfaceEvent::OpenUrl(url));
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_COMMAND_FINISHED => {
