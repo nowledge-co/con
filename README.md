@@ -54,6 +54,23 @@ If you're an old-school terminal user and only want enough AI harness when neede
   <a href="docs/screenshots.md">View the full screenshot gallery</a>
 </p>
 
+
+## 2 min know-how
+
+<p align="center">
+  <video controls muted playsinline width="100%" src="https://github.com/user-attachments/assets/2b6f6145-e400-4a74-a951-cd8221493a17"></video>
+</p>
+hint:
+
+- use <kbd>meta</kbd> <kbd>i</kbd> to switch between terminal and `Input Area`
+  - use <kbd>meta</kbd> <kbd>\`</kbd> to switch `Input Area` between `Buttom Bar`  or `Agent Panel`
+- <kbd>meta</kbd> <kbd>l</kbd> to show/hide side `Agent Panel`
+- Within the `Buttom Bar`
+  - <kbd>meta</kbd> <kbd>;</kbd> to switch between
+    - `Smart Mode` it detects whether an AI call or a command
+    - `Command Mode`, where, in multiple pane situation, there is a Pane Mini Map for ease to select `broadcast command` scope
+    - `Agent mode`
+
 ## Install
 
 **macOS, Homebrew**
