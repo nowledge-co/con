@@ -102,6 +102,11 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     /// Retry surface creation after transient libghostty initialization failures.
     next_surface_init_retry_at: Option<Instant>,
+    /// Last mouse position seen by GPUI. Ghostty link hover state depends on
+    /// both position and modifiers, but macOS sends modifier changes without a
+    /// mouse-move event when the pointer is stationary.
+    #[cfg(target_os = "macos")]
+    last_mouse_position: Option<Point<Pixels>>,
     ime_marked_text: Option<String>,
 }
 
@@ -144,6 +149,8 @@ impl GhosttyView {
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
             next_surface_init_retry_at: None,
+            #[cfg(target_os = "macos")]
+            last_mouse_position: None,
             ime_marked_text: None,
         }
     }
@@ -285,6 +292,10 @@ impl GhosttyView {
         self.last_title = None;
         self.pending_write = None;
         self.next_surface_init_retry_at = None;
+        #[cfg(target_os = "macos")]
+        {
+            self.last_mouse_position = None;
+        }
         self.ime_marked_text = None;
     }
 
@@ -708,6 +719,17 @@ impl GhosttyView {
         } else {
             (f64::from(pos.x), f64::from(pos.y))
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn refresh_mouse_modifiers(&self, modifiers: &Modifiers) {
+        let (Some(terminal), Some(position)) = (self.terminal.as_ref(), self.last_mouse_position)
+        else {
+            return;
+        };
+
+        let (x, y) = self.view_local_pos(position);
+        terminal.send_mouse_pos(x, y, gpui_mods_to_ghostty(modifiers));
     }
 
     /// Handle key input by forwarding to ghostty's key processing pipeline.
@@ -1172,6 +1194,7 @@ impl Render for GhosttyView {
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
+                    this.last_mouse_position = Some(event.position);
                     if let Some(ref terminal) = this.terminal {
                         let (x, y) = this.view_local_pos(event.position);
                         let mods = gpui_mods_to_ghostty(&event.modifiers);
@@ -1185,6 +1208,7 @@ impl Render for GhosttyView {
             .on_mouse_up(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.last_mouse_position = Some(event.position);
                     if let Some(ref terminal) = this.terminal {
                         let (x, y) = this.view_local_pos(event.position);
                         let mods = gpui_mods_to_ghostty(&event.modifiers);
@@ -1198,12 +1222,19 @@ impl Render for GhosttyView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
+                this.last_mouse_position = Some(event.position);
                 if let Some(ref terminal) = this.terminal {
                     let (x, y) = this.view_local_pos(event.position);
                     terminal.send_mouse_pos(x, y, gpui_mods_to_ghostty(&event.modifiers));
                 }
             }))
+            .on_modifiers_changed(cx.listener(
+                |this, event: &ModifiersChangedEvent, _window, _cx| {
+                    this.refresh_mouse_modifiers(&event.modifiers);
+                },
+            ))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, _cx| {
+                this.last_mouse_position = Some(event.position);
                 if let Some(ref terminal) = this.terminal {
                     let delta = match event.delta {
                         ScrollDelta::Lines(d) => (f64::from(d.x), f64::from(d.y)),
