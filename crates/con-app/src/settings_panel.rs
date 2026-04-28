@@ -5,7 +5,10 @@ use con_agent::{
 };
 use con_core::{
     Config,
-    config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE},
+    config::{
+        DEFAULT_TERMINAL_FONT_FAMILY, MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE,
+        is_gpui_pseudo_font_family, sanitize_terminal_font_family,
+    },
 };
 use futures::{FutureExt, StreamExt};
 use gpui::*;
@@ -244,16 +247,43 @@ impl SettingsPanel {
         }
     }
 
-    fn prepare_font_families(config: &Config, mut font_families: Vec<String>) -> Vec<String> {
+    fn prepare_terminal_font_families(
+        config: &Config,
+        mut font_families: Vec<String>,
+    ) -> Vec<String> {
+        font_families.sort_by_key(|name| name.to_lowercase());
+        font_families.dedup();
+
+        let mut preferred = Vec::new();
+        let sanitized_terminal_family = sanitize_terminal_font_family(&config.terminal.font_family);
+        for family in [
+            DEFAULT_TERMINAL_FONT_FAMILY,
+            sanitized_terminal_family.as_str(),
+        ] {
+            if !family.is_empty() && !preferred.iter().any(|existing| existing == family) {
+                preferred.push(family.to_string());
+            }
+        }
+
+        for family in font_families {
+            if !is_gpui_pseudo_font_family(&family)
+                && !preferred.iter().any(|existing| existing == &family)
+            {
+                preferred.push(family);
+            }
+        }
+        preferred
+    }
+
+    fn prepare_ui_font_families(config: &Config, mut font_families: Vec<String>) -> Vec<String> {
         font_families.sort_by_key(|name| name.to_lowercase());
         font_families.dedup();
 
         let mut preferred = Vec::new();
         for family in [
             ".SystemUIFont",
-            "Ioskeley Mono",
-            config.terminal.font_family.as_str(),
             config.appearance.ui_font_family.as_str(),
+            DEFAULT_TERMINAL_FONT_FAMILY,
         ] {
             if !family.is_empty() && !preferred.iter().any(|existing| existing == family) {
                 preferred.push(family.to_string());
@@ -1034,15 +1064,19 @@ impl SettingsPanel {
             window,
             cx,
         );
-        let font_families = Self::prepare_font_families(config, cx.text_system().all_font_names());
+        let all_font_families = cx.text_system().all_font_names();
+        let terminal_font_families =
+            Self::prepare_terminal_font_families(config, all_font_families.clone());
+        let ui_font_families = Self::prepare_ui_font_families(config, all_font_families);
+        let terminal_font_family = sanitize_terminal_font_family(&config.terminal.font_family);
         let terminal_font_select = Self::make_searchable_string_select(
-            &font_families,
-            &config.terminal.font_family,
+            &terminal_font_families,
+            &terminal_font_family,
             window,
             cx,
         );
         let ui_font_select = Self::make_searchable_string_select(
-            &font_families,
+            &ui_font_families,
             &config.appearance.ui_font_family,
             window,
             cx,
@@ -1252,7 +1286,7 @@ impl SettingsPanel {
             window,
             |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
-                    this.config.terminal.font_family = value.clone();
+                    this.config.terminal.font_family = sanitize_terminal_font_family(value);
                     cx.notify();
                 }
             },
@@ -1416,7 +1450,11 @@ impl SettingsPanel {
             self.endpoint_preset_select =
                 Self::make_endpoint_preset_select(&agent.provider, &pc.base_url, window, cx);
             self.terminal_font_select.update(cx, |select, cx| {
-                select.set_selected_value(&self.config.terminal.font_family, window, cx);
+                select.set_selected_value(
+                    &sanitize_terminal_font_family(&self.config.terminal.font_family),
+                    window,
+                    cx,
+                );
             });
             self.ui_font_select.update(cx, |select, cx| {
                 select.set_selected_value(&self.config.appearance.ui_font_family, window, cx);
@@ -1766,6 +1804,8 @@ impl SettingsPanel {
                 Some(suggestion_model_text)
             },
         };
+        self.config.terminal.font_family =
+            sanitize_terminal_font_family(&self.config.terminal.font_family);
         self.config.terminal.font_size = font_size_text.parse().unwrap_or(14.0);
         let parsed_ui_font_size = if ui_font_size_text.is_empty() {
             Some(self.config.appearance.ui_font_size)

@@ -25,6 +25,17 @@ use parking_lot::Mutex;
 
 use crate::ffi;
 
+const DEFAULT_GHOSTTY_FONT_FAMILY: &str = "Ioskeley Mono";
+
+fn sanitize_font_family_for_ghostty(font_family: &str) -> &str {
+    let trimmed = font_family.trim();
+    if trimmed.is_empty() || trimmed.starts_with('.') {
+        DEFAULT_GHOSTTY_FONT_FAMILY
+    } else {
+        trimmed
+    }
+}
+
 // ── Theme colors for ghostty config ──────────────────────────
 
 /// Terminal colors in a format ghostty understands.
@@ -117,6 +128,7 @@ impl GhosttyConfigPatch {
             colors.append_config(&mut s);
         }
         if let Some(font_family) = &self.font_family {
+            let font_family = sanitize_font_family_for_ghostty(font_family);
             s.push_str("font-family = \"\"\n");
             s.push_str(&format!("font-family = {:?}\n", font_family));
         }
@@ -1584,5 +1596,17 @@ mod tests {
             Some(replacement_colors.foreground)
         );
         assert_eq!(patch.font_size, Some(14.0));
+    }
+
+    #[test]
+    fn ghostty_config_sanitizes_gpui_pseudo_font_family() {
+        let patch = GhosttyConfigPatch {
+            font_family: Some(".ZedMono".to_string()),
+            ..Default::default()
+        };
+
+        let config = patch.to_config_string();
+        assert!(config.contains("font-family = \"Ioskeley Mono\""));
+        assert!(!config.contains(".ZedMono"));
     }
 }
