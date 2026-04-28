@@ -2140,6 +2140,10 @@ fn effective_highlighter_language(language: &Option<String>, code: &str) -> Opti
         .map(str::trim)
         .filter(|lang| !lang.is_empty());
 
+    // Some models emit terminal transcripts as ```code or unlabeled fences.
+    // Keep this inference intentionally narrow: only generic fences can be
+    // reclassified, explicit `text` remains plain, and the source must begin
+    // with a recognizable shell prompt.
     if raw_language.map(is_generic_code_language).unwrap_or(true)
         && looks_like_shell_transcript(code)
     {
@@ -2189,11 +2193,22 @@ fn is_shell_prompt_line(trimmed: &str) -> bool {
     trimmed == "$"
         || trimmed.starts_with("$ ")
         || trimmed.starts_with("$\t")
+        || looks_like_compact_dollar_prompt(trimmed)
         || trimmed.starts_with("% ")
         || trimmed.starts_with("# ")
         || trimmed.starts_with("\u{276f} ")
         || trimmed.starts_with("\u{279c} ")
         || trimmed.starts_with("\u{03bb} ")
+}
+
+fn looks_like_compact_dollar_prompt(trimmed: &str) -> bool {
+    let Some(rest) = trimmed.strip_prefix('$') else {
+        return false;
+    };
+    let Some(first) = rest.chars().next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric() && rest.contains(char::is_whitespace)
 }
 
 fn suppress_syntax_highlighting(lang: &str) -> bool {
@@ -2670,6 +2685,18 @@ mod tests {
     #[test]
     fn generic_code_fence_infers_bash_for_shell_prompt() {
         let code = "$ amp --version\n0.0.1";
+        let language = Some("code".to_string());
+
+        assert_eq!(
+            effective_highlighter_language(&language, code).as_deref(),
+            Some("bash")
+        );
+        assert_eq!(code_block_header_label(&language, code), "bash");
+    }
+
+    #[test]
+    fn generic_code_fence_infers_bash_for_compact_shell_prompt() {
+        let code = "$amp --version\n0.0.1";
         let language = Some("code".to_string());
 
         assert_eq!(

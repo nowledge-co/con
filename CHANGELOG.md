@@ -16,7 +16,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Agent Panel**
 
-- Fixed generic Markdown code fences that contain shell prompts so they infer bash highlighting instead of rendering as unhighlighted `code` blocks.
+- Fixed generic Markdown code fences that contain shell prompts, including compact prompt forms like `$amp --version`, so they infer bash highlighting instead of rendering as unhighlighted `code` blocks.
 
 **Terminal**
 
