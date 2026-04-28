@@ -90,6 +90,8 @@ pub struct GhosttyView {
     last_surface_size: Option<(u32, u32, u16, u16)>,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
+    hovered_link: Option<TerminalLink>,
+    last_mouse_position: Option<Point<Pixels>>,
 }
 
 pub fn init(cx: &mut App) {
@@ -161,6 +163,8 @@ impl GhosttyView {
             last_surface_size: None,
             mouse_down_link: None,
             suppress_link_mouse_up: false,
+            hovered_link: None,
+            last_mouse_position: None,
         }
     }
 
@@ -225,6 +229,8 @@ impl GhosttyView {
         self.last_surface_size = None;
         self.mouse_down_link = None;
         self.suppress_link_mouse_up = false;
+        self.hovered_link = None;
+        self.last_mouse_position = None;
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
@@ -455,6 +461,49 @@ impl GhosttyView {
         terminal_links::link_at_snapshot(snapshot, col, row)
     }
 
+    fn update_hovered_link(&mut self, modifiers: &Modifiers) -> bool {
+        let next = if terminal_links::should_open_link(modifiers) {
+            self.last_mouse_position
+                .and_then(|position| self.link_at_position(position))
+        } else {
+            None
+        };
+        if self.hovered_link == next {
+            return false;
+        }
+        self.hovered_link = next;
+        true
+    }
+
+    fn clear_hovered_link(&mut self) -> bool {
+        let changed = self.hovered_link.take().is_some();
+        self.last_mouse_position = None;
+        changed
+    }
+
+    fn render_link_cursor_overlay(
+        &self,
+        cell_width_px: f32,
+        line_height_px: f32,
+    ) -> Option<AnyElement> {
+        let link = self.hovered_link.as_ref()?;
+        let width_cols = link.end_col.saturating_sub(link.start_col).max(1);
+
+        Some(
+            div()
+                .absolute()
+                .left(px(
+                    TERMINAL_PADDING_X_PX + link.start_col as f32 * cell_width_px
+                ))
+                .top(px(TERMINAL_PADDING_Y_PX + link.row as f32 * line_height_px))
+                .w(px(width_cols as f32 * cell_width_px))
+                .h(px(line_height_px))
+                .bg(gpui::transparent_black())
+                .cursor_pointer()
+                .into_any_element(),
+        )
+    }
+
     fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let Some(terminal) = self.terminal.as_ref() else {
             return false;
@@ -618,6 +667,7 @@ impl Render for GhosttyView {
         let entity = cx.entity().downgrade();
         let font_size_px = effective_font_size(self.initial_font_size);
         let line_height_px = (font_size_px * 1.45).round();
+        let cell_width_px = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0);
         let mono_font = Font {
             family: theme.mono_font_family.clone(),
             features: FontFeatures::default(),
@@ -707,6 +757,17 @@ impl Render for GhosttyView {
             .items_start()
             .justify_start()
             .children(rows);
+        let mut terminal_children = vec![terminal_content.into_any_element()];
+        if let Some(overlay) = self.render_link_cursor_overlay(cell_width_px, line_height_px) {
+            terminal_children.push(overlay);
+        }
+        let terminal_layer = div()
+            .relative()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .children(terminal_children);
 
         div()
             .flex()
@@ -748,13 +809,27 @@ impl Render for GhosttyView {
                     cx.notify();
                 }
             }))
+            .on_modifiers_changed(cx.listener(
+                |this, event: &ModifiersChangedEvent, _window, cx| {
+                    if this.update_hovered_link(&event.modifiers) {
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                if !hovered && this.clear_hovered_link() {
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
                     let _ = this.ensure_session(cx);
+                    this.last_mouse_position = Some(event.position);
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
+                    let _ = this.update_hovered_link(&event.modifiers);
                     if terminal_links::should_open_link(&event.modifiers)
                         && let Some(link) = this.link_at_position(event.position)
                     {
@@ -768,24 +843,34 @@ impl Render for GhosttyView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                this.last_mouse_position = Some(event.position);
                 if this.suppress_link_mouse_up {
+                    let mut changed = this.update_hovered_link(&event.modifiers);
                     if event.pressed_button != Some(MouseButton::Left) {
-                        this.mouse_down_link = None;
+                        changed |= this.mouse_down_link.take().is_some();
                         this.suppress_link_mouse_up = false;
                     } else if let Some(down_link) = this.mouse_down_link.as_ref() {
                         let still_on_same_link =
                             this.link_at_position(event.position).as_ref() == Some(down_link);
                         if !still_on_same_link {
                             this.mouse_down_link = None;
+                            changed = true;
                         }
                     }
                     cx.stop_propagation();
+                    if changed {
+                        cx.notify();
+                    }
+                    return;
+                }
+                if this.update_hovered_link(&event.modifiers) {
                     cx.notify();
                 }
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.last_mouse_position = Some(event.position);
                     if this.suppress_link_mouse_up {
                         let down_link = this.mouse_down_link.take();
                         this.suppress_link_mouse_up = false;
@@ -796,6 +881,7 @@ impl Render for GhosttyView {
                         }
                         window.prevent_default();
                         cx.stop_propagation();
+                        let _ = this.update_hovered_link(&event.modifiers);
                         cx.notify();
                     }
                 }),
@@ -823,7 +909,7 @@ impl Render for GhosttyView {
                             });
                         }
                     })
-                    .child(terminal_content),
+                    .child(terminal_layer),
             )
     }
 }
