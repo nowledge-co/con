@@ -6,6 +6,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+### Added
+
+**Terminal**
+
+- Added terminal URL opening by modifier-clicking visible links: Cmd-click on macOS, Ctrl-click on Windows and Linux. macOS uses libghostty's native link action, while Windows and Linux use a bounded visible-row detector so ordinary terminal rendering remains off the hot path.
+
 ## `v0.1.0-beta.42` - 2026-04-27
 
 ### Fixed

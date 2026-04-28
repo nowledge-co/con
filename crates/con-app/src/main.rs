@@ -53,6 +53,7 @@ mod motion;
 mod pane_tree;
 mod settings_panel;
 mod sidebar;
+mod terminal_links;
 mod terminal_pane;
 mod theme;
 mod updater;
