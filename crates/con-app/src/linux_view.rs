@@ -777,6 +777,7 @@ impl Render for GhosttyView {
             .min_h_0()
             .key_context("GhosttyTerminal")
             .track_focus(&self.focus_handle)
+            .id(&self.focus_handle)
             .bg(theme.background.opacity(pane_opacity))
             .on_action(cx.listener(|this, _: &ConsumeTab, window, cx| {
                 if !this.focus_handle.is_focused(window) {

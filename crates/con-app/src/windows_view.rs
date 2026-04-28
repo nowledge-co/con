@@ -1222,6 +1222,7 @@ impl Render for GhosttyView {
             .min_h_0()
             .key_context("GhosttyTerminal")
             .track_focus(&self.focus_handle)
+            .id(&self.focus_handle)
             .bg(background)
             .on_action(cx.listener(|this, _: &ConsumeTab, window, _cx| {
                 if !this.focus_handle.is_focused(window) {
