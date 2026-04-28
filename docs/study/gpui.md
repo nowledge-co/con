@@ -21,6 +21,29 @@ Three registers:
 
 Terminal rendering uses the **Element** register: custom `canvas()` calls to paint cells directly to GPU.
 
+## Interaction API Notes
+
+GPUI has two different hover concepts:
+
+- `.hover(|style| ...)` is styling-only hover state on a normal `Div`.
+- `.on_hover(...)` is an enter/exit event listener and is only available on a `Stateful<Div>`.
+
+If a `div()` chain needs `.on_hover(...)`, assign a stable element id first:
+
+```rust
+div()
+    .track_focus(&self.focus_handle)
+    .id(&self.focus_handle)
+    .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+        if !*hovered {
+            // clear hover state
+            cx.notify();
+        }
+    }))
+```
+
+This is easy to miss because macOS-only checks do not compile the Windows/Linux `#[path]` terminal views. For platform-specific GPUI files, validate on the target platform or let portable CI compile those branches before considering the change closed-loop.
+
 ## Terminal Canvas Pattern
 
 ```rust
