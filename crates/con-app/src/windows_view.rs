@@ -136,6 +136,8 @@ pub struct GhosttyView {
     scrollbar_drag: Option<ScrollbarDrag>,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
+    hovered_link: Option<TerminalLink>,
+    last_mouse_position: Option<Point<Pixels>>,
     /// Cloned and handed to `RenderSession::new`; the ConPTY reader
     /// thread sends at most one queued signal while a repaint wake is
     /// pending. The coalescer task spawned in `new()` consumes that
@@ -209,6 +211,8 @@ impl GhosttyView {
             scrollbar_drag: None,
             mouse_down_link: None,
             suppress_link_mouse_up: false,
+            hovered_link: None,
+            last_mouse_position: None,
             wake_tx,
             wake_pending,
         }
@@ -260,6 +264,8 @@ impl GhosttyView {
         self.scrollbar_drag = None;
         self.mouse_down_link = None;
         self.suppress_link_mouse_up = false;
+        self.hovered_link = None;
+        self.last_mouse_position = None;
         self.images_to_drop.clear();
         self.last_physical_size = None;
     }
@@ -647,6 +653,51 @@ impl GhosttyView {
         let session = guard.as_ref()?;
         let snapshot = session.vt().snapshot();
         terminal_links::link_at_snapshot(&snapshot, col, row)
+    }
+
+    fn update_hovered_link(&mut self, modifiers: &Modifiers) -> bool {
+        let next = if terminal_links::should_open_link(modifiers) {
+            self.last_mouse_position
+                .and_then(|position| self.link_at_position(position))
+        } else {
+            None
+        };
+        if self.hovered_link == next {
+            return false;
+        }
+        self.hovered_link = next;
+        true
+    }
+
+    fn clear_hovered_link(&mut self) -> bool {
+        let changed = self.hovered_link.take().is_some();
+        self.last_mouse_position = None;
+        changed
+    }
+
+    fn render_link_cursor_overlay(&self) -> Option<AnyElement> {
+        let link = self.hovered_link.as_ref()?;
+        let terminal = self.terminal.as_ref()?;
+        let inner = terminal.inner();
+        let guard = inner.lock();
+        let session = guard.as_ref()?;
+        let metrics = session.metrics();
+        let scale = self.scale_factor.max(0.5);
+        let cell_w = metrics.cell_width_px.max(1) as f32 / scale;
+        let cell_h = metrics.cell_height_px.max(1) as f32 / scale;
+        let width_cols = link.end_col.saturating_sub(link.start_col).max(1);
+
+        Some(
+            div()
+                .absolute()
+                .left(px(link.start_col as f32 * cell_w))
+                .top(px(link.row as f32 * cell_h))
+                .w(px(width_cols as f32 * cell_w))
+                .h(px(cell_h))
+                .bg(gpui::transparent_black())
+                .cursor_pointer()
+                .into_any_element(),
+        )
     }
 
     fn forward_mouse_down(&self, pos: Point<Pixels>, mods: MouseEventMods) {
@@ -1154,6 +1205,9 @@ impl Render for GhosttyView {
             placeholder_background.unwrap_or_else(|| cx.theme().background.opacity(0.0));
         let entity = cx.entity().downgrade();
         let mut terminal_children = self.image_children();
+        if let Some(overlay) = self.render_link_cursor_overlay() {
+            terminal_children.push(overlay);
+        }
         if let Some(scrollbar) = self.render_terminal_scrollbar(cx) {
             terminal_children.push(scrollbar);
         }
@@ -1194,12 +1248,26 @@ impl Render for GhosttyView {
                     cx.stop_propagation();
                 }
             }))
+            .on_modifiers_changed(cx.listener(
+                |this, event: &ModifiersChangedEvent, _window, cx| {
+                    if this.update_hovered_link(&event.modifiers) {
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                if !hovered && this.clear_hovered_link() {
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
+                    this.last_mouse_position = Some(event.position);
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
+                    let _ = this.update_hovered_link(&event.modifiers);
                     if terminal_links::should_open_link(&event.modifiers)
                         && let Some(link) = this.link_at_position(event.position)
                     {
@@ -1217,9 +1285,11 @@ impl Render for GhosttyView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                this.last_mouse_position = Some(event.position);
                 if this.scrollbar_drag.is_some() {
                     if event.pressed_button != Some(MouseButton::Left) {
                         this.scrollbar_drag = None;
+                        this.update_hovered_link(&event.modifiers);
                         cx.notify();
                         return;
                     }
@@ -1228,29 +1298,38 @@ impl Render for GhosttyView {
                     return;
                 }
                 if this.suppress_link_mouse_up {
+                    let mut changed = this.update_hovered_link(&event.modifiers);
                     if event.pressed_button != Some(MouseButton::Left) {
-                        this.mouse_down_link = None;
+                        changed |= this.mouse_down_link.take().is_some();
                         this.suppress_link_mouse_up = false;
                     } else if let Some(down_link) = this.mouse_down_link.as_ref() {
                         let still_on_same_link =
                             this.link_at_position(event.position).as_ref() == Some(down_link);
                         if !still_on_same_link {
                             this.mouse_down_link = None;
+                            changed = true;
                         }
                     }
                     cx.stop_propagation();
-                    cx.notify();
+                    if changed {
+                        cx.notify();
+                    }
                     return;
                 }
+                let hover_changed = this.update_hovered_link(&event.modifiers);
                 if event.pressed_button == Some(MouseButton::Left) {
                     this.forward_mouse_drag(event.position, mouse_mods_from(&event.modifiers));
+                    cx.notify();
+                } else if hover_changed {
                     cx.notify();
                 }
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.last_mouse_position = Some(event.position);
                     if this.scrollbar_drag.take().is_some() {
+                        this.update_hovered_link(&event.modifiers);
                         cx.notify();
                         return;
                     }
@@ -1264,14 +1343,18 @@ impl Render for GhosttyView {
                         }
                         window.prevent_default();
                         cx.stop_propagation();
+                        this.update_hovered_link(&event.modifiers);
                         cx.notify();
                         return;
                     }
                     this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers));
+                    let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();
                 }),
             )
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
+                this.last_mouse_position = Some(event.position);
+                let _ = this.update_hovered_link(&event.modifiers);
                 this.forward_scroll(
                     event.position,
                     event.delta,
