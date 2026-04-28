@@ -332,13 +332,6 @@ impl PanelState {
             msg.duration_ms = duration_ms;
             self.messages.push(msg);
         }
-        // Auto-collapse steps on completed messages to reduce scroll noise
-        if let Some(last) = self.messages.last_mut() {
-            if !last.steps.is_empty() {
-                last.steps_collapsed = true;
-                last.touch();
-            }
-        }
         // Move active tool calls into the message's step timeline
         for tc in self.tool_calls.drain(..) {
             let args_display = format_tool_args(&tc.tool_name, &tc.args);
@@ -347,7 +340,7 @@ impl PanelState {
                 let formatted = format_tool_result(&tc.tool_name, &result);
                 (StepStatus::Complete, Some(formatted))
             } else {
-                (StepStatus::Running, None)
+                (StepStatus::Complete, None)
             };
             if let Some(last) = self.messages.last_mut() {
                 last.steps.push(StepEntry {
@@ -359,6 +352,14 @@ impl PanelState {
                     detail_expanded: false,
                     duration: tc.duration,
                 });
+                last.touch();
+            }
+        }
+        // Auto-collapse steps on completed messages to reduce scroll noise. This
+        // must happen after live tool calls are moved into the step timeline.
+        if let Some(last) = self.messages.last_mut() {
+            if !last.steps.is_empty() {
+                last.steps_collapsed = true;
                 last.touch();
             }
         }
@@ -502,7 +503,7 @@ struct StepEntry {
     duration: Option<std::time::Duration>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum StepStatus {
     Running,
     Complete,
@@ -5011,7 +5012,7 @@ fn humanize_model_name(model: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::AgentPanel;
+    use super::{AgentPanel, PanelState, StepStatus};
 
     #[test]
     fn multiline_drafts_disable_inline_history_navigation() {
@@ -5038,6 +5039,40 @@ mod tests {
             text.chars().count() as u32,
             false,
         ));
+    }
+
+    #[test]
+    fn completed_response_collapses_drained_tool_steps() {
+        let mut state = PanelState::new();
+        state.add_message("user", "search the repo");
+        state.add_tool_call("call-1", "search", r#"{"query":"scrollbar"}"#);
+        state.complete_tool_call("call-1", "line one\nline two");
+
+        state.complete_response("Done.", Some("test-model"), Some(42));
+
+        let message = state.messages.last().expect("assistant message");
+        assert_eq!(message.role, "assistant");
+        assert_eq!(message.content, "Done.");
+        assert!(message.steps_collapsed);
+        assert_eq!(message.steps.len(), 1);
+        assert_eq!(message.steps[0].status, StepStatus::Complete);
+        assert!(message.steps[0].detail_collapsed);
+        assert!(state.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn response_complete_does_not_leave_unresolved_tool_steps_live() {
+        let mut state = PanelState::new();
+        state.add_message("user", "read a file");
+        state.add_tool_call("call-1", "file_read", r#"{"path":"Cargo.toml"}"#);
+
+        state.complete_response("Done.", Some("test-model"), Some(42));
+
+        let message = state.messages.last().expect("assistant message");
+        assert!(message.steps_collapsed);
+        assert_eq!(message.steps.len(), 1);
+        assert_eq!(message.steps[0].status, StepStatus::Complete);
+        assert!(state.tool_calls.is_empty());
     }
 }
 
