@@ -17,7 +17,8 @@ This guide is meant to be read first, then used together with:
 
 | Element | Choice | Notes |
 |---------|--------|-------|
-| **Console font** | IoskeleyMono | Embedded. `font_family("Ioskeley Mono")` in all code. |
+| **Console font** | IoskeleyMono | Embedded. User-facing config uses `Ioskeley Mono`; GPUI text normalizes to the registered `IoskeleyMono` family; terminal backends receive concrete font names only. |
+| **UI font** | `.SystemUIFont` | GPUI virtual alias for the platform UI font. Valid for GPUI-rendered UI, not for terminal renderer config. |
 | **Default theme** | Flexoki Light | Dark available as Flexoki Dark. |
 | **Icons** | Phosphor Icons | phosphoricons.com. SVGs at `assets/phosphor/`. |
 | **Surfaces** | Borderless | No `border_1()` etc. Opacity-based fills only. |
