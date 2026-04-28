@@ -23,3 +23,7 @@ The README shows one representative view. This page keeps the full gallery in on
 ### Main Window
 
 <img alt="con screenshot 5" src="https://github.com/user-attachments/assets/81dcf6e4-6074-497e-98b8-00c884442cc2" />
+
+## Demo
+
+https://github.com/user-attachments/assets/2b6f6145-e400-4a74-a951-cd8221493a17
