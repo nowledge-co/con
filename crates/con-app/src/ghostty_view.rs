@@ -1174,8 +1174,9 @@ impl Render for GhosttyView {
                     window.focus(&focus, cx);
                     if let Some(ref terminal) = this.terminal {
                         let (x, y) = this.view_local_pos(event.position);
-                        terminal.send_mouse_pos(x, y, 0);
-                        terminal.send_mouse_button(true, MouseButton::Left, 0);
+                        let mods = gpui_mods_to_ghostty(&event.modifiers);
+                        terminal.send_mouse_pos(x, y, mods);
+                        terminal.send_mouse_button(true, MouseButton::Left, mods);
                     }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -1183,18 +1184,23 @@ impl Render for GhosttyView {
             )
             .on_mouse_up(
                 gpui::MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                     if let Some(ref terminal) = this.terminal {
                         let (x, y) = this.view_local_pos(event.position);
-                        terminal.send_mouse_pos(x, y, 0);
-                        terminal.send_mouse_button(false, MouseButton::Left, 0);
+                        let mods = gpui_mods_to_ghostty(&event.modifiers);
+                        terminal.send_mouse_pos(x, y, mods);
+                        terminal.send_mouse_button(false, MouseButton::Left, mods);
+                    }
+                    let changed = this.drain_surface_state(cx);
+                    if changed {
+                        cx.notify();
                     }
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
                 if let Some(ref terminal) = this.terminal {
                     let (x, y) = this.view_local_pos(event.position);
-                    terminal.send_mouse_pos(x, y, 0);
+                    terminal.send_mouse_pos(x, y, gpui_mods_to_ghostty(&event.modifiers));
                 }
             }))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, _cx| {
@@ -1208,7 +1214,11 @@ impl Render for GhosttyView {
                             (f64::from(d.x) / scale, f64::from(d.y) / scale)
                         }
                     };
-                    terminal.send_mouse_scroll(delta.0, delta.1, 0);
+                    terminal.send_mouse_scroll(
+                        delta.0,
+                        delta.1,
+                        gpui_mods_to_ghostty(&event.modifiers),
+                    );
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
