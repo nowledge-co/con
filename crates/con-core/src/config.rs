@@ -5,9 +5,10 @@ use std::path::PathBuf;
 
 pub const MIN_UI_FONT_SIZE: f32 = 12.0;
 pub const MAX_UI_FONT_SIZE: f32 = 24.0;
+pub const DEFAULT_TERMINAL_FONT_FAMILY: &str = "Ioskeley Mono";
 
 fn default_font_family() -> String {
-    "Ioskeley Mono".into()
+    DEFAULT_TERMINAL_FONT_FAMILY.into()
 }
 fn default_font_size() -> f32 {
     14.0
@@ -41,6 +42,19 @@ fn default_background_image_position() -> String {
 }
 fn default_background_image_fit() -> String {
     "contain".into()
+}
+
+pub fn is_gpui_pseudo_font_family(name: &str) -> bool {
+    name.trim_start().starts_with('.')
+}
+
+pub fn sanitize_terminal_font_family(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || is_gpui_pseudo_font_family(trimmed) {
+        DEFAULT_TERMINAL_FONT_FAMILY.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -398,7 +412,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::SkillsConfig;
+    use super::{DEFAULT_TERMINAL_FONT_FAMILY, SkillsConfig, sanitize_terminal_font_family};
 
     #[test]
     fn default_skill_path_uses_shared_app_path_policy() {
@@ -410,6 +424,22 @@ mod tests {
             } else {
                 "~/.config/con/skills"
             })
+        );
+    }
+
+    #[test]
+    fn terminal_font_sanitizer_rejects_gpui_pseudo_families() {
+        assert_eq!(
+            sanitize_terminal_font_family(".ZedMono"),
+            DEFAULT_TERMINAL_FONT_FAMILY
+        );
+        assert_eq!(
+            sanitize_terminal_font_family(" .SystemUIFont "),
+            DEFAULT_TERMINAL_FONT_FAMILY
+        );
+        assert_eq!(
+            sanitize_terminal_font_family("JetBrains Mono"),
+            "JetBrains Mono"
         );
     }
 }

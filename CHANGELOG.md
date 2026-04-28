@@ -12,6 +12,16 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Added terminal URL opening by modifier-clicking visible links: Cmd-click on macOS, Ctrl-click on Windows and Linux. macOS uses libghostty's native link action, while Windows and Linux use a bounded visible-row detector with pointer-cursor feedback so ordinary terminal rendering remains off the hot path.
 
+### Fixed
+
+**Agent Panel**
+
+- Fixed generic Markdown code fences that contain shell prompts so they infer bash highlighting instead of rendering as unhighlighted `code` blocks.
+
+**Terminal**
+
+- Fixed terminal font selection accepting GPUI-only pseudo font families such as `.ZedMono`, which could make macOS Ghostty text render with uneven spacing or overlapping glyphs. Existing bad configs now fall back to the default terminal font, and the Terminal Font picker hides those pseudo families.
+
 ## `v0.1.0-beta.42` - 2026-04-27
 
 ### Fixed

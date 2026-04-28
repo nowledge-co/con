@@ -1,4 +1,4 @@
-use con_core::config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE};
+use con_core::config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE, sanitize_terminal_font_family};
 use con_terminal::{Color, TerminalTheme};
 use gpui::App;
 use gpui_component::highlighter::LanguageRegistry;
@@ -264,6 +264,7 @@ fn apply_font_overrides(
 /// required on Linux's CosmicText backend and also avoids platform-
 /// specific fallback behavior in StyledText code runs.
 pub fn canonical_terminal_font_family(name: &str) -> String {
+    let name = sanitize_terminal_font_family(name);
     // Normalize aggressively: trim, lowercase, strip whitespace and
     // hyphens. That way `"Ioskeley Mono"`, `"IoskeleyMono"`,
     // `"Ioskeley-Mono"`, `"ioskeley mono"`, `" IOSKELEY  MONO "`,

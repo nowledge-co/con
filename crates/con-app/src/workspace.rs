@@ -237,7 +237,7 @@ use crate::{
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
 };
-use con_core::config::{Config, TabsOrientation};
+use con_core::config::{Config, TabsOrientation, sanitize_terminal_font_family};
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
@@ -617,7 +617,7 @@ impl ConWorkspace {
             s.set_pinned(initial_vertical_pinned, cx);
             s
         });
-        let terminal_font_family = config.terminal.font_family.clone();
+        let terminal_font_family = sanitize_terminal_font_family(&config.terminal.font_family);
         let ui_font_family = config.appearance.ui_font_family.clone();
         let ui_font_size = config.appearance.ui_font_size;
         let font_size = config.terminal.font_size;
@@ -3596,7 +3596,7 @@ impl ConWorkspace {
 
         let term_config = settings.read(cx).terminal_config().clone();
         let appearance_config = settings.read(cx).appearance_config().clone();
-        self.terminal_font_family = term_config.font_family.clone();
+        self.terminal_font_family = sanitize_terminal_font_family(&term_config.font_family);
         self.ui_font_family = appearance_config.ui_font_family.clone();
         self.ui_font_size = appearance_config.ui_font_size;
         self.font_size = term_config.font_size;

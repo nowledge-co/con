@@ -1386,10 +1386,7 @@ fn render_code_block(
     highlight_cache: &RefCell<Option<CachedCodeHighlightRuns>>,
     style: &ChatMarkdownStyle<'_>,
 ) -> AnyElement {
-    let header_label = language
-        .as_deref()
-        .filter(|lang| !lang.trim().is_empty())
-        .unwrap_or("code");
+    let header_label = code_block_header_label(language, code);
 
     let header_row = div()
         .flex()
@@ -1406,7 +1403,7 @@ fn render_code_block(
                 .text_size(px(10.5))
                 .line_height(px(11.0))
                 .text_color(style.code_block_language_text_color)
-                .child(header_label.to_string()),
+                .child(header_label),
         )
         .child(div().h(px(1.0)).flex_1().bg(style.rule_color.opacity(0.36)))
         .child(
@@ -2054,13 +2051,10 @@ fn highlighted_code_runs(
     let display_text = code_display_text(code);
     let base_style = style.code_text_style();
     let display_len = display_text.len();
-    let lang = language
-        .as_deref()
-        .map(canonical_highlighter_language)
-        .filter(|lang| !lang.is_empty() && !suppress_syntax_highlighting(lang));
+    let lang = effective_highlighter_language(language, code);
 
     let rope = Rope::from_str(code);
-    let mut runs = if let Some(lang) = lang {
+    let mut runs = if let Some(lang) = lang.as_deref() {
         let mut highlighter = SyntaxHighlighter::new(lang);
         highlighter.update(None, &rope, None);
         let highlights = highlighter.styles(&(0..code.len()), &style.theme.highlight_theme);
@@ -2125,6 +2119,81 @@ fn canonical_highlighter_language(language: &str) -> &str {
             }
         }
     }
+}
+
+fn code_block_header_label(language: &Option<String>, code: &str) -> String {
+    if let Some(lang) = effective_highlighter_language(language, code) {
+        return lang;
+    }
+
+    language
+        .as_deref()
+        .map(str::trim)
+        .filter(|lang| !lang.is_empty())
+        .unwrap_or("code")
+        .to_string()
+}
+
+fn effective_highlighter_language(language: &Option<String>, code: &str) -> Option<String> {
+    let raw_language = language
+        .as_deref()
+        .map(str::trim)
+        .filter(|lang| !lang.is_empty());
+
+    if raw_language.map(is_generic_code_language).unwrap_or(true)
+        && looks_like_shell_transcript(code)
+    {
+        return Some("bash".to_string());
+    }
+
+    raw_language
+        .map(canonical_highlighter_language)
+        .filter(|lang| {
+            !lang.is_empty()
+                && !is_generic_code_language(lang)
+                && !suppress_syntax_highlighting(lang)
+        })
+        .map(ToOwned::to_owned)
+}
+
+fn is_generic_code_language(language: &str) -> bool {
+    matches!(
+        language.trim().to_ascii_lowercase().as_str(),
+        "code" | "source"
+    )
+}
+
+fn looks_like_shell_transcript(code: &str) -> bool {
+    let mut meaningful_lines = 0usize;
+    let mut prompt_lines = 0usize;
+    let mut first_meaningful_line_is_prompt = false;
+
+    for line in code.lines().take(24) {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+        meaningful_lines += 1;
+        if is_shell_prompt_line(trimmed) {
+            prompt_lines += 1;
+            if meaningful_lines == 1 {
+                first_meaningful_line_is_prompt = true;
+            }
+        }
+    }
+
+    prompt_lines > 0 && (first_meaningful_line_is_prompt || prompt_lines * 2 >= meaningful_lines)
+}
+
+fn is_shell_prompt_line(trimmed: &str) -> bool {
+    trimmed == "$"
+        || trimmed.starts_with("$ ")
+        || trimmed.starts_with("$\t")
+        || trimmed.starts_with("% ")
+        || trimmed.starts_with("# ")
+        || trimmed.starts_with("\u{276f} ")
+        || trimmed.starts_with("\u{279c} ")
+        || trimmed.starts_with("\u{03bb} ")
 }
 
 fn suppress_syntax_highlighting(lang: &str) -> bool {
@@ -2596,5 +2665,26 @@ mod tests {
             runs.iter()
                 .all(|run| run.font.family.as_ref() == "IoskeleyMono")
         );
+    }
+
+    #[test]
+    fn generic_code_fence_infers_bash_for_shell_prompt() {
+        let code = "$ amp --version\n0.0.1";
+        let language = Some("code".to_string());
+
+        assert_eq!(
+            effective_highlighter_language(&language, code).as_deref(),
+            Some("bash")
+        );
+        assert_eq!(code_block_header_label(&language, code), "bash");
+    }
+
+    #[test]
+    fn plain_text_fence_does_not_infer_shell_prompt() {
+        let code = "$ amp --version\n0.0.1";
+        let language = Some("text".to_string());
+
+        assert_eq!(effective_highlighter_language(&language, code), None);
+        assert_eq!(code_block_header_label(&language, code), "text");
     }
 }
