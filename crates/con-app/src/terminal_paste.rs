@@ -169,7 +169,16 @@ fn quote_path(path: &std::path::Path) -> String {
 
 #[cfg(not(windows))]
 fn quote_path(path: &std::path::Path) -> String {
-    format!("{path:?}")
+    let mut quoted = String::new();
+    quoted.push('"');
+    for character in path.display().to_string().chars() {
+        if matches!(character, '"' | '\\' | '$' | '`') {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+    }
+    quoted.push('"');
+    quoted
 }
 
 #[cfg(test)]
@@ -190,6 +199,17 @@ mod tests {
         assert_eq!(
             quoted_paths_text(&paths),
             Some(" \"plain.txt\" \"name with spaces.png\" ".to_string())
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_paths_escape_double_quote_expansions() {
+        let paths = vec![PathBuf::from(r#"cost "$HOME".txt"#)];
+
+        assert_eq!(
+            quoted_paths_text(&paths),
+            Some(r#" "cost \"\$HOME\".txt" "#.to_string())
         );
     }
 
