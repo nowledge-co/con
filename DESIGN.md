@@ -300,6 +300,7 @@ Important consequence:
 - [x] CWD display in input bar from OSC 7
 - [x] Mouse text selection (click-drag, auto-copy, Cmd+C copy)
 - [x] Clipboard paste (Cmd+V) with bracketed paste mode support
+- [x] Terminal media ingress: file drops / file-path clipboard paste as quoted paths, and image clipboard paste forwarded to TUI apps via raw Ctrl+V
 - [x] Cmd+1..9 tab switching
 - [x] Session persistence (tabs, active tab, agent panel state)
 - [x] Kitty keyboard protocol (CSI u encoding, push/pop/query flags)

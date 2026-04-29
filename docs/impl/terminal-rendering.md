@@ -75,6 +75,34 @@ At the app level, con already does that. The remaining migration work is about r
 
 This distinction matters. Ghostty's embedded API is designed around wakeup-driven ticking, not "tick it every N milliseconds and hope that is close enough."
 
+## Clipboard, Drop, And Media Ingress
+
+Terminal-host clipboard support is an input contract, not an image-rendering
+protocol. Con handles the three ingress paths separately:
+
+- Text clipboard paste is forwarded through the terminal paste path so shells and
+  editors still get bracketed-paste behavior where the backend supports it.
+- File drops and file-path clipboard entries are converted into quoted paths
+  with surrounding spaces, matching Zed's terminal behavior and avoiding GPUI's
+  lossy path-to-text fallback for multi-file clipboard contents.
+- File-manager clipboard text that arrives as a Linux-style `text/uri-list`
+  is parsed only when every non-comment line is a local `file://` URI; mixed
+  prose stays ordinary text.
+- Image clipboard entries are not converted to files by Con. Instead, Con
+  forwards a raw Ctrl+V keypress to the TUI. Agent TUIs such as Codex can then
+  read the OS clipboard directly and attach the image using their native flow.
+
+If a clipboard item contains both image bytes and a text representation, image
+bytes win. If it contains file paths, paths win. That gives predictable behavior
+for the two common agent workflows: copy an actual image to attach it, or
+copy/drag image and code files to paste their paths.
+
+This is intentionally separate from output-side inline graphics protocols. On
+macOS, full embedded Ghostty owns any inline graphics support it exposes. On the
+Windows and Linux preview backends, Con's portable renderers still need explicit
+work before they can display Kitty graphics, Sixel, or iTerm2/OSC 1337 image
+output.
+
 ## What con reads from Ghostty
 
 Today con relies on these Ghostty-facing facts:

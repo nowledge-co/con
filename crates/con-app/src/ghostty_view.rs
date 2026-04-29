@@ -25,6 +25,10 @@ use con_ghostty::{
 };
 use gpui::*;
 
+use crate::terminal_paste::{
+    TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
+};
+
 // Actions to intercept Tab/Shift-Tab before Root's focus-cycling handler.
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
@@ -203,6 +207,43 @@ impl GhosttyView {
         }
 
         changed
+    }
+
+    fn send_terminal_paste_payload(&self, payload: TerminalPastePayload) -> bool {
+        let Some(terminal) = &self.terminal else {
+            return false;
+        };
+
+        match payload {
+            TerminalPastePayload::Text(text) if !text.is_empty() => {
+                terminal.send_text(&text);
+                true
+            }
+            TerminalPastePayload::ForwardCtrlV => {
+                terminal.send_key(ffi::ghostty_input_key_s {
+                    action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
+                    mods: ffi::GHOSTTY_MODS_CTRL,
+                    consumed_mods: 0,
+                    keycode: 0x09, // kVK_ANSI_V
+                    text: std::ptr::null(),
+                    unshifted_codepoint: 'v' as u32,
+                    composing: false,
+                });
+                true
+            }
+            TerminalPastePayload::Text(_) => false,
+        }
+    }
+
+    fn paste_from_clipboard(&self, cx: &mut Context<Self>) -> bool {
+        let Some(payload) = cx
+            .read_from_clipboard()
+            .and_then(|item| payload_from_clipboard(&item))
+        else {
+            return false;
+        };
+
+        self.send_terminal_paste_payload(payload)
     }
 
     pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
@@ -757,14 +798,8 @@ impl GhosttyView {
                     return true;
                 }
                 "v" => {
-                    if let Some(text) = cx
-                        .read_from_clipboard()
-                        .and_then(|item| item.text().map(|s| s.to_string()))
-                    {
-                        if !text.is_empty() {
-                            terminal.send_text(&text);
-                            cx.notify();
-                        }
+                    if self.paste_from_clipboard(cx) {
+                        cx.notify();
                     }
                     return true;
                 }
@@ -1175,20 +1210,20 @@ impl Render for GhosttyView {
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
-                let Some(terminal) = &this.terminal else {
-                    return;
-                };
-                let Some(text) = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text().map(|s| s.to_string()))
-                else {
-                    return;
-                };
-                if text.is_empty() {
-                    return;
+                if this.paste_from_clipboard(cx) {
+                    cx.notify();
                 }
-                terminal.send_text(&text);
-                cx.notify();
+            }))
+            .drag_over::<ExternalPaths>(|style, _, _, _| style)
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                let Some(payload) = payload_from_external_paths(paths) else {
+                    return;
+                };
+                window.focus(&this.focus_handle, cx);
+                if this.send_terminal_paste_payload(payload) {
+                    cx.emit(GhosttyFocusChanged);
+                    cx.notify();
+                }
             }))
             .on_mouse_down(
                 gpui::MouseButton::Left,

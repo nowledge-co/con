@@ -25,6 +25,9 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 
 use crate::terminal_links::{self, TerminalLink};
+use crate::terminal_paste::{
+    TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
+};
 
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const MIN_FONT_SIZE_PX: f32 = 12.0;
@@ -517,23 +520,18 @@ impl GhosttyView {
         if keystroke.modifiers.control
             && keystroke.modifiers.shift
             && !keystroke.modifiers.alt
-            && keystroke.key == "v"
+            && !keystroke.modifiers.platform
         {
-            if let Some(text) = cx
-                .read_from_clipboard()
-                .and_then(|item| item.text().map(|s| s.to_string()))
-                .filter(|text| !text.is_empty())
-            {
-                if terminal.is_bracketed_paste() {
-                    let mut wrapped = String::with_capacity(text.len() + 12);
-                    wrapped.push_str("\x1b[200~");
-                    wrapped.push_str(&text);
-                    wrapped.push_str("\x1b[201~");
-                    terminal.send_text(&wrapped);
-                } else {
-                    terminal.send_text(&text);
+            match keystroke.key.as_str() {
+                "c" => {
+                    copy_selection_to_clipboard(terminal, cx);
+                    return true;
                 }
-                return true;
+                "v" => {
+                    paste_from_clipboard(terminal, cx);
+                    return true;
+                }
+                _ => {}
             }
         }
 
@@ -652,6 +650,57 @@ impl GhosttyView {
         self.row_cache_style = Some(style);
         self.row_cache_shape = Some(shape);
     }
+}
+
+fn send_paste(terminal: &GhosttyTerminal, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+
+    if terminal.is_bracketed_paste() {
+        let mut wrapped = String::with_capacity(text.len() + 12);
+        wrapped.push_str("\x1b[200~");
+        wrapped.push_str(text);
+        wrapped.push_str("\x1b[201~");
+        terminal.send_text(&wrapped);
+    } else {
+        terminal.send_text(text);
+    }
+}
+
+fn send_terminal_paste_payload(terminal: &GhosttyTerminal, payload: TerminalPastePayload) {
+    match payload {
+        TerminalPastePayload::Text(text) => send_paste(terminal, &text),
+        TerminalPastePayload::ForwardCtrlV => terminal.send_text("\x16"),
+    }
+}
+
+fn paste_from_clipboard(terminal: &GhosttyTerminal, cx: &mut App) -> bool {
+    let Some(payload) = cx
+        .read_from_clipboard()
+        .and_then(|item| payload_from_clipboard(&item))
+    else {
+        return false;
+    };
+
+    send_terminal_paste_payload(terminal, payload);
+    true
+}
+
+fn copy_selection_to_clipboard(terminal: &GhosttyTerminal, cx: &mut App) -> bool {
+    if !terminal.has_selection() {
+        return false;
+    }
+
+    let Some(selection) = terminal
+        .selection_text()
+        .filter(|selection| !selection.is_empty())
+    else {
+        return false;
+    };
+
+    cx.write_to_clipboard(ClipboardItem::new_string(selection));
+    true
 }
 
 impl Focusable for GhosttyView {
@@ -798,6 +847,31 @@ impl Render for GhosttyView {
                     terminal.send_text("\x1b[Z");
                 }
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &crate::Copy, _window, cx| {
+                if let Some(terminal) = &this.terminal {
+                    copy_selection_to_clipboard(terminal, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
+                let _ = this.ensure_session(cx);
+                if let Some(terminal) = &this.terminal
+                    && paste_from_clipboard(terminal, cx)
+                {
+                    cx.notify();
+                }
+            }))
+            .drag_over::<ExternalPaths>(|style, _, _, _| style)
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                let Some(payload) = payload_from_external_paths(paths) else {
+                    return;
+                };
+                window.focus(&this.focus_handle, cx);
+                let _ = this.ensure_session(cx);
+                if let Some(terminal) = &this.terminal {
+                    send_terminal_paste_payload(terminal, payload);
+                    cx.notify();
+                }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
