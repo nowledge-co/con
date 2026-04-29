@@ -78,7 +78,7 @@ This distinction matters. Ghostty's embedded API is designed around wakeup-drive
 ## Clipboard, Drop, And Media Ingress
 
 Terminal-host clipboard support is an input contract, not an image-rendering
-protocol. Con handles the three ingress paths separately:
+protocol. Con handles these ingress paths separately:
 
 - Text clipboard paste is forwarded through the terminal paste path so shells and
   editors still get bracketed-paste behavior where the backend supports it.
