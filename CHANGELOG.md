@@ -6,6 +6,15 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+### Added
+
+**Terminal**
+
+- Added terminal file-drop and file-path clipboard paste. Dropped files now paste quoted paths into the active terminal pane instead of being ignored.
+- Added image clipboard forwarding for TUI agents such as Codex. When the clipboard contains image bytes, Con forwards a native Ctrl+V keypress so the TUI can attach the image through its own OS-clipboard workflow.
+- Added conservative file-URI clipboard parsing so Linux file-manager copies exposed as `text/uri-list` paste as quoted file paths instead of raw `file://` text.
+- Hardened terminal Copy/Paste action handling on Windows and Linux so menu/command-dispatched paste uses the same path as the terminal keyboard shortcut.
+
 ---
 
 ## `v0.1.0-beta.43` - 2026-04-28

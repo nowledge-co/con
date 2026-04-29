@@ -49,6 +49,9 @@ use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
 use crate::terminal_links::{self, TerminalLink};
+use crate::terminal_paste::{
+    TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
+};
 use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
 use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
 
@@ -958,22 +961,11 @@ impl GhosttyView {
         {
             match keystroke.key.as_str() {
                 "c" => {
-                    if terminal.has_selection() {
-                        if let Some(selection) = terminal.selection_text() {
-                            cx.write_to_clipboard(ClipboardItem::new_string(selection));
-                        }
-                    }
+                    copy_selection_to_clipboard(terminal, cx);
                     return true;
                 }
                 "v" => {
-                    if let Some(text) = cx
-                        .read_from_clipboard()
-                        .and_then(|item| item.text().map(|s| s.to_string()))
-                    {
-                        if !text.is_empty() {
-                            send_paste(terminal, &text);
-                        }
-                    }
+                    paste_from_clipboard(terminal, cx);
                     return true;
                 }
                 _ => {}
@@ -1183,6 +1175,42 @@ fn send_paste(terminal: &GhosttyTerminal, text: &str) {
     }
 }
 
+fn send_terminal_paste_payload(terminal: &GhosttyTerminal, payload: TerminalPastePayload) {
+    match payload {
+        TerminalPastePayload::Text(text) if !text.is_empty() => send_paste(terminal, &text),
+        TerminalPastePayload::ForwardCtrlV => terminal.send_text("\x16"),
+        TerminalPastePayload::Text(_) => {}
+    }
+}
+
+fn paste_from_clipboard(terminal: &GhosttyTerminal, cx: &mut App) -> bool {
+    let Some(payload) = cx
+        .read_from_clipboard()
+        .and_then(|item| payload_from_clipboard(&item))
+    else {
+        return false;
+    };
+
+    send_terminal_paste_payload(terminal, payload);
+    true
+}
+
+fn copy_selection_to_clipboard(terminal: &GhosttyTerminal, cx: &mut App) -> bool {
+    if !terminal.has_selection() {
+        return false;
+    }
+
+    let Some(selection) = terminal
+        .selection_text()
+        .filter(|selection| !selection.is_empty())
+    else {
+        return false;
+    };
+
+    cx.write_to_clipboard(ClipboardItem::new_string(selection));
+    true
+}
+
 impl Focusable for GhosttyView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1238,6 +1266,31 @@ impl Render for GhosttyView {
                 }
                 if let Some(terminal) = &this.terminal {
                     terminal.send_text("\x1b[Z");
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::Copy, _window, cx| {
+                if let Some(terminal) = &this.terminal {
+                    copy_selection_to_clipboard(terminal, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
+                let _ = this.ensure_session(cx);
+                if let Some(terminal) = &this.terminal
+                    && paste_from_clipboard(terminal, cx)
+                {
+                    cx.notify();
+                }
+            }))
+            .drag_over::<ExternalPaths>(|style, _, _, _| style)
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                let Some(payload) = payload_from_external_paths(paths) else {
+                    return;
+                };
+                window.focus(&this.focus_handle, cx);
+                let _ = this.ensure_session(cx);
+                if let Some(terminal) = &this.terminal {
+                    send_terminal_paste_payload(terminal, payload);
+                    cx.notify();
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
