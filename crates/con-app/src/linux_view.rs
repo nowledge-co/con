@@ -852,6 +852,7 @@ impl Render for GhosttyView {
                     return;
                 };
                 window.focus(&this.focus_handle, cx);
+                cx.emit(GhosttyFocusChanged);
                 let _ = this.ensure_session(cx);
                 if let Some(terminal) = &this.terminal {
                     send_terminal_paste_payload(terminal, payload);
