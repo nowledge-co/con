@@ -26,7 +26,8 @@ use gpui_component::ActiveTheme;
 
 use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
-    TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
+    TerminalPastePayload, copy_selection_to_clipboard, payload_from_clipboard,
+    payload_from_external_paths,
 };
 
 const DEFAULT_FONT_SIZE: f32 = 14.0;
@@ -684,22 +685,6 @@ fn paste_from_clipboard(terminal: &GhosttyTerminal, cx: &mut App) -> bool {
     };
 
     send_terminal_paste_payload(terminal, payload);
-    true
-}
-
-fn copy_selection_to_clipboard(terminal: &GhosttyTerminal, cx: &mut App) -> bool {
-    if !terminal.has_selection() {
-        return false;
-    }
-
-    let Some(selection) = terminal
-        .selection_text()
-        .filter(|selection| !selection.is_empty())
-    else {
-        return false;
-    };
-
-    cx.write_to_clipboard(ClipboardItem::new_string(selection));
     true
 }
 

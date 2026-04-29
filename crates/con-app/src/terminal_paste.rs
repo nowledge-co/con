@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use con_ghostty::GhosttyTerminal;
 use gpui::{ClipboardEntry, ClipboardItem, ExternalPaths};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -23,7 +25,8 @@ pub fn payload_from_clipboard(item: &ClipboardItem) -> Option<TerminalPastePaylo
     }
 
     let text = text_from_entries(item.entries());
-    if let Some(paths) = paths_from_uri_list(&text)
+    if cfg!(target_os = "linux")
+        && let Some(paths) = paths_from_uri_list(&text)
         && !paths.is_empty()
     {
         return quoted_paths_text(&paths).map(TerminalPastePayload::Text);
@@ -38,6 +41,23 @@ pub fn payload_from_clipboard(item: &ClipboardItem) -> Option<TerminalPastePaylo
 
 pub fn payload_from_external_paths(paths: &ExternalPaths) -> Option<TerminalPastePayload> {
     quoted_paths_text(paths.paths()).map(TerminalPastePayload::Text)
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn copy_selection_to_clipboard(terminal: &GhosttyTerminal, cx: &mut gpui::App) -> bool {
+    if !terminal.has_selection() {
+        return false;
+    }
+
+    let Some(selection) = terminal
+        .selection_text()
+        .filter(|selection| !selection.is_empty())
+    else {
+        return false;
+    };
+
+    cx.write_to_clipboard(ClipboardItem::new_string(selection));
+    true
 }
 
 fn external_paths_from_entries(entries: &[ClipboardEntry]) -> Vec<PathBuf> {
@@ -127,10 +147,29 @@ pub fn quoted_paths_text(paths: &[PathBuf]) -> Option<String> {
     let mut text = String::new();
     for path in paths {
         text.push(' ');
-        text.push_str(&format!("{path:?}"));
+        text.push_str(&quote_path(path));
     }
     text.push(' ');
     Some(text)
+}
+
+#[cfg(windows)]
+fn quote_path(path: &std::path::Path) -> String {
+    let mut quoted = String::new();
+    quoted.push('"');
+    for character in path.display().to_string().chars() {
+        if character == '"' {
+            quoted.push('"');
+        }
+        quoted.push(character);
+    }
+    quoted.push('"');
+    quoted
+}
+
+#[cfg(not(windows))]
+fn quote_path(path: &std::path::Path) -> String {
+    format!("{path:?}")
 }
 
 #[cfg(test)]
@@ -223,6 +262,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn linux_file_uri_clipboard_pastes_as_paths() {
         let item = ClipboardItem {
@@ -237,6 +277,22 @@ mod tests {
             Some(TerminalPastePayload::Text(
                 " \"/home/me/diagram one.png\" \"/home/me/main.rs\" ".to_string()
             ))
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn file_uri_clipboard_stays_text_off_linux() {
+        let text = "file:///home/me/diagram%20one.png\nfile:///home/me/main.rs\n";
+        let item = ClipboardItem {
+            entries: vec![ClipboardEntry::String(ClipboardString::new(
+                text.to_string(),
+            ))],
+        };
+
+        assert_eq!(
+            payload_from_clipboard(&item),
+            Some(TerminalPastePayload::Text(text.to_string()))
         );
     }
 
@@ -275,5 +331,16 @@ mod tests {
         };
 
         assert_eq!(payload_from_clipboard(&item), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_keep_single_backslashes() {
+        let paths = vec![PathBuf::from(r"C:\Users\me\image file.png")];
+
+        assert_eq!(
+            quoted_paths_text(&paths),
+            Some(r#" "C:\Users\me\image file.png" "#.to_string())
+        );
     }
 }
