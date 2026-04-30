@@ -1643,12 +1643,36 @@ impl ConWorkspace {
                             return false;
                         };
                         workspace.update(cx, |_workspace, cx| {
+                            let terminal_entity_id = terminal.entity_id();
+                            let terminal_still_owned = _workspace.tabs.iter().any(|tab| {
+                                tab.pane_tree
+                                    .all_surface_terminals()
+                                    .iter()
+                                    .any(|candidate| candidate.entity_id() == terminal_entity_id)
+                            });
+                            if !terminal_still_owned {
+                                terminal.set_focus_state(false, cx);
+                                return true;
+                            }
+
                             terminal.ensure_surface(window, cx);
                             terminal.notify(cx);
                             _workspace.sync_active_tab_native_view_visibility(cx);
                             if should_focus {
-                                _workspace.sync_active_terminal_focus_states(cx);
-                                terminal.focus(window, cx);
+                                let still_active_terminal = _workspace
+                                    .tabs
+                                    .get(_workspace.active_tab)
+                                    .is_some_and(|tab| {
+                                        tab.pane_tree.all_terminals().iter().any(|candidate| {
+                                            candidate.entity_id() == terminal_entity_id
+                                        })
+                                    });
+                                if still_active_terminal {
+                                    _workspace.sync_active_terminal_focus_states(cx);
+                                    terminal.focus(window, cx);
+                                } else {
+                                    terminal.set_focus_state(false, cx);
+                                }
                             } else {
                                 terminal.set_focus_state(false, cx);
                             }
@@ -1685,6 +1709,36 @@ impl ConWorkspace {
             if let Err(err) = result {
                 log::warn!(
                     "[control] failed to flush deferred pane creation in a window-aware context: {err}"
+                );
+            }
+        });
+    }
+
+    fn schedule_active_terminal_focus(&self, cx: &mut Context<Self>) {
+        let window_handle = self.window_handle;
+        let workspace_handle = self.workspace_handle.clone();
+        cx.defer(move |cx| {
+            let result = window_handle.update(cx, |_root, window, cx| {
+                if let Some(workspace) = workspace_handle.upgrade() {
+                    let _ = workspace.update(cx, |workspace, cx| {
+                        if !workspace.has_active_tab() {
+                            return;
+                        }
+                        let terminal = workspace.tabs[workspace.active_tab]
+                            .pane_tree
+                            .focused_terminal()
+                            .clone();
+                        terminal.ensure_surface(window, cx);
+                        workspace.sync_active_tab_native_view_visibility(cx);
+                        terminal.focus(window, cx);
+                        workspace.sync_active_terminal_focus_states(cx);
+                        cx.notify();
+                    });
+                }
+            });
+            if let Err(err) = result {
+                log::warn!(
+                    "[control] failed to focus active terminal in a window-aware context: {err}"
                 );
             }
         });
@@ -3263,6 +3317,7 @@ impl ConWorkspace {
                             if tab_idx == self.active_tab {
                                 self.sync_active_tab_native_view_visibility(cx);
                                 self.sync_active_terminal_focus_states(cx);
+                                self.schedule_active_terminal_focus(cx);
                             }
                             self.save_session(cx);
                             cx.notify();
@@ -4464,6 +4519,36 @@ impl ConWorkspace {
             }
         }
         self.pending_control_agent_requests = remapped_pending;
+
+        for pending in &mut self.pending_create_pane_requests {
+            if let Some(summary_id) = old_order.get(pending.tab_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                pending.tab_idx = new_idx;
+            }
+        }
+
+        for pending in &mut self.pending_window_control_requests {
+            if let PendingWindowControlRequest::TabsClose { tab_idx, .. } = pending
+                && let Some(summary_id) = old_order.get(*tab_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                *tab_idx = new_idx;
+            }
+        }
+
+        for pending in &mut self.pending_surface_control_requests {
+            let tab_idx = match pending {
+                PendingSurfaceControlRequest::Create { tab_idx, .. }
+                | PendingSurfaceControlRequest::Split { tab_idx, .. }
+                | PendingSurfaceControlRequest::Close { tab_idx, .. } => tab_idx,
+            };
+            if let Some(summary_id) = old_order.get(*tab_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                *tab_idx = new_idx;
+            }
+        }
 
         // Re-locate the active tab by stable summary_id rather than
         // index arithmetic (which had its own off-by-one in the
