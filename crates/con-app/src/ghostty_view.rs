@@ -812,7 +812,9 @@ impl GhosttyView {
         if keystroke.modifiers.platform {
             match keystroke.key.as_str() {
                 // Tab management
-                "q" | "w" | "t" | "," => return false,
+                "q" | "w" | "t" | "," | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => {
+                    return false;
+                }
                 // Window cycling (cmd-`, cmd-shift-`)
                 "`" | "~" | ">" | "<" => return false,
                 // Splits (cmd-d, cmd-shift-d)

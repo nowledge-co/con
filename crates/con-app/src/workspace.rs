@@ -325,6 +325,7 @@ enum LocalPathCompletion {
 
 /// The main workspace: tabs + agent panel + input bar + settings overlay
 pub struct ConWorkspace {
+    config: Config,
     sidebar: Entity<SessionSidebar>,
     tabs: Vec<Tab>,
     active_tab: usize,
@@ -1207,6 +1208,7 @@ impl ConWorkspace {
         }
 
         Self {
+            config: config.clone(),
             sidebar,
             tabs,
             active_tab,
@@ -2936,6 +2938,16 @@ impl ConWorkspace {
         self.tab_agent_config(self.active_tab)
     }
 
+    fn provider_models_for_config(&self, config: &AgentConfig) -> Vec<String> {
+        self.model_registry.models_for_base_url(
+            &config.provider,
+            config
+                .providers
+                .get(&config.provider)
+                .and_then(|pc| pc.base_url.as_deref()),
+        )
+    }
+
     fn set_tab_provider_override(&mut self, tab_idx: usize, provider: ProviderKind) {
         self.tabs[tab_idx].agent_routing.provider = Some(provider);
     }
@@ -3127,6 +3139,7 @@ impl ConWorkspace {
         let provider = self.tab_agent_config(self.active_tab).provider.clone();
         self.set_tab_model_override(self.active_tab, provider.clone(), event.model.clone());
         let config = self.tab_agent_config(self.active_tab);
+        let available_models = self.provider_models_for_config(&config);
 
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_session_provider_options(
@@ -3135,7 +3148,7 @@ impl ConWorkspace {
                 cx,
             );
             panel.set_model_name(event.model.clone());
-            panel.set_session_model_options(self.model_registry.models_for(&provider), window, cx);
+            panel.set_session_model_options(available_models, window, cx);
         });
 
         self.save_session(cx);
@@ -3154,7 +3167,7 @@ impl ConWorkspace {
 
         let provider = config.provider.clone();
         let model_name = AgentHarness::active_model_name_for(&config);
-        let available_models = self.model_registry.models_for(&provider);
+        let available_models = self.provider_models_for_config(&config);
 
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_session_provider_options(
@@ -3567,9 +3580,11 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
         restore_focus: bool,
     ) {
-        let new_config = settings.read(cx).agent_config().clone();
-        let auto_approve = new_config.auto_approve_tools;
-        self.harness.update_config(new_config);
+        let full_config = settings.read(cx).config().clone();
+        self.config = full_config.clone();
+        let new_agent_config = full_config.agent.clone();
+        let auto_approve = new_agent_config.auto_approve_tools;
+        self.harness.update_config(new_agent_config);
         self.shell_suggestion_engine = self.harness.suggestion_engine(180);
         self.shell_suggestion_engine.clear_cache();
         // Same suggestion model drives the tab summarizer; rebuild
@@ -3596,6 +3611,7 @@ impl ConWorkspace {
             self.sync_sidebar(cx);
         }
         let active_agent_config = self.active_tab_agent_config();
+        let active_agent_models = self.provider_models_for_config(&active_agent_config);
 
         // Sync auto-approve to agent panel UI
         self.agent_panel.update(cx, |panel, cx| {
@@ -3607,16 +3623,11 @@ impl ConWorkspace {
             );
             panel.set_provider_name(active_agent_config.provider.clone(), window, cx);
             panel.set_model_name(AgentHarness::active_model_name_for(&active_agent_config));
-            panel.set_session_model_options(
-                self.model_registry
-                    .models_for(&active_agent_config.provider),
-                window,
-                cx,
-            );
+            panel.set_session_model_options(active_agent_models, window, cx);
         });
 
         // Apply updated skills paths (forces rescan on next cwd check)
-        let skills_config = settings.read(cx).skills_config().clone();
+        let skills_config = full_config.skills.clone();
         self.harness.update_skills_config(skills_config);
         if self.has_active_tab() {
             if let Some(cwd) = self.active_terminal().current_dir(cx) {
@@ -3624,12 +3635,12 @@ impl ConWorkspace {
             }
         }
 
-        let term_config = settings.read(cx).terminal_config().clone();
-        let appearance_config = settings.read(cx).appearance_config().clone();
+        let term_config = full_config.terminal.clone();
+        let appearance_config = full_config.appearance.clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
 
         // Re-apply keybindings at runtime so changes take effect immediately
-        let kb = settings.read(cx).keybinding_config().clone();
+        let kb = full_config.keybindings.clone();
         crate::bind_app_keybindings(cx, &kb);
         #[cfg(target_os = "macos")]
         crate::global_hotkey::update_from_keybindings(&kb);
@@ -3680,6 +3691,7 @@ impl ConWorkspace {
         if self.tabs_orientation == orientation {
             return;
         }
+        self.config.appearance.tabs_orientation = orientation;
         self.tabs_orientation = orientation;
         self.sync_tab_strip_motion();
         if self.vertical_tabs_active() {
@@ -5601,7 +5613,7 @@ impl ConWorkspace {
             self.settings_window = None;
         }
 
-        let config = Config::load().unwrap_or_default();
+        let config = self.config.clone();
         let registry = self.model_registry.clone();
         let runtime = self.harness.runtime_handle();
         let workspace = cx.weak_entity();
@@ -5669,6 +5681,14 @@ impl ConWorkspace {
                 });
             })
             .detach();
+
+            let panel_for_close = panel.clone();
+            settings_window.on_window_should_close(cx, move |_window, cx| {
+                let _ = panel_for_close.update(cx, |panel, cx| {
+                    panel.revert_standalone_preview(cx);
+                });
+                true
+            });
 
             let view = cx.new(|_| SettingsWindowView {
                 panel: panel.clone(),
@@ -7206,7 +7226,7 @@ impl Render for ConWorkspace {
         let active_agent_config = self.active_tab_agent_config();
         let model_name = AgentHarness::active_model_name_for(&active_agent_config);
         let provider = active_agent_config.provider.clone();
-        let available_models = self.model_registry.models_for(&provider);
+        let available_models = self.provider_models_for_config(&active_agent_config);
         let show_inline = !self.input_bar_visible && self.agent_panel_open;
         let panel_skills: Vec<crate::input_bar::SkillEntry> = self
             .harness
@@ -7942,19 +7962,6 @@ impl Render for ConWorkspace {
                     window.prevent_default();
                     cx.stop_propagation();
                     return;
-                }
-
-                // Cmd+1..9 — jump to tab
-                if mods.platform && !mods.shift {
-                    if let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10)) {
-                        let tab_index = if digit == 0 { 9 } else { (digit - 1) as usize };
-                        if tab_index < this.tabs.len() {
-                            this.activate_tab(tab_index, window, cx);
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            return;
-                        }
-                    }
                 }
 
                 // Browser-style fallbacks. The configurable actions also bind

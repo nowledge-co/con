@@ -203,7 +203,7 @@ struct CacheEntry {
 #[derive(Clone)]
 pub struct ModelRegistry {
     inner: Arc<Mutex<Option<CacheEntry>>>,
-    custom: Arc<Mutex<HashMap<ProviderKind, Vec<String>>>>,
+    custom: Arc<Mutex<HashMap<(ProviderKind, String), Vec<String>>>>,
 }
 
 impl ModelRegistry {
@@ -216,11 +216,31 @@ impl ModelRegistry {
 
     /// Returns the cached model list for a provider.
     /// Falls back to hardcoded defaults if the cache is empty.
+    #[cfg(test)]
     pub fn models_for(&self, provider: &ProviderKind) -> Vec<String> {
+        self.models_for_base_url(provider, None)
+    }
+
+    /// Returns the cached model list for a provider scoped to a concrete
+    /// endpoint when one is available.
+    pub fn models_for_base_url(
+        &self,
+        provider: &ProviderKind,
+        base_url: Option<&str>,
+    ) -> Vec<String> {
         let canonical = canonical_models_provider(provider);
         {
             let custom = self.custom.lock().unwrap();
-            if let Some(models) = custom.get(&canonical) {
+            if let Some(endpoint) = base_url.and_then(Self::custom_models_scope) {
+                if let Some(models) = custom.get(&(canonical.clone(), endpoint)) {
+                    if !models.is_empty() {
+                        let mut models = models.clone();
+                        append_missing_models(&mut models, pinned_models(provider));
+                        return models;
+                    }
+                }
+            }
+            if let Some(models) = custom.get(&(canonical.clone(), String::new())) {
                 if !models.is_empty() {
                     let mut models = models.clone();
                     append_missing_models(&mut models, pinned_models(provider));
@@ -248,9 +268,29 @@ impl ModelRegistry {
     }
 
     /// Stores models discovered from a user-configured provider endpoint.
+    #[cfg(test)]
     pub fn set_provider_models(&self, provider: ProviderKind, models: Vec<String>) {
         let canonical = canonical_models_provider(&provider);
-        self.custom.lock().unwrap().insert(canonical, models);
+        self.custom
+            .lock()
+            .unwrap()
+            .insert((canonical, String::new()), models);
+    }
+
+    /// Stores models discovered from a specific user-configured endpoint.
+    pub fn set_provider_models_for_base_url(
+        &self,
+        provider: ProviderKind,
+        base_url: &str,
+        models: Vec<String>,
+    ) -> anyhow::Result<()> {
+        let canonical = canonical_models_provider(&provider);
+        let endpoint = Self::openai_compatible_models_url(base_url)?;
+        self.custom
+            .lock()
+            .unwrap()
+            .insert((canonical, endpoint), models);
+        Ok(())
     }
 
     /// Whether the cache is stale or empty and needs a refresh.
@@ -342,6 +382,10 @@ impl ModelRegistry {
         }
 
         Ok(endpoint)
+    }
+
+    fn custom_models_scope(base_url: &str) -> Option<String> {
+        Self::openai_compatible_models_url(base_url).ok()
     }
 
     /// Fetch a model list from an OpenAI-compatible endpoint.
@@ -481,6 +525,40 @@ mod tests {
         assert_eq!(
             registry.models_for(&ProviderKind::OpenAICompatible),
             vec!["custom-a".to_string(), "custom-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn custom_openai_compatible_models_are_scoped_by_endpoint() {
+        let registry = ModelRegistry::new();
+        registry
+            .set_provider_models_for_base_url(
+                ProviderKind::OpenAICompatible,
+                "https://one.example.com/v1",
+                vec!["one-a".to_string()],
+            )
+            .unwrap();
+        registry
+            .set_provider_models_for_base_url(
+                ProviderKind::OpenAICompatible,
+                "https://two.example.com/v1/chat/completions",
+                vec!["two-a".to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(
+            registry.models_for_base_url(
+                &ProviderKind::OpenAICompatible,
+                Some("https://one.example.com/v1/models")
+            ),
+            vec!["one-a".to_string()]
+        );
+        assert_eq!(
+            registry.models_for_base_url(
+                &ProviderKind::OpenAICompatible,
+                Some("https://two.example.com/v1")
+            ),
+            vec!["two-a".to_string()]
         );
     }
 }

@@ -1,6 +1,6 @@
 use con_agent::provider::{AgentPurpose, ProviderTransport};
 use con_agent::{
-    AgentConfig, OAuthDevicePrompt, ProviderConfig, ProviderKind, SuggestionModelConfig,
+    OAuthDevicePrompt, ProviderConfig, ProviderKind, SuggestionModelConfig,
     authorize_oauth_provider, oauth_token_dir,
 };
 use con_core::{
@@ -25,6 +25,7 @@ use crate::model_registry::ModelRegistry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
 use std::collections::HashMap;
 use std::sync::Arc;
+use url::Url;
 
 actions!(
     settings,
@@ -95,6 +96,7 @@ pub struct SettingsPanel {
     visible: bool,
     standalone: bool,
     config: Config,
+    preview_snapshot: Option<Config>,
     registry: ModelRegistry,
     oauth_runtime: Arc<tokio::runtime::Runtime>,
     focus_handle: FocusHandle,
@@ -992,8 +994,14 @@ impl SettingsPanel {
             window,
             cx,
         );
-        let active_model_select =
-            Self::make_model_select(&agent.provider, &pc.model, &registry, window, cx);
+        let active_model_select = Self::make_model_select(
+            &agent.provider,
+            &pc.model,
+            pc.base_url.as_deref(),
+            &registry,
+            window,
+            cx,
+        );
 
         let model_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
@@ -1001,8 +1009,14 @@ impl SettingsPanel {
             s.set_value(&pc.model.clone().unwrap_or_default(), window, cx);
             s
         });
-        let model_select =
-            Self::make_model_select(&agent.provider, &pc.model, &registry, window, cx);
+        let model_select = Self::make_model_select(
+            &agent.provider,
+            &pc.model,
+            pc.base_url.as_deref(),
+            &registry,
+            window,
+            cx,
+        );
         let endpoint_preset_select =
             Self::make_endpoint_preset_select(&agent.provider, &pc.base_url, window, cx);
         let api_key_input = cx.new(|cx| {
@@ -1068,6 +1082,7 @@ impl SettingsPanel {
         let suggestion_model_select = Self::make_model_select(
             &suggestion_provider,
             &agent.suggestion_model.model,
+            Self::provider_base_url(config, &suggestion_provider),
             &registry,
             window,
             cx,
@@ -1219,6 +1234,7 @@ impl SettingsPanel {
                         this.active_model_select = Self::make_model_select(
                             &provider,
                             &current_model,
+                            Self::provider_base_url(&this.config, &provider),
                             &this.registry,
                             window,
                             cx,
@@ -1261,6 +1277,7 @@ impl SettingsPanel {
                     this.suggestion_model_select = Self::make_model_select(
                         &provider,
                         &selected_model,
+                        Self::provider_base_url(&this.config, &provider),
                         &this.registry,
                         window,
                         cx,
@@ -1358,6 +1375,7 @@ impl SettingsPanel {
             visible: false,
             standalone: false,
             config: config.clone(),
+            preview_snapshot: None,
             registry,
             oauth_runtime,
             focus_handle: cx.focus_handle(),
@@ -1420,10 +1438,22 @@ impl SettingsPanel {
     pub fn open_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.standalone = true;
         self.visible = true;
+        self.preview_snapshot = Some(self.config.clone());
         self.overlay_motion
             .set_target(1.0, std::time::Duration::ZERO);
         self.refresh_controls_from_config(window, cx);
         cx.notify();
+    }
+
+    pub fn revert_standalone_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.standalone {
+            return;
+        }
+        if let Some(snapshot) = self.preview_snapshot.take() {
+            self.config = snapshot;
+            cx.emit(AppearancePreview);
+            cx.notify();
+        }
     }
 
     fn refresh_controls_from_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1454,6 +1484,7 @@ impl SettingsPanel {
                 .providers
                 .get(&agent.provider)
                 .and_then(|pc| pc.model.clone()),
+            Self::provider_base_url(&self.config, &agent.provider),
             &self.registry,
             window,
             cx,
@@ -1476,13 +1507,23 @@ impl SettingsPanel {
         self.suggestion_model_select = Self::make_model_select(
             &Self::effective_suggestion_provider(&self.config),
             &agent.suggestion_model.model,
+            Self::provider_base_url(
+                &self.config,
+                &Self::effective_suggestion_provider(&self.config),
+            ),
             &self.registry,
             window,
             cx,
         );
         self.auto_approve = agent.auto_approve_tools;
-        self.model_select =
-            Self::make_model_select(&agent.provider, &pc.model, &self.registry, window, cx);
+        self.model_select = Self::make_model_select(
+            &agent.provider,
+            &pc.model,
+            pc.base_url.as_deref(),
+            &self.registry,
+            window,
+            cx,
+        );
         self.endpoint_preset_select =
             Self::make_endpoint_preset_select(&agent.provider, &pc.base_url, window, cx);
         self.terminal_font_select.update(cx, |select, cx| {
@@ -1604,14 +1645,23 @@ impl SettingsPanel {
     }
 
     /// Build a model select entity for the given provider.
+    fn provider_base_url<'a>(config: &'a Config, provider: &ProviderKind) -> Option<&'a str> {
+        config
+            .agent
+            .providers
+            .get(provider)
+            .and_then(|pc| pc.base_url.as_deref())
+    }
+
     fn make_model_select(
         provider: &ProviderKind,
         current_model: &Option<String>,
+        base_url: Option<&str>,
         registry: &ModelRegistry,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SelectState<SearchableVec<String>>> {
-        let mut models: Vec<String> = registry.models_for(provider);
+        let mut models: Vec<String> = registry.models_for_base_url(provider, base_url);
         if let Some(model) = current_model
             .as_ref()
             .map(|model| model.trim())
@@ -1877,6 +1927,7 @@ impl SettingsPanel {
 
         let registry = self.registry.clone();
         let runtime = self.oauth_runtime.clone();
+        let base_url_for_cache = base_url.clone();
         cx.spawn_in(window, async move |this, window| {
             let result = runtime
                 .spawn(async move {
@@ -1897,7 +1948,16 @@ impl SettingsPanel {
                         }
                         Ok(models) => {
                             let count = models.len();
-                            registry.set_provider_models(ProviderKind::OpenAICompatible, models);
+                            if let Err(err) = registry.set_provider_models_for_base_url(
+                                ProviderKind::OpenAICompatible,
+                                &base_url_for_cache,
+                                models,
+                            ) {
+                                panel.provider_model_status = Some(err.to_string());
+                                panel.provider_model_status_error = true;
+                                cx.notify();
+                                return;
+                            }
                             if panel.selected_provider == ProviderKind::OpenAICompatible {
                                 let current_model =
                                     panel.model_input.read(cx).value().trim().to_string();
@@ -1906,6 +1966,7 @@ impl SettingsPanel {
                                 panel.model_select = Self::make_model_select(
                                     &ProviderKind::OpenAICompatible,
                                     &current_model,
+                                    Some(&base_url_for_cache),
                                     &registry,
                                     window,
                                     cx,
@@ -2019,6 +2080,7 @@ impl SettingsPanel {
         match self.persist_config() {
             Ok(()) => {
                 self.save_error = None;
+                self.preview_snapshot = Some(self.config.clone());
                 if !self.standalone {
                     self.visible = false;
                     self.overlay_motion
@@ -2106,8 +2168,8 @@ impl SettingsPanel {
         }
     }
 
-    pub fn agent_config(&self) -> &AgentConfig {
-        &self.config.agent
+    pub fn config(&self) -> &Config {
+        &self.config
     }
     pub fn terminal_config(&self) -> &con_core::config::TerminalConfig {
         &self.config.terminal
@@ -2115,13 +2177,6 @@ impl SettingsPanel {
     pub fn appearance_config(&self) -> &con_core::config::AppearanceConfig {
         &self.config.appearance
     }
-    pub fn keybinding_config(&self) -> &con_core::config::KeybindingConfig {
-        &self.config.keybindings
-    }
-    pub fn skills_config(&self) -> &con_core::config::SkillsConfig {
-        &self.config.skills
-    }
-
     fn persist_config(&self) -> anyhow::Result<()> {
         let path = Config::config_path();
         if let Some(parent) = path.parent() {
@@ -2183,8 +2238,14 @@ impl SettingsPanel {
         self.load_provider_inputs(&pc, window, cx);
         self.sync_provider_placeholders(&provider, window, cx);
 
-        self.model_select =
-            Self::make_model_select(&provider, &pc.model, &self.registry, window, cx);
+        self.model_select = Self::make_model_select(
+            &provider,
+            &pc.model,
+            pc.base_url.as_deref(),
+            &self.registry,
+            window,
+            cx,
+        );
         self.endpoint_preset_select =
             Self::make_endpoint_preset_select(&provider, &pc.base_url, window, cx);
         cx.notify();
@@ -3072,6 +3133,10 @@ impl SettingsPanel {
                                     cx.notify();
                                     return;
                                 }
+                                if let Some(snapshot) = &mut this.preview_snapshot {
+                                    snapshot.appearance.tabs_orientation =
+                                        this.config.appearance.tabs_orientation;
+                                }
                                 this.save_error = None;
                                 cx.emit(TabsOrientationChanged);
                                 cx.notify();
@@ -3557,7 +3622,10 @@ impl SettingsPanel {
         let api_key_input = self.api_key_input.clone();
         let base_url_input = self.base_url_input.clone();
         let max_tokens_input = self.max_tokens_input.clone();
-        let models = self.registry.models_for(&self.selected_provider);
+        let models = self.registry.models_for_base_url(
+            &self.selected_provider,
+            Self::provider_base_url(&self.config, &self.selected_provider),
+        );
         let model_select = self.model_select.clone();
         let endpoint_preset_select = self.endpoint_preset_select.clone();
         let endpoint_presets = Self::provider_endpoint_presets(&self.selected_provider);
@@ -4630,6 +4698,7 @@ impl Render for SettingsPanel {
                 match event.keystroke.key.as_str() {
                     "escape" => {
                         if this.standalone {
+                            this.revert_standalone_preview(cx);
                             window.remove_window();
                         } else {
                             this.save(window, cx);
@@ -4689,10 +4758,15 @@ impl Render for SettingsPanel {
                                                         }
                                                         let _ = std::fs::write(&path, "");
                                                     }
-                                                    cx.open_url(&format!(
-                                                        "file://{}",
-                                                        path.display()
-                                                    ));
+                                                    match Url::from_file_path(&path) {
+                                                        Ok(url) => cx.open_url(url.as_str()),
+                                                        Err(()) => {
+                                                            log::warn!(
+                                                                "settings: failed to build file URL for {}",
+                                                                path.display()
+                                                            );
+                                                        }
+                                                    }
                                                 }),
                                             )
                                             .child(

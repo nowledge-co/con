@@ -952,6 +952,20 @@ impl GhosttyView {
         };
         let keystroke = &event.keystroke;
 
+        // App-level tab selection. Let GPUI dispatch SelectTab1..9
+        // instead of forwarding Ctrl+digit to the shell.
+        if keystroke.modifiers.control
+            && !keystroke.modifiers.shift
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && matches!(
+                keystroke.key.as_str(),
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+            )
+        {
+            return false;
+        }
+
         // Ctrl+Shift+C / Ctrl+Shift+V → clipboard. These must run ahead
         // of the generic Ctrl-letter path below, which would otherwise
         // emit ^C / ^V to the shell.
