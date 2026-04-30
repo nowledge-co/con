@@ -346,9 +346,11 @@ fn default_workspace_window_bounds(cx: &mut App) -> WindowBounds {
 
     const CASCADE_OFFSET: f32 = 28.0;
 
-    let display_bounds = display_bounds.unwrap_or(fallback_bounds);
     let proposed_origin = base_bounds.origin + point(px(CASCADE_OFFSET), px(CASCADE_OFFSET));
     let proposed_bounds = Bounds::new(proposed_origin, base_bounds.size);
+    let Some(display_bounds) = display_bounds else {
+        return WindowBounds::Windowed(proposed_bounds);
+    };
 
     let display_right = display_bounds.origin.x + display_bounds.size.width;
     let display_bottom = display_bounds.origin.y + display_bounds.size.height;
@@ -526,43 +528,6 @@ pub(crate) fn toggle_global_summon(cx: &mut App) {
             });
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-fn cycle_app_window(cx: &mut App, reverse: bool) {
-    let mut windows = cx.window_stack().unwrap_or_else(|| cx.windows());
-    if windows.len() <= 1 {
-        return;
-    }
-
-    // Keep only handles that still update successfully. Window-stack
-    // snapshots can lag behind just-closed utility windows.
-    windows.retain(|handle| handle.update(cx, |_, _window, _cx| ()).is_ok());
-    if windows.len() <= 1 {
-        return;
-    }
-
-    let active = cx.active_window();
-    let current = active
-        .and_then(|active| {
-            windows
-                .iter()
-                .position(|handle| handle.window_id() == active.window_id())
-        })
-        .unwrap_or(0);
-    // GPUI/macOS reports the stack front-to-back. Cmd+` moves to the
-    // window immediately behind the active one; Shift reverses that.
-    let next = if reverse {
-        current.checked_sub(1).unwrap_or(windows.len() - 1)
-    } else {
-        (current + 1) % windows.len()
-    };
-
-    let target = windows[next];
-    cx.activate(true);
-    let _ = target.update(cx, |_, window, _| {
-        window.activate_window();
-    });
 }
 
 #[cfg(target_os = "macos")]
@@ -1164,12 +1129,12 @@ fn main() {
             toggle_global_summon(cx);
         });
         #[cfg(target_os = "macos")]
-        cx.on_action(|_: &NextWindow, cx: &mut App| {
-            cycle_app_window(cx, false);
+        cx.on_action(|_: &NextWindow, _cx: &mut App| {
+            macos_windowing::cycle_app_window(false);
         });
         #[cfg(target_os = "macos")]
-        cx.on_action(|_: &PreviousWindow, cx: &mut App| {
-            cycle_app_window(cx, true);
+        cx.on_action(|_: &PreviousWindow, _cx: &mut App| {
+            macos_windowing::cycle_app_window(true);
         });
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {

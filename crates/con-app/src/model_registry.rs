@@ -368,31 +368,31 @@ impl ModelRegistry {
     }
 
     pub fn openai_compatible_models_url(base_url: &str) -> anyhow::Result<String> {
-        let mut endpoint = base_url.trim().trim_end_matches('/').to_string();
-        if endpoint.is_empty() {
+        let raw = base_url.trim();
+        if raw.is_empty() {
             return Err(anyhow!("Base URL is required"));
         }
 
-        if endpoint.ends_with("/chat/completions") {
-            endpoint.truncate(endpoint.len() - "/chat/completions".len());
-        } else if endpoint == "chat/completions" {
-            endpoint.clear();
-        }
-
-        if endpoint.trim_matches('/').is_empty() {
-            return Err(anyhow!("Base URL is required"));
-        }
-
-        if !endpoint.ends_with("/models") {
-            endpoint.push_str("/models");
-        }
-
-        let parsed = url::Url::parse(&endpoint).context("Base URL must be an absolute URL")?;
+        let mut parsed = url::Url::parse(raw).context("Base URL must be an absolute URL")?;
         if !matches!(parsed.scheme(), "http" | "https") {
             return Err(anyhow!("Base URL must use http or https"));
         }
 
-        Ok(endpoint)
+        let mut path = parsed.path().trim_end_matches('/').to_string();
+        if path.ends_with("/chat/completions") {
+            path.truncate(path.len() - "/chat/completions".len());
+        }
+        if !path.ends_with("/models") {
+            if path.is_empty() || path == "/" {
+                path = "/models".to_string();
+            } else {
+                path.push_str("/models");
+            }
+        }
+
+        parsed.set_path(&path);
+        parsed.set_fragment(None);
+        Ok(parsed.to_string())
     }
 
     fn custom_models_scope(base_url: &str) -> Option<String> {
@@ -523,6 +523,20 @@ mod tests {
             ModelRegistry::openai_compatible_models_url("https://api.example.com/v1/models")
                 .unwrap(),
             "https://api.example.com/v1/models"
+        );
+        assert_eq!(
+            ModelRegistry::openai_compatible_models_url(
+                "https://api.example.com/v1?api-version=2026-04-30"
+            )
+            .unwrap(),
+            "https://api.example.com/v1/models?api-version=2026-04-30"
+        );
+        assert_eq!(
+            ModelRegistry::openai_compatible_models_url(
+                "https://api.example.com/v1/chat/completions?api-version=2026-04-30"
+            )
+            .unwrap(),
+            "https://api.example.com/v1/models?api-version=2026-04-30"
         );
         assert!(ModelRegistry::openai_compatible_models_url("/chat/completions").is_err());
         assert!(ModelRegistry::openai_compatible_models_url("chat/completions").is_err());
