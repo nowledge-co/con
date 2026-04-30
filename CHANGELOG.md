@@ -6,6 +6,8 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+## `v0.1.0-beta.45` - 2026-04-30
+
 ### Added
 
 **Settings**
