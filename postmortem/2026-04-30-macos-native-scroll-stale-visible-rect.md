@@ -16,7 +16,7 @@ Manual divider resizing appeared to fix the issue because it forced another GPUI
 
 `GhosttyView::sync_native_scroll_view` no longer reads `documentVisibleRect` after mutating the scroll hierarchy and no longer caches away native frame writes. It reapplies the document frame, clip scroll point, reflected scroller state, and surface frame directly from Con-owned pane bounds and Ghostty scrollbar state: `(x = 0, y = scroll_y, width = visible_width, height = visible_height)`.
 
-The PR keeps only the minimum reveal delay for panes that are becoming newly visible, such as unzooming back to a split tree. The layout-pending signal must not hide already-visible native surfaces, because that replaces the terminal with a matte fallback and creates a visible blink during split, close, zoom, and unzoom operations.
+The PR keeps only the minimum reveal delay for panes that are becoming newly visible, such as unzooming back to a split tree. The layout-pending signal must not hide already-visible native surfaces, because that replaces the terminal with a matte fallback and creates a visible blink during split, close, zoom, and unzoom operations. Zoom toggles also keep the old native visibility until the next layout frame, then apply the new visibility map, so zoom-in does not hide sibling panes before the focused pane has received its full-size frame.
 
 ## What We Learned
 

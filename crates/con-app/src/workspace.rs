@@ -1445,12 +1445,40 @@ impl ConWorkspace {
         });
     }
 
-    fn sync_active_tab_native_view_visibility_now_or_after_layout(
+    fn sync_active_tab_native_view_visibility_after_zoom_layout(
         &self,
-        _was_zoomed: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Zoom/unzoom should not hide anything before GPUI has produced the
+        // new pane frames. Keeping the old visual state for one frame is less
+        // visible than flashing the matte/fallback background.
+        cx.on_next_frame(window, |workspace, _window, cx| {
+            if workspace.has_active_tab()
+                && !workspace.ghostty_hidden
+                && !workspace.is_modal_open(cx)
+            {
+                workspace.sync_active_tab_native_view_visibility(cx);
+            }
+        });
+    }
+
+    fn sync_active_tab_native_view_visibility_now_or_after_layout(
+        &self,
+        was_zoomed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if was_zoomed
+            || self
+                .tabs
+                .get(self.active_tab)
+                .and_then(|tab| tab.pane_tree.zoomed_pane_id())
+                .is_some()
+        {
+            self.sync_active_tab_native_view_visibility_after_zoom_layout(window, cx);
+            return;
+        }
         self.sync_active_tab_native_view_visibility_after_layout(window, cx);
     }
 
