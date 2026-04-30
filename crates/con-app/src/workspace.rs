@@ -7279,10 +7279,24 @@ impl Render for ConWorkspace {
             .clamp(0.0, 1.0)
             .powf(0.92);
         let compact_titlebar_progress = 1.0 - tab_strip_progress;
+        let window_width = window.bounds().size.width.as_f32();
         let effective_agent_panel_width = self
             .agent_panel_width
-            .min(max_agent_panel_width(window.bounds().size.width.as_f32()));
+            .min(max_agent_panel_width(window_width));
         let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
+        let vertical_tabs_width = if self.vertical_tabs_active() {
+            self.sidebar.read(cx).occupied_width()
+        } else {
+            0.0
+        };
+        let agent_panel_outer_width = if agent_panel_progress > 0.01 {
+            animated_panel_width + 1.0
+        } else {
+            0.0
+        };
+        let terminal_content_left = vertical_tabs_width;
+        let terminal_content_width =
+            (window_width - terminal_content_left - agent_panel_outer_width).max(0.0);
 
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
@@ -7296,14 +7310,40 @@ impl Render for ConWorkspace {
                 .render(begin_drag_cb, cx)
         };
 
-        let terminal_area = div()
+        let mut terminal_area = div()
             .flex()
             .flex_col()
             .flex_1()
             .min_w_0()
             .min_h_0()
             .bg(theme.transparent)
-            .child(pane_tree_rendered);
+            .child(div().flex_1().min_h_0().child(pane_tree_rendered));
+
+        if input_bar_transitioning && input_bar_progress > 0.01 {
+            terminal_area = terminal_area.child(
+                div()
+                    .h(px(CHROME_TRANSITION_SEAM_COVER))
+                    .flex_shrink_0()
+                    .bg(theme.title_bar.opacity(ui_surface_opacity)),
+            );
+        }
+
+        if input_bar_progress > 0.01 {
+            terminal_area = terminal_area.child(
+                div()
+                    .overflow_hidden()
+                    .h(px(43.0 * input_bar_progress))
+                    .flex_shrink_0()
+                    .bg(theme.title_bar.opacity(ui_surface_opacity))
+                    .child(div().h(px(1.0)).bg(theme.title_bar_border))
+                    .child(
+                        div()
+                            .h(px(42.0))
+                            .opacity(input_bar_content_progress)
+                            .child(self.input_bar.clone()),
+                    ),
+            );
+        }
 
         let mut main_area = div().relative().flex().flex_1().min_h_0();
 
@@ -7988,45 +8028,20 @@ impl Render for ConWorkspace {
                 div()
                     .absolute()
                     .top(px(top_bar_height))
-                    .bottom(px(43.0 * input_bar_progress))
+                    .bottom_0()
                     .right(px(animated_panel_width))
                     .w(px(CHROME_TRANSITION_SEAM_COVER))
                     .bg(theme.background.opacity(elevated_ui_surface_opacity)),
             );
         }
 
-        if input_bar_transitioning && input_bar_progress > 0.01 {
-            root = root.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom(px(43.0 * input_bar_progress))
-                    .h(px(CHROME_TRANSITION_SEAM_COVER))
-                    .bg(theme.title_bar.opacity(ui_surface_opacity)),
-            );
-        }
-
-        if input_bar_progress > 0.01 {
-            root = root.child(
-                div()
-                    .overflow_hidden()
-                    .h(px(43.0 * input_bar_progress))
-                    .bg(theme.title_bar.opacity(ui_surface_opacity))
-                    .child(div().h(px(1.0)).bg(theme.title_bar_border))
-                    .child(
-                        div()
-                            .h(px(42.0))
-                            .opacity(input_bar_content_progress)
-                            .child(self.input_bar.clone()),
-                    ),
-            );
-        }
-
         // Skill autocomplete popup — rendered at workspace level above ghostty
         if has_skill_popup {
             let theme = cx.theme();
-            let popup_width = px((window.bounds().size.width.as_f32() * 0.34).clamp(320.0, 480.0));
+            let popup_available_width = (terminal_content_width - 48.0).max(240.0);
+            let popup_width = px((terminal_content_width * 0.34)
+                .clamp(320.0, 480.0)
+                .min(popup_available_width));
             let popup_bottom = self.input_bar.read(cx).skill_popup_offset(cx);
             let skills = self
                 .input_bar
@@ -8041,7 +8056,7 @@ impl Render for ConWorkspace {
             let mut popup = div()
                 .absolute()
                 .bottom(popup_bottom)
-                .left(px(24.0))
+                .left(px(terminal_content_left + 24.0))
                 .w(popup_width)
                 .max_h(px(320.0))
                 .flex()
@@ -8107,7 +8122,10 @@ impl Render for ConWorkspace {
 
         if has_path_popup && !has_skill_popup {
             let theme = cx.theme();
-            let popup_width = px((window.bounds().size.width.as_f32() * 0.32).clamp(320.0, 440.0));
+            let popup_available_width = (terminal_content_width - 48.0).max(240.0);
+            let popup_width = px((terminal_content_width * 0.32)
+                .clamp(320.0, 440.0)
+                .min(popup_available_width));
             let popup_bottom = self.input_bar.read(cx).skill_popup_offset(cx);
             let candidates = self.input_bar.read(cx).path_completion_candidates();
             let sel = self
@@ -8119,7 +8137,7 @@ impl Render for ConWorkspace {
             let mut popup = div()
                 .absolute()
                 .bottom(popup_bottom)
-                .left(px(24.0))
+                .left(px(terminal_content_left + 24.0))
                 .w(popup_width)
                 .max_h(px(280.0))
                 .flex()
@@ -8200,8 +8218,10 @@ impl Render for ConWorkspace {
                     .enumerate()
                     .map(|(ix, pane)| (pane.id, ix))
                     .collect();
-                let popup_width =
-                    px((window.bounds().size.width.as_f32() * 0.38).clamp(360.0, 520.0));
+                let popup_available_width = (terminal_content_width - 40.0).max(280.0);
+                let popup_width = px((terminal_content_width * 0.38)
+                    .clamp(360.0, 520.0)
+                    .min(popup_available_width));
                 let popup_bottom = px(58.0 + (43.0 * input_bar_progress.max(0.01)));
                 let preview_content = self.render_scope_node(
                     &layout,
@@ -8401,7 +8421,7 @@ impl Render for ConWorkspace {
                 root = root.child(
                     div()
                         .absolute()
-                        .left(px(20.0))
+                        .left(px(terminal_content_left + 20.0))
                         .bottom(popup_bottom)
                         .w(popup_width)
                         .rounded(px(14.0))
