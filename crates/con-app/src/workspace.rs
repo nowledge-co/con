@@ -1429,15 +1429,10 @@ impl ConWorkspace {
 
     fn sync_active_tab_native_view_visibility_now_or_after_layout(
         &self,
-        was_zoomed: bool,
+        _was_zoomed: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if was_zoomed {
-            self.sync_active_tab_native_view_visibility(cx);
-            return;
-        }
-
         self.sync_active_tab_native_view_visibility_after_layout(window, cx);
     }
 
@@ -7208,16 +7203,21 @@ impl ConWorkspace {
             placement,
             terminal.clone(),
         );
-        self.active_tab = tab_idx;
+        let tab_was_active = tab_idx == self.active_tab;
         #[cfg(target_os = "macos")]
         self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
         self.notify_tab_terminal_views(tab_idx, cx);
-        terminal.focus(window, cx);
-        self.sync_active_terminal_focus_states(cx);
-        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
+        if tab_was_active {
+            terminal.focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
+            self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
+        } else {
+            terminal.set_focus_state(false, cx);
+            self.sync_tab_native_view_visibility(tab_idx, false, cx);
+        }
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
-            true,
+            tab_was_active,
             self.window_handle,
             self.workspace_handle.clone(),
             cx,

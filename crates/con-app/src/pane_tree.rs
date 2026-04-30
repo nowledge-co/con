@@ -270,11 +270,11 @@ impl PaneTree {
             return false;
         }
 
-        self.zoomed_pane_id = if self.zoomed_pane_id == Some(self.focused_pane_id) {
-            None
+        if self.zoomed_pane_id.is_some() {
+            self.zoomed_pane_id = None;
         } else {
-            Some(self.focused_pane_id)
-        };
+            self.zoomed_pane_id = Some(self.focused_pane_id);
+        }
         true
     }
 

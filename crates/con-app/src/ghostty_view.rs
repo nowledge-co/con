@@ -107,6 +107,11 @@ pub struct GhosttyView {
     pending_write: Option<Vec<u8>>,
     /// Desired native view visibility, including before the NSView exists.
     native_view_visible: Cell<bool>,
+    /// Split/zoom topology changes need a workspace-level reveal barrier.
+    /// Individual AppKit layout callbacks can arrive before sibling panes have
+    /// received their final frames, which lets stale native views cover panes.
+    #[cfg(target_os = "macos")]
+    native_layout_reveal_blocked: Cell<bool>,
     /// Desired Ghostty focus state. This is independent from GPUI keyboard
     /// focus so broadcast/custom pane scopes can light multiple cursors.
     surface_focused: Cell<bool>,
@@ -170,6 +175,8 @@ impl GhosttyView {
             last_title: None,
             pending_write: None,
             native_view_visible: Cell::new(true),
+            #[cfg(target_os = "macos")]
+            native_layout_reveal_blocked: Cell::new(false),
             surface_focused: Cell::new(true),
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
@@ -326,6 +333,7 @@ impl GhosttyView {
         self.terminal.is_none()
             || self.awaiting_first_layout_visibility
             || self.pending_native_layout
+            || self.native_layout_reveal_blocked.get()
     }
 
     #[allow(dead_code)]
@@ -350,6 +358,7 @@ impl GhosttyView {
         self.native_scroll_surface_frame = None;
         self.native_backing_color = None;
         self.pending_native_layout = false;
+        self.native_layout_reveal_blocked.set(false);
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -378,6 +387,7 @@ impl GhosttyView {
             self.native_scroll_y = None;
             self.native_scroll_surface_frame = None;
             self.pending_native_layout = false;
+            self.native_layout_reveal_blocked.set(false);
         }
         self.ime_marked_text = None;
     }
@@ -577,7 +587,9 @@ impl GhosttyView {
         let Some(rgba) = self.native_backing_rgba() else {
             return;
         };
-        if self.native_backing_color == Some(rgba) {
+        let has_native_views =
+            self.host_view.is_some() || self.document_view.is_some() || self.nsview.is_some();
+        if has_native_views && self.native_backing_color == Some(rgba) {
             return;
         }
 
@@ -594,7 +606,9 @@ impl GhosttyView {
         if let Some(nsview) = self.nsview {
             Self::apply_native_backing_color(nsview, rgba);
         }
-        self.native_backing_color = Some(rgba);
+        if has_native_views {
+            self.native_backing_color = Some(rgba);
+        }
     }
 
     fn reset_native_scroll_layout_cache(&mut self) {
@@ -605,11 +619,8 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     pub fn mark_native_layout_pending(&mut self, cx: &mut Context<Self>) {
-        if self.terminal.is_none() && self.host_view.is_none() {
-            return;
-        }
-
         self.pending_native_layout = true;
+        self.native_layout_reveal_blocked.set(true);
         self.apply_native_visibility();
         cx.notify();
     }
@@ -879,6 +890,9 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     pub fn set_visible(&self, visible: bool) {
         self.native_view_visible.set(visible);
+        if visible {
+            self.native_layout_reveal_blocked.set(false);
+        }
         self.apply_native_visibility();
     }
 
@@ -888,7 +902,8 @@ impl GhosttyView {
             unsafe {
                 let effective_visible = self.native_view_visible.get()
                     && !self.awaiting_first_layout_visibility
-                    && !self.pending_native_layout;
+                    && !self.pending_native_layout
+                    && !self.native_layout_reveal_blocked.get();
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![host_view, setHidden:hidden];
                 if effective_visible {
@@ -899,6 +914,7 @@ impl GhosttyView {
         if self.native_view_visible.get()
             && !self.awaiting_first_layout_visibility
             && !self.pending_native_layout
+            && !self.native_layout_reveal_blocked.get()
         {
             self.draw_surface_now();
         }
@@ -1367,11 +1383,12 @@ impl Render for GhosttyView {
             .app
             .background_rgb()
             .map(|rgb| {
+                let alpha = self.app.background_opacity().unwrap_or(1.0).clamp(0.0, 1.0);
                 Rgba {
                     r: f32::from(rgb[0]) / 255.0,
                     g: f32::from(rgb[1]) / 255.0,
                     b: f32::from(rgb[2]) / 255.0,
-                    a: 1.0,
+                    a: alpha,
                 }
                 .into()
             })
