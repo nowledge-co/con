@@ -23,7 +23,8 @@ use con_ghostty::ffi;
 use con_ghostty::{
     GhosttyApp, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton,
 };
-use gpui::*;
+use gpui::{prelude::FluentBuilder as _, *};
+use gpui_component::ActiveTheme;
 
 use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
@@ -1217,9 +1218,18 @@ impl Render for GhosttyView {
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
         let entity = cx.entity().downgrade();
+        let show_layout_fallback = self.terminal.is_none() || self.awaiting_first_layout_visibility;
+        let layout_fallback_bg = cx.theme().background;
 
         div()
             .size_full()
+            .map(|div| {
+                if show_layout_fallback {
+                    div.bg(layout_fallback_bg)
+                } else {
+                    div
+                }
+            })
             .key_context("GhosttyTerminal")
             .track_focus(&focus)
             // Consume Tab/Shift-Tab so Root's focus cycling doesn't intercept them.
