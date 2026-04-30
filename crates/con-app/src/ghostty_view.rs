@@ -12,11 +12,9 @@
 //! ghostty key bindings all work correctly.
 
 use std::cell::Cell;
-#[cfg(target_os = "macos")]
-use std::ffi::CStr;
 use std::ops::Range;
 #[cfg(target_os = "macos")]
-use std::os::raw::{c_char, c_void};
+use std::os::raw::c_void;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -528,54 +526,6 @@ impl GhosttyView {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    fn suppress_scroll_pocket_artifacts(scroll_view: id) {
-        if scroll_view.is_null() {
-            return;
-        }
-
-        unsafe {
-            let subviews: id = msg_send![scroll_view, subviews];
-            if subviews.is_null() {
-                return;
-            }
-
-            let count: usize = msg_send![subviews, count];
-            let zero_frame = NSRect::new(
-                cocoa::foundation::NSPoint::new(0.0, 0.0),
-                cocoa::foundation::NSSize::new(0.0, 0.0),
-            );
-
-            for index in 0..count {
-                let view: id = msg_send![subviews, objectAtIndex:index];
-                if view.is_null() {
-                    continue;
-                }
-
-                let class_name: id = msg_send![view, className];
-                if class_name.is_null() {
-                    continue;
-                }
-
-                let utf8: *const c_char = msg_send![class_name, UTF8String];
-                if utf8.is_null() {
-                    continue;
-                }
-
-                if CStr::from_ptr(utf8)
-                    .to_string_lossy()
-                    .contains("NSScrollPocket")
-                {
-                    let _: () = msg_send![view, setPostsFrameChangedNotifications:NO];
-                    let _: () = msg_send![view, setFrame:zero_frame];
-                    let _: () = msg_send![view, setHidden:YES];
-                    let _: () = msg_send![view, setPostsFrameChangedNotifications:YES];
-                }
-            }
-        }
-    }
-
-    #[cfg(target_os = "macos")]
     fn reset_native_scroll_layout_cache(&mut self) {
         self.native_scroll_document_frame = None;
         self.native_scroll_y = None;
@@ -628,7 +578,6 @@ impl GhosttyView {
                 );
                 let _: () = msg_send![host_view, setFrame:frame];
             }
-            Self::suppress_scroll_pocket_artifacts(host_view);
         }
 
         self.commit_surface_resize(bounds);
@@ -663,6 +612,7 @@ impl GhosttyView {
             self.awaiting_first_layout_visibility = false;
         }
         self.set_visible(self.native_view_visible.get());
+        self.draw_surface_now();
     }
 
     #[cfg(target_os = "macos")]
@@ -704,8 +654,6 @@ impl GhosttyView {
         };
 
         unsafe {
-            Self::suppress_scroll_pocket_artifacts(scroll_view);
-
             let document_frame_key = (visible_width, document_height);
             let document_frame_changed =
                 self.native_scroll_document_frame != Some(document_frame_key);
@@ -821,6 +769,7 @@ impl GhosttyView {
 
         let started = perf_trace_enabled().then(Instant::now);
         terminal.set_size(width_px, height_px);
+        terminal.draw();
         if let Some(started) = started {
             let elapsed = started.elapsed();
             log::info!(
@@ -849,8 +798,22 @@ impl GhosttyView {
                 let effective_visible = visible && !self.awaiting_first_layout_visibility;
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![host_view, setHidden:hidden];
+                if effective_visible {
+                    let _: () = msg_send![host_view, setNeedsDisplay:YES];
+                }
             }
         }
+        if visible && !self.awaiting_first_layout_visibility {
+            self.draw_surface_now();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn draw_surface_now(&self) {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return;
+        };
+        terminal.draw();
     }
 
     #[cfg(target_os = "macos")]
