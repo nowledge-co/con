@@ -27,6 +27,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Terminal, macOS**
+
+- Fixed fast trackpad scrolling in macOS terminal panes so precise scroll events are sent through Ghostty's precision-scroll path instead of being treated as coarse wheel ticks.
+
+**Workspace**
+
+- Fixed the bottom input bar layout so it spans only the terminal area, staying out of the vertical tab sidebar and right agent panel.
+
 **Settings**
 
 - Fixed Settings live preview dismissal so unsaved appearance and theme changes are rolled back when the standalone Settings window is closed.
