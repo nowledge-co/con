@@ -1374,6 +1374,21 @@ impl ConWorkspace {
         }
     }
 
+    fn notify_tab_terminal_views(&self, tab_index: usize, cx: &mut App) {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        for terminal in tab.pane_tree.all_terminals() {
+            terminal.notify(cx);
+        }
+    }
+
+    fn notify_active_tab_terminal_views(&self, cx: &mut App) {
+        if self.has_active_tab() {
+            self.notify_tab_terminal_views(self.active_tab, cx);
+        }
+    }
+
     fn sync_active_tab_native_view_visibility_after_layout(
         &self,
         window: &mut Window,
@@ -6726,6 +6741,7 @@ impl ConWorkspace {
                 startup_command: None,
             },
         );
+        self.notify_active_tab_terminal_views(cx);
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
         self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
@@ -6794,6 +6810,7 @@ impl ConWorkspace {
             return;
         }
 
+        self.notify_active_tab_terminal_views(cx);
         self.active_terminal().focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
         self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
@@ -7163,6 +7180,7 @@ impl ConWorkspace {
             terminal.clone(),
         );
         self.active_tab = tab_idx;
+        self.notify_tab_terminal_views(tab_idx, cx);
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
         self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
