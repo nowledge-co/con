@@ -588,4 +588,18 @@ mod tests {
             vec!["two-a".to_string()]
         );
     }
+
+    #[test]
+    fn openai_compatible_without_discovered_models_uses_manual_entry() {
+        let registry = ModelRegistry::new();
+
+        assert!(
+            registry
+                .models_for_base_url(
+                    &ProviderKind::OpenAICompatible,
+                    Some("https://api.example.com/v1")
+                )
+                .is_empty()
+        );
+    }
 }
