@@ -2483,14 +2483,15 @@ impl ConWorkspace {
     }
 
     fn surface_key_bytes(key: &str) -> Result<Vec<u8>, ControlError> {
-        match key.trim().to_ascii_lowercase().as_str() {
+        let key = key.trim();
+        match key.to_ascii_lowercase().as_str() {
             "escape" | "esc" => Ok(vec![0x1b]),
             "enter" | "return" => Ok(b"\n".to_vec()),
             "tab" => Ok(b"\t".to_vec()),
             "backspace" => Ok(vec![0x7f]),
             "ctrl-c" | "control-c" | "c-c" => Ok(vec![0x03]),
             "ctrl-d" | "control-d" | "c-d" => Ok(vec![0x04]),
-            other if other.len() == 1 => Ok(other.as_bytes().to_vec()),
+            _ if key.chars().count() == 1 => Ok(key.as_bytes().to_vec()),
             _ => Err(ControlError::invalid_params(format!(
                 "Unsupported surface key `{key}`. Supported keys: escape, enter, tab, backspace, ctrl-c, ctrl-d."
             ))),
@@ -10092,4 +10093,24 @@ fn longest_common_prefix<'a>(values: impl IntoIterator<Item = &'a str>) -> Strin
         }
     }
     prefix
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConWorkspace;
+
+    #[test]
+    fn surface_key_bytes_preserves_literal_character_case() {
+        assert_eq!(ConWorkspace::surface_key_bytes("A").unwrap(), b"A");
+        assert_eq!(ConWorkspace::surface_key_bytes("z").unwrap(), b"z");
+    }
+
+    #[test]
+    fn surface_key_bytes_matches_named_keys_case_insensitively() {
+        assert_eq!(ConWorkspace::surface_key_bytes("ENTER").unwrap(), b"\n");
+        assert_eq!(
+            ConWorkspace::surface_key_bytes("Ctrl-C").unwrap(),
+            vec![0x03]
+        );
+    }
 }
