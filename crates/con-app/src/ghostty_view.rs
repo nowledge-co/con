@@ -791,6 +791,11 @@ impl GhosttyView {
                 let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
             }
 
+            // Do not read `documentVisibleRect` here. Con drives this AppKit
+            // hierarchy from GPUI layout callbacks, so the clip view can still
+            // report stale geometry immediately after split/zoom frame changes.
+            // The terminal surface frame must come from Con-owned pane bounds
+            // plus Ghostty's scrollbar state.
             let surface_frame_key = (0.0, scroll_y, visible_width, visible_height);
             if self.native_scroll_surface_frame == Some(surface_frame_key) {
                 return;
