@@ -26,6 +26,15 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Settings**
+
+- Fixed Settings live preview dismissal so unsaved appearance and theme changes are rolled back when the standalone Settings window is closed.
+- Fixed OpenAI-compatible model discovery so fetched model lists are scoped to the configured Base URL instead of leaking across custom endpoints.
+
+**Keyboard**
+
+- Fixed direct tab selection shortcuts so terminal panes hand Cmd/Ctrl+1-9 back to the app instead of forwarding them to the shell.
+
 **Terminal, Windows Backend (preview)**
 
 - Fixed Windows terminal text rendering to avoid RGB color fringing around glyphs. The DirectWrite atlas now uses grayscale antialiasing with neutral coverage compositing, making CJK and mono text look cleaner in screenshots, scaled displays, remote review, and transparent windows.

@@ -517,6 +517,19 @@ impl GhosttyView {
         if keystroke.modifiers.platform {
             return false;
         }
+        // App-level tab selection. Let GPUI dispatch SelectTab1..9
+        // instead of forwarding Ctrl+digit to the shell.
+        if keystroke.modifiers.control
+            && !keystroke.modifiers.shift
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && matches!(
+                keystroke.key.as_str(),
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+            )
+        {
+            return false;
+        }
 
         if keystroke.modifiers.control
             && keystroke.modifiers.shift

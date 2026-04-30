@@ -1197,6 +1197,7 @@ fn main() {
                 ],
                 disabled: false,
             },
+            #[cfg(target_os = "macos")]
             Menu {
                 name: "Window".into(),
                 items: vec![
