@@ -231,10 +231,9 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, NextWindow, PreviousTab,
-    PreviousWindow, Quit, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
-    SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitRight, ToggleAgentPanel,
-    TogglePaneScopePicker,
+    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit,
+    SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
+    SelectTab9, SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -1003,8 +1002,11 @@ impl ConWorkspace {
                         let _ = handle.update(cx, |workspace, cx| {
                             workspace.prepare_window_close(cx);
                         });
+                        let should_quit = cx.windows().len() <= 1;
                         window.remove_window();
-                        cx.quit();
+                        if should_quit {
+                            cx.quit();
+                        }
                     });
                 })
                 .detach();
@@ -5899,8 +5901,12 @@ impl ConWorkspace {
 
     fn close_window_from_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.defer_in(window, |workspace, window, cx| {
+            let should_quit = cfg!(not(target_os = "macos")) && cx.windows().len() <= 1;
             workspace.prepare_window_close(cx);
             window.remove_window();
+            if should_quit {
+                cx.quit();
+            }
         });
     }
 
@@ -6681,7 +6687,7 @@ impl ConWorkspace {
             return;
         }
 
-        self.quit(&Quit, window, cx);
+        self.close_window_from_last_tab(window, cx);
     }
 
     fn close_pane_in_tab(
@@ -6972,8 +6978,9 @@ impl ConWorkspace {
             // Last pane in this tab — close the tab.
             self.close_tab_by_index(tab_idx, window, cx);
         } else {
-            // Last pane in last tab — quit the app.
-            self.quit(&Quit, window, cx);
+            // Last pane in this window — close this workspace only.
+            // App-level quit would tear down sibling windows too.
+            self.close_window_from_last_tab(window, cx);
         }
         cx.notify();
     }
@@ -7923,9 +7930,9 @@ impl Render for ConWorkspace {
                 #[cfg(target_os = "macos")]
                 if mods.platform && !mods.control && !mods.alt && (key == "`" || key == "~") {
                     if mods.shift {
-                        cx.dispatch_action(&PreviousWindow);
+                        cx.dispatch_action(&crate::PreviousWindow);
                     } else {
-                        cx.dispatch_action(&NextWindow);
+                        cx.dispatch_action(&crate::NextWindow);
                     }
                     window.prevent_default();
                     cx.stop_propagation();
