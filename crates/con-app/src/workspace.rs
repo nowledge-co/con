@@ -231,9 +231,10 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit,
-    SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
-    SelectTab9, SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
+    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, NextWindow, PreviousTab,
+    PreviousWindow, Quit, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
+    SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitRight, ToggleAgentPanel,
+    TogglePaneScopePicker,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -6822,6 +6823,11 @@ impl ConWorkspace {
     }
 
     fn select_tab_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pane_scope_picker_open {
+            self.toggle_scope_pane_by_index(index, window, cx);
+            return;
+        }
+
         if index >= self.tabs.len() || index == self.active_tab {
             return;
         }
@@ -7871,6 +7877,38 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::focus_input))
             .on_action(cx.listener(Self::cycle_input_mode))
             .on_action(cx.listener(Self::toggle_pane_scope_picker))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if !this.pane_scope_picker_open {
+                    return;
+                }
+
+                let mods = &event.keystroke.modifiers;
+                let key = event.keystroke.key.as_str();
+                let local_picker_key = !mods.control && !mods.alt && !mods.shift && !mods.platform;
+
+                let mut handled = false;
+                if key == "escape" {
+                    this.close_pane_scope_picker(cx);
+                    handled = true;
+                } else if local_picker_key && key == "a" {
+                    this.set_scope_broadcast(window, cx);
+                    handled = true;
+                } else if local_picker_key && key == "f" {
+                    this.set_scope_focused(window, cx);
+                    handled = true;
+                } else if local_picker_key
+                    && let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10))
+                {
+                    let pane_index = if digit == 0 { 9 } else { (digit - 1) as usize };
+                    this.toggle_scope_pane_by_index(pane_index, window, cx);
+                    handled = true;
+                }
+
+                if handled {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Don't handle workspace shortcuts when a modal overlay is open
                 if this.settings_panel.read(cx).is_overlay_visible()
@@ -7882,29 +7920,16 @@ impl Render for ConWorkspace {
                 let mods = &event.keystroke.modifiers;
                 let key = event.keystroke.key.as_str();
 
-                if this.pane_scope_picker_open {
-                    if key == "escape" {
-                        this.close_pane_scope_picker(cx);
-                        return;
+                #[cfg(target_os = "macos")]
+                if mods.platform && !mods.control && !mods.alt && (key == "`" || key == "~") {
+                    if mods.shift {
+                        cx.dispatch_action(&PreviousWindow);
+                    } else {
+                        cx.dispatch_action(&NextWindow);
                     }
-
-                    if mods.platform && key == "a" {
-                        this.set_scope_broadcast(window, cx);
-                        return;
-                    }
-
-                    if mods.platform && key == "f" {
-                        this.set_scope_focused(window, cx);
-                        return;
-                    }
-
-                    if mods.platform && !mods.shift {
-                        if let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10)) {
-                            let pane_index = if digit == 0 { 9 } else { (digit - 1) as usize };
-                            this.toggle_scope_pane_by_index(pane_index, window, cx);
-                            return;
-                        }
-                    }
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
                 }
 
                 // Cmd+1..9 — jump to tab
@@ -7913,6 +7938,9 @@ impl Render for ConWorkspace {
                         let tab_index = if digit == 0 { 9 } else { (digit - 1) as usize };
                         if tab_index < this.tabs.len() {
                             this.activate_tab(tab_index, window, cx);
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            return;
                         }
                     }
                 }
@@ -7921,10 +7949,15 @@ impl Render for ConWorkspace {
                 // Control-Tab / Control-Shift-Tab by default.
                 if mods.platform && mods.shift && key == "[" {
                     this.previous_tab(&PreviousTab, window, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
                 }
 
                 if mods.platform && mods.shift && key == "]" {
                     this.next_tab(&NextTab, window, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
                 }
             }))
             .child(top_bar)
@@ -8176,6 +8209,32 @@ impl Render for ConWorkspace {
                 };
                 let scope_frame_inset = px(4.0);
                 let scope_frame_radius = px(10.0);
+                let pane_picker_binding =
+                    crate::keycaps::first_action_keystroke(&TogglePaneScopePicker, window)
+                        .map(|stroke| {
+                            crate::keycaps::keycaps_for_stroke(&stroke, theme).into_any_element()
+                        })
+                        .unwrap_or_else(|| {
+                            crate::keycaps::keycaps_for_binding("secondary-'", theme)
+                        });
+                let local_keycap = |label: &'static str| {
+                    let wide = label.chars().count() > 1;
+                    div()
+                        .h(px(19.0))
+                        .min_w(if wide { px(32.0) } else { px(19.0) })
+                        .px(px(if wide { 6.0 } else { 0.0 }))
+                        .rounded(px(5.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(theme.muted.opacity(0.14))
+                        .text_size(px(10.5))
+                        .line_height(px(11.0))
+                        .font_family(theme.mono_font_family.clone())
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.foreground.opacity(0.74))
+                        .child(label)
+                };
 
                 let presets = div()
                     .flex()
@@ -8209,22 +8268,18 @@ impl Render for ConWorkspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(5.0))
-                            .child(crate::keycaps::keycaps_for_binding("secondary-'", theme))
+                            .gap(px(4.0))
+                            .child(pane_picker_binding)
                             .child(
                                 div()
-                                    .h(px(19.0))
-                                    .px(px(7.0))
-                                    .rounded(px(5.0))
-                                    .flex()
-                                    .items_center()
-                                    .bg(theme.muted.opacity(0.12))
-                                    .text_size(px(10.5))
+                                    .text_size(px(10.0))
                                     .font_family(theme.mono_font_family.clone())
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.foreground.opacity(0.66))
-                                    .child("1-9"),
-                            ),
+                                    .text_color(theme.muted_foreground.opacity(0.58))
+                                    .child("then"),
+                            )
+                            .child(local_keycap("1-9"))
+                            .child(local_keycap("A"))
+                            .child(local_keycap("F")),
                     );
 
                 let preset_segment = |id: &'static str, label: &'static str, active: bool| {

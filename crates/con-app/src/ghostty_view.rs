@@ -813,6 +813,8 @@ impl GhosttyView {
             match keystroke.key.as_str() {
                 // Tab management
                 "q" | "w" | "t" | "," => return false,
+                // Window cycling (cmd-`, cmd-shift-`)
+                "`" | "~" => return false,
                 // Splits (cmd-d, cmd-shift-d)
                 "d" => return false,
                 // Agent & input
