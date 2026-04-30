@@ -445,7 +445,8 @@ impl GhosttyView {
                 setLayerContentsRedrawPolicy:NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE
             ];
             let content_view: id = msg_send![host, contentView];
-            let _: () = msg_send![content_view, setClipsToBounds:NO];
+            let _: () = msg_send![content_view, setClipsToBounds:YES];
+            let _: () = msg_send![host, setHidden:YES];
             let _: () = msg_send![
                 parent_nsview,
                 addSubview: host
@@ -491,12 +492,13 @@ impl GhosttyView {
                 self.nsview = Some(nsview);
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
-                self.set_visible(
-                    self.native_view_visible.get() && !self.awaiting_first_layout_visibility,
-                );
                 self.sync_window_background_blur();
-                // Don't set last_bounds here — let update_frame() handle
-                // the coordinate flip and position the NSView correctly.
+                // Force update_frame() to position the newly-created host.
+                // If a previous layout recorded the same bounds while the
+                // surface was still pending, an early-return here leaves the
+                // NSView at its bootstrap origin until a manual divider resize.
+                self.last_bounds = None;
+                self.reset_native_scroll_layout_cache();
                 log::info!(
                     "Ghostty surface created: {}x{} px, scale {}",
                     width_px,
@@ -522,6 +524,13 @@ impl GhosttyView {
                 self.detach_host_view();
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn reset_native_scroll_layout_cache(&mut self) {
+        self.native_scroll_document_frame = None;
+        self.native_scroll_y = None;
+        self.native_scroll_surface_frame = None;
     }
 
     #[cfg(target_os = "macos")]
@@ -572,8 +581,9 @@ impl GhosttyView {
             }
         }
 
-        self.sync_native_scroll_view();
         self.commit_surface_resize(bounds);
+        self.reset_native_scroll_layout_cache();
+        self.sync_native_scroll_view();
 
         if let Some(started) = started {
             let in_live_resize = if let Some(host_view) = self.host_view {
@@ -601,8 +611,8 @@ impl GhosttyView {
 
         if self.awaiting_first_layout_visibility {
             self.awaiting_first_layout_visibility = false;
-            self.set_visible(self.native_view_visible.get());
         }
+        self.set_visible(self.native_view_visible.get());
     }
 
     #[cfg(target_os = "macos")]
