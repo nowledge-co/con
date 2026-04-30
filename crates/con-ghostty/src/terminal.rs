@@ -483,6 +483,16 @@ impl GhosttyApp {
         self.wake_handle.generation.load(Ordering::Acquire)
     }
 
+    /// Current configured terminal background, used by the embedding UI for
+    /// short-lived native-view layout mattes before Ghostty has painted.
+    pub fn background_rgb(&self) -> Option<[u8; 3]> {
+        self.appearance
+            .lock()
+            .colors
+            .as_ref()
+            .map(|colors| colors.background)
+    }
+
     /// Update the app's terminal colors at runtime.
     pub fn update_colors(&self, colors: &TerminalColors) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {

@@ -1230,7 +1230,19 @@ impl Render for GhosttyView {
         let input_focus = focus.clone();
         let entity = cx.entity().downgrade();
         let show_layout_fallback = self.terminal.is_none() || self.awaiting_first_layout_visibility;
-        let layout_fallback_bg = cx.theme().background;
+        let layout_fallback_bg = self
+            .app
+            .background_rgb()
+            .map(|rgb| {
+                Rgba {
+                    r: f32::from(rgb[0]) / 255.0,
+                    g: f32::from(rgb[1]) / 255.0,
+                    b: f32::from(rgb[2]) / 255.0,
+                    a: 1.0,
+                }
+                .into()
+            })
+            .unwrap_or_else(|| cx.theme().background);
 
         div()
             .size_full()
