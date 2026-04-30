@@ -2710,6 +2710,10 @@ impl ConWorkspace {
         }
     }
 
+    fn tab_index_for_summary_id(&self, tab_id: u64) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.summary_id == tab_id)
+    }
+
     fn pane_selector_from_target(target: con_core::PaneTarget) -> con_agent::tools::PaneSelector {
         con_agent::tools::PaneSelector::new(target.pane_index, target.pane_id)
     }
@@ -3403,20 +3407,32 @@ impl ConWorkspace {
                 timeout_secs,
             } => match self.resolve_control_tab_index(tab_index) {
                 Ok(tab_idx) => {
+                    let requested_tab_index = tab_idx + 1;
+                    let tab_id = self.tabs[tab_idx].summary_id;
+                    let surface_id = match self.resolve_surface_target_for_tab(tab_idx, target) {
+                        Ok(resolved) => resolved.surface_id,
+                        Err(err) => {
+                            Self::send_control_result(response_tx, Err(err));
+                            return;
+                        }
+                    };
                     let timeout = Duration::from_secs(timeout_secs.unwrap_or(10).clamp(1, 300));
                     let started = std::time::Instant::now();
                     cx.spawn(async move |this, cx| {
                         loop {
                             let result = this.update(cx, |workspace, cx| {
-                                if tab_idx >= workspace.tabs.len() {
+                                let Some(current_tab_idx) =
+                                    workspace.tab_index_for_summary_id(tab_id)
+                                else {
                                     return Some(Err(ControlError::invalid_params(format!(
                                         "Tab {} is no longer available.",
-                                        tab_idx + 1
+                                        requested_tab_index
                                     ))));
-                                }
-                                let resolved = match workspace
-                                    .resolve_surface_target_for_tab(tab_idx, target)
-                                {
+                                };
+                                let resolved = match workspace.resolve_surface_target_for_tab(
+                                    current_tab_idx,
+                                    con_core::SurfaceTarget::new(None, None, Some(surface_id)),
+                                ) {
                                     Ok(resolved) => resolved,
                                     Err(err) => return Some(Err(err)),
                                 };
@@ -3425,8 +3441,12 @@ impl ConWorkspace {
                                 let timed_out = started.elapsed() >= timeout;
                                 if is_ready || timed_out {
                                     let status = if is_ready { "ready" } else { "timeout" };
-                                    Some(Ok(workspace
-                                        .surface_wait_ready_result(tab_idx, &resolved, status, cx)))
+                                    Some(Ok(workspace.surface_wait_ready_result(
+                                        current_tab_idx,
+                                        &resolved,
+                                        status,
+                                        cx,
+                                    )))
                                 } else {
                                     None
                                 }
