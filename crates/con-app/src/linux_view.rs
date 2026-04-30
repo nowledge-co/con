@@ -512,7 +512,12 @@ impl GhosttyView {
         )
     }
 
-    fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(terminal) = self.terminal.as_ref() else {
             return false;
         };
@@ -521,13 +526,11 @@ impl GhosttyView {
         if keystroke.modifiers.platform {
             return false;
         }
-        // Pane zoom. Keep the Alt+Shift+Enter app shortcut out of
-        // xterm modifier encoding so GPUI can dispatch TogglePaneZoom.
-        if keystroke.modifiers.alt
-            && keystroke.modifiers.shift
-            && !keystroke.modifiers.control
-            && matches!(keystroke.key.as_str(), "enter" | "return")
-        {
+        if crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
+            &crate::TogglePaneZoom,
+        ) {
             return false;
         }
         // App-level tab selection. Let GPUI dispatch SelectTab1..9
@@ -890,7 +893,7 @@ impl Render for GhosttyView {
                     return;
                 }
                 let _ = this.ensure_session(cx);
-                if this.handle_key_down(event, cx) {
+                if this.handle_key_down(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
                     cx.notify();

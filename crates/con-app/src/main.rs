@@ -58,6 +58,7 @@ mod sidebar;
 mod terminal_links;
 mod terminal_pane;
 mod terminal_paste;
+mod terminal_shortcuts;
 mod theme;
 mod updater;
 mod workspace;

@@ -950,20 +950,22 @@ impl GhosttyView {
     /// the focus chain — so we translate at this layer into byte
     /// sequences a terminal emulator expects. DECCKM-aware arrows live
     /// alongside the printable / Ctrl-letter paths.
-    fn handle_key_down(&self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+    fn handle_key_down(
+        &self,
+        event: &KeyDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(terminal) = self.terminal.as_ref() else {
             return false;
         };
         let keystroke = &event.keystroke;
 
-        // Pane zoom. Keep the Alt+Shift+Enter app shortcut out of
-        // xterm modifier encoding so GPUI can dispatch TogglePaneZoom.
-        if keystroke.modifiers.alt
-            && keystroke.modifiers.shift
-            && !keystroke.modifiers.control
-            && !keystroke.modifiers.platform
-            && matches!(keystroke.key.as_str(), "enter" | "return")
-        {
+        if crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
+            &crate::TogglePaneZoom,
+        ) {
             return false;
         }
 
@@ -1310,7 +1312,7 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                if this.handle_key_down(event, cx) {
+                if this.handle_key_down(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
                 }

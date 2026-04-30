@@ -829,7 +829,12 @@ impl GhosttyView {
     /// mode-dependent sequences (application cursor mode, kitty protocol, etc.)
     /// correctly. Falls back to `ghostty_surface_text` for composed/IME text
     /// when no keycode mapping exists.
-    fn handle_key_down(&self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+    fn handle_key_down(
+        &self,
+        event: &KeyDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let terminal = match self.terminal.as_ref() {
             Some(t) => t,
             None => return false,
@@ -857,6 +862,14 @@ impl GhosttyView {
             }
         }
 
+        if crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
+            &crate::TogglePaneZoom,
+        ) {
+            return false;
+        }
+
         // App-level shortcuts — skip forwarding so GPUI action dispatch handles them.
         // All other Cmd/Ctrl combos pass through to ghostty (e.g. cmd-k for clear screen).
         if keystroke.modifiers.platform {
@@ -869,8 +882,6 @@ impl GhosttyView {
                 "`" | "~" | ">" | "<" => return false,
                 // Splits (cmd-d, cmd-shift-d)
                 "d" => return false,
-                // Pane zoom (cmd-shift-enter)
-                "enter" | "return" if keystroke.modifiers.shift => return false,
                 // Agent & input
                 "l" | "i" => return false,
                 // Edit menu (handled by OS)
@@ -1364,7 +1375,7 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                if this.handle_key_down(event, cx) {
+                if this.handle_key_down(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
                 }
