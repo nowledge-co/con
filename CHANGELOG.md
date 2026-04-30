@@ -31,6 +31,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Fixed Settings live preview dismissal so unsaved appearance and theme changes are rolled back when the standalone Settings window is closed.
 - Fixed OpenAI-compatible model discovery so fetched model lists are scoped to the configured Base URL instead of leaking across custom endpoints.
+- Fixed OpenAI-compatible model discovery so newly fetched models immediately refresh all related Settings pickers, including active and suggestion model selectors.
 - Fixed standalone Settings cleanup so closing the last workspace window also closes Settings on Windows and Linux instead of leaving an orphaned process.
 - Hardened OpenAI-compatible model discovery URL normalization so incomplete `/chat/completions` paths fail clearly instead of becoming relative `/models` URLs.
 
