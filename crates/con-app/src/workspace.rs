@@ -1374,6 +1374,42 @@ impl ConWorkspace {
         }
     }
 
+    fn sync_active_tab_native_view_visibility_after_layout(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Native Ghostty NSViews live outside GPUI's element tree. Wait
+        // until GPUI has committed one layout frame before hiding/showing
+        // them, otherwise zoom/split transitions can expose transparent gaps.
+        window.request_animation_frame();
+        cx.on_next_frame(window, |_workspace, window, cx| {
+            window.request_animation_frame();
+            cx.on_next_frame(window, |workspace, _window, cx| {
+                if workspace.has_active_tab()
+                    && !workspace.ghostty_hidden
+                    && !workspace.is_modal_open(cx)
+                {
+                    workspace.sync_active_tab_native_view_visibility(cx);
+                }
+            });
+        });
+    }
+
+    fn sync_active_tab_native_view_visibility_now_or_after_layout(
+        &self,
+        was_zoomed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if was_zoomed {
+            self.sync_active_tab_native_view_visibility(cx);
+            return;
+        }
+
+        self.sync_active_tab_native_view_visibility_after_layout(window, cx);
+    }
+
     fn pump_ghostty_views(&mut self, cx: &mut Context<Self>) -> bool {
         let started = perf_trace_enabled().then(std::time::Instant::now);
         let mut changed = false;
@@ -6675,6 +6711,10 @@ impl ConWorkspace {
         }
         let cwd = self.active_terminal().current_dir(cx);
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+        let was_zoomed = self.tabs[self.active_tab]
+            .pane_tree
+            .zoomed_pane_id()
+            .is_some();
         self.tabs[self.active_tab].pane_tree.split_with_placement(
             direction,
             placement,
@@ -6687,11 +6727,9 @@ impl ConWorkspace {
                 startup_command: None,
             },
         );
-        terminal.ensure_surface(window, cx);
-        terminal.notify(cx);
         terminal.focus(window, cx);
-        self.sync_active_tab_native_view_visibility(cx);
         self.sync_active_terminal_focus_states(cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
             true,
@@ -6749,17 +6787,17 @@ impl ConWorkspace {
             return;
         }
 
+        let was_zoomed = self.tabs[self.active_tab]
+            .pane_tree
+            .zoomed_pane_id()
+            .is_some();
         if !self.tabs[self.active_tab].pane_tree.toggle_zoom_focused() {
             return;
         }
 
-        for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
-            terminal.ensure_surface(window, cx);
-            terminal.notify(cx);
-        }
-        self.sync_active_tab_native_view_visibility(cx);
         self.active_terminal().focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
         cx.notify();
     }
 
@@ -7118,16 +7156,17 @@ impl ConWorkspace {
             .and_then(|terminal| terminal.current_dir(cx));
 
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+        let was_zoomed = self.tabs[tab_idx].pane_tree.zoomed_pane_id().is_some();
         self.tabs[tab_idx].pane_tree.split_pane_with_placement(
             origin_pane_id,
             direction,
             placement,
             terminal.clone(),
         );
-        terminal.ensure_surface(window, cx);
-        terminal.notify(cx);
+        self.active_tab = tab_idx;
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
             true,
@@ -7135,7 +7174,6 @@ impl ConWorkspace {
             self.workspace_handle.clone(),
             cx,
         );
-        self.active_tab = tab_idx;
         self.record_runtime_event_for_terminal(
             tab_idx,
             &terminal,
@@ -7196,10 +7234,6 @@ impl Render for ConWorkspace {
             });
         }
         self.modal_was_open = is_modal_open;
-
-        if !needs_ghostty_hidden && !is_modal_open {
-            self.sync_active_tab_native_view_visibility(cx);
-        }
 
         // Keep pane focus in sync with which terminal has window focus
         self.tabs[self.active_tab].pane_tree.sync_focus(window, cx);
