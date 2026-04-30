@@ -41,6 +41,7 @@ Prefer `--json` for automation:
 con-cli --json identify
 con-cli --json tabs list
 con-cli --json panes list
+con-cli --json tree
 ```
 
 Before driving a pane, confirm it actually exposes the capability you need.
@@ -114,6 +115,11 @@ For follow-up shell control, wait until the pane reports:
 ## 6. Automation guidance
 
 - Use `pane_id` for follow-up targeting, not `pane_index`
+- Use `surfaces.*` only when the test is explicitly about pane-local terminal
+  sessions. Existing pane and agent benchmarks should stay on `panes.*`.
+- Use `surface_id` for surface follow-up targeting.
+- After `surfaces create` or `surfaces split`, call
+  `surfaces wait-ready --surface-id <id> --timeout 10` before sending input.
 - Keep assertions concrete and machine-checkable
 - Record the exact tab index you used
 - Capture both the command result and a follow-up `panes list` snapshot when reporting regressions

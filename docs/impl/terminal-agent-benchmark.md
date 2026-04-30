@@ -35,6 +35,12 @@ Current focus:
 
 These are hard product invariants. If they fail, higher-level SSH/tmux evaluation is not meaningful.
 
+Pane-local terminal surfaces are intentionally outside the default strict
+benchmark path. The benchmark's existing pane model maps to one active surface
+per pane so the built-in agent's tool contract stays stable. Add `surfaces.*`
+coverage only in scenarios that explicitly test external-orchestrator behavior,
+such as interactive subagent panes.
+
 ### 2. Operator suites
 
 This layer executes real multi-turn benchmark prompts through `con-cli agent ask`.

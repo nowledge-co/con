@@ -18,12 +18,18 @@ Default workflow:
 3. Wait for `/tmp/con.sock`.
 4. Use `con-cli --json identify`, `tabs list`, and `panes list` before acting.
 5. Only use `panes exec` on panes that expose `exec_visible_shell`.
-6. Use `agent ask` to verify the real in-tab built-in agent session.
+6. Use `tree` / `surfaces list` only for pane-local surface validation.
+7. After `surfaces create` or `surfaces split`, use `surfaces wait-ready --surface-id <id> --timeout 10` before sending input.
+8. Use `agent ask` to verify the real in-tab built-in agent session.
 
 Rules:
 
 - Prefer `--json` for every command in automated evaluation.
 - Prefer `pane_id` over `pane_index` for follow-up actions.
+- Prefer `surface_id` for follow-up actions only when testing the explicit
+  `surfaces.*` API.
+- Keep existing pane and agent benchmarks on `panes.*`; surfaces are additive
+  and must not change the built-in agent's pane model.
 - After visible execution, confirm the pane still reports `shell_prompt` and keeps `exec_visible_shell`.
 - If `agent ask` fails, check provider config/env before blaming the socket layer.
 

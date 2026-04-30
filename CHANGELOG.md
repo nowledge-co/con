@@ -6,6 +6,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+### Added
+
+**Control Plane**
+
+- Added pane-local terminal surfaces for external orchestrators. Existing `panes.*` APIs, built-in agent tools, and benchmarks keep the active-surface pane contract, while new `tree.get` and `surfaces.*` RPC/CLI commands can create, split, wait for readiness, focus, rename, drive, read, and close terminal sessions inside a pane.
+
 ## `v0.1.0-beta.46` - 2026-04-30
 
 ### Added

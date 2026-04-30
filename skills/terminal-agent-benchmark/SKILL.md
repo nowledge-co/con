@@ -40,6 +40,9 @@ Primary references:
 ## Rules
 
 - Prefer `pane_id` over `pane_index` when following up on benchmark findings.
+- Keep benchmark control on the existing `panes.*` API unless the benchmark
+  explicitly targets pane-local surfaces. Surface support is additive and should
+  not change the built-in agent's pane/tool contract.
 - Do not treat playbook observations as strict pass/fail evidence unless the behavior is actually deterministic.
 - If a scenario depends on host setup, say so explicitly.
 - Keep operator playbooks safe-by-default. Prefer read-only checks first, and treat destructive or privileged steps as explicit branches.
