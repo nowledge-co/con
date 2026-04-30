@@ -5623,13 +5623,10 @@ impl ConWorkspace {
         }
 
         self.pane_scope_picker_open = false;
-        let Some((pane_id, terminal)) = self.tabs[self.active_tab]
-            .pane_tree
-            .pane_terminals()
-            .into_iter()
-            .next()
-        else {
-            return;
+        let (pane_id, terminal) = {
+            let pane_tree = &self.tabs[self.active_tab].pane_tree;
+            let (pane_id, terminal) = pane_tree.visible_focus_terminal();
+            (pane_id, terminal.clone())
         };
         let zoom_target_changed = self.tabs[self.active_tab].pane_tree.focus(pane_id);
         terminal.focus(window, cx);

@@ -200,17 +200,28 @@ impl PaneTree {
         true
     }
 
-    /// Set focus to a pane by ID
+    /// Set focus to a pane by ID without changing the current zoom target.
     #[allow(dead_code)]
     pub fn focus(&mut self, pane_id: PaneId) -> bool {
-        let previous_zoomed_pane_id = self.zoomed_pane_id;
         if Self::find_terminal(&self.root, pane_id).is_some() {
             self.focused_pane_id = pane_id;
-            if self.zoomed_pane_id.is_some() {
-                self.zoomed_pane_id = Some(pane_id);
+        }
+        false
+    }
+
+    /// Terminal that should receive app-level focus when returning from UI.
+    /// While zoomed, only the zoomed pane is visible, so focus that pane.
+    pub fn visible_focus_terminal(&self) -> (PaneId, &TerminalPane) {
+        if let Some(zoomed_id) = self.zoomed_pane_id {
+            if let Some(terminal) = Self::find_terminal(&self.root, zoomed_id) {
+                return (zoomed_id, terminal);
             }
         }
-        previous_zoomed_pane_id != self.zoomed_pane_id
+
+        (
+            Self::first_pane_id(&self.root),
+            Self::first_terminal(&self.root),
+        )
     }
 
     /// Update focused pane based on which terminal currently has window focus.

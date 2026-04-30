@@ -314,6 +314,10 @@ impl GhosttyView {
         self.terminal.is_some()
     }
 
+    fn show_layout_fallback(&self) -> bool {
+        self.terminal.is_none() || self.awaiting_first_layout_visibility
+    }
+
     #[allow(dead_code)]
     pub fn selection_text(&self) -> Option<String> {
         self.terminal.as_ref().and_then(|t| t.selection_text())
@@ -522,6 +526,7 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     pub fn ensure_initialized_for_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let showed_layout_fallback = self.show_layout_fallback();
         let Some(bounds) = self.last_bounds else {
             // Never create a native NSView from estimated bounds. Nested split
             // and zoom transitions move panes between flex subtrees; a bootstrap
@@ -535,6 +540,9 @@ impl GhosttyView {
 
         self.ensure_initialized(bounds, window, cx);
         self.update_frame(bounds);
+        if showed_layout_fallback != self.show_layout_fallback() {
+            cx.notify();
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -698,10 +706,14 @@ impl GhosttyView {
     }
 
     fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let showed_layout_fallback = self.show_layout_fallback();
         #[cfg(target_os = "macos")]
         {
             self.ensure_initialized(bounds, window, cx);
             self.update_frame(bounds);
+        }
+        if showed_layout_fallback != self.show_layout_fallback() {
+            cx.notify();
         }
     }
 
@@ -1227,7 +1239,7 @@ impl Render for GhosttyView {
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
         let entity = cx.entity().downgrade();
-        let show_layout_fallback = self.terminal.is_none() || self.awaiting_first_layout_visibility;
+        let show_layout_fallback = self.show_layout_fallback();
         let layout_fallback_bg = self
             .app
             .background_rgb()
