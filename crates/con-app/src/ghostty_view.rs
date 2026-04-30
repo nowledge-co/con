@@ -814,7 +814,7 @@ impl GhosttyView {
                 // Tab management
                 "q" | "w" | "t" | "," => return false,
                 // Window cycling (cmd-`, cmd-shift-`)
-                "`" | "~" => return false,
+                "`" | "~" | ">" | "<" => return false,
                 // Splits (cmd-d, cmd-shift-d)
                 "d" => return false,
                 // Agent & input

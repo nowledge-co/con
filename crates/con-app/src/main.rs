@@ -447,7 +447,7 @@ fn fresh_window_session_with_history() -> Session {
 pub(crate) fn toggle_global_summon(cx: &mut App) {
     let frontmost_window = cx
         .window_stack()
-        .and_then(|windows| windows.last().cloned());
+        .and_then(|windows| windows.first().cloned());
     let has_windows = frontmost_window.is_some();
 
     #[cfg(target_os = "macos")]
@@ -496,13 +496,12 @@ fn cycle_app_window(cx: &mut App, reverse: bool) {
                 .position(|handle| handle.window_id() == active.window_id())
         })
         .unwrap_or(0);
-    // GPUI/macOS reports the stack from back to front (the summon
-    // path also treats `last()` as frontmost), so Cmd+` moves to the
-    // window immediately behind the active one. Shift reverses that.
+    // GPUI/macOS reports the stack front-to-back. Cmd+` moves to the
+    // window immediately behind the active one; Shift reverses that.
     let next = if reverse {
-        (current + 1) % windows.len()
-    } else {
         current.checked_sub(1).unwrap_or(windows.len() - 1)
+    } else {
+        (current + 1) % windows.len()
     };
 
     let target = windows[next];
@@ -842,12 +841,18 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new("cmd-h", HideApp, None),
         KeyBinding::new("cmd-alt-h", HideOtherApps, None),
         KeyBinding::new("cmd-alt-shift-h", ShowAllApps, None),
+        KeyBinding::new("cmd->", NextWindow, None),
         KeyBinding::new("cmd-`", NextWindow, None),
+        KeyBinding::new("cmd-~", PreviousWindow, None),
+        KeyBinding::new("cmd-<", PreviousWindow, None),
         KeyBinding::new("cmd-shift-`", PreviousWindow, None),
         KeyBinding::new("cmd-h", HideApp, Some("Input")),
         KeyBinding::new("cmd-alt-h", HideOtherApps, Some("Input")),
         KeyBinding::new("cmd-alt-shift-h", ShowAllApps, Some("Input")),
+        KeyBinding::new("cmd->", NextWindow, Some("Input")),
         KeyBinding::new("cmd-`", NextWindow, Some("Input")),
+        KeyBinding::new("cmd-~", PreviousWindow, Some("Input")),
+        KeyBinding::new("cmd-<", PreviousWindow, Some("Input")),
         KeyBinding::new("cmd-shift-`", PreviousWindow, Some("Input")),
     ]);
 }

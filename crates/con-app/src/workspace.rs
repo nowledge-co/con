@@ -7891,19 +7891,20 @@ impl Render for ConWorkspace {
 
                 let mods = &event.keystroke.modifiers;
                 let key = event.keystroke.key.as_str();
-                let local_picker_key = !mods.control && !mods.alt && !mods.shift && !mods.platform;
+                let local_picker_key = !mods.control && !mods.alt && !mods.platform;
+                let unshifted_local_picker_key = local_picker_key && !mods.shift;
 
                 let mut handled = false;
                 if key == "escape" {
                     this.close_pane_scope_picker(cx);
                     handled = true;
-                } else if local_picker_key && key == "a" {
+                } else if local_picker_key && key.eq_ignore_ascii_case("a") {
                     this.set_scope_broadcast(window, cx);
                     handled = true;
-                } else if local_picker_key && key == "f" {
+                } else if local_picker_key && key.eq_ignore_ascii_case("f") {
                     this.set_scope_focused(window, cx);
                     handled = true;
-                } else if local_picker_key
+                } else if unshifted_local_picker_key
                     && let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10))
                 {
                     let pane_index = if digit == 0 { 9 } else { (digit - 1) as usize };
@@ -7928,8 +7929,12 @@ impl Render for ConWorkspace {
                 let key = event.keystroke.key.as_str();
 
                 #[cfg(target_os = "macos")]
-                if mods.platform && !mods.control && !mods.alt && (key == "`" || key == "~") {
-                    if mods.shift {
+                if mods.platform
+                    && !mods.control
+                    && !mods.alt
+                    && matches!(key, "`" | "~" | ">" | "<")
+                {
+                    if mods.shift || matches!(key, "~" | "<") {
                         cx.dispatch_action(&crate::PreviousWindow);
                     } else {
                         cx.dispatch_action(&crate::NextWindow);
