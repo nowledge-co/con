@@ -8,6 +8,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Added
 
+**Agent Providers**
+
+- Updated Rig to 0.36.0 and added DeepSeek V4 model support. DeepSeek now defaults to `deepseek-v4-flash`, keeps `deepseek-v4-pro` available in the model picker, and preserves the legacy `deepseek-chat` and `deepseek-reasoner` aliases.
+
 **Settings**
 
 - Settings now opens as a separate window. You can adjust appearance, shortcuts, and provider configuration, save changes, and keep the settings window open while checking the terminal.

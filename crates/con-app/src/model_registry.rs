@@ -71,7 +71,12 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
         ProviderKind::ZAI | ProviderKind::ZAIAnthropic => {
             &["glm-4.6", "glm-4.6-air", "glm-4.5", "glm-4.5v"]
         }
-        ProviderKind::DeepSeek => &["deepseek-chat", "deepseek-reasoner"],
+        ProviderKind::DeepSeek => &[
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "deepseek-chat",
+            "deepseek-reasoner",
+        ],
         ProviderKind::Groq => &[
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
@@ -112,6 +117,7 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
 fn pinned_models(provider: &ProviderKind) -> &'static [&'static str] {
     match provider {
         ProviderKind::Moonshot => &["kimi-for-coding"],
+        ProviderKind::DeepSeek => &["deepseek-v4-flash", "deepseek-v4-pro"],
         _ => &[],
     }
 }
@@ -488,6 +494,10 @@ mod tests {
             models_dev_id_to_providers("zai-coding-plan"),
             &[ProviderKind::ZAI, ProviderKind::ZAIAnthropic]
         );
+        assert_eq!(
+            models_dev_id_to_providers("deepseek"),
+            &[ProviderKind::DeepSeek]
+        );
     }
 
     #[test]
@@ -495,6 +505,7 @@ mod tests {
         let registry = ModelRegistry::new();
         let mut models = HashMap::new();
         models.insert(ProviderKind::Moonshot, vec!["kimi-k2.5".to_string()]);
+        models.insert(ProviderKind::DeepSeek, vec!["deepseek-chat".to_string()]);
         *registry.inner.lock().unwrap() = Some(CacheEntry {
             models,
             fetched_at: Instant::now(),
@@ -503,6 +514,14 @@ mod tests {
         assert_eq!(
             registry.models_for(&ProviderKind::Moonshot),
             vec!["kimi-k2.5".to_string(), "kimi-for-coding".to_string()]
+        );
+        assert_eq!(
+            registry.models_for(&ProviderKind::DeepSeek),
+            vec![
+                "deepseek-chat".to_string(),
+                "deepseek-v4-flash".to_string(),
+                "deepseek-v4-pro".to_string(),
+            ]
         );
     }
 

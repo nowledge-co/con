@@ -470,7 +470,7 @@ impl ProviderKind {
             Self::MoonshotAnthropic => "kimi-k2.5",
             Self::ZAI => "glm-4.6",
             Self::ZAIAnthropic => "glm-4.6",
-            Self::DeepSeek => "deepseek-chat",
+            Self::DeepSeek => "deepseek-v4-flash",
             Self::Groq => "llama-3.3-70b-versatile",
             Self::Cohere => "command-a-03-2025",
             Self::Gemini => "gemini-2.5-flash",
