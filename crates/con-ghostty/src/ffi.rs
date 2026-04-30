@@ -100,6 +100,7 @@ pub const GHOSTTY_MODS_NUM: c_int = 1 << 5;
 
 /// Packed scroll modifier struct (see ghostty input/mouse.zig).
 pub type ghostty_input_scroll_mods_t = c_int;
+pub const GHOSTTY_SCROLL_MODS_PRECISION: ghostty_input_scroll_mods_t = 1 << 0;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

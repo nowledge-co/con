@@ -87,6 +87,12 @@ pub struct GhosttyView {
     document_view: Option<id>,
     #[cfg(target_os = "macos")]
     nsview: Option<id>,
+    #[cfg(target_os = "macos")]
+    native_scroll_document_frame: Option<(f64, f64)>,
+    #[cfg(target_os = "macos")]
+    native_scroll_y: Option<f64>,
+    #[cfg(target_os = "macos")]
+    native_scroll_surface_frame: Option<(f64, f64, f64, f64)>,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -143,6 +149,12 @@ impl GhosttyView {
             document_view: None,
             #[cfg(target_os = "macos")]
             nsview: None,
+            #[cfg(target_os = "macos")]
+            native_scroll_document_frame: None,
+            #[cfg(target_os = "macos")]
+            native_scroll_y: None,
+            #[cfg(target_os = "macos")]
+            native_scroll_surface_frame: None,
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
@@ -312,6 +324,9 @@ impl GhosttyView {
         }
         self.document_view = None;
         self.nsview = None;
+        self.native_scroll_document_frame = None;
+        self.native_scroll_y = None;
+        self.native_scroll_surface_frame = None;
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -336,6 +351,9 @@ impl GhosttyView {
         #[cfg(target_os = "macos")]
         {
             self.last_mouse_position = None;
+            self.native_scroll_document_frame = None;
+            self.native_scroll_y = None;
+            self.native_scroll_surface_frame = None;
         }
         self.ime_marked_text = None;
     }
@@ -613,13 +631,20 @@ impl GhosttyView {
         };
 
         unsafe {
-            let document_frame = NSRect::new(
-                cocoa::foundation::NSPoint::new(0.0, 0.0),
-                cocoa::foundation::NSSize::new(visible_width, document_height),
-            );
-            let _: () = msg_send![document_view, setFrame:document_frame];
+            let document_frame_key = (visible_width, document_height);
+            let document_frame_changed =
+                self.native_scroll_document_frame != Some(document_frame_key);
+            if document_frame_changed {
+                let document_frame = NSRect::new(
+                    cocoa::foundation::NSPoint::new(0.0, 0.0),
+                    cocoa::foundation::NSSize::new(visible_width, document_height),
+                );
+                let _: () = msg_send![document_view, setFrame:document_frame];
+                self.native_scroll_document_frame = Some(document_frame_key);
+            }
 
             let content_view: id = msg_send![scroll_view, contentView];
+            let mut scroll_changed = false;
             if let Some(scrollbar) = scrollbar {
                 let total_rows = scrollbar.total.max(scrollbar.len).max(1);
                 let visible_rows = scrollbar.len.max(1).min(total_rows);
@@ -633,19 +658,37 @@ impl GhosttyView {
                 };
                 let scroll_y =
                     offset_from_bottom.clamp(0.0, (document_height - visible_height).max(0.0));
-                let _: () = msg_send![
-                    content_view,
-                    scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
-                ];
+                if self.native_scroll_y != Some(scroll_y) {
+                    let _: () = msg_send![
+                        content_view,
+                        scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
+                    ];
+                    self.native_scroll_y = Some(scroll_y);
+                    scroll_changed = true;
+                }
+            } else {
+                self.native_scroll_y = None;
             }
-            let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
+            if document_frame_changed || scroll_changed {
+                let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
+            }
 
             let visible_rect: NSRect = msg_send![content_view, documentVisibleRect];
+            let surface_frame_key = (
+                visible_rect.origin.x,
+                visible_rect.origin.y,
+                visible_width,
+                visible_height,
+            );
+            if self.native_scroll_surface_frame == Some(surface_frame_key) {
+                return;
+            }
             let surface_frame = NSRect::new(
                 visible_rect.origin,
                 cocoa::foundation::NSSize::new(visible_width, visible_height),
             );
             let _: () = msg_send![nsview, setFrame:surface_frame];
+            self.native_scroll_surface_frame = Some(surface_frame_key);
         }
     }
 
@@ -1046,6 +1089,13 @@ fn gpui_mods_to_ghostty(mods: &Modifiers) -> i32 {
     m
 }
 
+fn gpui_scroll_mods_to_ghostty(delta: &ScrollDelta) -> i32 {
+    match delta {
+        ScrollDelta::Pixels(_) => ffi::GHOSTTY_SCROLL_MODS_PRECISION,
+        ScrollDelta::Lines(_) => 0,
+    }
+}
+
 // ── GPUI key name → macOS virtual keycode mapping ────────────
 //
 // These are the kVK_* constants from Carbon/HIToolbox/Events.h.
@@ -1278,16 +1328,17 @@ impl Render for GhosttyView {
                     let delta = match event.delta {
                         ScrollDelta::Lines(d) => (f64::from(d.x), f64::from(d.y)),
                         ScrollDelta::Pixels(d) => {
-                            // GPUI gives physical pixel deltas on Retina;
-                            // normalize to logical coordinates for ghostty.
-                            let scale = this.scale_factor as f64;
-                            (f64::from(d.x) / scale, f64::from(d.y) / scale)
+                            // Match Ghostty's AppKit host: precise trackpad
+                            // deltas are sent as-is with a subjective 2x
+                            // multiplier and the ScrollMods precision bit.
+                            // Ghostty core then accumulates sub-row remainders.
+                            (f64::from(d.x) * 2.0, f64::from(d.y) * 2.0)
                         }
                     };
                     terminal.send_mouse_scroll(
                         delta.0,
                         delta.1,
-                        gpui_mods_to_ghostty(&event.modifiers),
+                        gpui_scroll_mods_to_ghostty(&event.delta),
                     );
                 }
             }))
