@@ -302,7 +302,11 @@ impl GhosttyView {
         // at window-creation time; there's nothing per-pane to refresh.
     }
 
-    pub fn drain_surface_state(&mut self, _cx: &mut Context<Self>) -> bool {
+    pub fn drain_surface_state(
+        &mut self,
+        _sync_native_scroll: bool,
+        _cx: &mut Context<Self>,
+    ) -> bool {
         false
     }
 

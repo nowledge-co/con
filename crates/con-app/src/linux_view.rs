@@ -254,7 +254,11 @@ impl GhosttyView {
 
     pub fn sync_window_background_blur(&self) {}
 
-    pub fn drain_surface_state(&mut self, cx: &mut Context<Self>) -> bool {
+    pub fn drain_surface_state(
+        &mut self,
+        _sync_native_scroll: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let mut changed = self.ensure_session(cx);
 
         let Some(terminal) = self.terminal.as_ref().cloned() else {

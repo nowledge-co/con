@@ -134,9 +134,14 @@ impl TerminalPane {
         }
     }
 
-    pub fn drain_surface_state(&self, cx: &mut App) -> bool {
-        self.entity
-            .update(cx, |view, cx| view.drain_surface_state(cx))
+    pub fn drain_surface_state_with_native_scroll(
+        &self,
+        sync_native_scroll: bool,
+        cx: &mut App,
+    ) -> bool {
+        self.entity.update(cx, |view, cx| {
+            view.drain_surface_state(sync_native_scroll, cx)
+        })
     }
 
     pub fn pump_surface_deferred_work(&self, cx: &mut App) -> bool {

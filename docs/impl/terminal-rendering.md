@@ -164,6 +164,8 @@ The host also must not invent viewport state that Ghostty has not emitted. Stand
 
 macOS scroll input must also preserve Ghostty's scroll-event contract. AppKit precise scroll events are not keyboard modifier events; they must be sent with Ghostty's packed `ScrollMods.precision` bit and without scaling by the window backing factor. Con mirrors Ghostty's AppKit host by sending precise deltas through that path with the same 2x multiplier, leaving Ghostty core to accumulate sub-row remainders and apply terminal-row scrolling.
 
+The workspace pump still drains title/process/link events for every terminal surface, including background tabs, but macOS native scroll-container synchronization is visible-tab-only. Hidden tabs do not need AppKit scroll frame updates, and keeping that work out of fast scroll bursts avoids unnecessary main-thread native view churn without dropping terminal lifecycle events.
+
 Con also no longer tries to outsmart Ghostty's resize path with host-side coalescing. The embedded surface now updates its core size immediately on layout using AppKit backing-size conversion, which is much closer to how Ghostty's own macOS app drives `ghostty_surface_set_size`.
 
 One build-time rule matters too: the embedded Ghostty runtime itself must be compiled as a release-class library. Con now passes Zig `-Doptimize=ReleaseFast` for the macOS Ghostty build by default. Without that, traces are dominated by Ghostty's own formatter, reflow, integrity-check, and debug-allocation paths, which makes Con look fundamentally slower than standalone Ghostty even when the host integration is not the main bottleneck.
