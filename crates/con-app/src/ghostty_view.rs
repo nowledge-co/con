@@ -764,8 +764,7 @@ impl GhosttyView {
             }
 
             let content_view: id = msg_send![scroll_view, contentView];
-            let mut scroll_changed = false;
-            if let Some(scrollbar) = scrollbar {
+            let scroll_y = if let Some(scrollbar) = scrollbar {
                 let total_rows = scrollbar.total.max(scrollbar.len).max(1);
                 let visible_rows = scrollbar.len.max(1).min(total_rows);
                 let offset_from_bottom = if cell_height > 0.0 {
@@ -776,35 +775,28 @@ impl GhosttyView {
                 } else {
                     0.0
                 };
-                let scroll_y =
-                    offset_from_bottom.clamp(0.0, (document_height - visible_height).max(0.0));
-                if self.native_scroll_y != Some(scroll_y) {
-                    let _: () = msg_send![
-                        content_view,
-                        scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
-                    ];
-                    self.native_scroll_y = Some(scroll_y);
-                    scroll_changed = true;
-                }
+                offset_from_bottom.clamp(0.0, (document_height - visible_height).max(0.0))
             } else {
-                self.native_scroll_y = None;
+                0.0
+            };
+            let scroll_changed = self.native_scroll_y != Some(scroll_y);
+            if scroll_changed {
+                let _: () = msg_send![
+                    content_view,
+                    scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
+                ];
+                self.native_scroll_y = Some(scroll_y);
             }
             if document_frame_changed || scroll_changed {
                 let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
             }
 
-            let visible_rect: NSRect = msg_send![content_view, documentVisibleRect];
-            let surface_frame_key = (
-                visible_rect.origin.x,
-                visible_rect.origin.y,
-                visible_width,
-                visible_height,
-            );
+            let surface_frame_key = (0.0, scroll_y, visible_width, visible_height);
             if self.native_scroll_surface_frame == Some(surface_frame_key) {
                 return;
             }
             let surface_frame = NSRect::new(
-                visible_rect.origin,
+                cocoa::foundation::NSPoint::new(0.0, scroll_y),
                 cocoa::foundation::NSSize::new(visible_width, visible_height),
             );
             let _: () = msg_send![nsview, setFrame:surface_frame];
