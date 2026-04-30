@@ -17,6 +17,8 @@ mod chat_markdown;
 mod command_palette;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
+#[cfg(target_os = "macos")]
+mod macos_windowing;
 
 // The terminal-view module is selected per platform:
 //   macOS   -> ghostty_view.rs (libghostty + child NSView)
@@ -302,7 +304,7 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
 fn default_window_options(cx: &mut App) -> WindowOptions {
     let transparent = supports_transparent_main_window();
     WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(1200.0), px(800.0)), cx)),
+        window_bounds: Some(default_workspace_window_bounds(cx)),
         titlebar: default_titlebar_options(transparent),
         window_decorations: default_window_decorations(),
         window_background: if transparent {
@@ -313,6 +315,58 @@ fn default_window_options(cx: &mut App) -> WindowOptions {
         ..Default::default()
     }
 }
+
+fn default_workspace_window_bounds(cx: &mut App) -> WindowBounds {
+    let fallback_size = size(px(1200.0), px(800.0));
+    let fallback_bounds = Bounds::centered(None, fallback_size, cx);
+    let fallback_display_bounds = cx.primary_display().map(|display| display.visible_bounds());
+
+    let active_bounds = cx.active_window().and_then(|handle| {
+        handle
+            .update(cx, |_, window, cx| {
+                let bounds = match window.window_bounds() {
+                    WindowBounds::Windowed(bounds) => bounds,
+                    WindowBounds::Maximized(_) | WindowBounds::Fullscreen(_) => {
+                        return None;
+                    }
+                };
+                let display_bounds = window
+                    .display(cx)
+                    .map(|display| display.visible_bounds())
+                    .or(fallback_display_bounds);
+                Some((bounds, display_bounds))
+            })
+            .ok()
+            .flatten()
+    });
+
+    let Some((base_bounds, display_bounds)) = active_bounds else {
+        return WindowBounds::Windowed(fallback_bounds);
+    };
+
+    const CASCADE_OFFSET: f32 = 28.0;
+
+    let display_bounds = display_bounds.unwrap_or(fallback_bounds);
+    let proposed_origin = base_bounds.origin + point(px(CASCADE_OFFSET), px(CASCADE_OFFSET));
+    let proposed_bounds = Bounds::new(proposed_origin, base_bounds.size);
+
+    let display_right = display_bounds.origin.x + display_bounds.size.width;
+    let display_bottom = display_bounds.origin.y + display_bounds.size.height;
+    let window_right = proposed_bounds.origin.x + proposed_bounds.size.width;
+    let window_bottom = proposed_bounds.origin.y + proposed_bounds.size.height;
+
+    let fits_horizontally = window_right <= display_right;
+    let fits_vertically = window_bottom <= display_bottom;
+    let final_origin = match (fits_horizontally, fits_vertically) {
+        (true, true) => proposed_origin,
+        (false, true) => point(display_bounds.origin.x, base_bounds.origin.y),
+        (true, false) => point(base_bounds.origin.x, display_bounds.origin.y),
+        (false, false) => display_bounds.origin,
+    };
+
+    WindowBounds::Windowed(Bounds::new(final_origin, base_bounds.size))
+}
+
 fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
     Some(TitlebarOptions {
         title: Some("con".into()),
@@ -1099,6 +1153,8 @@ fn main() {
         bind_app_keybindings(cx, &config.keybindings);
         #[cfg(target_os = "macos")]
         global_hotkey::init(cx, &config.keybindings);
+        #[cfg(target_os = "macos")]
+        macos_windowing::install_window_cycle_shortcuts();
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             let config = con_core::Config::load().unwrap_or_default();
