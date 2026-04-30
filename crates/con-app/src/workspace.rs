@@ -1494,7 +1494,7 @@ impl ConWorkspace {
                         workspace.update(cx, |_workspace, cx| {
                             terminal.ensure_surface(window, cx);
                             terminal.notify(cx);
-                            terminal.set_native_view_visible(true, cx);
+                            _workspace.sync_active_tab_native_view_visibility(cx);
                             if should_focus {
                                 _workspace.sync_active_terminal_focus_states(cx);
                                 terminal.focus(window, cx);
@@ -5854,10 +5854,10 @@ impl ConWorkspace {
             };
 
             for terminal in &surviving_terminals {
-                terminal.set_native_view_visible(true, cx);
                 terminal.ensure_surface(window, cx);
                 terminal.notify(cx);
             }
+            self.sync_active_tab_native_view_visibility(cx);
 
             new_focus.focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
@@ -7198,9 +7198,7 @@ impl Render for ConWorkspace {
         self.modal_was_open = is_modal_open;
 
         if !needs_ghostty_hidden && !is_modal_open {
-            for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
-                terminal.set_native_view_visible(true, cx);
-            }
+            self.sync_active_tab_native_view_visibility(cx);
         }
 
         // Keep pane focus in sync with which terminal has window focus
