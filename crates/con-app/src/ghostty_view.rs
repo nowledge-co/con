@@ -522,21 +522,19 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     pub fn ensure_initialized_for_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let fallback_bounds = self.last_bounds.unwrap_or_else(|| {
-            let window_bounds = window.bounds();
-            let width = (window_bounds.size.width.as_f32() * 0.45).clamp(360.0, 900.0);
-            let height = (window_bounds.size.height.as_f32() * 0.7).clamp(240.0, 900.0);
-            Bounds::new(point(px(0.0), px(0.0)), size(px(width), px(height)))
-        });
-        let needs_real_layout = self.last_bounds.is_none();
-        self.awaiting_first_layout_visibility = needs_real_layout;
-        self.ensure_initialized(fallback_bounds, window, cx);
-        // Control-created panes may need a live PTY before GPUI has laid them out,
-        // but publishing a fallback frame makes the native view visibly jump across
-        // the workspace. Keep the surface hidden until the first real on_layout.
-        if !needs_real_layout {
-            self.update_frame(fallback_bounds);
-        }
+        let Some(bounds) = self.last_bounds else {
+            // Never create a native NSView from estimated bounds. Nested split
+            // and zoom transitions move panes between flex subtrees; a bootstrap
+            // frame can survive long enough to paint in the wrong pane until a
+            // manual divider resize corrects it. The GPUI fallback matte covers
+            // this pane until the canvas supplies authoritative layout bounds.
+            self.awaiting_first_layout_visibility = true;
+            cx.notify();
+            return;
+        };
+
+        self.ensure_initialized(bounds, window, cx);
+        self.update_frame(bounds);
     }
 
     #[cfg(target_os = "macos")]
