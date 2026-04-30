@@ -5628,13 +5628,9 @@ impl ConWorkspace {
             let (pane_id, terminal) = pane_tree.visible_focus_terminal();
             (pane_id, terminal.clone())
         };
-        let zoom_target_changed = self.tabs[self.active_tab].pane_tree.focus(pane_id);
+        self.tabs[self.active_tab].pane_tree.focus(pane_id);
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
-        if zoom_target_changed {
-            self.notify_active_tab_terminal_views(cx);
-            self.sync_active_tab_native_view_visibility_after_layout(window, cx);
-        }
         cx.notify();
     }
 
@@ -7062,13 +7058,9 @@ impl ConWorkspace {
         let entity_id = entity.entity_id();
         let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
         if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
-            let zoom_target_changed = pane_tree.focus(pane_id);
+            pane_tree.focus(pane_id);
             entity.focus_handle(cx).focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
-            if zoom_target_changed {
-                self.notify_active_tab_terminal_views(cx);
-                self.sync_active_tab_native_view_visibility_after_layout(window, cx);
-            }
         }
         cx.notify();
     }

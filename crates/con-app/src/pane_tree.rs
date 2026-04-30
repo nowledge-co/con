@@ -201,12 +201,10 @@ impl PaneTree {
     }
 
     /// Set focus to a pane by ID without changing the current zoom target.
-    #[allow(dead_code)]
-    pub fn focus(&mut self, pane_id: PaneId) -> bool {
+    pub fn focus(&mut self, pane_id: PaneId) {
         if Self::find_terminal(&self.root, pane_id).is_some() {
             self.focused_pane_id = pane_id;
         }
-        false
     }
 
     /// Terminal that should receive app-level focus when returning from UI.
