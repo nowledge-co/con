@@ -13,7 +13,7 @@ use con_core::{
 use futures::{FutureExt, StreamExt};
 use gpui::*;
 
-use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_component::clipboard::Clipboard;
 use gpui_component::input::InputState;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
@@ -38,6 +38,10 @@ actions!(
 
 /// Emitted when the user selects a different terminal theme for live preview.
 pub struct ThemePreview(pub String);
+
+/// Emitted for lightweight appearance changes that should be visible
+/// immediately but should not persist/rebuild the full agent config.
+pub struct AppearancePreview;
 
 #[derive(Debug, Clone, Default)]
 struct ProviderOAuthState {
@@ -1170,6 +1174,7 @@ impl SettingsPanel {
                 SliderEvent::Change(value) => {
                     this.config.appearance.terminal_opacity =
                         Self::clamp_terminal_opacity(value.end());
+                    cx.emit(AppearancePreview);
                     cx.notify();
                 }
             },
@@ -1180,6 +1185,7 @@ impl SettingsPanel {
             |this, _, event: &SliderEvent, cx| match event {
                 SliderEvent::Change(value) => {
                     this.config.appearance.ui_opacity = Self::clamp_ui_opacity(value.end());
+                    cx.emit(AppearancePreview);
                     cx.notify();
                 }
             },
@@ -1191,6 +1197,7 @@ impl SettingsPanel {
                 SliderEvent::Change(value) => {
                     this.config.appearance.background_image_opacity =
                         Self::clamp_background_image_opacity(value.end());
+                    cx.emit(AppearancePreview);
                     cx.notify();
                 }
             },
@@ -1291,6 +1298,7 @@ impl SettingsPanel {
             |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
                     this.config.terminal.font_family = sanitize_terminal_font_family(value);
+                    cx.emit(AppearancePreview);
                     cx.notify();
                 }
             },
@@ -1302,6 +1310,7 @@ impl SettingsPanel {
             |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
                     this.config.appearance.ui_font_family = value.clone();
+                    cx.emit(AppearancePreview);
                     cx.notify();
                 }
             },
@@ -1314,6 +1323,7 @@ impl SettingsPanel {
                 if let SelectEvent::Confirm(Some(value)) = ev {
                     this.config.terminal.cursor_style =
                         Self::cursor_style_from_label(value).to_string();
+                    cx.emit(AppearancePreview);
                     cx.notify();
                 }
             },
@@ -1325,6 +1335,7 @@ impl SettingsPanel {
             |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
                     this.config.appearance.background_image_position = value.clone();
+                    cx.emit(AppearancePreview);
                     cx.notify();
                 }
             },
@@ -1336,6 +1347,7 @@ impl SettingsPanel {
             |this, _, ev: &SelectEvent<Vec<String>>, _, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
                     this.config.appearance.background_image_fit = value.clone();
+                    cx.emit(AppearancePreview);
                     cx.notify();
                 }
             },
@@ -1683,7 +1695,7 @@ impl SettingsPanel {
         });
 
         let input = self.background_image_input.clone();
-        cx.spawn_in(window, async move |_, window| {
+        cx.spawn_in(window, async move |this, window| {
             let path = paths.await.ok()?.ok()??.into_iter().next()?;
             let path_text = path.to_string_lossy().to_string();
 
@@ -1691,6 +1703,11 @@ impl SettingsPanel {
                 .update(|window, cx| {
                     _ = input.update(cx, |state, cx| {
                         state.set_value(&path_text, window, cx);
+                    });
+                    _ = this.update(cx, |panel, cx| {
+                        panel.config.appearance.background_image = Some(path_text.clone());
+                        cx.emit(AppearancePreview);
+                        cx.notify();
                     });
                 })
                 .ok()?;
@@ -2756,6 +2773,7 @@ impl SettingsPanel {
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                 this.background_image_repeat = *checked;
                 this.config.appearance.background_image_repeat = *checked;
+                cx.emit(AppearancePreview);
                 cx.notify();
             }));
         let all_themes = con_terminal::TerminalTheme::all_available();
@@ -3001,6 +3019,8 @@ impl SettingsPanel {
                                 .small()
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                     this.terminal_blur = *checked;
+                                    this.config.appearance.terminal_blur = *checked;
+                                    cx.emit(AppearancePreview);
                                     cx.notify();
                                 })),
                             theme,
@@ -4428,6 +4448,7 @@ impl SettingsPanel {
 impl EventEmitter<SaveSettings> for SettingsPanel {}
 impl EventEmitter<TabsOrientationChanged> for SettingsPanel {}
 impl EventEmitter<ThemePreview> for SettingsPanel {}
+impl EventEmitter<AppearancePreview> for SettingsPanel {}
 
 impl Focusable for SettingsPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -4574,6 +4595,11 @@ impl Render for SettingsPanel {
             .overflow_y_scroll()
             .p(content_pad)
             .child(content);
+        let apply_button_style = ButtonCustomVariant::new(cx)
+            .color(theme.primary.opacity(0.12))
+            .foreground(theme.primary)
+            .hover(theme.primary.opacity(0.18))
+            .active(theme.primary.opacity(0.24));
 
         let surface_rounding = if self.standalone { px(0.0) } else { px(12.0) };
         let surface = div()
@@ -4682,8 +4708,9 @@ impl Render for SettingsPanel {
                                     .children(self.standalone.then(|| {
                                         Button::new("settings-apply")
                                             .small()
-                                            .primary()
-                                            .label("Apply")
+                                            .custom(apply_button_style)
+                                            .icon(Icon::default().path("phosphor/check.svg"))
+                                            .label("Save Changes")
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.save(window, cx);
                                             }))

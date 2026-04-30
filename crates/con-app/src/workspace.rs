@@ -217,7 +217,7 @@ use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
 use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
 use crate::settings_panel::{
-    self, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
+    self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
 use crate::sidebar::{
     NewSession, SessionEntry, SessionSidebar, SidebarCloseOthers, SidebarCloseTab,
@@ -238,7 +238,9 @@ use crate::{
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
 };
-use con_core::config::{Config, TabsOrientation, sanitize_terminal_font_family};
+use con_core::config::{
+    AppearanceConfig, Config, TabsOrientation, TerminalConfig, sanitize_terminal_font_family,
+};
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
@@ -886,6 +888,8 @@ impl ConWorkspace {
         cx.subscribe_in(&settings_panel, window, Self::on_tabs_orientation_changed)
             .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_theme_preview)
+            .detach();
+        cx.subscribe_in(&settings_panel, window, Self::on_appearance_preview)
             .detach();
         // Re-render workspace when settings panel visibility changes (e.g. X close button)
         cx.observe(&settings_panel, |_, _, cx| cx.notify()).detach();
@@ -3619,49 +3623,7 @@ impl ConWorkspace {
 
         let term_config = settings.read(cx).terminal_config().clone();
         let appearance_config = settings.read(cx).appearance_config().clone();
-        self.terminal_font_family = sanitize_terminal_font_family(&term_config.font_family);
-        self.ui_font_family = appearance_config.ui_font_family.clone();
-        self.ui_font_size = appearance_config.ui_font_size;
-        self.font_size = term_config.font_size;
-        self.terminal_cursor_style = term_config.cursor_style.clone();
-        self.terminal_opacity =
-            Self::effective_terminal_opacity(appearance_config.terminal_opacity);
-        self.terminal_blur = Self::effective_terminal_blur(appearance_config.terminal_blur);
-        self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
-        let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
-        self.background_image = appearance_config.background_image.clone();
-        self.background_image_opacity =
-            Self::clamp_background_image_opacity(appearance_config.background_image_opacity);
-        self.background_image_position = appearance_config.background_image_position.clone();
-        self.background_image_fit = appearance_config.background_image_fit.clone();
-        self.background_image_repeat = appearance_config.background_image_repeat;
-        if self.tabs_orientation != appearance_config.tabs_orientation {
-            self.tabs_orientation = appearance_config.tabs_orientation;
-            // Tab strip motion drives the top-bar height. In vertical
-            // mode the strip is always hidden — collapse the motion now
-            // so we don't pay an unrelated transition.
-            self.sync_tab_strip_motion();
-            self.save_session(cx);
-            cx.notify();
-        }
-        self.agent_panel
-            .update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
-        self.input_bar
-            .update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
-        self.sidebar
-            .update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
-        self.command_palette.update(cx, |palette, _cx| {
-            palette.set_ui_opacity(effective_ui_opacity)
-        });
-
-        if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
-            self.apply_terminal_theme(new_theme, window, cx);
-        } else {
-            log::warn!(
-                "Skipping terminal theme sync; theme {:?} was not found",
-                term_config.theme
-            );
-        }
+        self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
 
         // Re-apply keybindings at runtime so changes take effect immediately
         let kb = settings.read(cx).keybinding_config().clone();
@@ -3672,6 +3634,28 @@ impl ConWorkspace {
         if restore_focus {
             self.focus_terminal(window, cx);
         }
+    }
+
+    fn on_appearance_preview(
+        &mut self,
+        settings: &Entity<SettingsPanel>,
+        _event: &AppearancePreview,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_appearance_preview_from_panel(settings, window, cx);
+    }
+
+    fn apply_appearance_preview_from_panel(
+        &mut self,
+        settings: &Entity<SettingsPanel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let term_config = settings.read(cx).terminal_config().clone();
+        let appearance_config = settings.read(cx).appearance_config().clone();
+        self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
+        cx.notify();
     }
 
     fn on_tabs_orientation_changed(
@@ -3726,6 +3710,97 @@ impl ConWorkspace {
         }
     }
 
+    fn apply_terminal_and_ui_appearance(
+        &mut self,
+        term_config: &TerminalConfig,
+        appearance_config: &AppearanceConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let next_terminal_font_family = sanitize_terminal_font_family(&term_config.font_family);
+        let next_ui_font_family = appearance_config.ui_font_family.clone();
+        let next_ui_font_size = appearance_config.ui_font_size;
+        let next_font_size = term_config.font_size;
+        let next_terminal_cursor_style = term_config.cursor_style.clone();
+        let next_terminal_opacity =
+            Self::effective_terminal_opacity(appearance_config.terminal_opacity);
+        let next_terminal_blur = Self::effective_terminal_blur(appearance_config.terminal_blur);
+        let next_background_image = appearance_config.background_image.clone();
+        let next_background_image_opacity =
+            Self::clamp_background_image_opacity(appearance_config.background_image_opacity);
+        let next_background_image_position = appearance_config.background_image_position.clone();
+        let next_background_image_fit = appearance_config.background_image_fit.clone();
+        let next_background_image_repeat = appearance_config.background_image_repeat;
+
+        let font_changed = self.terminal_font_family != next_terminal_font_family
+            || (self.font_size - next_font_size).abs() > f32::EPSILON;
+        let terminal_appearance_changed = font_changed
+            || self.terminal_cursor_style != next_terminal_cursor_style
+            || (self.terminal_opacity - next_terminal_opacity).abs() > f32::EPSILON
+            || self.terminal_blur != next_terminal_blur
+            || self.background_image != next_background_image
+            || (self.background_image_opacity - next_background_image_opacity).abs() > f32::EPSILON
+            || self.background_image_position != next_background_image_position
+            || self.background_image_fit != next_background_image_fit
+            || self.background_image_repeat != next_background_image_repeat;
+        let ui_theme_changed = font_changed
+            || self.ui_font_family != next_ui_font_family
+            || (self.ui_font_size - next_ui_font_size).abs() > f32::EPSILON;
+
+        self.terminal_font_family = next_terminal_font_family;
+        self.ui_font_family = next_ui_font_family;
+        self.ui_font_size = next_ui_font_size;
+        self.font_size = next_font_size;
+        self.terminal_cursor_style = next_terminal_cursor_style;
+        self.terminal_opacity = next_terminal_opacity;
+        self.terminal_blur = next_terminal_blur;
+        self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
+        self.background_image = next_background_image;
+        self.background_image_opacity = next_background_image_opacity;
+        self.background_image_position = next_background_image_position;
+        self.background_image_fit = next_background_image_fit;
+        self.background_image_repeat = next_background_image_repeat;
+
+        if self.tabs_orientation != appearance_config.tabs_orientation {
+            self.tabs_orientation = appearance_config.tabs_orientation;
+            // Tab strip motion drives the top-bar height. In vertical
+            // mode the strip is always hidden, so collapse the motion now
+            // and avoid an unrelated transition.
+            self.sync_tab_strip_motion();
+            self.save_session(cx);
+            cx.notify();
+        }
+
+        let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
+        self.agent_panel
+            .update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
+        self.input_bar
+            .update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
+        self.sidebar
+            .update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
+        self.command_palette.update(cx, |palette, _cx| {
+            palette.set_ui_opacity(effective_ui_opacity)
+        });
+
+        if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
+            let theme_changed = new_theme.name != self.terminal_theme.name;
+            if theme_changed {
+                self.terminal_theme = new_theme.clone();
+            }
+            if theme_changed || terminal_appearance_changed {
+                self.sync_terminal_surface_appearance(&new_theme, window, cx);
+            }
+            if theme_changed || ui_theme_changed {
+                self.sync_gpui_theme_appearance(&new_theme, window, cx);
+            }
+        } else {
+            log::warn!(
+                "Skipping terminal theme sync; theme {:?} was not found",
+                term_config.theme
+            );
+        }
+    }
+
     /// Apply a new terminal theme to all panes and sync UI mode.
     fn apply_terminal_theme(
         &mut self,
@@ -3734,12 +3809,22 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.terminal_theme = theme.clone();
-        let colors = theme_to_ghostty_colors(&theme);
+        self.sync_terminal_surface_appearance(&theme, window, cx);
+        self.sync_gpui_theme_appearance(&theme, window, cx);
+    }
+
+    fn sync_terminal_surface_appearance(
+        &self,
+        theme: &TerminalTheme,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let colors = theme_to_ghostty_colors(theme);
         // Update all terminal panes (legacy gets full theme, ghostty gets color scheme)
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_terminals() {
                 terminal.set_theme(
-                    &theme,
+                    theme,
                     &colors,
                     &self.terminal_font_family,
                     self.font_size,
@@ -3776,12 +3861,20 @@ impl ConWorkspace {
             }
         }
         #[cfg(target_os = "windows")]
-        crate::set_windows_backdrop_blur(window, self.terminal_blur);
+        crate::set_windows_backdrop_blur(_window, self.terminal_blur);
         #[cfg(target_os = "linux")]
-        crate::set_linux_window_blur(window, self.terminal_blur);
+        crate::set_linux_window_blur(_window, self.terminal_blur);
+    }
+
+    fn sync_gpui_theme_appearance(
+        &self,
+        theme: &TerminalTheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Sync GPUI UI theme colors with terminal theme
         crate::theme::sync_gpui_theme(
-            &theme,
+            theme,
             &self.terminal_font_family,
             &self.ui_font_family,
             self.ui_font_size,
@@ -5551,13 +5644,24 @@ impl ConWorkspace {
             })
             .detach();
 
-            let workspace_for_theme = workspace;
+            let workspace_for_theme = workspace.clone();
             let main_window_for_theme = main_window;
             cx.subscribe(&panel, move |_settings, event: &ThemePreview, cx| {
                 let theme_name = event.0.clone();
                 let _ = main_window_for_theme.update(cx, |_, window, cx| {
                     let _ = workspace_for_theme.update(cx, |workspace, cx| {
                         workspace.apply_theme_preview(&theme_name, window, cx);
+                    });
+                });
+            })
+            .detach();
+
+            let workspace_for_appearance = workspace.clone();
+            let main_window_for_appearance = main_window;
+            cx.subscribe(&panel, move |settings, _: &AppearancePreview, cx| {
+                let _ = main_window_for_appearance.update(cx, |_, window, cx| {
+                    let _ = workspace_for_appearance.update(cx, |workspace, cx| {
+                        workspace.apply_appearance_preview_from_panel(&settings, window, cx);
                     });
                 });
             })
