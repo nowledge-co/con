@@ -190,6 +190,15 @@ fn default_close_pane() -> String {
     "alt-shift-w".into()
 }
 
+#[cfg(target_os = "macos")]
+fn default_toggle_pane_zoom() -> String {
+    "secondary-shift-enter".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_toggle_pane_zoom() -> String {
+    "alt-shift-enter".into()
+}
+
 fn default_next_tab() -> String {
     "ctrl-tab".into()
 }
@@ -269,6 +278,7 @@ pub struct KeybindingConfig {
     pub new_tab: String,
     pub close_tab: String,
     pub close_pane: String,
+    pub toggle_pane_zoom: String,
     pub next_tab: String,
     pub previous_tab: String,
     pub settings: String,
@@ -292,6 +302,7 @@ impl Default for KeybindingConfig {
             new_tab: default_new_tab(),
             close_tab: default_close_tab(),
             close_pane: default_close_pane(),
+            toggle_pane_zoom: default_toggle_pane_zoom(),
             next_tab: default_next_tab(),
             previous_tab: default_previous_tab(),
             settings: default_settings(),

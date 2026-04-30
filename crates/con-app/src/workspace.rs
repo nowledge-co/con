@@ -233,7 +233,7 @@ use crate::ghostty_view::{
 use crate::{
     ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit,
     SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
-    SelectTab9, SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
+    SelectTab9, SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -1356,6 +1356,132 @@ impl ConWorkspace {
         }
     }
 
+    fn sync_tab_native_view_visibility(&self, tab_index: usize, visible: bool, cx: &App) {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        let zoomed_pane_id = tab.pane_tree.zoomed_pane_id();
+
+        for (pane_id, terminal) in tab.pane_tree.pane_terminals() {
+            let pane_visible = visible && zoomed_pane_id.is_none_or(|zoomed| zoomed == pane_id);
+            terminal.set_native_view_visible(pane_visible, cx);
+        }
+    }
+
+    fn sync_active_tab_native_view_visibility(&self, cx: &App) {
+        if self.has_active_tab() {
+            self.sync_tab_native_view_visibility(self.active_tab, true, cx);
+        }
+    }
+
+    fn hide_active_tab_native_views_not_in_layout(&self, cx: &App) {
+        if !self.has_active_tab() {
+            return;
+        }
+        let tab = &self.tabs[self.active_tab];
+        let Some(zoomed_pane_id) = tab.pane_tree.zoomed_pane_id() else {
+            return;
+        };
+
+        for (pane_id, terminal) in tab.pane_tree.pane_terminals() {
+            if pane_id != zoomed_pane_id {
+                terminal.set_native_view_visible(false, cx);
+            }
+        }
+    }
+
+    fn notify_tab_terminal_views(&self, tab_index: usize, cx: &mut App) {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        for terminal in tab.pane_tree.all_terminals() {
+            terminal.notify(cx);
+        }
+    }
+
+    fn notify_active_tab_terminal_views(&self, cx: &mut App) {
+        if self.has_active_tab() {
+            self.notify_tab_terminal_views(self.active_tab, cx);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn mark_tab_terminal_native_layout_pending(&self, tab_index: usize, cx: &mut App) {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        for terminal in tab.pane_tree.all_terminals() {
+            terminal.mark_native_layout_pending(cx);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn mark_active_tab_terminal_native_layout_pending(&self, cx: &mut App) {
+        if self.has_active_tab() {
+            self.mark_tab_terminal_native_layout_pending(self.active_tab, cx);
+        }
+    }
+
+    fn sync_active_tab_native_view_visibility_after_layout(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Native Ghostty NSViews live outside GPUI's element tree. Hide panes
+        // that are definitely leaving the layout immediately, but delay
+        // revealing newly-visible panes until GPUI has committed one layout
+        // frame so they do not flash at stale split coordinates.
+        self.hide_active_tab_native_views_not_in_layout(cx);
+        cx.on_next_frame(window, |_workspace, window, cx| {
+            cx.notify();
+            cx.on_next_frame(window, |workspace, _window, cx| {
+                if workspace.has_active_tab()
+                    && !workspace.ghostty_hidden
+                    && !workspace.is_modal_open(cx)
+                {
+                    workspace.sync_active_tab_native_view_visibility(cx);
+                }
+            });
+        });
+    }
+
+    fn sync_active_tab_native_view_visibility_after_zoom_layout(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Zoom/unzoom should not hide anything before GPUI has produced the
+        // new pane frames. Keeping the old visual state for one frame is less
+        // visible than flashing the matte/fallback background.
+        cx.on_next_frame(window, |workspace, _window, cx| {
+            if workspace.has_active_tab()
+                && !workspace.ghostty_hidden
+                && !workspace.is_modal_open(cx)
+            {
+                workspace.sync_active_tab_native_view_visibility(cx);
+            }
+        });
+    }
+
+    fn sync_active_tab_native_view_visibility_now_or_after_layout(
+        &self,
+        was_zoomed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if was_zoomed
+            || self
+                .tabs
+                .get(self.active_tab)
+                .and_then(|tab| tab.pane_tree.zoomed_pane_id())
+                .is_some()
+        {
+            self.sync_active_tab_native_view_visibility_after_zoom_layout(window, cx);
+            return;
+        }
+        self.sync_active_tab_native_view_visibility_after_layout(window, cx);
+    }
+
     fn pump_ghostty_views(&mut self, cx: &mut Context<Self>) -> bool {
         let started = perf_trace_enabled().then(std::time::Instant::now);
         let mut changed = false;
@@ -1476,7 +1602,7 @@ impl ConWorkspace {
                         workspace.update(cx, |_workspace, cx| {
                             terminal.ensure_surface(window, cx);
                             terminal.notify(cx);
-                            terminal.set_native_view_visible(true, cx);
+                            _workspace.sync_active_tab_native_view_visibility(cx);
                             if should_focus {
                                 _workspace.sync_active_terminal_focus_states(cx);
                                 terminal.focus(window, cx);
@@ -1589,15 +1715,20 @@ impl ConWorkspace {
                 con_agent::tools::PaneCreateLocation::Right => SplitDirection::Horizontal,
                 con_agent::tools::PaneCreateLocation::Down => SplitDirection::Vertical,
             };
+            let was_zoomed = self.tabs[req.tab_idx].pane_tree.zoomed_pane_id().is_some();
             self.tabs[req.tab_idx]
                 .pane_tree
                 .split(direction, terminal.clone());
-            terminal.ensure_surface(window, cx);
-            terminal.notify(cx);
             let should_focus = req.tab_idx == self.active_tab;
             if should_focus {
+                #[cfg(target_os = "macos")]
+                self.mark_tab_terminal_native_layout_pending(req.tab_idx, cx);
+                self.notify_tab_terminal_views(req.tab_idx, cx);
                 terminal.focus(window, cx);
                 self.sync_active_terminal_focus_states(cx);
+                self.sync_active_tab_native_view_visibility_now_or_after_layout(
+                    was_zoomed, window, cx,
+                );
             } else {
                 terminal.set_focus_state(false, cx);
             }
@@ -3523,6 +3654,9 @@ impl ConWorkspace {
             }
             "split-down" => {
                 self.split_pane(SplitDirection::Vertical, SplitPlacement::After, window, cx);
+            }
+            "toggle-pane-zoom" => {
+                self.toggle_pane_zoom(&TogglePaneZoom, window, cx);
             }
             "clear-terminal" => {
                 if self.has_active_tab() {
@@ -5549,13 +5683,10 @@ impl ConWorkspace {
         }
 
         self.pane_scope_picker_open = false;
-        let Some((pane_id, terminal)) = self.tabs[self.active_tab]
-            .pane_tree
-            .pane_terminals()
-            .into_iter()
-            .next()
-        else {
-            return;
+        let (pane_id, terminal) = {
+            let pane_tree = &self.tabs[self.active_tab].pane_tree;
+            let (pane_id, terminal) = pane_tree.visible_focus_terminal();
+            (pane_id, terminal.clone())
         };
         self.tabs[self.active_tab].pane_tree.focus(pane_id);
         terminal.focus(window, cx);
@@ -5767,9 +5898,9 @@ impl ConWorkspace {
             t.set_focus_state(false, cx);
         }
         for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
-            terminal.set_native_view_visible(true, cx);
             terminal.ensure_surface(window, cx);
         }
+        self.sync_active_tab_native_view_visibility(cx);
         let old_terminals: Vec<TerminalPane> = self.tabs[old_active]
             .pane_tree
             .all_terminals()
@@ -5831,12 +5962,14 @@ impl ConWorkspace {
                 let new_focus = tab.pane_tree.focused_terminal().clone();
                 (closing, surviving_terminals, new_focus)
             };
+            #[cfg(target_os = "macos")]
+            self.mark_active_tab_terminal_native_layout_pending(cx);
 
             for terminal in &surviving_terminals {
-                terminal.set_native_view_visible(true, cx);
                 terminal.ensure_surface(window, cx);
                 terminal.notify(cx);
             }
+            self.sync_active_tab_native_view_visibility(cx);
 
             new_focus.focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
@@ -5896,10 +6029,10 @@ impl ConWorkspace {
             });
         }
         // Show and focus new active tab's ghostty views
-        for t in self.tabs[self.active_tab].pane_tree.all_terminals() {
-            t.set_native_view_visible(true, cx);
-            t.ensure_surface(window, cx);
+        for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
+            terminal.ensure_surface(window, cx);
         }
+        self.sync_active_tab_native_view_visibility(cx);
         cx.on_next_frame(window, move |_workspace, _window, cx| {
             for terminal in &closing_terminals {
                 terminal.shutdown_surface(cx);
@@ -6654,11 +6787,17 @@ impl ConWorkspace {
         }
         let cwd = self.active_terminal().current_dir(cx);
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+        let was_zoomed = self.tabs[self.active_tab]
+            .pane_tree
+            .zoomed_pane_id()
+            .is_some();
         self.tabs[self.active_tab].pane_tree.split_with_placement(
             direction,
             placement,
             terminal.clone(),
         );
+        #[cfg(target_os = "macos")]
+        self.mark_active_tab_terminal_native_layout_pending(cx);
         self.record_runtime_event_for_terminal(
             self.active_tab,
             &terminal,
@@ -6666,10 +6805,10 @@ impl ConWorkspace {
                 startup_command: None,
             },
         );
-        terminal.ensure_surface(window, cx);
-        terminal.notify(cx);
+        self.notify_active_tab_terminal_views(cx);
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
             true,
@@ -6717,6 +6856,33 @@ impl ConWorkspace {
         self.close_window_from_last_tab(window, cx);
     }
 
+    fn toggle_pane_zoom(
+        &mut self,
+        _: &TogglePaneZoom,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let was_zoomed = self.tabs[self.active_tab]
+            .pane_tree
+            .zoomed_pane_id()
+            .is_some();
+        if !self.tabs[self.active_tab].pane_tree.toggle_zoom_focused() {
+            return;
+        }
+
+        #[cfg(target_os = "macos")]
+        self.mark_active_tab_terminal_native_layout_pending(cx);
+        self.notify_active_tab_terminal_views(cx);
+        self.active_terminal().focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
+        cx.notify();
+    }
+
     fn close_pane_in_tab(
         &mut self,
         tab_idx: usize,
@@ -6729,6 +6895,7 @@ impl ConWorkspace {
         }
 
         let mut focus_after_close = None;
+        let mut sync_visibility_after_close = false;
         {
             let pane_tree = &mut self.tabs[tab_idx].pane_tree;
             let closing = pane_tree
@@ -6746,10 +6913,10 @@ impl ConWorkspace {
             let tab_is_visible = tab_idx == self.active_tab;
             if tab_is_visible {
                 for terminal in &surviving_terminals {
-                    terminal.set_native_view_visible(true, cx);
                     terminal.ensure_surface(window, cx);
                     terminal.notify(cx);
                 }
+                sync_visibility_after_close = true;
             }
 
             if let Some(closing) = closing {
@@ -6767,8 +6934,15 @@ impl ConWorkspace {
                 focus_after_close = Some(pane_tree.focused_terminal().clone());
             }
         }
+        if tab_idx == self.active_tab {
+            #[cfg(target_os = "macos")]
+            self.mark_active_tab_terminal_native_layout_pending(cx);
+        }
 
         if let Some(focused) = focus_after_close {
+            if sync_visibility_after_close {
+                self.sync_active_tab_native_view_visibility(cx);
+            }
             focused.focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
         }
@@ -6798,9 +6972,9 @@ impl ConWorkspace {
 
         // Show new tab's ghostty NSViews and focus active surface
         for terminal in self.tabs[index].pane_tree.all_terminals() {
-            terminal.set_native_view_visible(true, cx);
             terminal.ensure_surface(window, cx);
         }
+        self.sync_tab_native_view_visibility(index, true, cx);
         for terminal in self.tabs[old_active].pane_tree.all_terminals() {
             terminal.set_focus_state(false, cx);
         }
@@ -6931,10 +7105,7 @@ impl ConWorkspace {
     /// When hiding, all views are hidden (for modal overlays).
     fn set_ghostty_views_visible(&self, visible: bool, cx: &App) {
         if visible {
-            // Only show the active tab's views
-            for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
-                terminal.set_native_view_visible(true, cx);
-            }
+            self.sync_active_tab_native_view_visibility(cx);
         } else {
             // Hide all tabs' views for modal z-order
             for tab in &self.tabs {
@@ -7071,24 +7242,32 @@ impl ConWorkspace {
             .and_then(|terminal| terminal.current_dir(cx));
 
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+        let was_zoomed = self.tabs[tab_idx].pane_tree.zoomed_pane_id().is_some();
         self.tabs[tab_idx].pane_tree.split_pane_with_placement(
             origin_pane_id,
             direction,
             placement,
             terminal.clone(),
         );
-        terminal.ensure_surface(window, cx);
-        terminal.notify(cx);
-        terminal.focus(window, cx);
-        self.sync_active_terminal_focus_states(cx);
+        let tab_was_active = tab_idx == self.active_tab;
+        #[cfg(target_os = "macos")]
+        self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
+        self.notify_tab_terminal_views(tab_idx, cx);
+        if tab_was_active {
+            terminal.focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
+            self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
+        } else {
+            terminal.set_focus_state(false, cx);
+            self.sync_tab_native_view_visibility(tab_idx, false, cx);
+        }
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
-            true,
+            tab_was_active,
             self.window_handle,
             self.workspace_handle.clone(),
             cx,
         );
-        self.active_tab = tab_idx;
         self.record_runtime_event_for_terminal(
             tab_idx,
             &terminal,
@@ -7149,12 +7328,6 @@ impl Render for ConWorkspace {
             });
         }
         self.modal_was_open = is_modal_open;
-
-        if !needs_ghostty_hidden && !is_modal_open {
-            for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
-                terminal.set_native_view_visible(true, cx);
-            }
-        }
 
         // Keep pane focus in sync with which terminal has window focus
         self.tabs[self.active_tab].pane_tree.sync_focus(window, cx);
@@ -7318,7 +7491,16 @@ impl Render for ConWorkspace {
             .min_w_0()
             .min_h_0()
             .bg(theme.transparent)
-            .child(div().flex_1().min_h_0().child(pane_tree_rendered));
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(pane_tree_rendered),
+            );
 
         if input_bar_transitioning && input_bar_progress > 0.01 {
             terminal_area = terminal_area.child(
@@ -7941,6 +8123,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::select_tab_9))
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(Self::close_pane))
+            .on_action(cx.listener(Self::toggle_pane_zoom))
             .on_action(cx.listener(Self::split_right))
             .on_action(cx.listener(Self::split_down))
             .on_action(cx.listener(Self::focus_input))

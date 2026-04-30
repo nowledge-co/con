@@ -23,7 +23,8 @@ use con_ghostty::ffi;
 use con_ghostty::{
     GhosttyApp, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton,
 };
-use gpui::*;
+use gpui::{prelude::FluentBuilder as _, *};
+use gpui_component::ActiveTheme;
 
 use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
@@ -88,11 +89,9 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     nsview: Option<id>,
     #[cfg(target_os = "macos")]
-    native_scroll_document_frame: Option<(f64, f64)>,
+    native_backing_color: Option<(u8, u8, u8, u8)>,
     #[cfg(target_os = "macos")]
-    native_scroll_y: Option<f64>,
-    #[cfg(target_os = "macos")]
-    native_scroll_surface_frame: Option<(f64, f64, f64, f64)>,
+    pending_native_layout: bool,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -150,11 +149,9 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             nsview: None,
             #[cfg(target_os = "macos")]
-            native_scroll_document_frame: None,
+            native_backing_color: None,
             #[cfg(target_os = "macos")]
-            native_scroll_y: None,
-            #[cfg(target_os = "macos")]
-            native_scroll_surface_frame: None,
+            pending_native_layout: false,
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
@@ -313,6 +310,10 @@ impl GhosttyView {
         self.terminal.is_some()
     }
 
+    fn show_layout_fallback(&self) -> bool {
+        self.terminal.is_none() || self.awaiting_first_layout_visibility
+    }
+
     #[allow(dead_code)]
     pub fn selection_text(&self) -> Option<String> {
         self.terminal.as_ref().and_then(|t| t.selection_text())
@@ -330,9 +331,8 @@ impl GhosttyView {
         }
         self.document_view = None;
         self.nsview = None;
-        self.native_scroll_document_frame = None;
-        self.native_scroll_y = None;
-        self.native_scroll_surface_frame = None;
+        self.native_backing_color = None;
+        self.pending_native_layout = false;
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -357,9 +357,7 @@ impl GhosttyView {
         #[cfg(target_os = "macos")]
         {
             self.last_mouse_position = None;
-            self.native_scroll_document_frame = None;
-            self.native_scroll_y = None;
-            self.native_scroll_surface_frame = None;
+            self.pending_native_layout = false;
         }
         self.ime_marked_text = None;
     }
@@ -440,7 +438,8 @@ impl GhosttyView {
                 setLayerContentsRedrawPolicy:NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE
             ];
             let content_view: id = msg_send![host, contentView];
-            let _: () = msg_send![content_view, setClipsToBounds:NO];
+            let _: () = msg_send![content_view, setClipsToBounds:YES];
+            let _: () = msg_send![host, setHidden:YES];
             let _: () = msg_send![
                 parent_nsview,
                 addSubview: host
@@ -486,12 +485,13 @@ impl GhosttyView {
                 self.nsview = Some(nsview);
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
-                self.set_visible(
-                    self.native_view_visible.get() && !self.awaiting_first_layout_visibility,
-                );
+                self.sync_native_backing_background();
                 self.sync_window_background_blur();
-                // Don't set last_bounds here — let update_frame() handle
-                // the coordinate flip and position the NSView correctly.
+                // Force update_frame() to position the newly-created host.
+                // If a previous layout recorded the same bounds while the
+                // surface was still pending, an early-return here leaves the
+                // NSView at its bootstrap origin until a manual divider resize.
+                self.last_bounds = None;
                 log::info!(
                     "Ghostty surface created: {}x{} px, scale {}",
                     width_px,
@@ -520,31 +520,104 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
+    fn native_backing_rgba(&self) -> Option<(u8, u8, u8, u8)> {
+        let rgb = self.app.background_rgb()?;
+        let alpha = self.app.background_opacity().unwrap_or(1.0).clamp(0.0, 1.0);
+        Some((rgb[0], rgb[1], rgb[2], (alpha * 255.0).round() as u8))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_native_backing_color(view: id, rgba: (u8, u8, u8, u8)) {
+        if view.is_null() {
+            return;
+        }
+
+        unsafe {
+            let _: () = msg_send![view, setWantsLayer:YES];
+            let layer: id = msg_send![view, layer];
+            if layer.is_null() {
+                return;
+            }
+
+            let color: id = msg_send![
+                class!(NSColor),
+                colorWithSRGBRed:f64::from(rgba.0) / 255.0
+                green:f64::from(rgba.1) / 255.0
+                blue:f64::from(rgba.2) / 255.0
+                alpha:f64::from(rgba.3) / 255.0
+            ];
+            let cg_color: id = msg_send![color, CGColor];
+            let _: () = msg_send![layer, setBackgroundColor:cg_color];
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_native_backing_background(&mut self) {
+        let Some(rgba) = self.native_backing_rgba() else {
+            return;
+        };
+        let has_native_views =
+            self.host_view.is_some() || self.document_view.is_some() || self.nsview.is_some();
+        if has_native_views && self.native_backing_color == Some(rgba) {
+            return;
+        }
+
+        if let Some(host_view) = self.host_view {
+            Self::apply_native_backing_color(host_view, rgba);
+            unsafe {
+                let content_view: id = msg_send![host_view, contentView];
+                Self::apply_native_backing_color(content_view, rgba);
+            }
+        }
+        if let Some(document_view) = self.document_view {
+            Self::apply_native_backing_color(document_view, rgba);
+        }
+        if let Some(nsview) = self.nsview {
+            Self::apply_native_backing_color(nsview, rgba);
+        }
+        if has_native_views {
+            self.native_backing_color = Some(rgba);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn mark_native_layout_pending(&mut self, cx: &mut Context<Self>) {
+        self.pending_native_layout = true;
+        cx.notify();
+    }
+
+    #[cfg(target_os = "macos")]
     pub fn ensure_initialized_for_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let fallback_bounds = self.last_bounds.unwrap_or_else(|| {
-            let window_bounds = window.bounds();
-            let width = (window_bounds.size.width.as_f32() * 0.45).clamp(360.0, 900.0);
-            let height = (window_bounds.size.height.as_f32() * 0.7).clamp(240.0, 900.0);
-            Bounds::new(point(px(0.0), px(0.0)), size(px(width), px(height)))
-        });
-        let needs_real_layout = self.last_bounds.is_none();
-        self.awaiting_first_layout_visibility = needs_real_layout;
-        self.ensure_initialized(fallback_bounds, window, cx);
-        // Control-created panes may need a live PTY before GPUI has laid them out,
-        // but publishing a fallback frame makes the native view visibly jump across
-        // the workspace. Keep the surface hidden until the first real on_layout.
-        if !needs_real_layout {
-            self.update_frame(fallback_bounds);
+        let showed_layout_fallback = self.show_layout_fallback();
+        let Some(bounds) = self.last_bounds else {
+            // Never create a native NSView from estimated bounds. Nested split
+            // and zoom transitions move panes between flex subtrees; a bootstrap
+            // frame can survive long enough to paint in the wrong pane until a
+            // manual divider resize corrects it. The GPUI fallback matte covers
+            // this pane until the canvas supplies authoritative layout bounds.
+            self.awaiting_first_layout_visibility = true;
+            cx.notify();
+            return;
+        };
+
+        self.ensure_initialized(bounds, window, cx);
+        self.update_frame(bounds);
+        if showed_layout_fallback != self.show_layout_fallback() {
+            cx.notify();
         }
     }
 
     #[cfg(target_os = "macos")]
     fn update_frame(&mut self, bounds: Bounds<Pixels>) {
-        if self.last_bounds.as_ref() == Some(&bounds) {
+        if self.last_bounds.as_ref() == Some(&bounds)
+            && !self.awaiting_first_layout_visibility
+            && !self.pending_native_layout
+        {
             return;
         }
         let started = perf_trace_enabled().then(Instant::now);
         self.last_bounds = Some(bounds);
+        self.sync_native_backing_background();
 
         if let Some(host_view) = self.host_view {
             unsafe {
@@ -565,8 +638,8 @@ impl GhosttyView {
             }
         }
 
-        self.sync_native_scroll_view();
         self.commit_surface_resize(bounds);
+        self.sync_native_scroll_view();
 
         if let Some(started) = started {
             let in_live_resize = if let Some(host_view) = self.host_view {
@@ -594,8 +667,9 @@ impl GhosttyView {
 
         if self.awaiting_first_layout_visibility {
             self.awaiting_first_layout_visibility = false;
-            self.set_visible(self.native_view_visible.get());
         }
+        self.pending_native_layout = false;
+        self.apply_native_visibility();
     }
 
     #[cfg(target_os = "macos")]
@@ -637,21 +711,14 @@ impl GhosttyView {
         };
 
         unsafe {
-            let document_frame_key = (visible_width, document_height);
-            let document_frame_changed =
-                self.native_scroll_document_frame != Some(document_frame_key);
-            if document_frame_changed {
-                let document_frame = NSRect::new(
-                    cocoa::foundation::NSPoint::new(0.0, 0.0),
-                    cocoa::foundation::NSSize::new(visible_width, document_height),
-                );
-                let _: () = msg_send![document_view, setFrame:document_frame];
-                self.native_scroll_document_frame = Some(document_frame_key);
-            }
+            let document_frame = NSRect::new(
+                cocoa::foundation::NSPoint::new(0.0, 0.0),
+                cocoa::foundation::NSSize::new(visible_width, document_height),
+            );
+            let _: () = msg_send![document_view, setFrame:document_frame];
 
             let content_view: id = msg_send![scroll_view, contentView];
-            let mut scroll_changed = false;
-            if let Some(scrollbar) = scrollbar {
+            let scroll_y = if let Some(scrollbar) = scrollbar {
                 let total_rows = scrollbar.total.max(scrollbar.len).max(1);
                 let visible_rows = scrollbar.len.max(1).min(total_rows);
                 let offset_from_bottom = if cell_height > 0.0 {
@@ -662,47 +729,40 @@ impl GhosttyView {
                 } else {
                     0.0
                 };
-                let scroll_y =
-                    offset_from_bottom.clamp(0.0, (document_height - visible_height).max(0.0));
-                if self.native_scroll_y != Some(scroll_y) {
-                    let _: () = msg_send![
-                        content_view,
-                        scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
-                    ];
-                    self.native_scroll_y = Some(scroll_y);
-                    scroll_changed = true;
-                }
+                offset_from_bottom.clamp(0.0, (document_height - visible_height).max(0.0))
             } else {
-                self.native_scroll_y = None;
-            }
-            if document_frame_changed || scroll_changed {
-                let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
-            }
+                0.0
+            };
+            let _: () = msg_send![
+                content_view,
+                scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
+            ];
+            let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
 
-            let visible_rect: NSRect = msg_send![content_view, documentVisibleRect];
-            let surface_frame_key = (
-                visible_rect.origin.x,
-                visible_rect.origin.y,
-                visible_width,
-                visible_height,
-            );
-            if self.native_scroll_surface_frame == Some(surface_frame_key) {
-                return;
-            }
+            // Do not read `documentVisibleRect` here and do not skip this frame
+            // mutation through a local tuple cache. Con drives this AppKit
+            // hierarchy from GPUI layout callbacks, so split/zoom topology
+            // changes can leave AppKit's computed geometry or an old host
+            // placement stale until the next layout pass. The terminal surface
+            // frame must be deterministically reapplied from Con-owned pane
+            // bounds plus Ghostty's scrollbar state.
             let surface_frame = NSRect::new(
-                visible_rect.origin,
+                cocoa::foundation::NSPoint::new(0.0, scroll_y),
                 cocoa::foundation::NSSize::new(visible_width, visible_height),
             );
             let _: () = msg_send![nsview, setFrame:surface_frame];
-            self.native_scroll_surface_frame = Some(surface_frame_key);
         }
     }
 
     fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let showed_layout_fallback = self.show_layout_fallback();
         #[cfg(target_os = "macos")]
         {
             self.ensure_initialized(bounds, window, cx);
             self.update_frame(bounds);
+        }
+        if showed_layout_fallback != self.show_layout_fallback() {
+            cx.notify();
         }
     }
 
@@ -748,6 +808,7 @@ impl GhosttyView {
 
         let started = perf_trace_enabled().then(Instant::now);
         terminal.set_size(width_px, height_px);
+        terminal.draw();
         if let Some(started) = started {
             let elapsed = started.elapsed();
             log::info!(
@@ -771,17 +832,39 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     pub fn set_visible(&self, visible: bool) {
         self.native_view_visible.set(visible);
+        self.apply_native_visibility();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_native_visibility(&self) {
         if let Some(host_view) = self.host_view {
             unsafe {
-                let effective_visible = visible && !self.awaiting_first_layout_visibility;
+                let effective_visible =
+                    self.native_view_visible.get() && !self.awaiting_first_layout_visibility;
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![host_view, setHidden:hidden];
+                if effective_visible {
+                    let _: () = msg_send![host_view, setNeedsDisplay:YES];
+                }
             }
+        }
+        if self.native_view_visible.get() && !self.awaiting_first_layout_visibility {
+            self.draw_surface_now();
         }
     }
 
     #[cfg(target_os = "macos")]
-    pub fn sync_window_background_blur(&self) {
+    fn draw_surface_now(&self) {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return;
+        };
+        terminal.draw();
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn sync_window_background_blur(&mut self) {
+        self.sync_native_backing_background();
+
         let Some(host_view) = self.host_view else {
             return;
         };
@@ -828,7 +911,12 @@ impl GhosttyView {
     /// mode-dependent sequences (application cursor mode, kitty protocol, etc.)
     /// correctly. Falls back to `ghostty_surface_text` for composed/IME text
     /// when no keycode mapping exists.
-    fn handle_key_down(&self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+    fn handle_key_down(
+        &self,
+        event: &KeyDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let terminal = match self.terminal.as_ref() {
             Some(t) => t,
             None => return false,
@@ -854,6 +942,14 @@ impl GhosttyView {
                 }
                 _ => {}
             }
+        }
+
+        if crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
+            &crate::TogglePaneZoom,
+        ) {
+            return false;
         }
 
         // App-level shortcuts — skip forwarding so GPUI action dispatch handles them.
@@ -1215,9 +1311,31 @@ impl Render for GhosttyView {
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
         let entity = cx.entity().downgrade();
+        let show_layout_fallback = self.show_layout_fallback();
+        let layout_fallback_bg = self
+            .app
+            .background_rgb()
+            .map(|rgb| {
+                let alpha = self.app.background_opacity().unwrap_or(1.0).clamp(0.0, 1.0);
+                Rgba {
+                    r: f32::from(rgb[0]) / 255.0,
+                    g: f32::from(rgb[1]) / 255.0,
+                    b: f32::from(rgb[2]) / 255.0,
+                    a: alpha,
+                }
+                .into()
+            })
+            .unwrap_or_else(|| cx.theme().background);
 
         div()
             .size_full()
+            .map(|div| {
+                if show_layout_fallback {
+                    div.bg(layout_fallback_bg)
+                } else {
+                    div
+                }
+            })
             .key_context("GhosttyTerminal")
             .track_focus(&focus)
             // Consume Tab/Shift-Tab so Root's focus cycling doesn't intercept them.
@@ -1352,7 +1470,7 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                if this.handle_key_down(event, cx) {
+                if this.handle_key_down(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
                 }

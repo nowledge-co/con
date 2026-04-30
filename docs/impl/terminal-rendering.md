@@ -21,6 +21,12 @@ That is not a temporary compromise. It matches Ghostty's own host-side architect
 
 That split is intentional. Terminal correctness stays in Ghostty. Product intelligence stays in con.
 
+Pane zoom follows the same boundary. Zooming a pane is a Con layout state,
+not a terminal mutation: every split surface stays alive, but the active
+tab renders and shows only the focused pane until the zoom shortcut is
+pressed again. This keeps it equivalent to tmux-style zoom while avoiding
+fake resize, detach, or process lifecycle events.
+
 ## Runtime stack
 
 ```text
@@ -165,6 +171,8 @@ The host also must not invent viewport state that Ghostty has not emitted. Stand
 macOS scroll input must also preserve Ghostty's scroll-event contract. AppKit precise scroll events are not keyboard modifier events; they must be sent with Ghostty's packed `ScrollMods.precision` bit and without scaling by the window backing factor. Con mirrors Ghostty's AppKit host by sending precise deltas through that path with the same 2x multiplier, leaving Ghostty core to accumulate sub-row remainders and apply terminal-row scrolling.
 
 The workspace pump still drains title/process/link events for every terminal surface, including background tabs, but macOS native scroll-container synchronization is visible-tab-only. Hidden tabs do not need AppKit scroll frame updates, and keeping that work out of fast scroll bursts avoids unnecessary main-thread native view churn without dropping terminal lifecycle events.
+
+One macOS embedding invariant is subtle but important: after GPUI changes split or zoom layout, Con must not position the embedded Ghostty surface from `NSClipView.documentVisibleRect` in the same synchronization pass, and it must not skip native frame mutations from a local tuple cache. Ghostty's native app owns an AppKit `layout()` method for its scroll hierarchy, but Con drives the hierarchy imperatively from GPUI callbacks; AppKit can return a stale visible rect immediately after those mutations, and a cached leaf-local frame can be stale after GPUI reparents or resizes a split subtree. Con therefore computes and reapplies the surface frame from Con-owned pane bounds plus Ghostty scrollbar state and treats AppKit scroll geometry as an effect, not as the source of truth.
 
 Con also no longer tries to outsmart Ghostty's resize path with host-side coalescing. The embedded surface now updates its core size immediately on layout using AppKit backing-size conversion, which is much closer to how Ghostty's own macOS app drives `ghostty_surface_set_size`.
 

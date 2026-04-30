@@ -483,6 +483,23 @@ impl GhosttyApp {
         self.wake_handle.generation.load(Ordering::Acquire)
     }
 
+    /// Current configured terminal background, used by the embedding UI for
+    /// short-lived native-view layout mattes before Ghostty has painted.
+    pub fn background_rgb(&self) -> Option<[u8; 3]> {
+        self.appearance
+            .lock()
+            .colors
+            .as_ref()
+            .map(|colors| colors.background)
+    }
+
+    /// Current configured terminal background opacity. This lets the macOS
+    /// embedding layer keep short-lived AppKit backing mattes visually aligned
+    /// with Ghostty's own transparent terminal background.
+    pub fn background_opacity(&self) -> Option<f32> {
+        self.appearance.lock().background_opacity
+    }
+
     /// Update the app's terminal colors at runtime.
     pub fn update_colors(&self, colors: &TerminalColors) -> Result<(), String> {
         self.update_config(&GhosttyConfigPatch {

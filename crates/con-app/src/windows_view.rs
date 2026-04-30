@@ -950,11 +950,24 @@ impl GhosttyView {
     /// the focus chain — so we translate at this layer into byte
     /// sequences a terminal emulator expects. DECCKM-aware arrows live
     /// alongside the printable / Ctrl-letter paths.
-    fn handle_key_down(&self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+    fn handle_key_down(
+        &self,
+        event: &KeyDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(terminal) = self.terminal.as_ref() else {
             return false;
         };
         let keystroke = &event.keystroke;
+
+        if crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
+            &crate::TogglePaneZoom,
+        ) {
+            return false;
+        }
 
         // App-level tab selection. Let GPUI dispatch SelectTab1..9
         // instead of forwarding Ctrl+digit to the shell.
@@ -1299,7 +1312,7 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                if this.handle_key_down(event, cx) {
+                if this.handle_key_down(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
                 }

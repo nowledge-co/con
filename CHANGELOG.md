@@ -10,6 +10,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Added
 
+**Agent Providers**
+
+- Updated Rig to 0.36.0 and added DeepSeek V4 model support. DeepSeek now defaults to `deepseek-v4-flash`, keeps `deepseek-v4-pro` available in the model picker, and preserves the legacy `deepseek-chat` and `deepseek-reasoner` aliases.
+
 **Settings**
 
 - Settings now opens as a separate window. You can adjust appearance, shortcuts, and provider configuration, save changes, and keep the settings window open while checking the terminal.
@@ -20,6 +24,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Keyboard**
 
 - Added direct tab selection shortcuts: Cmd+1 through Cmd+9 on macOS, Ctrl+1 through Ctrl+9 on Windows and Linux.
+- Added pane zoom for the focused split pane. Use Cmd+Shift+Enter on macOS or Alt+Shift+Enter on Windows and Linux to let one pane fill the tab's terminal area, then press it again to restore the split layout.
 - Added macOS window cycling with Cmd+Backtick and Cmd+Shift+Backtick.
 - Fixed macOS Cmd+Backtick window cycling when the terminal surface has focus.
 - Fixed macOS Cmd+Backtick window cycling at the native window-event layer so it works even when the embedded terminal NSView is first responder.
@@ -33,6 +38,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Fixed fast trackpad scrolling in macOS terminal panes so precise scroll events are sent through Ghostty's precision-scroll path instead of being treated as coarse wheel ticks.
 - Reduced macOS terminal scroll-path overhead by syncing the native Ghostty scroll container only for visible tab surfaces while still draining background-tab title and process events.
+- Fixed macOS split, nested split, zoom, and unzoom operations that could leave a blank or transparent pane region until the divider was manually resized.
 
 **Workspace**
 

@@ -19,6 +19,11 @@ struct PaletteAction {
 
 // Shortcut strings are parsed by `Keystroke::parse` and rendered by
 // `Kbd`, so `secondary-` shows as ⌘ on macOS and Ctrl on Windows/Linux.
+#[cfg(target_os = "macos")]
+const TOGGLE_PANE_ZOOM_SHORTCUT: &str = "secondary-shift-enter";
+#[cfg(not(target_os = "macos"))]
+const TOGGLE_PANE_ZOOM_SHORTCUT: &str = "alt-shift-enter";
+
 const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "new-window",
@@ -84,6 +89,12 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         id: "split-down",
         label: "Split Down",
         shortcut: "secondary-shift-d",
+        category: "Pane",
+    },
+    PaletteAction {
+        id: "toggle-pane-zoom",
+        label: "Toggle Pane Zoom",
+        shortcut: TOGGLE_PANE_ZOOM_SHORTCUT,
         category: "Pane",
     },
     PaletteAction {
