@@ -411,6 +411,12 @@ impl PaneTree {
         result
     }
 
+    pub fn surface_terminals(&self) -> Vec<(PaneId, bool, TerminalPane)> {
+        let mut result = Vec::new();
+        Self::collect_surface_terminals(&self.root, &mut result);
+        result
+    }
+
     pub fn surface_infos(&self, target_pane_id: Option<PaneId>) -> Vec<PaneSurfaceInfo> {
         let mut result = Vec::new();
         let mut pane_index = 0;
@@ -1216,6 +1222,28 @@ impl PaneTree {
             PaneNode::Split { first, second, .. } => {
                 Self::collect_pane_terminals(first, result);
                 Self::collect_pane_terminals(second, result);
+            }
+        }
+    }
+
+    fn collect_surface_terminals(node: &PaneNode, result: &mut Vec<(PaneId, bool, TerminalPane)>) {
+        match node {
+            PaneNode::Leaf {
+                id,
+                surfaces,
+                active_surface_id,
+            } => {
+                result.extend(surfaces.iter().map(|surface| {
+                    (
+                        *id,
+                        surface.id == *active_surface_id,
+                        surface.terminal.clone(),
+                    )
+                }));
+            }
+            PaneNode::Split { first, second, .. } => {
+                Self::collect_surface_terminals(first, result);
+                Self::collect_surface_terminals(second, result);
             }
         }
     }

@@ -1359,7 +1359,7 @@ impl ConWorkspace {
         }
 
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
-        let pane_terminals = pane_tree.pane_terminals();
+        let surface_terminals = pane_tree.surface_terminals();
         let focused_id = pane_tree.focused_pane_id();
         let (mode, is_broadcast, is_focused, selected_ids) = {
             let input_bar = self.input_bar.read(cx);
@@ -1370,9 +1370,9 @@ impl ConWorkspace {
                 input_bar.scope_selected_ids(),
             )
         };
-        let all_ids = pane_terminals
+        let all_ids = surface_terminals
             .iter()
-            .map(|(pane_id, _)| *pane_id)
+            .map(|(pane_id, _, _)| *pane_id)
             .collect::<HashSet<_>>();
 
         let target_ids: HashSet<usize> = if mode == InputMode::Agent || is_focused {
@@ -1391,8 +1391,8 @@ impl ConWorkspace {
             }
         };
 
-        for (pane_id, terminal) in pane_terminals {
-            terminal.set_focus_state(target_ids.contains(&pane_id), cx);
+        for (pane_id, is_active_surface, terminal) in surface_terminals {
+            terminal.set_focus_state(is_active_surface && target_ids.contains(&pane_id), cx);
         }
     }
 
@@ -2015,6 +2015,9 @@ impl ConWorkspace {
                         .find(|surface| surface.surface_id == resolved.surface_id)
                         .cloned();
                     let surface_count = surfaces.len();
+                    let closing_was_focused = current
+                        .as_ref()
+                        .is_some_and(|surface| surface.is_active && surface.is_focused_pane);
                     if surface_count > 1 {
                         let Some((_pane_id, closing)) = self.tabs[tab_idx]
                             .pane_tree
@@ -2029,10 +2032,17 @@ impl ConWorkspace {
                             );
                             continue;
                         };
+                        closing.set_focus_state(false, cx);
                         closing.set_native_view_visible(false, cx);
                         closing.shutdown_surface(cx);
                         if tab_idx == self.active_tab {
                             self.sync_active_tab_native_view_visibility(cx);
+                            if closing_was_focused {
+                                let replacement =
+                                    self.tabs[tab_idx].pane_tree.focused_terminal().clone();
+                                replacement.ensure_surface(window, cx);
+                                replacement.focus(window, cx);
+                            }
                             self.sync_active_terminal_focus_states(cx);
                         }
                         self.save_session(cx);
