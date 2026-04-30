@@ -6,6 +6,18 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+### Added
+
+**Settings**
+
+- Settings now opens as a separate window. You can adjust appearance, shortcuts, and provider configuration, apply changes, and keep the settings window open while checking the terminal.
+- OpenAI-compatible providers can now fetch available models from the provider's `/models` endpoint when a Base URL and API key are configured.
+
+**Keyboard**
+
+- Added direct tab selection shortcuts: Cmd+1 through Cmd+9 on macOS, Ctrl+1 through Ctrl+9 on Windows and Linux.
+- Added macOS window cycling with Cmd+Backtick and Cmd+Shift+Backtick.
+
 ### Fixed
 
 **Terminal, Windows Backend (preview)**

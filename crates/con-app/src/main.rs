@@ -77,6 +77,17 @@ actions!(
         NewTab,
         NextTab,
         PreviousTab,
+        SelectTab1,
+        SelectTab2,
+        SelectTab3,
+        SelectTab4,
+        SelectTab5,
+        SelectTab6,
+        SelectTab7,
+        SelectTab8,
+        SelectTab9,
+        NextWindow,
+        PreviousWindow,
         ToggleSummon,
         ToggleAgentPanel,
         ToggleInputBar,
@@ -464,6 +475,44 @@ pub(crate) fn toggle_global_summon(cx: &mut App) {
 }
 
 #[cfg(target_os = "macos")]
+fn cycle_app_window(cx: &mut App, reverse: bool) {
+    let mut windows = cx.window_stack().unwrap_or_else(|| cx.windows());
+    if windows.len() <= 1 {
+        return;
+    }
+
+    // Keep only handles that still update successfully. Window-stack
+    // snapshots can lag behind just-closed utility windows.
+    windows.retain(|handle| handle.update(cx, |_, _window, _cx| ()).is_ok());
+    if windows.len() <= 1 {
+        return;
+    }
+
+    let active = cx.active_window();
+    let current = active
+        .and_then(|active| {
+            windows
+                .iter()
+                .position(|handle| handle.window_id() == active.window_id())
+        })
+        .unwrap_or(0);
+    // GPUI/macOS reports the stack from back to front (the summon
+    // path also treats `last()` as frontmost), so Cmd+` moves to the
+    // window immediately behind the active one. Shift reverses that.
+    let next = if reverse {
+        (current + 1) % windows.len()
+    } else {
+        current.checked_sub(1).unwrap_or(windows.len() - 1)
+    };
+
+    let target = windows[next];
+    cx.activate(true);
+    let _ = target.update(cx, |_, window, _| {
+        window.activate_window();
+    });
+}
+
+#[cfg(target_os = "macos")]
 fn bundle_info_value(key: &'static [u8]) -> Option<String> {
     use objc::{class, msg_send, sel, sel_impl};
     use std::ffi::CStr;
@@ -727,6 +776,15 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.previous_tab, PreviousTab, None),
         KeyBinding::new("secondary-shift-]", NextTab, None),
         KeyBinding::new("secondary-shift-[", PreviousTab, None),
+        KeyBinding::new("secondary-1", SelectTab1, None),
+        KeyBinding::new("secondary-2", SelectTab2, None),
+        KeyBinding::new("secondary-3", SelectTab3, None),
+        KeyBinding::new("secondary-4", SelectTab4, None),
+        KeyBinding::new("secondary-5", SelectTab5, None),
+        KeyBinding::new("secondary-6", SelectTab6, None),
+        KeyBinding::new("secondary-7", SelectTab7, None),
+        KeyBinding::new("secondary-8", SelectTab8, None),
+        KeyBinding::new("secondary-9", SelectTab9, None),
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
         KeyBinding::new(&kb.close_tab, CloseTab, None),
         KeyBinding::new(&kb.close_pane, ClosePane, None),
@@ -749,6 +807,15 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.previous_tab, PreviousTab, Some("Input")),
         KeyBinding::new("secondary-shift-]", NextTab, Some("Input")),
         KeyBinding::new("secondary-shift-[", PreviousTab, Some("Input")),
+        KeyBinding::new("secondary-1", SelectTab1, Some("Input")),
+        KeyBinding::new("secondary-2", SelectTab2, Some("Input")),
+        KeyBinding::new("secondary-3", SelectTab3, Some("Input")),
+        KeyBinding::new("secondary-4", SelectTab4, Some("Input")),
+        KeyBinding::new("secondary-5", SelectTab5, Some("Input")),
+        KeyBinding::new("secondary-6", SelectTab6, Some("Input")),
+        KeyBinding::new("secondary-7", SelectTab7, Some("Input")),
+        KeyBinding::new("secondary-8", SelectTab8, Some("Input")),
+        KeyBinding::new("secondary-9", SelectTab9, Some("Input")),
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, Some("Input")),
         KeyBinding::new(&kb.close_tab, CloseTab, Some("Input")),
         KeyBinding::new(&kb.close_pane, ClosePane, Some("Input")),
@@ -775,9 +842,13 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new("cmd-h", HideApp, None),
         KeyBinding::new("cmd-alt-h", HideOtherApps, None),
         KeyBinding::new("cmd-alt-shift-h", ShowAllApps, None),
+        KeyBinding::new("cmd-`", NextWindow, None),
+        KeyBinding::new("cmd-shift-`", PreviousWindow, None),
         KeyBinding::new("cmd-h", HideApp, Some("Input")),
         KeyBinding::new("cmd-alt-h", HideOtherApps, Some("Input")),
         KeyBinding::new("cmd-alt-shift-h", ShowAllApps, Some("Input")),
+        KeyBinding::new("cmd-`", NextWindow, Some("Input")),
+        KeyBinding::new("cmd-shift-`", PreviousWindow, Some("Input")),
     ]);
 }
 
@@ -1031,6 +1102,14 @@ fn main() {
         cx.on_action(|_: &ToggleSummon, cx: &mut App| {
             toggle_global_summon(cx);
         });
+        #[cfg(target_os = "macos")]
+        cx.on_action(|_: &NextWindow, cx: &mut App| {
+            cycle_app_window(cx, false);
+        });
+        #[cfg(target_os = "macos")]
+        cx.on_action(|_: &PreviousWindow, cx: &mut App| {
+            cycle_app_window(cx, true);
+        });
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
                 let config = con_core::Config::load().unwrap_or_default();
@@ -1110,6 +1189,14 @@ fn main() {
                     MenuItem::separator(),
                     MenuItem::action("Toggle Input / Terminal", FocusInput),
                     MenuItem::action("Cycle Input Mode", CycleInputMode),
+                ],
+                disabled: false,
+            },
+            Menu {
+                name: "Window".into(),
+                items: vec![
+                    MenuItem::action("Next Window", NextWindow),
+                    MenuItem::action("Previous Window", PreviousWindow),
                 ],
                 disabled: false,
             },

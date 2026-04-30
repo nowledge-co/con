@@ -231,8 +231,9 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit, SplitDown,
-    SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
+    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit,
+    SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
+    SelectTab9, SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -289,6 +290,16 @@ struct CommandSuggestionEntry {
     cwd: Option<String>,
 }
 
+struct SettingsWindowView {
+    panel: Entity<SettingsPanel>,
+}
+
+impl Render for SettingsWindowView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.panel.clone())
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[repr(C)]
 struct NSOperatingSystemVersion {
@@ -332,6 +343,7 @@ pub struct ConWorkspace {
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
+    settings_window: Option<AnyWindowHandle>,
     command_palette: Entity<CommandPalette>,
     model_registry: ModelRegistry,
     harness: AgentHarness,
@@ -1208,6 +1220,7 @@ impl ConWorkspace {
             agent_panel,
             input_bar,
             settings_panel,
+            settings_window: None,
             command_palette,
             model_registry,
             harness,
@@ -3537,6 +3550,16 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.apply_settings_from_panel(settings, window, cx, true);
+    }
+
+    fn apply_settings_from_panel(
+        &mut self,
+        settings: &Entity<SettingsPanel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        restore_focus: bool,
+    ) {
         let new_config = settings.read(cx).agent_config().clone();
         let auto_approve = new_config.auto_approve_tools;
         self.harness.update_config(new_config);
@@ -3646,8 +3669,9 @@ impl ConWorkspace {
         #[cfg(target_os = "macos")]
         crate::global_hotkey::update_from_keybindings(&kb);
 
-        // Settings panel closes on save — restore terminal focus
-        self.focus_terminal(window, cx);
+        if restore_focus {
+            self.focus_terminal(window, cx);
+        }
     }
 
     fn on_tabs_orientation_changed(
@@ -3655,6 +3679,14 @@ impl ConWorkspace {
         settings: &Entity<SettingsPanel>,
         _event: &TabsOrientationChanged,
         _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_tabs_orientation_from_panel(settings, cx);
+    }
+
+    fn apply_tabs_orientation_from_panel(
+        &mut self,
+        settings: &Entity<SettingsPanel>,
         cx: &mut Context<Self>,
     ) {
         let orientation = settings.read(cx).appearance_config().tabs_orientation;
@@ -3677,7 +3709,16 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(new_theme) = TerminalTheme::by_name(&event.0) {
+        self.apply_theme_preview(&event.0, window, cx);
+    }
+
+    fn apply_theme_preview(
+        &mut self,
+        theme_name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(new_theme) = TerminalTheme::by_name(theme_name) {
             if new_theme.name != self.terminal_theme.name {
                 self.apply_terminal_theme(new_theme, window, cx);
                 cx.notify();
@@ -5436,7 +5477,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         // Close settings if open (mutually exclusive)
-        if self.settings_panel.read(cx).is_visible() {
+        if self.settings_panel.read(cx).is_overlay_visible() {
             self.settings_panel.update(cx, |panel, cx| {
                 panel.toggle(window, cx);
             });
@@ -5451,6 +5492,93 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn open_settings_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.settings_window {
+            if handle
+                .update(cx, |_, settings_window, _| {
+                    settings_window.activate_window();
+                })
+                .is_ok()
+            {
+                return;
+            }
+            self.settings_window = None;
+        }
+
+        let config = Config::load().unwrap_or_default();
+        let registry = self.model_registry.clone();
+        let runtime = self.harness.runtime_handle();
+        let workspace = cx.weak_entity();
+        let main_window = window.window_handle();
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::centered(size(px(920.0), px(680.0)), cx)),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Settings".into()),
+                appears_transparent: false,
+                ..Default::default()
+            }),
+            window_background: WindowBackgroundAppearance::Opaque,
+            ..Default::default()
+        };
+
+        match cx.open_window(options, move |settings_window, cx| {
+            let panel = cx.new(|cx| {
+                let mut panel =
+                    SettingsPanel::new(&config, registry.clone(), runtime, settings_window, cx);
+                panel.open_standalone(settings_window, cx);
+                panel
+            });
+
+            let workspace_for_save = workspace.clone();
+            let main_window_for_save = main_window;
+            cx.subscribe(&panel, move |settings, _: &SaveSettings, cx| {
+                let _ = main_window_for_save.update(cx, |_, window, cx| {
+                    let _ = workspace_for_save.update(cx, |workspace, cx| {
+                        workspace.apply_settings_from_panel(&settings, window, cx, false);
+                    });
+                });
+            })
+            .detach();
+
+            let workspace_for_tabs = workspace.clone();
+            let main_window_for_tabs = main_window;
+            cx.subscribe(&panel, move |settings, _: &TabsOrientationChanged, cx| {
+                let _ = main_window_for_tabs.update(cx, |_, _window, cx| {
+                    let _ = workspace_for_tabs.update(cx, |workspace, cx| {
+                        workspace.apply_tabs_orientation_from_panel(&settings, cx);
+                    });
+                });
+            })
+            .detach();
+
+            let workspace_for_theme = workspace;
+            let main_window_for_theme = main_window;
+            cx.subscribe(&panel, move |_settings, event: &ThemePreview, cx| {
+                let theme_name = event.0.clone();
+                let _ = main_window_for_theme.update(cx, |_, window, cx| {
+                    let _ = workspace_for_theme.update(cx, |workspace, cx| {
+                        workspace.apply_theme_preview(&theme_name, window, cx);
+                    });
+                });
+            })
+            .detach();
+
+            let view = cx.new(|_| SettingsWindowView {
+                panel: panel.clone(),
+            });
+            cx.new(|cx| {
+                gpui_component::Root::new(view, settings_window, cx).bg(cx.theme().background)
+            })
+        }) {
+            Ok(handle) => {
+                self.settings_window = Some(handle.into());
+            }
+            Err(err) => {
+                log::error!("Failed to open settings window: {err}");
+            }
+        }
+    }
+
     fn toggle_settings(
         &mut self,
         _: &settings_panel::ToggleSettings,
@@ -5463,18 +5591,13 @@ impl ConWorkspace {
                 palette.toggle(window, cx);
             });
         }
-        self.settings_panel.update(cx, |panel, cx| {
-            panel.toggle(window, cx);
-        });
-        // Restore terminal focus if settings just closed
-        if !self.is_modal_open(cx) {
-            self.focus_terminal(window, cx);
-        }
+        self.open_settings_window(window, cx);
         cx.notify();
     }
 
     fn is_modal_open(&self, cx: &App) -> bool {
-        self.settings_panel.read(cx).is_visible() || self.command_palette.read(cx).is_visible()
+        self.settings_panel.read(cx).is_overlay_visible()
+            || self.command_palette.read(cx).is_visible()
     }
 
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
@@ -6594,6 +6717,49 @@ impl ConWorkspace {
         self.activate_tab(prev, window, cx);
     }
 
+    fn select_tab_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() || index == self.active_tab {
+            return;
+        }
+        self.activate_tab(index, window, cx);
+    }
+
+    fn select_tab_1(&mut self, _: &SelectTab1, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab_index(0, window, cx);
+    }
+
+    fn select_tab_2(&mut self, _: &SelectTab2, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab_index(1, window, cx);
+    }
+
+    fn select_tab_3(&mut self, _: &SelectTab3, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab_index(2, window, cx);
+    }
+
+    fn select_tab_4(&mut self, _: &SelectTab4, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab_index(3, window, cx);
+    }
+
+    fn select_tab_5(&mut self, _: &SelectTab5, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab_index(4, window, cx);
+    }
+
+    fn select_tab_6(&mut self, _: &SelectTab6, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab_index(5, window, cx);
+    }
+
+    fn select_tab_7(&mut self, _: &SelectTab7, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab_index(6, window, cx);
+    }
+
+    fn select_tab_8(&mut self, _: &SelectTab8, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab_index(7, window, cx);
+    }
+
+    fn select_tab_9(&mut self, _: &SelectTab9, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_tab_index(8, window, cx);
+    }
+
     /// Focus the active terminal (used after modal close, etc.)
     fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
         self.active_terminal().focus(window, cx);
@@ -6606,7 +6772,8 @@ impl ConWorkspace {
         }
         self.focus_terminal(window, cx);
         cx.on_next_frame(window, |workspace, window, cx| {
-            if workspace.has_active_tab() && !workspace.settings_panel.read(cx).is_visible() {
+            if workspace.has_active_tab() && !workspace.settings_panel.read(cx).is_overlay_visible()
+            {
                 workspace.focus_terminal(window, cx);
                 cx.notify();
             }
@@ -7584,6 +7751,15 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::next_tab))
             .on_action(cx.listener(Self::previous_tab))
+            .on_action(cx.listener(Self::select_tab_1))
+            .on_action(cx.listener(Self::select_tab_2))
+            .on_action(cx.listener(Self::select_tab_3))
+            .on_action(cx.listener(Self::select_tab_4))
+            .on_action(cx.listener(Self::select_tab_5))
+            .on_action(cx.listener(Self::select_tab_6))
+            .on_action(cx.listener(Self::select_tab_7))
+            .on_action(cx.listener(Self::select_tab_8))
+            .on_action(cx.listener(Self::select_tab_9))
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(Self::close_pane))
             .on_action(cx.listener(Self::split_right))
@@ -7593,7 +7769,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::toggle_pane_scope_picker))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Don't handle workspace shortcuts when a modal overlay is open
-                if this.settings_panel.read(cx).is_visible()
+                if this.settings_panel.read(cx).is_overlay_visible()
                     || this.command_palette.read(cx).is_visible()
                 {
                     return;
@@ -8149,7 +8325,7 @@ impl Render for ConWorkspace {
             root = root.child(popup);
         }
 
-        let settings_visible = self.settings_panel.read(cx).is_visible();
+        let settings_visible = self.settings_panel.read(cx).is_overlay_visible();
         if settings_visible {
             root = root.child(self.settings_panel.clone());
         }
