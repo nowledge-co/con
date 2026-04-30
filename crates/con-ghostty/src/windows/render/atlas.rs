@@ -2,13 +2,12 @@
 //!
 //! `BGRA8_UNORM` texture with skyline packing (`etagere`). Glyphs are
 //! rasterized via Direct2D `DrawText` onto a `ID2D1RenderTarget` that
-//! aliases the atlas texture through a DXGI surface. ClearType
-//! antialiasing writes RGB subpixel coverage into the atlas (one
-//! coverage value per channel); the pixel shader lerps fg→bg per
-//! channel to produce the final subpixel result. We fall back to
-//! grayscale if `SetTextAntialiasMode(CLEARTYPE)` isn't supported on
-//! this GPU / display (rare: only shows up in RDP / forced-grayscale
-//! accessibility modes).
+//! aliases the atlas texture through a DXGI surface. We intentionally
+//! use grayscale antialiasing, not ClearType: this atlas is an offscreen
+//! texture that is later scaled, copied, composited with transparency,
+//! and often inspected through screenshots. Subpixel RGB coverage looks
+//! sharp on a physical LCD panel but becomes colored fringe in that
+//! pipeline.
 
 use std::collections::HashMap;
 
@@ -22,8 +21,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_NONE,
     D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
-    D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory,
-    ID2D1Factory, ID2D1RenderTarget, ID2D1SolidColorBrush,
+    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Factory, ID2D1RenderTarget,
+    ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::{
@@ -34,9 +33,10 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_GLYPH_METRICS, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PIXEL_GEOMETRY_RGB,
-    DWRITE_RENDERING_MODE_NATURAL, IDWriteFactory, IDWriteFontCollection, IDWriteFontFace,
-    IDWriteFontFallback, IDWriteRenderingParams, IDWriteTextFormat, IDWriteTextFormat1,
+    DWRITE_GLYPH_METRICS, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PIXEL_GEOMETRY_FLAT,
+    DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, IDWriteFactory, IDWriteFontCollection,
+    IDWriteFontFace, IDWriteFontFallback, IDWriteRenderingParams, IDWriteTextFormat,
+    IDWriteTextFormat1,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -107,7 +107,7 @@ pub struct GlyphCache {
     white_brush: ID2D1SolidColorBrush,
     /// Opaque-black brush. Used to clear each slot before `DrawText` so
     /// any stale pixels — from a neighbouring scaled-PUA glyph that bled
-    /// past its own slot via ClearType AA fringe or wide layoutRect —
+    /// past its own slot via grayscale AA fringe or wide layoutRect —
     /// don't show through as speckles on thin glyphs (hyphens,
     /// box-drawing).
     black_brush: ID2D1SolidColorBrush,
@@ -280,11 +280,9 @@ impl GlyphCache {
         let dxgi_surface: IDXGISurface = atlas_texture
             .cast()
             .context("atlas texture -> IDXGISurface cast failed")?;
-        // ClearType requires an opaque-alpha render target: D2D composes
-        // the RGB subpixel coverage against the pre-painted surface
-        // directly. `ALPHA_MODE_IGNORE` leaves the alpha channel unused
-        // (we'll always sample BGRA8 with the 3 RGB channels carrying
-        // per-subpixel coverage; alpha stays 1.0).
+        // D2D draws grayscale glyph coverage into RGB channels on an
+        // opaque-alpha render target. Alpha stays unused; the shader
+        // derives final output alpha from coverage and the cell colors.
         let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
             pixelFormat: D2D1_PIXEL_FORMAT {
@@ -300,10 +298,12 @@ impl GlyphCache {
         let d2d_rt = unsafe { d2d_factory.CreateDxgiSurfaceRenderTarget(&dxgi_surface, &rt_props) }
             .context("CreateDxgiSurfaceRenderTarget failed")?;
 
-        // Custom rendering params give us consistent ClearType output
-        // across machines regardless of the user's Control-Panel
-        // ClearType Tuner settings. Values mirror Windows Terminal's
-        // TextureAtlas (see microsoft/terminal renderer/atlas/...).
+        // Custom rendering params give us consistent grayscale output
+        // across machines regardless of the user's ClearType Tuner
+        // settings. Natural symmetric preserves DirectWrite's vertical
+        // and horizontal antialiasing while avoiding RGB subpixel
+        // coverage in our offscreen atlas. A mild contrast bump offsets
+        // the perceived weight loss from dropping ClearType.
         //
         // If CreateCustomRenderingParams fails (very rare — it's a pure
         // parameter validator) we leave the default params in place.
@@ -311,25 +311,23 @@ impl GlyphCache {
         let custom_params: Option<IDWriteRenderingParams> = unsafe {
             dwrite
                 .CreateCustomRenderingParams(
-                    1.8,                       // gamma
-                    0.5,                       // enhanced contrast
-                    1.0,                       // ClearType level
-                    DWRITE_PIXEL_GEOMETRY_RGB, // subpixel layout
-                    DWRITE_RENDERING_MODE_NATURAL,
+                    1.8, // gamma
+                    0.8, // enhanced contrast
+                    0.0, // ClearType level; zero means no RGB subpixel coverage
+                    DWRITE_PIXEL_GEOMETRY_FLAT,
+                    DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
                 )
                 .ok()
         };
-        // SAFETY: ClearType AA. Fall back to grayscale if the display
-        // pipeline forces it (screen readers, RDP, color-filter modes)
-        // — setting the mode is always cheap; the D2D runtime picks the
-        // closest supported mode, so this is fire-and-forget.
+        // SAFETY: grayscale AA. Setting the mode is cheap; if a driver
+        // clamps it, the shader still collapses coverage to one scalar
+        // so colored subpixel fringe cannot escape to the final frame.
         unsafe {
-            d2d_rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+            d2d_rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             if let Some(params) = custom_params.as_ref() {
                 d2d_rt.SetTextRenderingParams(params);
             }
         }
-        let _ = D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE; // keep import live for docs
 
         let color = D2D1_COLOR_F {
             r: 1.0,
@@ -353,9 +351,9 @@ impl GlyphCache {
             unsafe { d2d_rt.CreateSolidColorBrush(&black, None) }
                 .context("CreateSolidColorBrush(black) failed")?;
 
-        // Seed the atlas with black so ClearType has a defined blend
-        // target for the first DrawText. D3D11 zero-inits the texture
-        // but the 0-alpha of (0,0,0,0) can confuse D2D's internal state
+        // Seed the atlas with black so glyph coverage starts from a
+        // defined blend target. D3D11 zero-inits the texture but the
+        // 0-alpha of (0,0,0,0) can confuse D2D's internal state
         // assertions in some drivers; an explicit Clear sidesteps that.
         // SAFETY: d2d_rt owned by us and targets the atlas texture.
         unsafe {
@@ -553,7 +551,7 @@ impl GlyphCache {
         // SAFETY: d2d_rt, format, brushes owned by self. BeginDraw /
         // EndDraw bracket a valid D2D scene; DrawText writes into the
         // atlas via the DXGI-backed RT. PushAxisAlignedClip pins all
-        // writes to `slot_rect` so (a) ClearType AA fringe at the slot
+        // writes to `slot_rect` so (a) antialias fringe at the slot
         // edges can't leak into adjacent atlas entries, and (b) the
         // scaled-PUA path — which uses an oversized layoutRect so
         // DirectWrite doesn't prematurely clip the natural ink — can't
@@ -695,7 +693,7 @@ impl GlyphCache {
         self.entries.clear();
         self.allocator = AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
         // SAFETY: d2d_rt owned by self and aliases the atlas texture.
-        // Re-clear so stale subpixel coverage doesn't bleed into freshly-
+        // Re-clear so stale glyph coverage doesn't bleed into freshly-
         // allocated slots.
         unsafe {
             self.d2d_rt.BeginDraw();
@@ -786,10 +784,10 @@ impl GlyphCache {
         // texture the D3D11 pixel shader samples, so the clear is
         // visible to the next frame.
         //
-        // Black (not transparent) — ClearType blends against the RT's
-        // current pixels. Starting from (0,0,0) + drawing with a white
-        // brush yields atlas values equal to per-subpixel coverage,
-        // which is what the PS expects.
+        // Black (not transparent) — D2D blends glyph coverage against
+        // the RT's current pixels. Starting from (0,0,0) + drawing with
+        // a white brush yields atlas values equal to coverage, which is
+        // what the PS expects.
         // SAFETY: d2d_rt is owned by self and targets the atlas texture.
         unsafe {
             self.d2d_rt.BeginDraw();
