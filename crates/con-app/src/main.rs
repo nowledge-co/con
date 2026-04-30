@@ -841,19 +841,19 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new("cmd-h", HideApp, None),
         KeyBinding::new("cmd-alt-h", HideOtherApps, None),
         KeyBinding::new("cmd-alt-shift-h", ShowAllApps, None),
-        KeyBinding::new("cmd->", NextWindow, None),
         KeyBinding::new("cmd-`", NextWindow, None),
+        KeyBinding::new("cmd->", NextWindow, None),
+        KeyBinding::new("cmd-shift-`", PreviousWindow, None),
         KeyBinding::new("cmd-~", PreviousWindow, None),
         KeyBinding::new("cmd-<", PreviousWindow, None),
-        KeyBinding::new("cmd-shift-`", PreviousWindow, None),
         KeyBinding::new("cmd-h", HideApp, Some("Input")),
         KeyBinding::new("cmd-alt-h", HideOtherApps, Some("Input")),
         KeyBinding::new("cmd-alt-shift-h", ShowAllApps, Some("Input")),
-        KeyBinding::new("cmd->", NextWindow, Some("Input")),
         KeyBinding::new("cmd-`", NextWindow, Some("Input")),
+        KeyBinding::new("cmd->", NextWindow, Some("Input")),
+        KeyBinding::new("cmd-shift-`", PreviousWindow, Some("Input")),
         KeyBinding::new("cmd-~", PreviousWindow, Some("Input")),
         KeyBinding::new("cmd-<", PreviousWindow, Some("Input")),
-        KeyBinding::new("cmd-shift-`", PreviousWindow, Some("Input")),
     ]);
 }
 
