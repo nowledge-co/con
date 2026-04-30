@@ -182,7 +182,7 @@ static NSMutableArray<NSNumber *> *con_current_window_cycle_order(
     return order;
 }
 
-static void con_cycle_app_window(BOOL reverse, NSTimeInterval timestamp) {
+static void con_cycle_app_window_at_time(BOOL reverse, NSTimeInterval timestamp) {
     NSArray<NSWindow *> *windows = con_cycleable_windows();
     NSUInteger count = windows.count;
     if (count < 2) {
@@ -218,6 +218,10 @@ static void con_cycle_app_window(BOOL reverse, NSTimeInterval timestamp) {
     [target makeKeyAndOrderFront:nil];
 }
 
+void con_cycle_app_window(bool reverse) {
+    con_cycle_app_window_at_time(reverse, [NSDate timeIntervalSinceReferenceDate]);
+}
+
 void con_install_window_cycle_shortcuts(void) {
     if (g_con_window_cycle_monitor != nil) {
         return;
@@ -227,7 +231,7 @@ void con_install_window_cycle_shortcuts(void) {
                                                                        handler:^NSEvent *(NSEvent *event) {
         BOOL reverse = NO;
         if (con_should_cycle_window(event, &reverse)) {
-            con_cycle_app_window(reverse, event.timestamp);
+            con_cycle_app_window_at_time(reverse, [NSDate timeIntervalSinceReferenceDate]);
             return nil;
         }
         return event;

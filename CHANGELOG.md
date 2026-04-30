@@ -32,6 +32,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed Settings live preview dismissal so unsaved appearance and theme changes are rolled back when the standalone Settings window is closed.
 - Fixed OpenAI-compatible model discovery so fetched model lists are scoped to the configured Base URL instead of leaking across custom endpoints.
 - Fixed OpenAI-compatible model discovery so newly fetched models immediately refresh all related Settings pickers, including active and suggestion model selectors.
+- Fixed OpenAI-compatible model discovery for Base URLs with required query parameters, preserving the query while deriving the `/models` endpoint.
 - Fixed standalone Settings cleanup so closing the last workspace window also closes Settings on Windows and Linux instead of leaving an orphaned process.
 - Hardened OpenAI-compatible model discovery URL normalization so incomplete `/chat/completions` paths fail clearly instead of becoming relative `/models` URLs.
 
@@ -42,7 +43,8 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Windowing**
 
-- Fixed new Con windows opening exactly on top of the previous one. New workspace windows now cascade from the active window while staying within the visible display area.
+- Fixed new Con windows opening exactly on top of the previous one. New workspace windows now cascade from the active window while staying within the visible display area when display bounds are available, and still cascade when the platform cannot report bounds.
+- Unified macOS Window menu cycling with the same native AppKit path used by Cmd+Backtick, so menu actions and keyboard shortcuts share one ordering model.
 
 **Terminal, Windows Backend (preview)**
 
