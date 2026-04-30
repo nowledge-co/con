@@ -94,6 +94,8 @@ pub struct GhosttyView {
     native_scroll_y: Option<f64>,
     #[cfg(target_os = "macos")]
     native_scroll_surface_frame: Option<(f64, f64, f64, f64)>,
+    #[cfg(target_os = "macos")]
+    pending_native_layout: bool,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -156,6 +158,8 @@ impl GhosttyView {
             native_scroll_y: None,
             #[cfg(target_os = "macos")]
             native_scroll_surface_frame: None,
+            #[cfg(target_os = "macos")]
+            pending_native_layout: false,
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
@@ -315,7 +319,9 @@ impl GhosttyView {
     }
 
     fn show_layout_fallback(&self) -> bool {
-        self.terminal.is_none() || self.awaiting_first_layout_visibility
+        self.terminal.is_none()
+            || self.awaiting_first_layout_visibility
+            || self.pending_native_layout
     }
 
     #[allow(dead_code)]
@@ -338,6 +344,7 @@ impl GhosttyView {
         self.native_scroll_document_frame = None;
         self.native_scroll_y = None;
         self.native_scroll_surface_frame = None;
+        self.pending_native_layout = false;
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -365,6 +372,7 @@ impl GhosttyView {
             self.native_scroll_document_frame = None;
             self.native_scroll_y = None;
             self.native_scroll_surface_frame = None;
+            self.pending_native_layout = false;
         }
         self.ime_marked_text = None;
     }
@@ -533,6 +541,17 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
+    pub fn mark_native_layout_pending(&mut self, cx: &mut Context<Self>) {
+        if self.terminal.is_none() && self.host_view.is_none() {
+            return;
+        }
+
+        self.pending_native_layout = true;
+        self.apply_native_visibility();
+        cx.notify();
+    }
+
+    #[cfg(target_os = "macos")]
     pub fn ensure_initialized_for_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let showed_layout_fallback = self.show_layout_fallback();
         let Some(bounds) = self.last_bounds else {
@@ -555,7 +574,10 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn update_frame(&mut self, bounds: Bounds<Pixels>) {
-        if self.last_bounds.as_ref() == Some(&bounds) {
+        if self.last_bounds.as_ref() == Some(&bounds)
+            && !self.awaiting_first_layout_visibility
+            && !self.pending_native_layout
+        {
             return;
         }
         let started = perf_trace_enabled().then(Instant::now);
@@ -611,7 +633,8 @@ impl GhosttyView {
         if self.awaiting_first_layout_visibility {
             self.awaiting_first_layout_visibility = false;
         }
-        self.set_visible(self.native_view_visible.get());
+        self.pending_native_layout = false;
+        self.apply_native_visibility();
         self.draw_surface_now();
     }
 
@@ -793,9 +816,16 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     pub fn set_visible(&self, visible: bool) {
         self.native_view_visible.set(visible);
+        self.apply_native_visibility();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_native_visibility(&self) {
         if let Some(host_view) = self.host_view {
             unsafe {
-                let effective_visible = visible && !self.awaiting_first_layout_visibility;
+                let effective_visible = self.native_view_visible.get()
+                    && !self.awaiting_first_layout_visibility
+                    && !self.pending_native_layout;
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![host_view, setHidden:hidden];
                 if effective_visible {
@@ -803,7 +833,10 @@ impl GhosttyView {
                 }
             }
         }
-        if visible && !self.awaiting_first_layout_visibility {
+        if self.native_view_visible.get()
+            && !self.awaiting_first_layout_visibility
+            && !self.pending_native_layout
+        {
             self.draw_surface_now();
         }
     }

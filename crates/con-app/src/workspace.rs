@@ -1389,6 +1389,23 @@ impl ConWorkspace {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn mark_tab_terminal_native_layout_pending(&self, tab_index: usize, cx: &mut App) {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        for terminal in tab.pane_tree.all_terminals() {
+            terminal.mark_native_layout_pending(cx);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn mark_active_tab_terminal_native_layout_pending(&self, cx: &mut App) {
+        if self.has_active_tab() {
+            self.mark_tab_terminal_native_layout_pending(self.active_tab, cx);
+        }
+    }
+
     fn sync_active_tab_native_view_visibility_after_layout(
         &self,
         window: &mut Window,
@@ -1663,6 +1680,8 @@ impl ConWorkspace {
                 .split(direction, terminal.clone());
             let should_focus = req.tab_idx == self.active_tab;
             if should_focus {
+                #[cfg(target_os = "macos")]
+                self.mark_tab_terminal_native_layout_pending(req.tab_idx, cx);
                 self.notify_tab_terminal_views(req.tab_idx, cx);
                 terminal.focus(window, cx);
                 self.sync_active_terminal_focus_states(cx);
@@ -5902,6 +5921,8 @@ impl ConWorkspace {
                 let new_focus = tab.pane_tree.focused_terminal().clone();
                 (closing, surviving_terminals, new_focus)
             };
+            #[cfg(target_os = "macos")]
+            self.mark_active_tab_terminal_native_layout_pending(cx);
 
             for terminal in &surviving_terminals {
                 terminal.ensure_surface(window, cx);
@@ -6734,6 +6755,8 @@ impl ConWorkspace {
             placement,
             terminal.clone(),
         );
+        #[cfg(target_os = "macos")]
+        self.mark_active_tab_terminal_native_layout_pending(cx);
         self.record_runtime_event_for_terminal(
             self.active_tab,
             &terminal,
@@ -6810,6 +6833,8 @@ impl ConWorkspace {
             return;
         }
 
+        #[cfg(target_os = "macos")]
+        self.mark_active_tab_terminal_native_layout_pending(cx);
         self.notify_active_tab_terminal_views(cx);
         self.active_terminal().focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
@@ -6867,6 +6892,10 @@ impl ConWorkspace {
             if tab_idx == self.active_tab {
                 focus_after_close = Some(pane_tree.focused_terminal().clone());
             }
+        }
+        if tab_idx == self.active_tab {
+            #[cfg(target_os = "macos")]
+            self.mark_active_tab_terminal_native_layout_pending(cx);
         }
 
         if let Some(focused) = focus_after_close {
@@ -7180,6 +7209,8 @@ impl ConWorkspace {
             terminal.clone(),
         );
         self.active_tab = tab_idx;
+        #[cfg(target_os = "macos")]
+        self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
         self.notify_tab_terminal_views(tab_idx, cx);
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
