@@ -37,6 +37,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Keyboard**
 
 - Fixed direct tab selection shortcuts so terminal panes hand Cmd/Ctrl+1-9 back to the app instead of forwarding them to the shell.
+- Fixed direct tab selection shortcuts so Cmd/Ctrl+1-9 keeps switching tabs while the pane picker is open; pane selection remains on bare 1-9 inside the picker.
 
 **Windowing**
 

@@ -6855,11 +6855,6 @@ impl ConWorkspace {
     }
 
     fn select_tab_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pane_scope_picker_open {
-            self.toggle_scope_pane_by_index(index, window, cx);
-            return;
-        }
-
         if index >= self.tabs.len() || index == self.active_tab {
             return;
         }
