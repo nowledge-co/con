@@ -5921,8 +5921,8 @@ impl ConWorkspace {
 
     fn close_window_from_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.defer_in(window, |workspace, window, cx| {
-            let should_quit = cfg!(not(target_os = "macos")) && cx.windows().len() <= 1;
             workspace.prepare_window_close(cx);
+            let should_quit = cfg!(not(target_os = "macos")) && cx.windows().len() <= 1;
             window.remove_window();
             if should_quit {
                 cx.quit();
@@ -5938,6 +5938,12 @@ impl ConWorkspace {
 
         self.cancel_all_sessions();
         self.flush_session_save(cx);
+
+        if let Some(settings_window) = self.settings_window.take() {
+            let _ = settings_window.update(cx, |_, window, _| {
+                window.remove_window();
+            });
+        }
 
         for request in std::mem::take(&mut self.pending_window_control_requests) {
             match request {

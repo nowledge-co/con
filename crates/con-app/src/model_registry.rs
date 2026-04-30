@@ -375,10 +375,21 @@ impl ModelRegistry {
 
         if endpoint.ends_with("/chat/completions") {
             endpoint.truncate(endpoint.len() - "/chat/completions".len());
+        } else if endpoint == "chat/completions" {
+            endpoint.clear();
+        }
+
+        if endpoint.trim_matches('/').is_empty() {
+            return Err(anyhow!("Base URL is required"));
         }
 
         if !endpoint.ends_with("/models") {
             endpoint.push_str("/models");
+        }
+
+        let parsed = url::Url::parse(&endpoint).context("Base URL must be an absolute URL")?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(anyhow!("Base URL must use http or https"));
         }
 
         Ok(endpoint)
@@ -513,6 +524,8 @@ mod tests {
                 .unwrap(),
             "https://api.example.com/v1/models"
         );
+        assert!(ModelRegistry::openai_compatible_models_url("/chat/completions").is_err());
+        assert!(ModelRegistry::openai_compatible_models_url("chat/completions").is_err());
     }
 
     #[test]
