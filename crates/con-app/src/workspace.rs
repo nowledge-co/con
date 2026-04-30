@@ -3250,6 +3250,7 @@ impl ConWorkspace {
                                 self.sync_active_tab_native_view_visibility(cx);
                                 self.sync_active_terminal_focus_states(cx);
                             }
+                            self.save_session(cx);
                             Self::send_control_result(
                                 response_tx,
                                 Ok(json!({
@@ -3278,6 +3279,7 @@ impl ConWorkspace {
                             .pane_tree
                             .rename_surface(resolved.surface_id, Some(title.clone()));
                         self.sync_sidebar(cx);
+                        self.save_session(cx);
                         Self::send_control_result(
                             response_tx,
                             Ok(json!({

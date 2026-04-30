@@ -301,6 +301,9 @@ impl PaneTree {
         surface.close_pane_when_last = options.close_pane_when_last;
 
         if Self::push_surface(&mut self.root, pane_id, surface) {
+            if self.zoomed_pane_id.is_some_and(|zoomed| zoomed != pane_id) {
+                self.zoomed_pane_id = None;
+            }
             self.focused_pane_id = pane_id;
             Some(surface_id)
         } else {
@@ -310,6 +313,9 @@ impl PaneTree {
 
     pub fn focus_surface(&mut self, surface_id: SurfaceId) -> bool {
         if let Some(pane_id) = Self::activate_surface(&mut self.root, surface_id) {
+            if self.zoomed_pane_id.is_some_and(|zoomed| zoomed != pane_id) {
+                self.zoomed_pane_id = None;
+            }
             self.focused_pane_id = pane_id;
             true
         } else {
