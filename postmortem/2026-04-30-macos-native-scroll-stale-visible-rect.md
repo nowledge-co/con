@@ -16,10 +16,12 @@ Manual divider resizing appeared to fix the issue because it forced another GPUI
 
 `GhosttyView::sync_native_scroll_view` no longer reads `documentVisibleRect` after mutating the scroll hierarchy and no longer caches away native frame writes. It reapplies the document frame, clip scroll point, reflected scroller state, and surface frame directly from Con-owned pane bounds and Ghostty scrollbar state: `(x = 0, y = scroll_y, width = visible_width, height = visible_height)`.
 
-The PR also keeps native pane views behind a short layout reveal barrier during topology changes so stale or bootstrap frames are not exposed while GPUI settles the split tree.
+The PR keeps only the minimum reveal delay for panes that are becoming newly visible, such as unzooming back to a split tree. The layout-pending signal must not hide already-visible native surfaces, because that replaces the terminal with a matte fallback and creates a visible blink during split, close, zoom, and unzoom operations.
 
 ## What We Learned
 
 Mirroring an upstream AppKit view hierarchy is not enough if the host owns a different layout lifecycle. Ghostty can safely use `documentVisibleRect` inside its own `NSView.layout()` flow; Con cannot safely query that computed AppKit geometry in the same pass where GPUI just drove imperative frame changes.
 
 For embedded native views under GPUI, deterministic geometry should come from Con's layout model and terminal state. AppKit geometry queries are acceptable as observations, not as source-of-truth immediately after host-driven mutations. Leaf-local native frame caches are also unsafe across GPUI split-tree topology changes unless they are tied to the full host placement lifecycle, not just the surface-local rect.
+
+Geometry fallback and visibility are separate concerns. A pending layout flag can force `update_frame`, but it should not hide a live terminal surface once deterministic geometry sync is in place. Otherwise the fix trades stale native rectangles for matte flicker.

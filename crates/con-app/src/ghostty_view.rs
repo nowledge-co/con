@@ -101,11 +101,6 @@ pub struct GhosttyView {
     pending_write: Option<Vec<u8>>,
     /// Desired native view visibility, including before the NSView exists.
     native_view_visible: Cell<bool>,
-    /// Split/zoom topology changes need a workspace-level reveal barrier.
-    /// Individual AppKit layout callbacks can arrive before sibling panes have
-    /// received their final frames, which lets stale native views cover panes.
-    #[cfg(target_os = "macos")]
-    native_layout_reveal_blocked: Cell<bool>,
     /// Desired Ghostty focus state. This is independent from GPUI keyboard
     /// focus so broadcast/custom pane scopes can light multiple cursors.
     surface_focused: Cell<bool>,
@@ -163,8 +158,6 @@ impl GhosttyView {
             last_title: None,
             pending_write: None,
             native_view_visible: Cell::new(true),
-            #[cfg(target_os = "macos")]
-            native_layout_reveal_blocked: Cell::new(false),
             surface_focused: Cell::new(true),
             awaiting_first_layout_visibility: false,
             process_exit_emitted: false,
@@ -318,10 +311,7 @@ impl GhosttyView {
     }
 
     fn show_layout_fallback(&self) -> bool {
-        self.terminal.is_none()
-            || self.awaiting_first_layout_visibility
-            || self.pending_native_layout
-            || self.native_layout_reveal_blocked.get()
+        self.terminal.is_none() || self.awaiting_first_layout_visibility
     }
 
     #[allow(dead_code)]
@@ -343,7 +333,6 @@ impl GhosttyView {
         self.nsview = None;
         self.native_backing_color = None;
         self.pending_native_layout = false;
-        self.native_layout_reveal_blocked.set(false);
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -369,7 +358,6 @@ impl GhosttyView {
         {
             self.last_mouse_position = None;
             self.pending_native_layout = false;
-            self.native_layout_reveal_blocked.set(false);
         }
         self.ime_marked_text = None;
     }
@@ -595,8 +583,6 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     pub fn mark_native_layout_pending(&mut self, cx: &mut Context<Self>) {
         self.pending_native_layout = true;
-        self.native_layout_reveal_blocked.set(true);
-        self.apply_native_visibility();
         cx.notify();
     }
 
@@ -846,9 +832,6 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     pub fn set_visible(&self, visible: bool) {
         self.native_view_visible.set(visible);
-        if visible {
-            self.native_layout_reveal_blocked.set(false);
-        }
         self.apply_native_visibility();
     }
 
@@ -856,10 +839,8 @@ impl GhosttyView {
     fn apply_native_visibility(&self) {
         if let Some(host_view) = self.host_view {
             unsafe {
-                let effective_visible = self.native_view_visible.get()
-                    && !self.awaiting_first_layout_visibility
-                    && !self.pending_native_layout
-                    && !self.native_layout_reveal_blocked.get();
+                let effective_visible =
+                    self.native_view_visible.get() && !self.awaiting_first_layout_visibility;
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![host_view, setHidden:hidden];
                 if effective_visible {
@@ -867,11 +848,7 @@ impl GhosttyView {
                 }
             }
         }
-        if self.native_view_visible.get()
-            && !self.awaiting_first_layout_visibility
-            && !self.pending_native_layout
-            && !self.native_layout_reveal_blocked.get()
-        {
+        if self.native_view_visible.get() && !self.awaiting_first_layout_visibility {
             self.draw_surface_now();
         }
     }

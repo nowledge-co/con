@@ -1374,6 +1374,22 @@ impl ConWorkspace {
         }
     }
 
+    fn hide_active_tab_native_views_not_in_layout(&self, cx: &App) {
+        if !self.has_active_tab() {
+            return;
+        }
+        let tab = &self.tabs[self.active_tab];
+        let Some(zoomed_pane_id) = tab.pane_tree.zoomed_pane_id() else {
+            return;
+        };
+
+        for (pane_id, terminal) in tab.pane_tree.pane_terminals() {
+            if pane_id != zoomed_pane_id {
+                terminal.set_native_view_visible(false, cx);
+            }
+        }
+    }
+
     fn notify_tab_terminal_views(&self, tab_index: usize, cx: &mut App) {
         let Some(tab) = self.tabs.get(tab_index) else {
             return;
@@ -1411,9 +1427,11 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Native Ghostty NSViews live outside GPUI's element tree. Wait
-        // until GPUI has committed one layout frame before hiding/showing
-        // them, otherwise zoom/split transitions can expose transparent gaps.
+        // Native Ghostty NSViews live outside GPUI's element tree. Hide panes
+        // that are definitely leaving the layout immediately, but delay
+        // revealing newly-visible panes until GPUI has committed one layout
+        // frame so they do not flash at stale split coordinates.
+        self.hide_active_tab_native_views_not_in_layout(cx);
         cx.on_next_frame(window, |_workspace, window, cx| {
             cx.notify();
             cx.on_next_frame(window, |workspace, _window, cx| {
