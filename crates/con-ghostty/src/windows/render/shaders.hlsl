@@ -3,14 +3,14 @@
 // Single DrawIndexedInstanced(6, cells) per frame. Each cell is a quad
 // with per-instance inputs (IA layout, matching `VS_INSTANCE` in
 // pipeline.rs). VS computes the cell's screen-space position from its
-// grid coords; PS samples the ClearType-rendered glyph atlas (BGRA8,
-// per-subpixel coverage in R,G,B) and lerps fg→bg per channel for a
-// subpixel-accurate composite.
+// grid coords; PS samples the DirectWrite grayscale glyph atlas (BGRA8,
+// same coverage in R,G,B) and composites fg over bg with one scalar
+// glyph coverage.
 //
-// Atlas contents: Direct2D draws a white brush through a ClearType-
-// enabled render target onto an opaque-black background. Result per
-// channel = subpixel coverage. The PS lerps (bg[c], fg[c], coverage[c])
-// per channel c in {R,G,B}.
+// Atlas contents: Direct2D draws a white brush through a grayscale text
+// render target onto an opaque-black background. Result RGB = glyph
+// coverage. We still defensively collapse sampled RGB to one scalar so
+// a driver / remote-display path cannot leak ClearType color fringe.
 
 // ── Constant buffer (per-frame) ────────────────────────────────────────
 cbuffer Globals : register(b0) {
@@ -128,9 +128,11 @@ VSOut vs_main(uint vid : SV_VertexID, VSInstance inst) {
 // ── PS ─────────────────────────────────────────────────────────────────
 float4 ps_main(VSOut i) : SV_Target {
     // atlasUV arrives already normalized (VS divides pixel coords by
-    // invAtlasSize). ClearType wrote per-subpixel coverage to R/G/B;
-    // sample all three channels for subpixel antialiasing.
-    float3 coverage = atlas.Sample(samp, i.atlasUV).rgb;
+    // invAtlasSize). The atlas is grayscale, but collapse RGB anyway
+    // so any platform-level subpixel fallback becomes neutral coverage
+    // instead of colored fringe.
+    float3 coverage_rgb = atlas.Sample(samp, i.atlasUV).rgb;
+    float coverage = max(coverage_rgb.r, max(coverage_rgb.g, coverage_rgb.b));
 
     // Inverse handling: swap fg/bg when attr bit 4 is set (SGR 7 or
     // a selected cell via the CPU-side XOR). After the swap the new
@@ -174,21 +176,17 @@ float4 ps_main(VSOut i) : SV_Target {
         }
     }
 
-    // Per-channel lerp: subpixel ClearType for glyph coverage, mixed
-    // with a flat `band_coverage` for decorations so underline /
-    // strike bands don't show subpixel fringing.
-    float3 comp = max(coverage, float3(band_coverage, band_coverage, band_coverage));
-    float3 rgb;
-    rgb.r = lerp(bg.r, fg.r, comp.r);
-    rgb.g = lerp(bg.g, fg.g, comp.g);
-    rgb.b = lerp(bg.b, fg.b, comp.b);
+    // Scalar glyph coverage keeps text neutral during screenshots,
+    // scaling, transparency, and remote-display review. Decorations use
+    // the same scalar path so underline / strike bands stay clean.
+    float comp = max(coverage, band_coverage);
+    float3 rgb = lerp(bg.rgb, fg.rgb, comp);
     // Output alpha follows the maximum coverage so glyph pixels stay
     // opaque while the cell's background takes the bg.a (which the
     // renderer drops to `background_opacity` for default-bg cells so
     // Mica / DComp visuals beneath show through). GPUI's compositor
     // expects premultiplied alpha — multiply the lerped RGB by the
     // output alpha so translucent pixels don't look washed out.
-    float a_cov = max(comp.r, max(comp.g, comp.b));
-    float alpha = lerp(bg.a, fg.a, a_cov);
+    float alpha = lerp(bg.a, fg.a, comp);
     return float4(rgb * alpha, alpha);
 }
