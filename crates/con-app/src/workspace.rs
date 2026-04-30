@@ -1382,9 +1382,8 @@ impl ConWorkspace {
         // Native Ghostty NSViews live outside GPUI's element tree. Wait
         // until GPUI has committed one layout frame before hiding/showing
         // them, otherwise zoom/split transitions can expose transparent gaps.
-        window.request_animation_frame();
         cx.on_next_frame(window, |_workspace, window, cx| {
-            window.request_animation_frame();
+            cx.notify();
             cx.on_next_frame(window, |workspace, _window, cx| {
                 if workspace.has_active_tab()
                     && !workspace.ghostty_hidden

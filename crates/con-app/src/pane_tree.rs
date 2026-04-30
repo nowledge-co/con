@@ -190,9 +190,10 @@ impl PaneTree {
         if Self::find_terminal(&self.root, self.focused_pane_id).is_none() {
             self.focused_pane_id = Self::first_pane_id(&self.root);
         }
-        if self
-            .zoomed_pane_id
-            .is_some_and(|zoomed_id| Self::find_terminal(&self.root, zoomed_id).is_none())
+        if self.pane_count() <= 1
+            || self
+                .zoomed_pane_id
+                .is_some_and(|zoomed_id| Self::find_terminal(&self.root, zoomed_id).is_none())
         {
             self.zoomed_pane_id = None;
         }
