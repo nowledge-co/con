@@ -215,7 +215,7 @@ use crate::input_bar::{
 };
 use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
-use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement};
+use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement, SurfaceCreateOptions};
 use crate::settings_panel::{
     self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
@@ -382,6 +382,8 @@ pub struct ConWorkspace {
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
     pending_window_control_requests: Vec<PendingWindowControlRequest>,
+    /// Pending surface-control requests that need a window context to allocate a terminal view.
+    pending_surface_control_requests: Vec<PendingSurfaceControlRequest>,
     /// Control-plane requests from the external `con-cli` socket bridge.
     control_request_rx: crossbeam_channel::Receiver<ControlRequestEnvelope>,
     /// Keeps the Unix socket alive for this workspace instance.
@@ -424,6 +426,15 @@ struct ResolvedPaneTarget {
     pane_id: usize,
 }
 
+#[derive(Clone)]
+struct ResolvedSurfaceTarget {
+    terminal: TerminalPane,
+    pane_index: usize,
+    pane_id: usize,
+    surface_index: usize,
+    surface_id: usize,
+}
+
 /// A deferred create-pane request waiting for a window-aware context.
 struct PendingCreatePane {
     command: Option<String>,
@@ -438,6 +449,34 @@ enum PendingWindowControlRequest {
     },
     TabsClose {
         tab_idx: usize,
+        response_tx: oneshot::Sender<ControlResult>,
+    },
+}
+
+enum PendingSurfaceControlRequest {
+    Create {
+        tab_idx: usize,
+        pane: con_core::PaneTarget,
+        title: Option<String>,
+        command: Option<String>,
+        owner: Option<String>,
+        close_pane_when_last: bool,
+        response_tx: oneshot::Sender<ControlResult>,
+    },
+    Split {
+        tab_idx: usize,
+        source: con_core::SurfaceTarget,
+        location: con_agent::tools::PaneCreateLocation,
+        title: Option<String>,
+        command: Option<String>,
+        owner: Option<String>,
+        close_pane_when_last: bool,
+        response_tx: oneshot::Sender<ControlResult>,
+    },
+    Close {
+        tab_idx: usize,
+        target: con_core::SurfaceTarget,
+        close_empty_owned_pane: bool,
         response_tx: oneshot::Sender<ControlResult>,
     },
 }
@@ -1149,7 +1188,7 @@ impl ConWorkspace {
         // Hide non-active tabs' ghostty NSViews so only the active tab is visible
         for (i, tab) in tabs.iter().enumerate() {
             if i != active_tab {
-                for terminal in tab.pane_tree.all_terminals() {
+                for terminal in tab.pane_tree.all_surface_terminals() {
                     terminal.set_native_view_visible(false, cx);
                 }
             }
@@ -1254,6 +1293,7 @@ impl ConWorkspace {
             last_window_resize_increment_millipoints: None,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
+            pending_surface_control_requests: Vec::new(),
             control_request_rx,
             control_socket,
             pending_control_agent_requests: HashMap::new(),
@@ -1362,9 +1402,12 @@ impl ConWorkspace {
         };
         let zoomed_pane_id = tab.pane_tree.zoomed_pane_id();
 
-        for (pane_id, terminal) in tab.pane_tree.pane_terminals() {
-            let pane_visible = visible && zoomed_pane_id.is_none_or(|zoomed| zoomed == pane_id);
-            terminal.set_native_view_visible(pane_visible, cx);
+        for surface in tab.pane_tree.surface_infos(None) {
+            let pane_visible =
+                visible && zoomed_pane_id.is_none_or(|zoomed| zoomed == surface.pane_id);
+            surface
+                .terminal
+                .set_native_view_visible(pane_visible && surface.is_active, cx);
         }
     }
 
@@ -1383,9 +1426,9 @@ impl ConWorkspace {
             return;
         };
 
-        for (pane_id, terminal) in tab.pane_tree.pane_terminals() {
-            if pane_id != zoomed_pane_id {
-                terminal.set_native_view_visible(false, cx);
+        for surface in tab.pane_tree.surface_infos(None) {
+            if surface.pane_id != zoomed_pane_id || !surface.is_active {
+                surface.terminal.set_native_view_visible(false, cx);
             }
         }
     }
@@ -1489,7 +1532,7 @@ impl ConWorkspace {
         let mut drain_count = 0usize;
 
         for tab in &self.tabs {
-            for terminal in tab.pane_tree.all_terminals() {
+            for terminal in tab.pane_tree.all_surface_terminals() {
                 terminal_count += 1;
                 changed |= terminal.pump_surface_deferred_work(cx);
             }
@@ -1513,7 +1556,7 @@ impl ConWorkspace {
         self.last_ghostty_wake_generation = generation;
         for (tab_index, tab) in self.tabs.iter().enumerate() {
             let sync_native_scroll = tab_index == self.active_tab;
-            for terminal in tab.pane_tree.all_terminals() {
+            for terminal in tab.pane_tree.all_surface_terminals() {
                 drain_count += 1;
                 changed |= terminal.drain_surface_state_with_native_scroll(sync_native_scroll, cx);
             }
@@ -1635,6 +1678,7 @@ impl ConWorkspace {
                     let _ = workspace.update(cx, |workspace, cx| {
                         workspace.flush_pending_window_control_requests(window, cx);
                         workspace.flush_pending_create_pane_requests(window, cx);
+                        workspace.flush_pending_surface_control_requests(window, cx);
                     });
                 }
             });
@@ -1773,6 +1817,315 @@ impl ConWorkspace {
         }
 
         cx.notify();
+        window.refresh();
+    }
+
+    fn flush_pending_surface_control_requests(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pending = std::mem::take(&mut self.pending_surface_control_requests);
+        if pending.is_empty() {
+            return;
+        }
+
+        for request in pending {
+            match request {
+                PendingSurfaceControlRequest::Create {
+                    tab_idx,
+                    pane,
+                    title,
+                    command,
+                    owner,
+                    close_pane_when_last,
+                    response_tx,
+                } => {
+                    if tab_idx >= self.tabs.len() {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(format!(
+                                "Tab {} is no longer available.",
+                                tab_idx + 1
+                            ))),
+                        );
+                        continue;
+                    }
+                    let resolved = match self
+                        .resolve_pane_target_for_tab(tab_idx, Self::pane_selector_from_target(pane))
+                    {
+                        Ok(resolved) => resolved,
+                        Err(err) => {
+                            Self::send_control_result(
+                                response_tx,
+                                Err(ControlError::invalid_params(err)),
+                            );
+                            continue;
+                        }
+                    };
+                    let cwd = resolved.pane.current_dir(cx);
+                    let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+                    let options = SurfaceCreateOptions {
+                        title,
+                        owner,
+                        close_pane_when_last,
+                    };
+                    let Some(surface_id) = self.tabs[tab_idx].pane_tree.create_surface_in_pane(
+                        resolved.pane_id,
+                        terminal.clone(),
+                        options,
+                    ) else {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(format!(
+                                "Pane id {} is no longer available in tab {}.",
+                                resolved.pane_id,
+                                tab_idx + 1
+                            ))),
+                        );
+                        continue;
+                    };
+                    if tab_idx == self.active_tab {
+                        #[cfg(target_os = "macos")]
+                        self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
+                        self.notify_tab_terminal_views(tab_idx, cx);
+                        self.sync_active_tab_native_view_visibility_now_or_after_layout(
+                            false, window, cx,
+                        );
+                    }
+                    self.finish_created_surface(
+                        tab_idx,
+                        resolved.pane_id,
+                        surface_id,
+                        terminal,
+                        command,
+                        false,
+                        response_tx,
+                        window,
+                        cx,
+                    );
+                }
+                PendingSurfaceControlRequest::Split {
+                    tab_idx,
+                    source,
+                    location,
+                    title,
+                    command,
+                    owner,
+                    close_pane_when_last,
+                    response_tx,
+                } => {
+                    if tab_idx >= self.tabs.len() {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(format!(
+                                "Tab {} is no longer available.",
+                                tab_idx + 1
+                            ))),
+                        );
+                        continue;
+                    }
+                    let resolved = match self.resolve_surface_target_for_tab(tab_idx, source) {
+                        Ok(resolved) => resolved,
+                        Err(err) => {
+                            Self::send_control_result(response_tx, Err(err));
+                            continue;
+                        }
+                    };
+                    let cwd = resolved.terminal.current_dir(cx);
+                    let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+                    let direction = match location {
+                        con_agent::tools::PaneCreateLocation::Right => SplitDirection::Horizontal,
+                        con_agent::tools::PaneCreateLocation::Down => SplitDirection::Vertical,
+                    };
+                    let was_zoomed = self.tabs[tab_idx].pane_tree.zoomed_pane_id().is_some();
+                    let options = SurfaceCreateOptions {
+                        title,
+                        owner: Some(owner.unwrap_or_else(|| "con-cli".to_string())),
+                        close_pane_when_last,
+                    };
+                    let Some((pane_id, surface_id)) = self.tabs[tab_idx]
+                        .pane_tree
+                        .split_pane_with_surface_options(
+                            resolved.pane_id,
+                            direction,
+                            SplitPlacement::After,
+                            terminal.clone(),
+                            options,
+                        )
+                    else {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(format!(
+                                "{} is no longer available in tab {}.",
+                                source.describe(),
+                                tab_idx + 1
+                            ))),
+                        );
+                        continue;
+                    };
+                    if tab_idx == self.active_tab {
+                        #[cfg(target_os = "macos")]
+                        self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
+                        self.notify_tab_terminal_views(tab_idx, cx);
+                        self.sync_active_tab_native_view_visibility_now_or_after_layout(
+                            was_zoomed, window, cx,
+                        );
+                    }
+                    self.finish_created_surface(
+                        tab_idx,
+                        pane_id,
+                        surface_id,
+                        terminal,
+                        command,
+                        true,
+                        response_tx,
+                        window,
+                        cx,
+                    );
+                }
+                PendingSurfaceControlRequest::Close {
+                    tab_idx,
+                    target,
+                    close_empty_owned_pane,
+                    response_tx,
+                } => {
+                    if tab_idx >= self.tabs.len() {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(format!(
+                                "Tab {} is no longer available.",
+                                tab_idx + 1
+                            ))),
+                        );
+                        continue;
+                    }
+                    let resolved = match self.resolve_surface_target_for_tab(tab_idx, target) {
+                        Ok(resolved) => resolved,
+                        Err(err) => {
+                            Self::send_control_result(response_tx, Err(err));
+                            continue;
+                        }
+                    };
+                    let surfaces = self.tabs[tab_idx]
+                        .pane_tree
+                        .surface_infos(Some(resolved.pane_id));
+                    let current = surfaces
+                        .iter()
+                        .find(|surface| surface.surface_id == resolved.surface_id)
+                        .cloned();
+                    let surface_count = surfaces.len();
+                    if surface_count > 1 {
+                        let Some((_pane_id, closing)) = self.tabs[tab_idx]
+                            .pane_tree
+                            .close_surface(resolved.surface_id)
+                        else {
+                            Self::send_control_result(
+                                response_tx,
+                                Err(ControlError::invalid_params(format!(
+                                    "Surface id {} could not be closed.",
+                                    resolved.surface_id
+                                ))),
+                            );
+                            continue;
+                        };
+                        closing.set_native_view_visible(false, cx);
+                        closing.shutdown_surface(cx);
+                        if tab_idx == self.active_tab {
+                            self.sync_active_tab_native_view_visibility(cx);
+                            self.sync_active_terminal_focus_states(cx);
+                        }
+                        self.save_session(cx);
+                        Self::send_control_result(
+                            response_tx,
+                            Ok(json!({
+                                "status": "closed",
+                                "closed_pane": false,
+                                "tab_index": tab_idx + 1,
+                                "pane_id": resolved.pane_id,
+                                "surface_id": resolved.surface_id,
+                            })),
+                        );
+                    } else {
+                        let owned_empty_close = current.as_ref().is_some_and(|surface| {
+                            surface.owner.is_some() && surface.close_pane_when_last
+                        });
+                        if close_empty_owned_pane
+                            && owned_empty_close
+                            && self.tabs[tab_idx].pane_tree.pane_count() > 1
+                        {
+                            let closed =
+                                self.close_pane_in_tab(tab_idx, resolved.pane_id, window, cx);
+                            Self::send_control_result(
+                                response_tx,
+                                Ok(json!({
+                                    "status": if closed { "closed" } else { "unchanged" },
+                                    "closed_pane": closed,
+                                    "tab_index": tab_idx + 1,
+                                    "pane_id": resolved.pane_id,
+                                    "surface_id": resolved.surface_id,
+                                })),
+                            );
+                        } else {
+                            Self::send_control_result(
+                                response_tx,
+                                Err(ControlError::invalid_params(
+                                    "Refusing to close the last surface in a pane unless it is an owned ephemeral pane and close_empty_owned_pane=true.",
+                                )),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        cx.notify();
+        window.refresh();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_created_surface(
+        &mut self,
+        tab_idx: usize,
+        pane_id: usize,
+        surface_id: usize,
+        terminal: TerminalPane,
+        command: Option<String>,
+        created_pane: bool,
+        response_tx: oneshot::Sender<ControlResult>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_is_active = tab_idx == self.active_tab;
+        if tab_is_active {
+            terminal.focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
+            self.sync_active_tab_native_view_visibility(cx);
+        } else {
+            terminal.set_focus_state(false, cx);
+            terminal.set_native_view_visible(false, cx);
+        }
+        Self::schedule_terminal_bootstrap_reassert(
+            &terminal,
+            tab_is_active,
+            self.window_handle,
+            self.workspace_handle.clone(),
+            cx,
+        );
+        if let Some(cmd) = &command {
+            terminal.write(format!("{cmd}\n").as_bytes(), cx);
+        }
+        self.record_runtime_event_for_terminal(
+            tab_idx,
+            &terminal,
+            con_agent::context::PaneRuntimeEvent::PaneCreated {
+                startup_command: command.clone(),
+            },
+        );
+        let result =
+            self.surface_created_result(tab_idx, pane_id, surface_id, created_pane, &terminal, cx);
+        Self::send_control_result(response_tx, Ok(result));
+        self.save_session(cx);
     }
 
     fn reconcile_runtime_trackers_for_tab(&self, tab_idx: usize) {
@@ -1956,6 +2309,191 @@ impl ConWorkspace {
                 pane_index: focused_pane_index,
                 pane_id: focused_pane_id,
             }),
+        }
+    }
+
+    fn resolve_surface_target_for_tab(
+        &self,
+        tab_idx: usize,
+        target: con_core::SurfaceTarget,
+    ) -> Result<ResolvedSurfaceTarget, ControlError> {
+        let pane_tree = &self.tabs[tab_idx].pane_tree;
+        let surfaces = pane_tree.surface_infos(None);
+        if let Some(surface_id) = target.surface_id {
+            let surface = surfaces
+                .into_iter()
+                .find(|surface| surface.surface_id == surface_id)
+                .ok_or_else(|| {
+                    ControlError::invalid_params(format!(
+                        "Surface id {} is no longer available in tab {}.",
+                        surface_id,
+                        tab_idx + 1
+                    ))
+                })?;
+            if let Some(pane_id) = target.pane_id
+                && pane_id != surface.pane_id
+            {
+                return Err(ControlError::invalid_params(format!(
+                    "Surface id {} belongs to pane id {}, not pane id {}.",
+                    surface_id, surface.pane_id, pane_id
+                )));
+            }
+            if let Some(pane_index) = target.pane_index
+                && pane_index != surface.pane_index
+            {
+                return Err(ControlError::invalid_params(format!(
+                    "Surface id {} belongs to pane {}, not pane {}.",
+                    surface_id, surface.pane_index, pane_index
+                )));
+            }
+            return Ok(ResolvedSurfaceTarget {
+                terminal: surface.terminal,
+                pane_index: surface.pane_index,
+                pane_id: surface.pane_id,
+                surface_index: surface.surface_index,
+                surface_id,
+            });
+        }
+
+        let resolved_pane = self
+            .resolve_pane_target_for_tab(
+                tab_idx,
+                Self::pane_selector_from_target(target.pane_target()),
+            )
+            .map_err(ControlError::invalid_params)?;
+        let surface_id = pane_tree
+            .active_surface_id_for_pane(resolved_pane.pane_id)
+            .ok_or_else(|| {
+                ControlError::invalid_params(format!(
+                    "Pane id {} has no active surface in tab {}.",
+                    resolved_pane.pane_id,
+                    tab_idx + 1
+                ))
+            })?;
+        let surface = pane_tree
+            .surface_infos(Some(resolved_pane.pane_id))
+            .into_iter()
+            .find(|surface| surface.surface_id == surface_id)
+            .ok_or_else(|| {
+                ControlError::invalid_params(format!(
+                    "Surface id {} is no longer available in tab {}.",
+                    surface_id,
+                    tab_idx + 1
+                ))
+            })?;
+        Ok(ResolvedSurfaceTarget {
+            terminal: surface.terminal,
+            pane_index: surface.pane_index,
+            pane_id: surface.pane_id,
+            surface_index: surface.surface_index,
+            surface_id,
+        })
+    }
+
+    fn surface_created_result(
+        &self,
+        tab_idx: usize,
+        pane_id: usize,
+        surface_id: usize,
+        created_pane: bool,
+        terminal: &TerminalPane,
+        cx: &App,
+    ) -> serde_json::Value {
+        let pane_tree = &self.tabs[tab_idx].pane_tree;
+        let pane_index = pane_tree
+            .pane_terminals()
+            .into_iter()
+            .enumerate()
+            .find_map(|(index, (candidate, _))| (candidate == pane_id).then_some(index + 1))
+            .unwrap_or(1);
+        let surface_index = pane_tree
+            .surface_infos(Some(pane_id))
+            .into_iter()
+            .find_map(|surface| (surface.surface_id == surface_id).then_some(surface.surface_index))
+            .unwrap_or(1);
+        json!({
+            "tab_index": tab_idx + 1,
+            "created_pane": created_pane,
+            "pane_index": pane_index,
+            "pane_id": pane_id,
+            "pane_ref": format!("pane:{pane_index}"),
+            "surface_index": surface_index,
+            "surface_id": surface_id,
+            "surface_ref": format!("surface:{surface_index}"),
+            "surface_ready": terminal.surface_ready(cx),
+            "is_alive": terminal.is_alive(cx),
+            "has_shell_integration": terminal.has_shell_integration(cx),
+        })
+    }
+
+    fn surface_wait_ready_result(
+        &self,
+        tab_idx: usize,
+        resolved: &ResolvedSurfaceTarget,
+        status: &str,
+        cx: &App,
+    ) -> serde_json::Value {
+        json!({
+            "status": status,
+            "tab_index": tab_idx + 1,
+            "pane_index": resolved.pane_index,
+            "pane_id": resolved.pane_id,
+            "surface_index": resolved.surface_index,
+            "surface_id": resolved.surface_id,
+            "surface_ready": resolved.terminal.surface_ready(cx),
+            "is_alive": resolved.terminal.is_alive(cx),
+            "has_shell_integration": resolved.terminal.has_shell_integration(cx),
+            "is_busy": resolved.terminal.is_busy(cx),
+        })
+    }
+
+    fn surface_info_value(
+        &self,
+        tab_idx: usize,
+        surface: crate::pane_tree::PaneSurfaceInfo,
+        cx: &App,
+    ) -> serde_json::Value {
+        let title = surface
+            .title
+            .clone()
+            .or_else(|| surface.terminal.title(cx))
+            .unwrap_or_else(|| format!("Surface {}", surface.surface_index));
+        let (cols, rows) = surface.terminal.grid_size(cx);
+        json!({
+            "tab_index": tab_idx + 1,
+            "pane_index": surface.pane_index,
+            "pane_id": surface.pane_id,
+            "pane_ref": format!("pane:{}", surface.pane_index),
+            "surface_index": surface.surface_index,
+            "surface_id": surface.surface_id,
+            "surface_ref": format!("surface:{}", surface.surface_index),
+            "title": title,
+            "cwd": surface.terminal.current_dir(cx),
+            "is_active": surface.is_active,
+            "is_focused_pane": surface.is_focused_pane,
+            "surface_ready": surface.terminal.surface_ready(cx),
+            "is_alive": surface.terminal.is_alive(cx),
+            "has_shell_integration": surface.terminal.has_shell_integration(cx),
+            "is_busy": surface.terminal.is_busy(cx),
+            "rows": rows,
+            "cols": cols,
+            "owner": surface.owner,
+            "close_pane_when_last": surface.close_pane_when_last,
+        })
+    }
+
+    fn surface_key_bytes(key: &str) -> Result<Vec<u8>, ControlError> {
+        match key.trim().to_ascii_lowercase().as_str() {
+            "escape" | "esc" => Ok(vec![0x1b]),
+            "enter" | "return" => Ok(b"\n".to_vec()),
+            "tab" => Ok(b"\t".to_vec()),
+            "backspace" => Ok(vec![0x7f]),
+            "ctrl-c" | "control-c" | "c-c" => Ok(vec![0x03]),
+            "ctrl-d" | "control-d" | "c-d" => Ok(vec![0x04]),
+            other if other.len() == 1 => Ok(other.as_bytes().to_vec()),
+            _ => Err(ControlError::invalid_params(format!(
+                "Unsupported surface key `{key}`. Supported keys: escape, enter, tab, backspace, ctrl-c, ctrl-d."
+            ))),
         }
     }
 
@@ -2560,6 +3098,362 @@ impl ConWorkspace {
                     Err(err) => Self::send_control_result(response_tx, Err(err)),
                 }
             }
+            ControlCommand::TreeGet { tab_index } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => {
+                        let tabs = self
+                        .tabs
+                        .iter()
+                        .enumerate()
+                        .filter(|(idx, _)| tab_index.is_none() || *idx == tab_idx)
+                        .map(|(idx, tab)| {
+                            let panes = tab
+                                .pane_tree
+                                .pane_terminals()
+                                .into_iter()
+                                .enumerate()
+                                .map(|(pane_index, (pane_id, terminal))| {
+                                    let surfaces = tab
+                                        .pane_tree
+                                        .surface_infos(Some(pane_id))
+                                        .into_iter()
+                                        .map(|surface| self.surface_info_value(idx, surface, cx))
+                                        .collect::<Vec<_>>();
+                                    json!({
+                                        "pane_index": pane_index + 1,
+                                        "pane_id": pane_id,
+                                        "pane_ref": format!("pane:{}", pane_index + 1),
+                                        "title": terminal.title(cx).unwrap_or_else(|| format!("Pane {}", pane_index + 1)),
+                                        "is_focused": pane_id == tab.pane_tree.focused_pane_id(),
+                                        "active_surface_id": tab.pane_tree.active_surface_id_for_pane(pane_id),
+                                        "surfaces": surfaces,
+                                    })
+                                })
+                                .collect::<Vec<_>>();
+                            json!({
+                                "tab_index": idx + 1,
+                                "is_active": idx == self.active_tab,
+                                "title": tab.title,
+                                "focused_pane_id": tab.pane_tree.focused_pane_id(),
+                                "panes": panes,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                        Self::send_control_result(
+                            response_tx,
+                            Ok(json!({
+                                "active_tab_index": self.active_tab + 1,
+                                "tabs": tabs,
+                            })),
+                        );
+                    }
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
+            ControlCommand::SurfacesList { tab_index, pane } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => {
+                        let target_pane_id = if pane.pane_index.is_some() || pane.pane_id.is_some()
+                        {
+                            match self.resolve_pane_target_for_tab(
+                                tab_idx,
+                                Self::pane_selector_from_target(pane),
+                            ) {
+                                Ok(resolved) => Some(resolved.pane_id),
+                                Err(err) => {
+                                    Self::send_control_result(
+                                        response_tx,
+                                        Err(ControlError::invalid_params(err)),
+                                    );
+                                    return;
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        let surfaces = self.tabs[tab_idx]
+                            .pane_tree
+                            .surface_infos(target_pane_id)
+                            .into_iter()
+                            .map(|surface| self.surface_info_value(tab_idx, surface, cx))
+                            .collect::<Vec<_>>();
+                        Self::send_control_result(
+                            response_tx,
+                            Ok(json!({
+                                "tab_index": tab_idx + 1,
+                                "surfaces": surfaces,
+                            })),
+                        );
+                    }
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
+            ControlCommand::SurfacesCreate {
+                tab_index,
+                pane,
+                title,
+                command,
+                owner,
+                close_pane_when_last,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => {
+                    self.pending_surface_control_requests.push(
+                        PendingSurfaceControlRequest::Create {
+                            tab_idx,
+                            pane,
+                            title,
+                            command,
+                            owner,
+                            close_pane_when_last,
+                            response_tx,
+                        },
+                    );
+                    self.schedule_pending_create_pane_flush(cx);
+                }
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::SurfacesSplit {
+                tab_index,
+                source,
+                location,
+                title,
+                command,
+                owner,
+                close_pane_when_last,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => {
+                    self.pending_surface_control_requests.push(
+                        PendingSurfaceControlRequest::Split {
+                            tab_idx,
+                            source,
+                            location,
+                            title,
+                            command,
+                            owner,
+                            close_pane_when_last,
+                            response_tx,
+                        },
+                    );
+                    self.schedule_pending_create_pane_flush(cx);
+                }
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::SurfacesFocus { tab_index, target } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => match self.resolve_surface_target_for_tab(tab_idx, target) {
+                        Ok(resolved) => {
+                            let focused = self.tabs[tab_idx]
+                                .pane_tree
+                                .focus_surface(resolved.surface_id);
+                            if tab_idx == self.active_tab {
+                                self.sync_active_tab_native_view_visibility(cx);
+                                self.sync_active_terminal_focus_states(cx);
+                            }
+                            Self::send_control_result(
+                                response_tx,
+                                Ok(json!({
+                                    "status": if focused { "focused" } else { "unchanged" },
+                                    "tab_index": tab_idx + 1,
+                                    "pane_index": resolved.pane_index,
+                                    "pane_id": resolved.pane_id,
+                                    "surface_index": resolved.surface_index,
+                                    "surface_id": resolved.surface_id,
+                                })),
+                            );
+                        }
+                        Err(err) => Self::send_control_result(response_tx, Err(err)),
+                    },
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
+            ControlCommand::SurfacesRename {
+                tab_index,
+                target,
+                title,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => match self.resolve_surface_target_for_tab(tab_idx, target) {
+                    Ok(resolved) => {
+                        self.tabs[tab_idx]
+                            .pane_tree
+                            .rename_surface(resolved.surface_id, Some(title.clone()));
+                        self.sync_sidebar(cx);
+                        Self::send_control_result(
+                            response_tx,
+                            Ok(json!({
+                                "status": "renamed",
+                                "tab_index": tab_idx + 1,
+                                "pane_id": resolved.pane_id,
+                                "surface_id": resolved.surface_id,
+                                "title": title,
+                            })),
+                        );
+                        cx.notify();
+                    }
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                },
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::SurfacesClose {
+                tab_index,
+                target,
+                close_empty_owned_pane,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => {
+                    self.pending_surface_control_requests.push(
+                        PendingSurfaceControlRequest::Close {
+                            tab_idx,
+                            target,
+                            close_empty_owned_pane,
+                            response_tx,
+                        },
+                    );
+                    self.schedule_pending_create_pane_flush(cx);
+                }
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::SurfacesRead {
+                tab_index,
+                target,
+                lines,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => match self.resolve_surface_target_for_tab(tab_idx, target) {
+                    Ok(resolved) => Self::send_control_result(
+                        response_tx,
+                        Ok(json!({
+                            "tab_index": tab_idx + 1,
+                            "pane_id": resolved.pane_id,
+                            "surface_id": resolved.surface_id,
+                            "content": resolved.terminal.recent_lines(lines, cx).join("\n"),
+                        })),
+                    ),
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                },
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::SurfacesSendText {
+                tab_index,
+                target,
+                text,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => match self.resolve_surface_target_for_tab(tab_idx, target) {
+                    Ok(resolved) => {
+                        resolved.terminal.write(text.as_bytes(), cx);
+                        self.record_runtime_event_for_terminal(
+                            tab_idx,
+                            &resolved.terminal,
+                            con_agent::context::PaneRuntimeEvent::RawInput {
+                                keys: text,
+                                input_generation: resolved.terminal.input_generation(cx),
+                            },
+                        );
+                        Self::send_control_result(
+                            response_tx,
+                            Ok(json!({
+                                "status": "sent",
+                                "tab_index": tab_idx + 1,
+                                "pane_id": resolved.pane_id,
+                                "surface_id": resolved.surface_id,
+                            })),
+                        );
+                    }
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                },
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::SurfacesSendKey {
+                tab_index,
+                target,
+                key,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => match self.resolve_surface_target_for_tab(tab_idx, target) {
+                    Ok(resolved) => match Self::surface_key_bytes(&key) {
+                        Ok(bytes) => {
+                            resolved.terminal.write(&bytes, cx);
+                            self.record_runtime_event_for_terminal(
+                                tab_idx,
+                                &resolved.terminal,
+                                con_agent::context::PaneRuntimeEvent::RawInput {
+                                    keys: key,
+                                    input_generation: resolved.terminal.input_generation(cx),
+                                },
+                            );
+                            Self::send_control_result(
+                                response_tx,
+                                Ok(json!({
+                                    "status": "sent",
+                                    "tab_index": tab_idx + 1,
+                                    "pane_id": resolved.pane_id,
+                                    "surface_id": resolved.surface_id,
+                                })),
+                            );
+                        }
+                        Err(err) => Self::send_control_result(response_tx, Err(err)),
+                    },
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                },
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
+            ControlCommand::SurfacesWaitReady {
+                tab_index,
+                target,
+                timeout_secs,
+            } => match self.resolve_control_tab_index(tab_index) {
+                Ok(tab_idx) => {
+                    let timeout = Duration::from_secs(timeout_secs.unwrap_or(10).clamp(1, 300));
+                    let started = std::time::Instant::now();
+                    cx.spawn(async move |this, cx| {
+                        loop {
+                            let result = this.update(cx, |workspace, cx| {
+                                if tab_idx >= workspace.tabs.len() {
+                                    return Some(Err(ControlError::invalid_params(format!(
+                                        "Tab {} is no longer available.",
+                                        tab_idx + 1
+                                    ))));
+                                }
+                                let resolved = match workspace
+                                    .resolve_surface_target_for_tab(tab_idx, target)
+                                {
+                                    Ok(resolved) => resolved,
+                                    Err(err) => return Some(Err(err)),
+                                };
+                                let is_ready = resolved.terminal.surface_ready(cx)
+                                    && resolved.terminal.is_alive(cx);
+                                let timed_out = started.elapsed() >= timeout;
+                                if is_ready || timed_out {
+                                    let status = if is_ready { "ready" } else { "timeout" };
+                                    Some(Ok(workspace
+                                        .surface_wait_ready_result(tab_idx, &resolved, status, cx)))
+                                } else {
+                                    None
+                                }
+                            });
+
+                            match result {
+                                Ok(Some(result)) => {
+                                    Self::send_control_result(response_tx, result);
+                                    return;
+                                }
+                                Ok(None) => {}
+                                Err(err) => {
+                                    Self::send_control_result(
+                                        response_tx,
+                                        Err(ControlError::internal(format!(
+                                            "Failed to wait for surface readiness: {err}"
+                                        ))),
+                                    );
+                                    return;
+                                }
+                            }
+
+                            cx.background_executor()
+                                .timer(Duration::from_millis(50))
+                                .await;
+                        }
+                    })
+                    .detach();
+                }
+                Err(err) => Self::send_control_result(response_tx, Err(err)),
+            },
             ControlCommand::TmuxInspect { tab_index, target } => {
                 match self.resolve_control_tab_index(tab_index) {
                     Ok(tab_idx) => self.spawn_control_pane_query(
@@ -3972,7 +4866,7 @@ impl ConWorkspace {
         let colors = theme_to_ghostty_colors(theme);
         // Update all terminal panes (legacy gets full theme, ghostty gets color scheme)
         for tab in &self.tabs {
-            for terminal in tab.pane_tree.all_terminals() {
+            for terminal in tab.pane_tree.all_surface_terminals() {
                 terminal.set_theme(
                     theme,
                     &colors,
@@ -4006,7 +4900,7 @@ impl ConWorkspace {
             log::error!("Failed to update Ghostty appearance: {}", e);
         }
         for tab in &self.tabs {
-            for terminal in tab.pane_tree.all_terminals() {
+            for terminal in tab.pane_tree.all_surface_terminals() {
                 terminal.sync_window_background_blur(cx);
             }
         }
@@ -4501,7 +5395,6 @@ impl ConWorkspace {
     ) {
         use con_agent::{PaneInfo, PaneQuery, PaneResponse};
 
-        log::info!("[workspace] handle_pane_request entered");
         let pane_tree = &self.tabs[tab_idx].pane_tree;
         let focused_pid = pane_tree.focused_pane_id();
         let all_terminals = pane_tree.all_terminals();
@@ -5617,7 +6510,7 @@ impl ConWorkspace {
         // Hide views and unfocus first, then clear the tabs vector so GhosttyTerminal
         // Drop runs (calling ghostty_surface_free) before cx.quit() exits the process.
         for tab in &self.tabs {
-            for t in tab.pane_tree.all_terminals() {
+            for t in tab.pane_tree.all_surface_terminals() {
                 t.set_focus_state(false, cx);
                 t.set_native_view_visible(false, cx);
             }
@@ -5894,7 +6787,7 @@ impl ConWorkspace {
             .update(cx, |panel, cx| panel.swap_state(incoming, cx));
         self.tabs[old_active].panel_state = outgoing;
 
-        for t in self.tabs[old_active].pane_tree.all_terminals() {
+        for t in self.tabs[old_active].pane_tree.all_surface_terminals() {
             t.set_focus_state(false, cx);
         }
         for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
@@ -5903,7 +6796,7 @@ impl ConWorkspace {
         self.sync_active_tab_native_view_visibility(cx);
         let old_terminals: Vec<TerminalPane> = self.tabs[old_active]
             .pane_tree
-            .all_terminals()
+            .all_surface_terminals()
             .into_iter()
             .cloned()
             .collect();
@@ -5953,14 +6846,20 @@ impl ConWorkspace {
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
         if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
-            let (closing, surviving_terminals, new_focus) = {
+            let (closing_terminals, surviving_terminals, new_focus) = {
                 let tab = &mut self.tabs[self.active_tab];
-                let closing = tab.pane_tree.focused_terminal().clone();
+                let pane_id = tab.pane_tree.focused_pane_id();
+                let closing_terminals = tab
+                    .pane_tree
+                    .surface_infos(Some(pane_id))
+                    .into_iter()
+                    .map(|surface| surface.terminal)
+                    .collect::<Vec<_>>();
                 tab.pane_tree.close_focused();
                 let surviving_terminals: Vec<TerminalPane> =
                     tab.pane_tree.all_terminals().into_iter().cloned().collect();
                 let new_focus = tab.pane_tree.focused_terminal().clone();
-                (closing, surviving_terminals, new_focus)
+                (closing_terminals, surviving_terminals, new_focus)
             };
             #[cfg(target_os = "macos")]
             self.mark_active_tab_terminal_native_layout_pending(cx);
@@ -5974,7 +6873,9 @@ impl ConWorkspace {
             new_focus.focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
             cx.on_next_frame(window, move |_workspace, _window, cx| {
-                closing.shutdown_surface(cx);
+                for terminal in &closing_terminals {
+                    terminal.shutdown_surface(cx);
+                }
                 for terminal in &surviving_terminals {
                     terminal.notify(cx);
                 }
@@ -5996,7 +6897,7 @@ impl ConWorkspace {
         }
         let closing_terminals: Vec<TerminalPane> = self.tabs[index]
             .pane_tree
-            .all_terminals()
+            .all_surface_terminals()
             .into_iter()
             .cloned()
             .collect();
@@ -6007,6 +6908,7 @@ impl ConWorkspace {
         }
         let was_active = index == self.active_tab;
         self.reindex_pending_control_agent_requests_after_tab_close(index);
+        self.reindex_pending_surface_control_requests_after_tab_close(index);
         let removed = self.tabs.remove(index);
         // Drop the closed tab's cached AI summary so a future tab
         // assigned the same summary_id (which won't happen, since
@@ -6110,11 +7012,25 @@ impl ConWorkspace {
             );
         }
 
+        for request in std::mem::take(&mut self.pending_surface_control_requests) {
+            let response_tx = match request {
+                PendingSurfaceControlRequest::Create { response_tx, .. }
+                | PendingSurfaceControlRequest::Split { response_tx, .. }
+                | PendingSurfaceControlRequest::Close { response_tx, .. } => response_tx,
+            };
+            Self::send_control_result(
+                response_tx,
+                Err(ControlError::internal(
+                    "window closed while a surface control request was pending".to_string(),
+                )),
+            );
+        }
+
         for tab in &self.tabs {
             let conv = tab.session.conversation();
             let _ = conv.lock().save();
 
-            for terminal in tab.pane_tree.all_terminals() {
+            for terminal in tab.pane_tree.all_surface_terminals() {
                 terminal.shutdown_surface(cx);
             }
         }
@@ -6142,6 +7058,110 @@ impl ConWorkspace {
             shifted.insert(next_idx, pending);
         }
         self.pending_control_agent_requests = shifted;
+    }
+
+    fn reindex_pending_surface_control_requests_after_tab_close(&mut self, closed_tab_idx: usize) {
+        let mut shifted = Vec::new();
+        for request in std::mem::take(&mut self.pending_surface_control_requests) {
+            match request {
+                PendingSurfaceControlRequest::Create {
+                    tab_idx,
+                    pane,
+                    title,
+                    command,
+                    owner,
+                    close_pane_when_last,
+                    response_tx,
+                } => {
+                    if tab_idx == closed_tab_idx {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::internal(format!(
+                                "Tab {} was closed while surfaces.create was pending",
+                                closed_tab_idx + 1
+                            ))),
+                        );
+                        continue;
+                    }
+                    shifted.push(PendingSurfaceControlRequest::Create {
+                        tab_idx: if tab_idx > closed_tab_idx {
+                            tab_idx - 1
+                        } else {
+                            tab_idx
+                        },
+                        pane,
+                        title,
+                        command,
+                        owner,
+                        close_pane_when_last,
+                        response_tx,
+                    });
+                }
+                PendingSurfaceControlRequest::Split {
+                    tab_idx,
+                    source,
+                    location,
+                    title,
+                    command,
+                    owner,
+                    close_pane_when_last,
+                    response_tx,
+                } => {
+                    if tab_idx == closed_tab_idx {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::internal(format!(
+                                "Tab {} was closed while surfaces.split was pending",
+                                closed_tab_idx + 1
+                            ))),
+                        );
+                        continue;
+                    }
+                    shifted.push(PendingSurfaceControlRequest::Split {
+                        tab_idx: if tab_idx > closed_tab_idx {
+                            tab_idx - 1
+                        } else {
+                            tab_idx
+                        },
+                        source,
+                        location,
+                        title,
+                        command,
+                        owner,
+                        close_pane_when_last,
+                        response_tx,
+                    });
+                }
+                PendingSurfaceControlRequest::Close {
+                    tab_idx,
+                    target,
+                    close_empty_owned_pane,
+                    response_tx,
+                } => {
+                    if tab_idx == closed_tab_idx {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::internal(format!(
+                                "Tab {} was closed while surfaces.close was pending",
+                                closed_tab_idx + 1
+                            ))),
+                        );
+                        continue;
+                    }
+                    shifted.push(PendingSurfaceControlRequest::Close {
+                        tab_idx: if tab_idx > closed_tab_idx {
+                            tab_idx - 1
+                        } else {
+                            tab_idx
+                        },
+                        target,
+                        close_empty_owned_pane,
+                        response_tx,
+                    });
+                }
+            }
+        }
+        self.pending_surface_control_requests = shifted;
     }
 
     fn record_shell_command(
@@ -6898,13 +7918,13 @@ impl ConWorkspace {
         let mut sync_visibility_after_close = false;
         {
             let pane_tree = &mut self.tabs[tab_idx].pane_tree;
-            let closing = pane_tree
-                .pane_terminals()
+            let closing_terminals = pane_tree
+                .surface_infos(Some(pane_id))
                 .into_iter()
-                .find(|(candidate_pane_id, _)| *candidate_pane_id == pane_id)
-                .map(|(_, terminal)| terminal);
+                .map(|surface| surface.terminal)
+                .collect::<Vec<_>>();
 
-            if closing.is_none() || !pane_tree.close_pane(pane_id) {
+            if closing_terminals.is_empty() || !pane_tree.close_pane(pane_id) {
                 return false;
             }
 
@@ -6919,16 +7939,16 @@ impl ConWorkspace {
                 sync_visibility_after_close = true;
             }
 
-            if let Some(closing) = closing {
-                cx.on_next_frame(window, move |_workspace, _window, cx| {
-                    closing.shutdown_surface(cx);
-                    if tab_is_visible {
-                        for terminal in &surviving_terminals {
-                            terminal.notify(cx);
-                        }
+            cx.on_next_frame(window, move |_workspace, _window, cx| {
+                for terminal in &closing_terminals {
+                    terminal.shutdown_surface(cx);
+                }
+                if tab_is_visible {
+                    for terminal in &surviving_terminals {
+                        terminal.notify(cx);
                     }
-                });
-            }
+                }
+            });
 
             if tab_idx == self.active_tab {
                 focus_after_close = Some(pane_tree.focused_terminal().clone());
@@ -6975,12 +7995,12 @@ impl ConWorkspace {
             terminal.ensure_surface(window, cx);
         }
         self.sync_tab_native_view_visibility(index, true, cx);
-        for terminal in self.tabs[old_active].pane_tree.all_terminals() {
+        for terminal in self.tabs[old_active].pane_tree.all_surface_terminals() {
             terminal.set_focus_state(false, cx);
         }
         let old_terminals: Vec<TerminalPane> = self.tabs[old_active]
             .pane_tree
-            .all_terminals()
+            .all_surface_terminals()
             .into_iter()
             .cloned()
             .collect();
@@ -7078,6 +8098,33 @@ impl ConWorkspace {
         self.sync_active_terminal_focus_states(cx);
     }
 
+    fn focus_surface_in_active_tab(
+        &mut self,
+        surface_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+        let changed = self.tabs[self.active_tab]
+            .pane_tree
+            .focus_surface(surface_id);
+        if !changed {
+            return;
+        }
+        let terminal = self.tabs[self.active_tab]
+            .pane_tree
+            .focused_terminal()
+            .clone();
+        terminal.ensure_surface(window, cx);
+        self.sync_active_tab_native_view_visibility(cx);
+        terminal.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
     fn restore_terminal_focus_after_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.has_active_tab() {
             return;
@@ -7109,7 +8156,7 @@ impl ConWorkspace {
         } else {
             // Hide all tabs' views for modal z-order
             for tab in &self.tabs {
-                for terminal in tab.pane_tree.all_terminals() {
+                for terminal in tab.pane_tree.all_surface_terminals() {
                     terminal.set_native_view_visible(false, cx);
                 }
             }
@@ -7142,31 +8189,55 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Find which tab contains the dead pane (may not be the active tab).
+        // Find which tab contains the dead terminal surface (may not be the active tab).
         let entity_id = entity.entity_id();
         let tab_idx = self
             .tabs
             .iter()
             .position(|tab| tab.pane_tree.pane_id_for_entity(entity_id).is_some());
         let Some(tab_idx) = tab_idx else { return };
-        if let Some(terminal) = self.tabs[tab_idx]
+
+        let surface = self.tabs[tab_idx]
             .pane_tree
-            .all_terminals()
+            .surface_infos(None)
             .into_iter()
-            .find(|terminal| terminal.entity_id() == entity_id)
-        {
-            self.record_runtime_event_for_terminal(
-                tab_idx,
-                &terminal,
-                con_agent::context::PaneRuntimeEvent::ProcessExited,
-            );
+            .find(|surface| surface.terminal.entity_id() == entity_id);
+        let Some(surface) = surface else { return };
+        self.record_runtime_event_for_terminal(
+            tab_idx,
+            &surface.terminal,
+            con_agent::context::PaneRuntimeEvent::ProcessExited,
+        );
+
+        let pane_surface_count = self.tabs[tab_idx]
+            .pane_tree
+            .surface_infos(Some(surface.pane_id))
+            .len();
+        if pane_surface_count > 1 {
+            let should_focus_replacement =
+                tab_idx == self.active_tab && surface.is_active && surface.is_focused_pane;
+            if let Some((_pane_id, terminal)) = self.tabs[tab_idx]
+                .pane_tree
+                .close_surface(surface.surface_id)
+            {
+                terminal.set_native_view_visible(false, cx);
+                terminal.shutdown_surface(cx);
+            }
+            if tab_idx == self.active_tab {
+                self.sync_active_tab_native_view_visibility(cx);
+                if should_focus_replacement {
+                    let replacement = self.tabs[tab_idx].pane_tree.focused_terminal().clone();
+                    replacement.focus(window, cx);
+                }
+                self.sync_active_terminal_focus_states(cx);
+            }
+            self.save_session(cx);
+            cx.notify();
+            return;
         }
 
         if self.tabs[tab_idx].pane_tree.pane_count() > 1 {
-            let Some(pane_id) = self.tabs[tab_idx].pane_tree.pane_id_for_entity(entity_id) else {
-                return;
-            };
-            let _ = self.close_pane_in_tab(tab_idx, pane_id, window, cx);
+            let _ = self.close_pane_in_tab(tab_idx, surface.pane_id, window, cx);
         } else if self.tabs.len() > 1 {
             // Last pane in this tab — close the tab.
             self.close_tab_by_index(tab_idx, window, cx);
@@ -7233,10 +8304,11 @@ impl ConWorkspace {
 
         let origin_terminal = self.tabs[tab_idx]
             .pane_tree
-            .all_terminals()
+            .surface_infos(Some(origin_pane_id))
             .into_iter()
-            .find(|terminal| terminal.entity_id() == entity_id)
-            .cloned();
+            .find_map(|surface| {
+                (surface.terminal.entity_id() == entity_id).then_some(surface.terminal)
+            });
         let cwd = origin_terminal
             .as_ref()
             .and_then(|terminal| terminal.current_dir(cx));
@@ -7479,9 +8551,17 @@ impl Render for ConWorkspace {
                     *guard = Some((split_id, start_pos));
                 }
             };
+            let workspace = cx.weak_entity();
+            let focus_surface_cb = move |surface_id: usize, window: &mut Window, cx: &mut App| {
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.focus_surface_in_active_tab(surface_id, window, cx);
+                    });
+                }
+            };
             self.tabs[self.active_tab]
                 .pane_tree
-                .render(begin_drag_cb, cx)
+                .render(begin_drag_cb, focus_surface_cb, cx)
         };
 
         let mut terminal_area = div()

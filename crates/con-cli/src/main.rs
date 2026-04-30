@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use con_agent::{PaneCreateLocation, TmuxExecLocation};
 use con_core::{
-    ControlCommand, JSON_RPC_VERSION, JsonRpcRequest, JsonRpcResponse, PaneTarget,
+    ControlCommand, JSON_RPC_VERSION, JsonRpcRequest, JsonRpcResponse, PaneTarget, SurfaceTarget,
     control_socket_path,
 };
 use serde_json::{Value, json};
@@ -33,6 +33,11 @@ enum Command {
         #[command(subcommand)]
         command: PanesCommand,
     },
+    Tree(TabArgs),
+    Surfaces {
+        #[command(subcommand)]
+        command: SurfacesCommand,
+    },
     Tmux {
         #[command(subcommand)]
         command: TmuxCommand,
@@ -59,6 +64,20 @@ enum PanesCommand {
     Create(PaneCreateArgs),
     Wait(PaneWaitArgs),
     ProbeShell(PaneTargetArgs),
+}
+
+#[derive(Subcommand)]
+enum SurfacesCommand {
+    List(PaneTargetArgs),
+    Create(SurfaceCreateArgs),
+    Split(SurfaceSplitArgs),
+    Focus(SurfaceTargetArgs),
+    Rename(SurfaceRenameArgs),
+    Close(SurfaceCloseArgs),
+    Read(SurfaceReadArgs),
+    SendText(SurfaceSendTextArgs),
+    SendKey(SurfaceSendKeyArgs),
+    WaitReady(SurfaceWaitReadyArgs),
 }
 
 #[derive(Subcommand)]
@@ -96,6 +115,28 @@ impl PaneTargetArgs {
     fn target(&self) -> PaneTarget {
         PaneTarget::new(self.pane_index, self.pane_id)
     }
+}
+
+#[derive(Args, Clone, Default)]
+struct SurfaceTargetArgs {
+    #[command(flatten)]
+    pane: PaneTargetArgs,
+    #[arg(long, value_name = "ID")]
+    surface_id: Option<usize>,
+}
+
+impl SurfaceTargetArgs {
+    fn target(&self) -> SurfaceTarget {
+        SurfaceTarget::new(self.pane.pane_index, self.pane.pane_id, self.surface_id)
+    }
+}
+
+#[derive(Args, Clone)]
+struct SurfaceWaitReadyArgs {
+    #[command(flatten)]
+    target: SurfaceTargetArgs,
+    #[arg(long)]
+    timeout: Option<u64>,
 }
 
 #[derive(Args, Clone)]
@@ -155,6 +196,76 @@ struct PaneWaitArgs {
     timeout: Option<u64>,
     #[arg(long)]
     pattern: Option<String>,
+}
+
+#[derive(Args, Clone)]
+struct SurfaceCreateArgs {
+    #[command(flatten)]
+    pane: PaneTargetArgs,
+    #[arg(long)]
+    title: Option<String>,
+    #[arg(long)]
+    command: Option<String>,
+    #[arg(long)]
+    owner: Option<String>,
+    #[arg(long)]
+    close_pane_when_last: bool,
+}
+
+#[derive(Args, Clone)]
+struct SurfaceSplitArgs {
+    #[command(flatten)]
+    source: SurfaceTargetArgs,
+    #[arg(long, value_enum, default_value_t = PaneCreateLocationArg::Right)]
+    location: PaneCreateLocationArg,
+    #[arg(long)]
+    title: Option<String>,
+    #[arg(long)]
+    command: Option<String>,
+    #[arg(long)]
+    owner: Option<String>,
+    #[arg(long = "keep-pane-when-last", action = clap::ArgAction::SetFalse, default_value_t = true)]
+    close_pane_when_last: bool,
+}
+
+#[derive(Args, Clone)]
+struct SurfaceRenameArgs {
+    #[command(flatten)]
+    target: SurfaceTargetArgs,
+    #[arg(required = true)]
+    title: String,
+}
+
+#[derive(Args, Clone)]
+struct SurfaceCloseArgs {
+    #[command(flatten)]
+    target: SurfaceTargetArgs,
+    #[arg(long)]
+    close_empty_owned_pane: bool,
+}
+
+#[derive(Args, Clone)]
+struct SurfaceReadArgs {
+    #[command(flatten)]
+    target: SurfaceTargetArgs,
+    #[arg(long, default_value_t = 80)]
+    lines: usize,
+}
+
+#[derive(Args, Clone)]
+struct SurfaceSendTextArgs {
+    #[command(flatten)]
+    target: SurfaceTargetArgs,
+    #[arg(required = true, trailing_var_arg = true)]
+    text: Vec<String>,
+}
+
+#[derive(Args, Clone)]
+struct SurfaceSendKeyArgs {
+    #[command(flatten)]
+    target: SurfaceTargetArgs,
+    #[arg(required = true)]
+    key: String,
 }
 
 #[derive(Args, Clone)]
@@ -335,6 +446,132 @@ fn main() -> Result<()> {
                     },
                 )?;
                 print_result(&result, cli.json, render_pretty_json)?;
+            }
+        },
+        Command::Tree(args) => {
+            let result = send_command(
+                &socket_path,
+                ControlCommand::TreeGet {
+                    tab_index: args.tab,
+                },
+            )?;
+            print_result(&result, cli.json, render_tree)?;
+        }
+        Command::Surfaces { command } => match command {
+            SurfacesCommand::List(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesList {
+                        tab_index: args.tab.tab,
+                        pane: args.target(),
+                    },
+                )?;
+                print_result(&result, cli.json, render_surfaces_list)?;
+            }
+            SurfacesCommand::Create(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesCreate {
+                        tab_index: args.pane.tab.tab,
+                        pane: args.pane.target(),
+                        title: args.title,
+                        command: args.command,
+                        owner: args.owner,
+                        close_pane_when_last: args.close_pane_when_last,
+                    },
+                )?;
+                print_result(&result, cli.json, render_surface_created)?;
+            }
+            SurfacesCommand::Split(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesSplit {
+                        tab_index: args.source.pane.tab.tab,
+                        source: args.source.target(),
+                        location: args.location.into(),
+                        title: args.title,
+                        command: args.command,
+                        owner: args.owner,
+                        close_pane_when_last: args.close_pane_when_last,
+                    },
+                )?;
+                print_result(&result, cli.json, render_surface_created)?;
+            }
+            SurfacesCommand::Focus(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesFocus {
+                        tab_index: args.pane.tab.tab,
+                        target: args.target(),
+                    },
+                )?;
+                print_result(&result, cli.json, render_status_only)?;
+            }
+            SurfacesCommand::Rename(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesRename {
+                        tab_index: args.target.pane.tab.tab,
+                        target: args.target.target(),
+                        title: args.title,
+                    },
+                )?;
+                print_result(&result, cli.json, render_status_only)?;
+            }
+            SurfacesCommand::Close(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesClose {
+                        tab_index: args.target.pane.tab.tab,
+                        target: args.target.target(),
+                        close_empty_owned_pane: args.close_empty_owned_pane,
+                    },
+                )?;
+                print_result(&result, cli.json, render_status_only)?;
+            }
+            SurfacesCommand::Read(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesRead {
+                        tab_index: args.target.pane.tab.tab,
+                        target: args.target.target(),
+                        lines: args.lines,
+                    },
+                )?;
+                print_result(&result, cli.json, render_content_only)?;
+            }
+            SurfacesCommand::SendText(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesSendText {
+                        tab_index: args.target.pane.tab.tab,
+                        target: args.target.target(),
+                        text: join_words(args.text),
+                    },
+                )?;
+                print_result(&result, cli.json, render_status_only)?;
+            }
+            SurfacesCommand::SendKey(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesSendKey {
+                        tab_index: args.target.pane.tab.tab,
+                        target: args.target.target(),
+                        key: args.key,
+                    },
+                )?;
+                print_result(&result, cli.json, render_status_only)?;
+            }
+            SurfacesCommand::WaitReady(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesWaitReady {
+                        tab_index: args.target.pane.tab.tab,
+                        target: args.target.target(),
+                        timeout_secs: args.timeout,
+                    },
+                )?;
+                print_result(&result, cli.json, render_surface_wait)?;
             }
         },
         Command::Tmux { command } => match command {
@@ -679,6 +916,77 @@ fn render_panes_list(value: &Value) -> Result<()> {
     Ok(())
 }
 
+fn render_tree(value: &Value) -> Result<()> {
+    let tabs = value
+        .get("tabs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("missing tabs array"))?;
+    for tab in tabs {
+        let marker = if tab["is_active"].as_bool().unwrap_or(false) {
+            "*"
+        } else {
+            " "
+        };
+        let tab_index = tab["tab_index"].as_u64().unwrap_or(0);
+        let title = tab["title"].as_str().unwrap_or("Untitled");
+        println!("{marker} tab {tab_index}  {title}");
+        let panes = tab
+            .get("panes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for pane in panes {
+            let pane_marker = if pane["is_focused"].as_bool().unwrap_or(false) {
+                "*"
+            } else {
+                " "
+            };
+            let pane_index = pane["pane_index"].as_u64().unwrap_or(0);
+            let pane_id = pane["pane_id"].as_u64().unwrap_or(0);
+            let active_surface_id = pane["active_surface_id"].as_u64().unwrap_or(0);
+            println!(
+                "  {pane_marker} pane {pane_index:<3} id={pane_id:<3} active_surface={active_surface_id}"
+            );
+            if let Some(surfaces) = pane.get("surfaces").and_then(Value::as_array) {
+                render_surface_rows(surfaces, "      ");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn render_surfaces_list(value: &Value) -> Result<()> {
+    let surfaces = value
+        .get("surfaces")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("missing surfaces array"))?;
+    render_surface_rows(surfaces, "");
+    Ok(())
+}
+
+fn render_surface_rows(surfaces: &[Value], prefix: &str) {
+    for surface in surfaces {
+        let marker = if surface["is_active"].as_bool().unwrap_or(false) {
+            "*"
+        } else {
+            " "
+        };
+        let pane_index = surface["pane_index"].as_u64().unwrap_or(0);
+        let pane_id = surface["pane_id"].as_u64().unwrap_or(0);
+        let surface_index = surface["surface_index"].as_u64().unwrap_or(0);
+        let surface_id = surface["surface_id"].as_u64().unwrap_or(0);
+        let title = surface["title"].as_str().unwrap_or("Surface");
+        let cwd = surface["cwd"].as_str().unwrap_or("");
+        let owner = surface["owner"].as_str().unwrap_or("");
+        println!(
+            "{prefix}{marker} surface {surface_index:<3} id={surface_id:<3} pane={pane_index} pane_id={pane_id} owner={owner} cwd={cwd}"
+        );
+        if !title.is_empty() {
+            println!("{prefix}    title: {title}");
+        }
+    }
+}
+
 fn render_content_only(value: &Value) -> Result<()> {
     print!("{}", value["content"].as_str().unwrap_or(""));
     Ok(())
@@ -715,6 +1023,24 @@ fn render_create_result(value: &Value) -> Result<()> {
     Ok(())
 }
 
+fn render_surface_created(value: &Value) -> Result<()> {
+    let created_pane = value["created_pane"].as_bool().unwrap_or(false);
+    let noun = if created_pane {
+        "Created pane surface"
+    } else {
+        "Created surface"
+    };
+    println!(
+        "{noun} {} (id {}) in pane {} (id {}) on tab {}",
+        value["surface_index"].as_u64().unwrap_or(0),
+        value["surface_id"].as_u64().unwrap_or(0),
+        value["pane_index"].as_u64().unwrap_or(0),
+        value["pane_id"].as_u64().unwrap_or(0),
+        value["tab_index"].as_u64().unwrap_or(0)
+    );
+    Ok(())
+}
+
 fn render_wait_result(value: &Value) -> Result<()> {
     let status = value["status"].as_str().unwrap_or("unknown");
     println!("status: {status}");
@@ -723,6 +1049,20 @@ fn render_wait_result(value: &Value) -> Result<()> {
         println!();
         print!("{output}");
     }
+    Ok(())
+}
+
+fn render_surface_wait(value: &Value) -> Result<()> {
+    println!(
+        "surface {} in pane {}: status={} ready={} alive={} shell={} busy={}",
+        value["surface_id"].as_u64().unwrap_or(0),
+        value["pane_id"].as_u64().unwrap_or(0),
+        value["status"].as_str().unwrap_or("unknown"),
+        value["surface_ready"].as_bool().unwrap_or(false),
+        value["is_alive"].as_bool().unwrap_or(false),
+        value["has_shell_integration"].as_bool().unwrap_or(false),
+        value["is_busy"].as_bool().unwrap_or(false)
+    );
     Ok(())
 }
 
