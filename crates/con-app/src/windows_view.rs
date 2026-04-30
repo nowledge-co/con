@@ -956,6 +956,17 @@ impl GhosttyView {
         };
         let keystroke = &event.keystroke;
 
+        // Pane zoom. Keep the Alt+Shift+Enter app shortcut out of
+        // xterm modifier encoding so GPUI can dispatch TogglePaneZoom.
+        if keystroke.modifiers.alt
+            && keystroke.modifiers.shift
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.platform
+            && matches!(keystroke.key.as_str(), "enter" | "return")
+        {
+            return false;
+        }
+
         // App-level tab selection. Let GPUI dispatch SelectTab1..9
         // instead of forwarding Ctrl+digit to the shell.
         if keystroke.modifiers.control

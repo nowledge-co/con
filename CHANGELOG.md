@@ -18,6 +18,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Keyboard**
 
 - Added direct tab selection shortcuts: Cmd+1 through Cmd+9 on macOS, Ctrl+1 through Ctrl+9 on Windows and Linux.
+- Added pane zoom for the focused split pane. Use Cmd+Shift+Enter on macOS or Alt+Shift+Enter on Windows and Linux to let one pane fill the tab's terminal area, then press it again to restore the split layout.
 - Added macOS window cycling with Cmd+Backtick and Cmd+Shift+Backtick.
 - Fixed macOS Cmd+Backtick window cycling when the terminal surface has focus.
 - Fixed macOS Cmd+Backtick window cycling at the native window-event layer so it works even when the embedded terminal NSView is first responder.

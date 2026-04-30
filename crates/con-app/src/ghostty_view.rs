@@ -868,6 +868,8 @@ impl GhosttyView {
                 "`" | "~" | ">" | "<" => return false,
                 // Splits (cmd-d, cmd-shift-d)
                 "d" => return false,
+                // Pane zoom (cmd-shift-enter)
+                "enter" | "return" if keystroke.modifiers.shift => return false,
                 // Agent & input
                 "l" | "i" => return false,
                 // Edit menu (handled by OS)

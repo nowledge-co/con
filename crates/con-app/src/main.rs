@@ -95,6 +95,7 @@ actions!(
         ToggleInputBar,
         CloseTab,
         ClosePane,
+        TogglePaneZoom,
         SplitRight,
         SplitDown,
         FocusInput,
@@ -806,6 +807,7 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
         KeyBinding::new(&kb.close_tab, CloseTab, None),
         KeyBinding::new(&kb.close_pane, ClosePane, None),
+        KeyBinding::new(&kb.toggle_pane_zoom, TogglePaneZoom, None),
         KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
         KeyBinding::new(
             &kb.command_palette,
@@ -837,6 +839,7 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, Some("Input")),
         KeyBinding::new(&kb.close_tab, CloseTab, Some("Input")),
         KeyBinding::new(&kb.close_pane, ClosePane, Some("Input")),
+        KeyBinding::new(&kb.toggle_pane_zoom, TogglePaneZoom, Some("Input")),
         KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, Some("Input")),
         KeyBinding::new(
             &kb.command_palette,
@@ -1186,6 +1189,7 @@ fn main() {
                     MenuItem::action("New Tab", NewTab),
                     MenuItem::action("Close Tab", CloseTab),
                     MenuItem::action("Close Pane", ClosePane),
+                    MenuItem::action("Toggle Pane Zoom", TogglePaneZoom),
                     MenuItem::separator(),
                     MenuItem::action("Split Right", SplitRight),
                     MenuItem::action("Split Down", SplitDown),

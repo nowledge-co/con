@@ -21,6 +21,12 @@ That is not a temporary compromise. It matches Ghostty's own host-side architect
 
 That split is intentional. Terminal correctness stays in Ghostty. Product intelligence stays in con.
 
+Pane zoom follows the same boundary. Zooming a pane is a Con layout state,
+not a terminal mutation: every split surface stays alive, but the active
+tab renders and shows only the focused pane until the zoom shortcut is
+pressed again. This keeps it equivalent to tmux-style zoom while avoiding
+fake resize, detach, or process lifecycle events.
+
 ## Runtime stack
 
 ```text

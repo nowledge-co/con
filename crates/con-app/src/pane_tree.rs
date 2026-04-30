@@ -53,6 +53,7 @@ pub struct DragState {
 pub struct PaneTree {
     root: PaneNode,
     focused_pane_id: PaneId,
+    zoomed_pane_id: Option<PaneId>,
     next_id: PaneId,
     next_split_id: SplitId,
     /// Active divider drag, if any
@@ -64,6 +65,7 @@ impl PaneTree {
         Self {
             root: PaneNode::Leaf { id: 0, terminal },
             focused_pane_id: 0,
+            zoomed_pane_id: None,
             next_id: 1,
             next_split_id: 0,
             dragging: None,
@@ -89,6 +91,7 @@ impl PaneTree {
         Self {
             root,
             focused_pane_id,
+            zoomed_pane_id: None,
             next_id,
             next_split_id,
             dragging: None,
@@ -137,6 +140,7 @@ impl PaneTree {
             new_split_id,
         );
         self.focused_pane_id = new_id;
+        self.zoomed_pane_id = None;
     }
 
     pub fn split_pane_with_placement(
@@ -160,6 +164,7 @@ impl PaneTree {
             new_split_id,
         ) {
             self.focused_pane_id = new_id;
+            self.zoomed_pane_id = None;
         }
     }
 
@@ -185,6 +190,12 @@ impl PaneTree {
         if Self::find_terminal(&self.root, self.focused_pane_id).is_none() {
             self.focused_pane_id = Self::first_pane_id(&self.root);
         }
+        if self
+            .zoomed_pane_id
+            .is_some_and(|zoomed_id| Self::find_terminal(&self.root, zoomed_id).is_none())
+        {
+            self.zoomed_pane_id = None;
+        }
         true
     }
 
@@ -193,6 +204,9 @@ impl PaneTree {
     pub fn focus(&mut self, pane_id: PaneId) {
         if Self::find_terminal(&self.root, pane_id).is_some() {
             self.focused_pane_id = pane_id;
+            if self.zoomed_pane_id.is_some() {
+                self.zoomed_pane_id = Some(pane_id);
+            }
         }
     }
 
@@ -200,6 +214,9 @@ impl PaneTree {
     pub fn sync_focus(&mut self, window: &Window, cx: &App) {
         if let Some(id) = Self::find_focused_pane(&self.root, window, cx) {
             self.focused_pane_id = id;
+            if self.zoomed_pane_id.is_some() {
+                self.zoomed_pane_id = Some(id);
+            }
         }
     }
 
@@ -232,6 +249,24 @@ impl PaneTree {
     /// Number of panes
     pub fn pane_count(&self) -> usize {
         Self::count_leaves(&self.root)
+    }
+
+    pub fn zoomed_pane_id(&self) -> Option<PaneId> {
+        self.zoomed_pane_id
+    }
+
+    pub fn toggle_zoom_focused(&mut self) -> bool {
+        if self.pane_count() <= 1 {
+            self.zoomed_pane_id = None;
+            return false;
+        }
+
+        self.zoomed_pane_id = if self.zoomed_pane_id == Some(self.focused_pane_id) {
+            None
+        } else {
+            Some(self.focused_pane_id)
+        };
+        true
     }
 
     /// Start a drag on the given split divider.
@@ -277,6 +312,15 @@ impl PaneTree {
 
     /// Render the pane tree as a GPUI element.
     pub fn render(&self, begin_drag_cb: impl Fn(SplitId, f32) + 'static, cx: &App) -> AnyElement {
+        if let Some(zoomed_id) = self.zoomed_pane_id {
+            if let Some(terminal) = Self::find_terminal(&self.root, zoomed_id) {
+                return div()
+                    .size_full()
+                    .child(terminal.render_child())
+                    .into_any_element();
+            }
+        }
+
         Self::render_node(
             &self.root,
             self.focused_pane_id,

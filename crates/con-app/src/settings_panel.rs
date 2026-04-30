@@ -2153,6 +2153,7 @@ impl SettingsPanel {
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
             "close_pane" => self.config.keybindings.close_pane = binding,
+            "toggle_pane_zoom" => self.config.keybindings.toggle_pane_zoom = binding,
             "next_tab" => self.config.keybindings.next_tab = binding,
             "previous_tab" => self.config.keybindings.previous_tab = binding,
             "settings" => self.config.keybindings.settings = binding,
@@ -2179,6 +2180,7 @@ impl SettingsPanel {
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
             "close_pane" => &self.config.keybindings.close_pane,
+            "toggle_pane_zoom" => &self.config.keybindings.toggle_pane_zoom,
             "next_tab" => &self.config.keybindings.next_tab,
             "previous_tab" => &self.config.keybindings.previous_tab,
             "settings" => &self.config.keybindings.settings,
@@ -4202,6 +4204,7 @@ impl SettingsPanel {
         let pane_keys: &[(&str, &str)] = &[
             ("Split Right", "split_right"),
             ("Split Down", "split_down"),
+            ("Toggle Pane Zoom", "toggle_pane_zoom"),
             ("Close Pane", "close_pane"),
         ];
 
