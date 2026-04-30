@@ -95,6 +95,8 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     native_scroll_surface_frame: Option<(f64, f64, f64, f64)>,
     #[cfg(target_os = "macos")]
+    native_backing_color: Option<(u8, u8, u8, u8)>,
+    #[cfg(target_os = "macos")]
     pending_native_layout: bool,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
@@ -158,6 +160,8 @@ impl GhosttyView {
             native_scroll_y: None,
             #[cfg(target_os = "macos")]
             native_scroll_surface_frame: None,
+            #[cfg(target_os = "macos")]
+            native_backing_color: None,
             #[cfg(target_os = "macos")]
             pending_native_layout: false,
             initialized: false,
@@ -344,6 +348,7 @@ impl GhosttyView {
         self.native_scroll_document_frame = None;
         self.native_scroll_y = None;
         self.native_scroll_surface_frame = None;
+        self.native_backing_color = None;
         self.pending_native_layout = false;
     }
 
@@ -453,7 +458,7 @@ impl GhosttyView {
                 setLayerContentsRedrawPolicy:NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE
             ];
             let content_view: id = msg_send![host, contentView];
-            let _: () = msg_send![content_view, setClipsToBounds:NO];
+            let _: () = msg_send![content_view, setClipsToBounds:YES];
             let _: () = msg_send![host, setHidden:YES];
             let _: () = msg_send![
                 parent_nsview,
@@ -500,6 +505,7 @@ impl GhosttyView {
                 self.nsview = Some(nsview);
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
+                self.sync_native_backing_background();
                 self.sync_window_background_blur();
                 // Force update_frame() to position the newly-created host.
                 // If a previous layout recorded the same bounds while the
@@ -532,6 +538,63 @@ impl GhosttyView {
                 self.detach_host_view();
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn native_backing_rgba(&self) -> Option<(u8, u8, u8, u8)> {
+        let rgb = self.app.background_rgb()?;
+        let alpha = self.app.background_opacity().unwrap_or(1.0).clamp(0.0, 1.0);
+        Some((rgb[0], rgb[1], rgb[2], (alpha * 255.0).round() as u8))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_native_backing_color(view: id, rgba: (u8, u8, u8, u8)) {
+        if view.is_null() {
+            return;
+        }
+
+        unsafe {
+            let _: () = msg_send![view, setWantsLayer:YES];
+            let layer: id = msg_send![view, layer];
+            if layer.is_null() {
+                return;
+            }
+
+            let color: id = msg_send![
+                class!(NSColor),
+                colorWithSRGBRed:f64::from(rgba.0) / 255.0
+                green:f64::from(rgba.1) / 255.0
+                blue:f64::from(rgba.2) / 255.0
+                alpha:f64::from(rgba.3) / 255.0
+            ];
+            let cg_color: id = msg_send![color, CGColor];
+            let _: () = msg_send![layer, setBackgroundColor:cg_color];
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_native_backing_background(&mut self) {
+        let Some(rgba) = self.native_backing_rgba() else {
+            return;
+        };
+        if self.native_backing_color == Some(rgba) {
+            return;
+        }
+
+        if let Some(host_view) = self.host_view {
+            Self::apply_native_backing_color(host_view, rgba);
+            unsafe {
+                let content_view: id = msg_send![host_view, contentView];
+                Self::apply_native_backing_color(content_view, rgba);
+            }
+        }
+        if let Some(document_view) = self.document_view {
+            Self::apply_native_backing_color(document_view, rgba);
+        }
+        if let Some(nsview) = self.nsview {
+            Self::apply_native_backing_color(nsview, rgba);
+        }
+        self.native_backing_color = Some(rgba);
     }
 
     fn reset_native_scroll_layout_cache(&mut self) {
@@ -582,6 +645,7 @@ impl GhosttyView {
         }
         let started = perf_trace_enabled().then(Instant::now);
         self.last_bounds = Some(bounds);
+        self.sync_native_backing_background();
 
         if let Some(host_view) = self.host_view {
             unsafe {
@@ -635,7 +699,6 @@ impl GhosttyView {
         }
         self.pending_native_layout = false;
         self.apply_native_visibility();
-        self.draw_surface_now();
     }
 
     #[cfg(target_os = "macos")]
@@ -850,7 +913,9 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn sync_window_background_blur(&self) {
+    pub fn sync_window_background_blur(&mut self) {
+        self.sync_native_backing_background();
+
         let Some(host_view) = self.host_view else {
             return;
         };
