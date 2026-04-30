@@ -202,22 +202,21 @@ impl PaneTree {
 
     /// Set focus to a pane by ID
     #[allow(dead_code)]
-    pub fn focus(&mut self, pane_id: PaneId) {
+    pub fn focus(&mut self, pane_id: PaneId) -> bool {
+        let previous_zoomed_pane_id = self.zoomed_pane_id;
         if Self::find_terminal(&self.root, pane_id).is_some() {
             self.focused_pane_id = pane_id;
             if self.zoomed_pane_id.is_some() {
                 self.zoomed_pane_id = Some(pane_id);
             }
         }
+        previous_zoomed_pane_id != self.zoomed_pane_id
     }
 
     /// Update focused pane based on which terminal currently has window focus.
     pub fn sync_focus(&mut self, window: &Window, cx: &App) {
         if let Some(id) = Self::find_focused_pane(&self.root, window, cx) {
             self.focused_pane_id = id;
-            if self.zoomed_pane_id.is_some() {
-                self.zoomed_pane_id = Some(id);
-            }
         }
     }
 

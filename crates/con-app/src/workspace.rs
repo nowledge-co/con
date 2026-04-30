@@ -1657,15 +1657,18 @@ impl ConWorkspace {
                 con_agent::tools::PaneCreateLocation::Right => SplitDirection::Horizontal,
                 con_agent::tools::PaneCreateLocation::Down => SplitDirection::Vertical,
             };
+            let was_zoomed = self.tabs[req.tab_idx].pane_tree.zoomed_pane_id().is_some();
             self.tabs[req.tab_idx]
                 .pane_tree
                 .split(direction, terminal.clone());
-            terminal.ensure_surface(window, cx);
-            terminal.notify(cx);
             let should_focus = req.tab_idx == self.active_tab;
             if should_focus {
+                self.notify_tab_terminal_views(req.tab_idx, cx);
                 terminal.focus(window, cx);
                 self.sync_active_terminal_focus_states(cx);
+                self.sync_active_tab_native_view_visibility_now_or_after_layout(
+                    was_zoomed, window, cx,
+                );
             } else {
                 terminal.set_focus_state(false, cx);
             }
@@ -5628,9 +5631,13 @@ impl ConWorkspace {
         else {
             return;
         };
-        self.tabs[self.active_tab].pane_tree.focus(pane_id);
+        let zoom_target_changed = self.tabs[self.active_tab].pane_tree.focus(pane_id);
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
+        if zoom_target_changed {
+            self.notify_active_tab_terminal_views(cx);
+            self.sync_active_tab_native_view_visibility_after_layout(window, cx);
+        }
         cx.notify();
     }
 
@@ -7058,9 +7065,13 @@ impl ConWorkspace {
         let entity_id = entity.entity_id();
         let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
         if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
-            pane_tree.focus(pane_id);
+            let zoom_target_changed = pane_tree.focus(pane_id);
             entity.focus_handle(cx).focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
+            if zoom_target_changed {
+                self.notify_active_tab_terminal_views(cx);
+                self.sync_active_tab_native_view_visibility_after_layout(window, cx);
+            }
         }
         cx.notify();
     }
