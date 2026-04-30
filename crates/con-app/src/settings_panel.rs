@@ -994,14 +994,7 @@ impl SettingsPanel {
             window,
             cx,
         );
-        let active_model_select = Self::make_model_select(
-            &agent.provider,
-            &pc.model,
-            pc.base_url.as_deref(),
-            &registry,
-            window,
-            cx,
-        );
+        let active_model_select = Self::make_active_model_select(config, &registry, window, cx);
 
         let model_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
@@ -1072,21 +1065,14 @@ impl SettingsPanel {
             window,
             cx,
         );
-        let suggestion_provider = Self::effective_suggestion_provider(config);
         let suggestion_provider_select = Self::make_searchable_string_select(
             &Self::suggestion_provider_options(),
             &Self::suggestion_provider_label(agent.suggestion_model.provider.as_ref()),
             window,
             cx,
         );
-        let suggestion_model_select = Self::make_model_select(
-            &suggestion_provider,
-            &agent.suggestion_model.model,
-            Self::provider_base_url(config, &suggestion_provider),
-            &registry,
-            window,
-            cx,
-        );
+        let suggestion_model_select =
+            Self::make_suggestion_model_select(config, &registry, window, cx);
         let all_font_families = cx.text_system().all_font_names();
         let terminal_font_families =
             Self::prepare_terminal_font_families(config, all_font_families.clone());
@@ -1224,17 +1210,9 @@ impl SettingsPanel {
             |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
                     if let Some(provider) = Self::suggestion_provider_from_label(value) {
-                        this.config.agent.provider = provider.clone();
-                        let current_model = this
-                            .config
-                            .agent
-                            .providers
-                            .get(&provider)
-                            .and_then(|pc| pc.model.clone());
-                        this.active_model_select = Self::make_model_select(
-                            &provider,
-                            &current_model,
-                            Self::provider_base_url(&this.config, &provider),
+                        this.config.agent.provider = provider;
+                        this.active_model_select = Self::make_active_model_select(
+                            &this.config,
                             &this.registry,
                             window,
                             cx,
@@ -1246,53 +1224,18 @@ impl SettingsPanel {
         )
         .detach();
         cx.subscribe_in(
-            &active_model_select,
-            window,
-            |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
-                if let SelectEvent::Confirm(Some(value)) = ev {
-                    let provider = this.config.agent.provider.clone();
-                    let mut pc = this.config.agent.providers.get_or_default(&provider);
-                    pc.model = Some(value.clone());
-                    this.config.agent.providers.set(&provider, pc);
-                    cx.notify();
-                }
-            },
-        )
-        .detach();
-        cx.subscribe_in(
             &suggestion_provider_select,
             window,
             |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
                     this.config.agent.suggestion_model.provider =
                         Self::suggestion_provider_from_label(value);
-                    let provider = this
-                        .config
-                        .agent
-                        .suggestion_model
-                        .provider
-                        .clone()
-                        .unwrap_or_else(|| this.config.agent.provider.clone());
-                    let selected_model = this.config.agent.suggestion_model.model.clone();
-                    this.suggestion_model_select = Self::make_model_select(
-                        &provider,
-                        &selected_model,
-                        Self::provider_base_url(&this.config, &provider),
+                    this.suggestion_model_select = Self::make_suggestion_model_select(
+                        &this.config,
                         &this.registry,
                         window,
                         cx,
                     );
-                    cx.notify();
-                }
-            },
-        )
-        .detach();
-        cx.subscribe_in(
-            &suggestion_model_select,
-            window,
-            |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
-                if let SelectEvent::Confirm(Some(value)) = ev {
-                    this.config.agent.suggestion_model.model = Some(value.clone());
                     cx.notify();
                 }
             },
@@ -1478,17 +1421,8 @@ impl SettingsPanel {
                 cx,
             );
         });
-        self.active_model_select = Self::make_model_select(
-            &agent.provider,
-            &agent
-                .providers
-                .get(&agent.provider)
-                .and_then(|pc| pc.model.clone()),
-            Self::provider_base_url(&self.config, &agent.provider),
-            &self.registry,
-            window,
-            cx,
-        );
+        self.active_model_select =
+            Self::make_active_model_select(&self.config, &self.registry, window, cx);
         self.ai_purpose_select.update(cx, |select, cx| {
             select.set_selected_value(
                 &Self::ai_purpose_label(agent.purpose).to_string(),
@@ -1504,17 +1438,8 @@ impl SettingsPanel {
                 cx,
             );
         });
-        self.suggestion_model_select = Self::make_model_select(
-            &Self::effective_suggestion_provider(&self.config),
-            &agent.suggestion_model.model,
-            Self::provider_base_url(
-                &self.config,
-                &Self::effective_suggestion_provider(&self.config),
-            ),
-            &self.registry,
-            window,
-            cx,
-        );
+        self.suggestion_model_select =
+            Self::make_suggestion_model_select(&self.config, &self.registry, window, cx);
         self.auto_approve = agent.auto_approve_tools;
         self.model_select = Self::make_model_select(
             &agent.provider,
@@ -1653,7 +1578,7 @@ impl SettingsPanel {
             .and_then(|pc| pc.base_url.as_deref())
     }
 
-    fn make_model_select(
+    fn make_model_select_state(
         provider: &ProviderKind,
         current_model: &Option<String>,
         base_url: Option<&str>,
@@ -1678,6 +1603,19 @@ impl SettingsPanel {
             SelectState::new(SearchableVec::new(models), selected_index, window, cx)
                 .searchable(true)
         });
+        entity
+    }
+
+    fn make_model_select(
+        provider: &ProviderKind,
+        current_model: &Option<String>,
+        base_url: Option<&str>,
+        registry: &ModelRegistry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<SearchableVec<String>>> {
+        let entity =
+            Self::make_model_select_state(provider, current_model, base_url, registry, window, cx);
         cx.subscribe_in(
             &entity,
             window,
@@ -1686,6 +1624,73 @@ impl SettingsPanel {
                     this.model_input.update(cx, |s, cx| {
                         s.set_value(value, window, cx);
                     });
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        entity
+    }
+
+    fn make_active_model_select(
+        config: &Config,
+        registry: &ModelRegistry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<SearchableVec<String>>> {
+        let provider = config.agent.provider.clone();
+        let current_model = config
+            .agent
+            .providers
+            .get(&provider)
+            .and_then(|pc| pc.model.clone());
+        let entity = Self::make_model_select_state(
+            &provider,
+            &current_model,
+            Self::provider_base_url(config, &provider),
+            registry,
+            window,
+            cx,
+        );
+        cx.subscribe_in(
+            &entity,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    let provider = this.config.agent.provider.clone();
+                    let mut pc = this.config.agent.providers.get_or_default(&provider);
+                    pc.model = Some(value.clone());
+                    this.config.agent.providers.set(&provider, pc);
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        entity
+    }
+
+    fn make_suggestion_model_select(
+        config: &Config,
+        registry: &ModelRegistry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<SearchableVec<String>>> {
+        let provider = Self::effective_suggestion_provider(config);
+        let current_model = config.agent.suggestion_model.model.clone();
+        let entity = Self::make_model_select_state(
+            &provider,
+            &current_model,
+            Self::provider_base_url(config, &provider),
+            registry,
+            window,
+            cx,
+        );
+        cx.subscribe_in(
+            &entity,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
+                    this.config.agent.suggestion_model.model = Some(value.clone());
                     cx.notify();
                 }
             },
@@ -1967,6 +1972,24 @@ impl SettingsPanel {
                                     &ProviderKind::OpenAICompatible,
                                     &current_model,
                                     Some(&base_url_for_cache),
+                                    &registry,
+                                    window,
+                                    cx,
+                                );
+                            }
+                            if panel.config.agent.provider == ProviderKind::OpenAICompatible {
+                                panel.active_model_select = Self::make_active_model_select(
+                                    &panel.config,
+                                    &registry,
+                                    window,
+                                    cx,
+                                );
+                            }
+                            if Self::effective_suggestion_provider(&panel.config)
+                                == ProviderKind::OpenAICompatible
+                            {
+                                panel.suggestion_model_select = Self::make_suggestion_model_select(
+                                    &panel.config,
                                     &registry,
                                     window,
                                     cx,
