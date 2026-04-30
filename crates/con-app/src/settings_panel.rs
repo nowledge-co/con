@@ -1947,8 +1947,10 @@ impl SettingsPanel {
                     panel.provider_model_fetching = false;
                     match result {
                         Ok(models) if models.is_empty() => {
-                            panel.provider_model_status =
-                                Some("The endpoint responded, but returned no models.".to_string());
+                            panel.provider_model_status = Some(
+                                "The endpoint responded, but returned no models. Type the model ID manually."
+                                    .to_string(),
+                            );
                             panel.provider_model_status_error = true;
                         }
                         Ok(models) => {
@@ -2002,7 +2004,9 @@ impl SettingsPanel {
                             panel.provider_model_status_error = false;
                         }
                         Err(err) => {
-                            panel.provider_model_status = Some(err.to_string());
+                            panel.provider_model_status = Some(format!(
+                                "Could not fetch models: {err}. Type the model ID manually."
+                            ));
                             panel.provider_model_status_error = true;
                         }
                     }
@@ -3853,7 +3857,7 @@ impl SettingsPanel {
                                 })
                                 .child(
                                     self.provider_model_status.clone().unwrap_or_else(|| {
-                                        "Fetch /models when the provider exposes an OpenAI-compatible model list.".to_string()
+                                        "Optional: fetch /models when the provider exposes a model list. Otherwise, type the model ID manually.".to_string()
                                     }),
                                 ),
                         )
