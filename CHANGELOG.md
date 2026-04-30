@@ -21,6 +21,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added macOS window cycling with Cmd+Backtick and Cmd+Shift+Backtick.
 - Fixed macOS Cmd+Backtick window cycling when the terminal surface has focus.
 - Pane picker shortcuts are now scoped to the picker: open it with the configured pane-scope shortcut, then use bare 1-9 to toggle panes, A for all panes, and F for focused pane. Global Cmd/Ctrl+1-9 remains reserved for tab switching outside the picker.
+- Fixed closing the last pane in one window so it closes only that window instead of quitting Con and killing sibling windows.
 
 ### Fixed
 
