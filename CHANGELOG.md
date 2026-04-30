@@ -30,6 +30,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, macOS**
 
 - Fixed fast trackpad scrolling in macOS terminal panes so precise scroll events are sent through Ghostty's precision-scroll path instead of being treated as coarse wheel ticks.
+- Reduced macOS terminal scroll-path overhead by syncing the native Ghostty scroll container only for visible tab surfaces while still draining background-tab title and process events.
 
 **Workspace**
 
@@ -53,6 +54,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Windowing**
 
 - Fixed new Con windows opening exactly on top of the previous one. New workspace windows now cascade from the active window while staying within the visible display area when display bounds are available, and still cascade when the platform cannot report bounds.
+- Fixed new-window cascade wrapping so the 28px stagger is preserved on the axis that still fits when the other axis wraps to the display edge.
 - Unified macOS Window menu cycling with the same native AppKit path used by Cmd+Backtick, so menu actions and keyboard shortcuts share one ordering model.
 
 **Terminal, Windows Backend (preview)**

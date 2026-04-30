@@ -107,7 +107,11 @@ impl GhosttyView {
 
     pub fn sync_window_background_blur(&self) {}
 
-    pub fn drain_surface_state(&mut self, _cx: &mut Context<Self>) -> bool {
+    pub fn drain_surface_state(
+        &mut self,
+        _sync_native_scroll: bool,
+        _cx: &mut Context<Self>,
+    ) -> bool {
         false
     }
 

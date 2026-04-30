@@ -16,7 +16,10 @@ Con also divided precise deltas by the window scale factor. Ghostty's own AppKit
 - Sent GPUI `ScrollDelta::Pixels` with Ghostty's precision bit instead of keyboard modifier bits.
 - Matched Ghostty's AppKit host by applying the same 2x multiplier to precise scroll deltas and not dividing by backing scale.
 - Cached native scroll-container frame synchronization so repeated terminal drains do not reapply unchanged AppKit frames.
+- Limited native scroll-container synchronization to visible tab surfaces while preserving background-tab event drains.
 
 ## What We Learned
 
 Ghostty's mouse scroll modifier type is not interchangeable with key or mouse-button modifiers. Any embedded host code that calls Ghostty's C API must mirror the upstream AppKit adapter closely, especially for input paths where small semantic differences are felt immediately by users.
+
+The workspace pump must keep lifecycle/event draining broad, but native view synchronization should be scoped to visible surfaces. Hidden tabs can continue receiving titles and process-exit events without forcing AppKit frame work during a visible pane's scroll burst.

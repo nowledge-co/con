@@ -171,7 +171,11 @@ impl GhosttyView {
         }
     }
 
-    pub fn drain_surface_state(&mut self, cx: &mut Context<Self>) -> bool {
+    pub fn drain_surface_state(
+        &mut self,
+        sync_native_scroll: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(ref terminal) = self.terminal else {
             return false;
         };
@@ -206,7 +210,9 @@ impl GhosttyView {
         }
 
         #[cfg(target_os = "macos")]
-        self.sync_native_scroll_view();
+        if sync_native_scroll {
+            self.sync_native_scroll_view();
+        }
 
         if let Some(started) = started {
             if changed {
@@ -1304,7 +1310,7 @@ impl Render for GhosttyView {
                         terminal.send_mouse_pos(x, y, mods);
                         terminal.send_mouse_button(false, MouseButton::Left, mods);
                     }
-                    let changed = this.drain_surface_state(cx);
+                    let changed = this.drain_surface_state(true, cx);
                     if changed {
                         cx.notify();
                     }

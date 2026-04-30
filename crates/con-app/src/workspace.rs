@@ -1385,10 +1385,11 @@ impl ConWorkspace {
         }
 
         self.last_ghostty_wake_generation = generation;
-        for tab in &self.tabs {
+        for (tab_index, tab) in self.tabs.iter().enumerate() {
+            let sync_native_scroll = tab_index == self.active_tab;
             for terminal in tab.pane_tree.all_terminals() {
                 drain_count += 1;
-                changed |= terminal.drain_surface_state(cx);
+                changed |= terminal.drain_surface_state_with_native_scroll(sync_native_scroll, cx);
             }
         }
 
