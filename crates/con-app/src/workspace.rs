@@ -3251,6 +3251,7 @@ impl ConWorkspace {
                                 self.sync_active_terminal_focus_states(cx);
                             }
                             self.save_session(cx);
+                            cx.notify();
                             Self::send_control_result(
                                 response_tx,
                                 Ok(json!({

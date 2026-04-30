@@ -1119,7 +1119,6 @@ impl PaneTree {
                     .max_w(px(180.0))
                     .min_w(px(0.0))
                     .px(px(6.0))
-                    .rounded(px(5.0))
                     .bg(bg)
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.foreground.opacity(0.10)))
