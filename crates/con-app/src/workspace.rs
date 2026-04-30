@@ -1389,6 +1389,21 @@ impl ConWorkspace {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn refresh_native_terminal_layout(&self, window: &mut Window, cx: &mut Context<Self>) {
+        // macOS terminals are native NSViews hosted outside GPUI's scene tree.
+        // Pane splits/zoom can move an existing terminal entity into a new
+        // subtree without changing that entity itself, so GPUI may otherwise
+        // reuse the child view's cached prepaint and skip the canvas layout
+        // callback that updates the NSView frame. A window refresh is scoped to
+        // structural pane changes and forces one authoritative layout pass.
+        window.refresh();
+        cx.notify();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn refresh_native_terminal_layout(&self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
     fn sync_active_tab_native_view_visibility_after_layout(
         &self,
         window: &mut Window,
@@ -1397,9 +1412,11 @@ impl ConWorkspace {
         // Native Ghostty NSViews live outside GPUI's element tree. Wait
         // until GPUI has committed one layout frame before hiding/showing
         // them, otherwise zoom/split transitions can expose transparent gaps.
-        cx.on_next_frame(window, |_workspace, window, cx| {
-            cx.notify();
-            cx.on_next_frame(window, |workspace, _window, cx| {
+        self.refresh_native_terminal_layout(window, cx);
+        cx.on_next_frame(window, |workspace, window, cx| {
+            workspace.refresh_native_terminal_layout(window, cx);
+            cx.on_next_frame(window, |workspace, window, cx| {
+                workspace.refresh_native_terminal_layout(window, cx);
                 if workspace.has_active_tab()
                     && !workspace.ghostty_hidden
                     && !workspace.is_modal_open(cx)
@@ -1417,7 +1434,9 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         if was_zoomed {
+            self.refresh_native_terminal_layout(window, cx);
             self.sync_active_tab_native_view_visibility(cx);
+            self.sync_active_tab_native_view_visibility_after_layout(window, cx);
             return;
         }
 
@@ -1544,6 +1563,8 @@ impl ConWorkspace {
                         workspace.update(cx, |_workspace, cx| {
                             terminal.ensure_surface(window, cx);
                             terminal.notify(cx);
+                            #[cfg(target_os = "macos")]
+                            window.refresh();
                             _workspace.sync_active_tab_native_view_visibility(cx);
                             if should_focus {
                                 _workspace.sync_active_terminal_focus_states(cx);
