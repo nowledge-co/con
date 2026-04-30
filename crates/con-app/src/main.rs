@@ -361,8 +361,8 @@ fn default_workspace_window_bounds(cx: &mut App) -> WindowBounds {
     let fits_vertically = window_bottom <= display_bottom;
     let final_origin = match (fits_horizontally, fits_vertically) {
         (true, true) => proposed_origin,
-        (false, true) => point(display_bounds.origin.x, base_bounds.origin.y),
-        (true, false) => point(base_bounds.origin.x, display_bounds.origin.y),
+        (false, true) => point(display_bounds.origin.x, proposed_origin.y),
+        (true, false) => point(proposed_origin.x, display_bounds.origin.y),
         (false, false) => display_bounds.origin,
     };
 
