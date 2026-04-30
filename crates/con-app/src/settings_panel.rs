@@ -89,6 +89,7 @@ const ALL_SECTIONS: &[SettingsSection] = &[
 
 pub struct SettingsPanel {
     visible: bool,
+    standalone: bool,
     config: Config,
     registry: ModelRegistry,
     oauth_runtime: Arc<tokio::runtime::Runtime>,
@@ -114,6 +115,9 @@ pub struct SettingsPanel {
     suggestion_provider_select: Entity<SelectState<SearchableVec<String>>>,
     suggestion_model_select: Entity<SelectState<SearchableVec<String>>>,
     oauth_states: HashMap<ProviderKind, ProviderOAuthState>,
+    provider_model_fetching: bool,
+    provider_model_status: Option<String>,
+    provider_model_status_error: bool,
 
     terminal_font_select: Entity<SelectState<SearchableVec<String>>>,
     ui_font_select: Entity<SelectState<SearchableVec<String>>>,
@@ -1340,6 +1344,7 @@ impl SettingsPanel {
 
         Self {
             visible: false,
+            standalone: false,
             config: config.clone(),
             registry,
             oauth_runtime,
@@ -1363,6 +1368,9 @@ impl SettingsPanel {
             suggestion_provider_select,
             suggestion_model_select,
             oauth_states: HashMap::new(),
+            provider_model_fetching: false,
+            provider_model_status: None,
+            provider_model_status_error: false,
             terminal_font_select,
             ui_font_select,
             cursor_style_select,
@@ -1385,150 +1393,167 @@ impl SettingsPanel {
     }
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.standalone = false;
         self.visible = !self.visible;
         self.overlay_motion.set_target(
             if self.visible { 1.0 } else { 0.0 },
             std::time::Duration::from_millis(if self.visible { 220 } else { 180 }),
         );
         if self.visible {
-            let agent = &self.config.agent;
-            let pc = agent.providers.get_or_default(&self.selected_provider);
-            self.load_provider_inputs(&pc, window, cx);
-            self.sync_provider_placeholders(&self.selected_provider, window, cx);
-            self.max_turns_input.update(cx, |s, cx| {
-                s.set_value(&agent.max_turns.to_string(), window, cx)
-            });
-            self.temperature_input.update(cx, |s, cx| {
-                s.set_value(
-                    &agent.temperature.map(|t| t.to_string()).unwrap_or_default(),
-                    window,
-                    cx,
-                )
-            });
-            self.active_provider_select.update(cx, |select, cx| {
-                select.set_selected_value(
-                    &provider_label(&Self::sidebar_provider_kind(&agent.provider)).to_string(),
-                    window,
-                    cx,
-                );
-            });
-            self.active_model_select = Self::make_model_select(
-                &agent.provider,
-                &agent
-                    .providers
-                    .get(&agent.provider)
-                    .and_then(|pc| pc.model.clone()),
-                &self.registry,
-                window,
-                cx,
-            );
-            self.ai_purpose_select.update(cx, |select, cx| {
-                select.set_selected_value(
-                    &Self::ai_purpose_label(agent.purpose).to_string(),
-                    window,
-                    cx,
-                );
-            });
-            self.suggestion_enabled = agent.suggestion_model.enabled;
-            self.suggestion_provider_select.update(cx, |select, cx| {
-                select.set_selected_value(
-                    &Self::suggestion_provider_label(agent.suggestion_model.provider.as_ref()),
-                    window,
-                    cx,
-                );
-            });
-            self.suggestion_model_select = Self::make_model_select(
-                &Self::effective_suggestion_provider(&self.config),
-                &agent.suggestion_model.model,
-                &self.registry,
-                window,
-                cx,
-            );
-            self.auto_approve = agent.auto_approve_tools;
-            self.model_select =
-                Self::make_model_select(&agent.provider, &pc.model, &self.registry, window, cx);
-            self.endpoint_preset_select =
-                Self::make_endpoint_preset_select(&agent.provider, &pc.base_url, window, cx);
-            self.terminal_font_select.update(cx, |select, cx| {
-                select.set_selected_value(
-                    &sanitize_terminal_font_family(&self.config.terminal.font_family),
-                    window,
-                    cx,
-                );
-            });
-            self.ui_font_select.update(cx, |select, cx| {
-                select.set_selected_value(&self.config.appearance.ui_font_family, window, cx);
-            });
-            self.cursor_style_select.update(cx, |select, cx| {
-                select.set_selected_value(
-                    &Self::cursor_style_label(&self.config.terminal.cursor_style).to_string(),
-                    window,
-                    cx,
-                );
-            });
-            self.font_size_input.update(cx, |s, cx| {
-                s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
-            });
-            self.ui_font_size_input.update(cx, |s, cx| {
-                s.set_value(
-                    &Self::clamp_ui_font_size(self.config.appearance.ui_font_size).to_string(),
-                    window,
-                    cx,
-                )
-            });
-            self.terminal_opacity_slider.update(cx, |slider, cx| {
-                slider.set_value(
-                    Self::clamp_terminal_opacity(self.config.appearance.terminal_opacity),
-                    window,
-                    cx,
-                );
-            });
-            self.terminal_blur = self.config.appearance.terminal_blur;
-            self.ui_opacity_slider.update(cx, |slider, cx| {
-                slider.set_value(
-                    Self::clamp_ui_opacity(self.config.appearance.ui_opacity),
-                    window,
-                    cx,
-                );
-            });
-            self.background_image_input.update(cx, |s, cx| {
-                s.set_value(
-                    &self
-                        .config
-                        .appearance
-                        .background_image
-                        .clone()
-                        .unwrap_or_default(),
-                    window,
-                    cx,
-                );
-            });
-            self.background_image_opacity_slider
-                .update(cx, |slider, cx| {
-                    slider.set_value(
-                        Self::clamp_background_image_opacity(
-                            self.config.appearance.background_image_opacity,
-                        ),
-                        window,
-                        cx,
-                    );
-                });
-            self.background_image_position_select
-                .update(cx, |select, cx| {
-                    select.set_selected_value(
-                        &self.config.appearance.background_image_position,
-                        window,
-                        cx,
-                    );
-                });
-            self.background_image_fit_select.update(cx, |select, cx| {
-                select.set_selected_value(&self.config.appearance.background_image_fit, window, cx);
-            });
-            self.background_image_repeat = self.config.appearance.background_image_repeat;
-            self.recording_key = None;
-            self.focus_handle.focus(window, cx);
+            self.refresh_controls_from_config(window, cx);
         }
         cx.notify();
+    }
+
+    pub fn open_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.standalone = true;
+        self.visible = true;
+        self.overlay_motion
+            .set_target(1.0, std::time::Duration::ZERO);
+        self.refresh_controls_from_config(window, cx);
+        cx.notify();
+    }
+
+    fn refresh_controls_from_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let agent = &self.config.agent;
+        let pc = agent.providers.get_or_default(&self.selected_provider);
+        self.load_provider_inputs(&pc, window, cx);
+        self.sync_provider_placeholders(&self.selected_provider, window, cx);
+        self.max_turns_input.update(cx, |s, cx| {
+            s.set_value(&agent.max_turns.to_string(), window, cx)
+        });
+        self.temperature_input.update(cx, |s, cx| {
+            s.set_value(
+                &agent.temperature.map(|t| t.to_string()).unwrap_or_default(),
+                window,
+                cx,
+            )
+        });
+        self.active_provider_select.update(cx, |select, cx| {
+            select.set_selected_value(
+                &provider_label(&Self::sidebar_provider_kind(&agent.provider)).to_string(),
+                window,
+                cx,
+            );
+        });
+        self.active_model_select = Self::make_model_select(
+            &agent.provider,
+            &agent
+                .providers
+                .get(&agent.provider)
+                .and_then(|pc| pc.model.clone()),
+            &self.registry,
+            window,
+            cx,
+        );
+        self.ai_purpose_select.update(cx, |select, cx| {
+            select.set_selected_value(
+                &Self::ai_purpose_label(agent.purpose).to_string(),
+                window,
+                cx,
+            );
+        });
+        self.suggestion_enabled = agent.suggestion_model.enabled;
+        self.suggestion_provider_select.update(cx, |select, cx| {
+            select.set_selected_value(
+                &Self::suggestion_provider_label(agent.suggestion_model.provider.as_ref()),
+                window,
+                cx,
+            );
+        });
+        self.suggestion_model_select = Self::make_model_select(
+            &Self::effective_suggestion_provider(&self.config),
+            &agent.suggestion_model.model,
+            &self.registry,
+            window,
+            cx,
+        );
+        self.auto_approve = agent.auto_approve_tools;
+        self.model_select =
+            Self::make_model_select(&agent.provider, &pc.model, &self.registry, window, cx);
+        self.endpoint_preset_select =
+            Self::make_endpoint_preset_select(&agent.provider, &pc.base_url, window, cx);
+        self.terminal_font_select.update(cx, |select, cx| {
+            select.set_selected_value(
+                &sanitize_terminal_font_family(&self.config.terminal.font_family),
+                window,
+                cx,
+            );
+        });
+        self.ui_font_select.update(cx, |select, cx| {
+            select.set_selected_value(&self.config.appearance.ui_font_family, window, cx);
+        });
+        self.cursor_style_select.update(cx, |select, cx| {
+            select.set_selected_value(
+                &Self::cursor_style_label(&self.config.terminal.cursor_style).to_string(),
+                window,
+                cx,
+            );
+        });
+        self.font_size_input.update(cx, |s, cx| {
+            s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
+        });
+        self.ui_font_size_input.update(cx, |s, cx| {
+            s.set_value(
+                &Self::clamp_ui_font_size(self.config.appearance.ui_font_size).to_string(),
+                window,
+                cx,
+            )
+        });
+        self.terminal_opacity_slider.update(cx, |slider, cx| {
+            slider.set_value(
+                Self::clamp_terminal_opacity(self.config.appearance.terminal_opacity),
+                window,
+                cx,
+            );
+        });
+        self.terminal_blur = self.config.appearance.terminal_blur;
+        self.ui_opacity_slider.update(cx, |slider, cx| {
+            slider.set_value(
+                Self::clamp_ui_opacity(self.config.appearance.ui_opacity),
+                window,
+                cx,
+            );
+        });
+        self.background_image_input.update(cx, |s, cx| {
+            s.set_value(
+                &self
+                    .config
+                    .appearance
+                    .background_image
+                    .clone()
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+        });
+        self.background_image_opacity_slider
+            .update(cx, |slider, cx| {
+                slider.set_value(
+                    Self::clamp_background_image_opacity(
+                        self.config.appearance.background_image_opacity,
+                    ),
+                    window,
+                    cx,
+                );
+            });
+        self.background_image_position_select
+            .update(cx, |select, cx| {
+                select.set_selected_value(
+                    &self.config.appearance.background_image_position,
+                    window,
+                    cx,
+                );
+            });
+        self.background_image_fit_select.update(cx, |select, cx| {
+            select.set_selected_value(&self.config.appearance.background_image_fit, window, cx);
+        });
+        self.background_image_repeat = self.config.appearance.background_image_repeat;
+        self.provider_model_fetching = false;
+        self.provider_model_status = None;
+        self.provider_model_status_error = false;
+        self.recording_key = None;
+        self.focus_handle.focus(window, cx);
     }
 
     /// Load a provider's config into the per-provider input fields.
@@ -1761,8 +1786,138 @@ impl SettingsPanel {
         }
     }
 
+    fn resolve_provider_api_key(config: &ProviderConfig) -> Result<String, String> {
+        if let Some(key) = config
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(key.to_string());
+        }
+
+        if let Some(env_name) = config
+            .api_key_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return std::env::var(env_name)
+                .map(|value| value.trim().to_string())
+                .map_err(|_| format!("Environment variable {env_name} is not set."))
+                .and_then(|value| {
+                    if value.is_empty() {
+                        Err(format!("Environment variable {env_name} is empty."))
+                    } else {
+                        Ok(value)
+                    }
+                });
+        }
+
+        Err("Enter an API key, or an environment variable name that contains one.".to_string())
+    }
+
+    fn fetch_selected_provider_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_provider != ProviderKind::OpenAICompatible || self.provider_model_fetching
+        {
+            return;
+        }
+
+        let provider_config = self.read_provider_inputs(cx);
+        self.config
+            .agent
+            .providers
+            .set(&self.selected_provider, provider_config.clone());
+
+        let Some(base_url) = provider_config
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+        else {
+            self.provider_model_status =
+                Some("Enter the provider Base URL, usually ending in /v1.".to_string());
+            self.provider_model_status_error = true;
+            cx.notify();
+            return;
+        };
+
+        let api_key = match Self::resolve_provider_api_key(&provider_config) {
+            Ok(api_key) => api_key,
+            Err(message) => {
+                self.provider_model_status = Some(message);
+                self.provider_model_status_error = true;
+                cx.notify();
+                return;
+            }
+        };
+
+        self.provider_model_fetching = true;
+        self.provider_model_status = Some("Fetching models from the provider…".to_string());
+        self.provider_model_status_error = false;
+        cx.notify();
+
+        let registry = self.registry.clone();
+        let runtime = self.oauth_runtime.clone();
+        cx.spawn_in(window, async move |this, window| {
+            let result = runtime
+                .spawn(async move {
+                    ModelRegistry::fetch_openai_compatible_models(&base_url, &api_key).await
+                })
+                .await
+                .map_err(|err| anyhow::anyhow!("Model fetch task failed: {err}"))
+                .and_then(|result| result);
+
+            let _ = window.update(|window, cx| {
+                let _ = this.update(cx, |panel, cx| {
+                    panel.provider_model_fetching = false;
+                    match result {
+                        Ok(models) if models.is_empty() => {
+                            panel.provider_model_status =
+                                Some("The endpoint responded, but returned no models.".to_string());
+                            panel.provider_model_status_error = true;
+                        }
+                        Ok(models) => {
+                            let count = models.len();
+                            registry.set_provider_models(ProviderKind::OpenAICompatible, models);
+                            if panel.selected_provider == ProviderKind::OpenAICompatible {
+                                let current_model =
+                                    panel.model_input.read(cx).value().trim().to_string();
+                                let current_model =
+                                    (!current_model.is_empty()).then_some(current_model);
+                                panel.model_select = Self::make_model_select(
+                                    &ProviderKind::OpenAICompatible,
+                                    &current_model,
+                                    &registry,
+                                    window,
+                                    cx,
+                                );
+                            }
+                            panel.provider_model_status = Some(format!(
+                                "Fetched {count} model{}.",
+                                if count == 1 { "" } else { "s" }
+                            ));
+                            panel.provider_model_status_error = false;
+                        }
+                        Err(err) => {
+                            panel.provider_model_status = Some(err.to_string());
+                            panel.provider_model_status_error = true;
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     pub fn is_visible(&self) -> bool {
         self.visible || self.overlay_motion.is_animating()
+    }
+
+    pub fn is_overlay_visible(&self) -> bool {
+        !self.standalone && self.is_visible()
     }
 
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1847,9 +2002,11 @@ impl SettingsPanel {
         match self.persist_config() {
             Ok(()) => {
                 self.save_error = None;
-                self.visible = false;
-                self.overlay_motion
-                    .set_target(0.0, std::time::Duration::from_millis(180));
+                if !self.standalone {
+                    self.visible = false;
+                    self.overlay_motion
+                        .set_target(0.0, std::time::Duration::from_millis(180));
+                }
                 cx.emit(SaveSettings);
             }
             Err(e) => {
@@ -2001,6 +2158,9 @@ impl SettingsPanel {
         }
 
         self.selected_provider = provider.clone();
+        self.provider_model_fetching = false;
+        self.provider_model_status = None;
+        self.provider_model_status_error = false;
 
         let pc = self.config.agent.providers.get_or_default(&provider);
         self.load_provider_inputs(&pc, window, cx);
@@ -3381,6 +3541,7 @@ impl SettingsPanel {
         let model_select = self.model_select.clone();
         let endpoint_preset_select = self.endpoint_preset_select.clone();
         let endpoint_presets = Self::provider_endpoint_presets(&self.selected_provider);
+        let can_fetch_models = self.selected_provider == ProviderKind::OpenAICompatible;
         let protocol_switch_label = Self::protocol_switch_label(&self.selected_provider);
         let protocol_switch_hint = Self::protocol_switch_hint(&self.selected_provider);
         let anthropic_protocol_enabled = Self::uses_anthropic_protocol(&self.selected_provider);
@@ -3523,6 +3684,7 @@ impl SettingsPanel {
                         .flex()
                         .items_center()
                         .justify_between()
+                        .gap(px(12.0))
                         .child(
                             div()
                                 .text_sm()
@@ -3560,7 +3722,42 @@ impl SettingsPanel {
                                 .small(),
                         )
                         .child(Input::new(&model_input).small())
-                }),
+                })
+                .children(can_fetch_models.then(|| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(10.0))
+                        .pt(px(2.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(if self.provider_model_status_error {
+                                    theme.danger
+                                } else {
+                                    theme.muted_foreground.opacity(0.62)
+                                })
+                                .child(
+                                    self.provider_model_status.clone().unwrap_or_else(|| {
+                                        "Fetch /models when the provider exposes an OpenAI-compatible model list.".to_string()
+                                    }),
+                                ),
+                        )
+                        .child(
+                            Button::new("fetch-openai-compatible-models")
+                                .small()
+                                .ghost()
+                                .label("Fetch Models")
+                                .loading(self.provider_model_fetching)
+                                .disabled(self.provider_model_fetching)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.fetch_selected_provider_models(window, cx);
+                                })),
+                        )
+                })),
         );
 
         let right_col = div()
@@ -3975,6 +4172,45 @@ impl SettingsPanel {
         let global_summon_recording = recording.as_deref() == Some("global_summon");
         let theme = cx.theme();
 
+        let fixed_tab_card = card(theme, card_opacity).child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(16.0))
+                .px(px(16.0))
+                .h(px(34.0))
+                .hover(|s| s.bg(theme.muted.opacity(0.025)))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .line_height(px(16.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.foreground.opacity(0.86))
+                        .child("Select Tab by Number"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(crate::keycaps::keycaps_for_binding("secondary-1", theme))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme.muted_foreground.opacity(0.55))
+                                .child("…"),
+                        )
+                        .child(crate::keycaps::keycaps_for_binding("secondary-9", theme)),
+                ),
+        );
+        #[cfg(target_os = "macos")]
+        let fixed_tab_card = fixed_tab_card
+            .child(row_separator(theme))
+            .child(key_row("Next Window", "cmd-`", theme))
+            .child(row_separator(theme))
+            .child(key_row("Previous Window", "cmd-shift-`", theme));
+
         let global_summon_badge = if global_summon_recording {
             div()
                 .min_h(px(28.0))
@@ -4133,6 +4369,14 @@ impl SettingsPanel {
                 .child(div().h(px(8.0)))
                 .child(group_label("General", &theme))
                 .child(general_card),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Fixed Shortcuts", &theme))
+                .child(fixed_tab_card),
         )
         .child(
             div()
@@ -4331,6 +4575,155 @@ impl Render for SettingsPanel {
             .p(content_pad)
             .child(content);
 
+        let surface_rounding = if self.standalone { px(0.0) } else { px(12.0) };
+        let surface = div()
+            .id("settings-card")
+            .w(if self.standalone {
+                px(viewport_w)
+            } else {
+                card_width
+            })
+            .h(if self.standalone {
+                px(viewport_h)
+            } else {
+                card_height
+            })
+            .rounded(surface_rounding)
+            .bg(theme.title_bar)
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .occlude()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                // If recording a keybinding, capture the keystroke.
+                if this.recording_key.is_some() {
+                    this.record_keystroke(&event.keystroke, cx);
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "escape" => {
+                        if this.standalone {
+                            window.remove_window();
+                        } else {
+                            this.save(window, cx);
+                        }
+                    }
+                    "enter" if event.keystroke.modifiers.platform => {
+                        this.save(window, cx);
+                    }
+                    _ => {}
+                }
+            }))
+            // Header
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_shrink_0()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .h(px(44.0))
+                            .px(px(20.0))
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.foreground)
+                                    .child("Settings"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .child(
+                                        div()
+                                            .id("open-config-file")
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(3.0))
+                                            .cursor_pointer()
+                                            .text_size(px(10.5))
+                                            .text_color(theme.muted_foreground.opacity(0.4))
+                                            .hover(|s| {
+                                                s.text_color(theme.muted_foreground.opacity(0.7))
+                                            })
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|_, _, _, cx| {
+                                                    let path = Config::config_path();
+                                                    // Ensure the file exists so the editor has something to open.
+                                                    if !path.exists() {
+                                                        if let Some(parent) = path.parent() {
+                                                            let _ = std::fs::create_dir_all(parent);
+                                                        }
+                                                        let _ = std::fs::write(&path, "");
+                                                    }
+                                                    cx.open_url(&format!(
+                                                        "file://{}",
+                                                        path.display()
+                                                    ));
+                                                }),
+                                            )
+                                            .child(
+                                                svg()
+                                                    .path("phosphor/file-text.svg")
+                                                    .size(px(12.0))
+                                                    .text_color(
+                                                        theme.muted_foreground.opacity(0.4),
+                                                    ),
+                                            )
+                                            .child("config.toml"),
+                                    )
+                                    .children(self.standalone.then(|| {
+                                        Button::new("settings-apply")
+                                            .small()
+                                            .primary()
+                                            .label("Apply")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.save(window, cx);
+                                            }))
+                                    })),
+                            ),
+                    )
+                    .child(div().h(px(1.0)).bg(theme.muted.opacity(0.10))),
+            )
+            // Error banner
+            .children(self.save_error.as_ref().map(|err| {
+                div()
+                    .px_4()
+                    .py_2()
+                    .mx_4()
+                    .mt_2()
+                    .rounded_md()
+                    .bg(theme.danger)
+                    .text_color(theme.danger_foreground)
+                    .text_xs()
+                    .child(format!("Save failed: {}", err))
+            }))
+            // Body
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(sidebar)
+                    .child(content_scroll),
+            );
+
+        if self.standalone {
+            return div()
+                .id("settings-window")
+                .size_full()
+                .font_family(theme.font_family.clone())
+                .bg(theme.background)
+                .child(surface);
+        }
+
         let backdrop = div()
             .id("settings-backdrop")
             .occlude()
@@ -4344,9 +4737,8 @@ impl Render for SettingsPanel {
                 }),
             );
 
-        // Card — centered with flex centering
         let card = div()
-            .id("settings-card")
+            .id("settings-card-shell")
             .absolute()
             .inset_0()
             .flex()
@@ -4356,132 +4748,8 @@ impl Render for SettingsPanel {
             .child(
                 div()
                     .pt(vertical_reveal_offset(overlay_progress, 18.0))
-                    .px(px(0.0))
                     .opacity(overlay_progress)
-                    .child(
-                        div()
-                    .w(card_width)
-                    .h(card_height)
-                    .rounded(px(12.0))
-                    .bg(theme.title_bar)
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .occlude()
-                    .track_focus(&self.focus_handle)
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        // If recording a keybinding, capture the keystroke
-                        if this.recording_key.is_some() {
-                            this.record_keystroke(&event.keystroke, cx);
-                            return;
-                        }
-                        match event.keystroke.key.as_str() {
-                            "escape" => {
-                                this.save(window, cx);
-                            }
-                            "enter" if event.keystroke.modifiers.platform => {
-                                this.save(window, cx);
-                            }
-                            _ => {}
-                        }
-                    }))
-                    // Header
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_shrink_0()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .h(px(44.0))
-                                    .px(px(20.0))
-                                    .child(
-                                        div()
-                                            .text_size(px(13.0))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme.foreground)
-                                            .child("Settings"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(8.0))
-                                            // Open config file link
-                                            .child(
-                                                div()
-                                                    .id("open-config-file")
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap(px(3.0))
-                                                    .cursor_pointer()
-                                                    .text_size(px(10.5))
-                                                    .text_color(theme.muted_foreground.opacity(0.4))
-                                                    .hover(|s| {
-                                                        s.text_color(
-                                                            theme.muted_foreground.opacity(0.7),
-                                                        )
-                                                    })
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        cx.listener(|_, _, _, cx| {
-                                                            let path = Config::config_path();
-                                                            // Ensure the file exists so the editor has something to open
-                                                            if !path.exists() {
-                                                                if let Some(parent) = path.parent()
-                                                                {
-                                                                    let _ = std::fs::create_dir_all(
-                                                                        parent,
-                                                                    );
-                                                                }
-                                                                let _ = std::fs::write(&path, "");
-                                                            }
-                                                            cx.open_url(&format!(
-                                                                "file://{}",
-                                                                path.display()
-                                                            ));
-                                                        }),
-                                                    )
-                                                    .child(
-                                                        svg()
-                                                            .path("phosphor/file-text.svg")
-                                                            .size(px(12.0))
-                                                            .text_color(
-                                                                theme.muted_foreground.opacity(0.4),
-                                                            ),
-                                                    )
-                                                    .child("config.toml"),
-                                            ),
-                                    ),
-                            )
-                            .child(div().h(px(1.0)).bg(theme.muted.opacity(0.10))),
-                    )
-                    // Error banner
-                    .children(self.save_error.as_ref().map(|err| {
-                        div()
-                            .px_4()
-                            .py_2()
-                            .mx_4()
-                            .mt_2()
-                            .rounded_md()
-                            .bg(theme.danger)
-                            .text_color(theme.danger_foreground)
-                            .text_xs()
-                            .child(format!("Save failed: {}", err))
-                    }))
-                    // Body
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_h_0()
-                            .child(sidebar)
-                            .child(content_scroll),
-                    ),
-                    ),
+                    .child(surface),
             );
 
         div()

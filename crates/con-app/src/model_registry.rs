@@ -4,6 +4,7 @@
 //! models.dev community API. Falls back to hardcoded defaults when
 //! the network is unavailable.
 
+use anyhow::{Context as _, anyhow};
 use con_agent::ProviderKind;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -180,6 +181,16 @@ struct ApiLimit {
     context: Option<u64>,
 }
 
+#[derive(serde::Deserialize)]
+struct OpenAICompatibleModelsResponse {
+    data: Vec<OpenAICompatibleModel>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAICompatibleModel {
+    id: String,
+}
+
 // ── Registry ─────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -192,12 +203,14 @@ struct CacheEntry {
 #[derive(Clone)]
 pub struct ModelRegistry {
     inner: Arc<Mutex<Option<CacheEntry>>>,
+    custom: Arc<Mutex<HashMap<ProviderKind, Vec<String>>>>,
 }
 
 impl ModelRegistry {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
+            custom: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -205,6 +218,16 @@ impl ModelRegistry {
     /// Falls back to hardcoded defaults if the cache is empty.
     pub fn models_for(&self, provider: &ProviderKind) -> Vec<String> {
         let canonical = canonical_models_provider(provider);
+        {
+            let custom = self.custom.lock().unwrap();
+            if let Some(models) = custom.get(&canonical) {
+                if !models.is_empty() {
+                    let mut models = models.clone();
+                    append_missing_models(&mut models, pinned_models(provider));
+                    return models;
+                }
+            }
+        }
         let guard = self.inner.lock().unwrap();
         if let Some(entry) = guard.as_ref() {
             if let Some(models) = entry.models.get(&canonical) {
@@ -222,6 +245,12 @@ impl ModelRegistry {
             .collect();
         append_missing_models(&mut models, pinned_models(provider));
         models
+    }
+
+    /// Stores models discovered from a user-configured provider endpoint.
+    pub fn set_provider_models(&self, provider: ProviderKind, models: Vec<String>) {
+        let canonical = canonical_models_provider(&provider);
+        self.custom.lock().unwrap().insert(canonical, models);
     }
 
     /// Whether the cache is stale or empty and needs a refresh.
@@ -297,6 +326,68 @@ impl ModelRegistry {
         log::info!("Model registry updated from models.dev");
         Ok(())
     }
+
+    pub fn openai_compatible_models_url(base_url: &str) -> anyhow::Result<String> {
+        let mut endpoint = base_url.trim().trim_end_matches('/').to_string();
+        if endpoint.is_empty() {
+            return Err(anyhow!("Base URL is required"));
+        }
+
+        if endpoint.ends_with("/chat/completions") {
+            endpoint.truncate(endpoint.len() - "/chat/completions".len());
+        }
+
+        if !endpoint.ends_with("/models") {
+            endpoint.push_str("/models");
+        }
+
+        Ok(endpoint)
+    }
+
+    /// Fetch a model list from an OpenAI-compatible endpoint.
+    pub async fn fetch_openai_compatible_models(
+        base_url: &str,
+        api_key: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        let endpoint = Self::openai_compatible_models_url(base_url)?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()?;
+
+        let resp = client.get(&endpoint).bearer_auth(api_key).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            let detail = body.trim();
+            let detail = if detail.chars().count() > 180 {
+                format!("{}…", detail.chars().take(180).collect::<String>())
+            } else {
+                detail.to_string()
+            };
+            return Err(anyhow!(
+                "Model list request failed with HTTP {status}{}",
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {detail}")
+                }
+            ));
+        }
+
+        let parsed: OpenAICompatibleModelsResponse = resp
+            .json()
+            .await
+            .context("Response was not an OpenAI-compatible model list")?;
+        let mut models: Vec<String> = parsed
+            .data
+            .into_iter()
+            .map(|model| model.id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect();
+        models.sort();
+        models.dedup();
+        Ok(models)
+    }
 }
 
 #[cfg(test)]
@@ -357,6 +448,39 @@ mod tests {
         assert_eq!(
             registry.models_for(&ProviderKind::Moonshot),
             vec!["kimi-k2.5".to_string(), "kimi-for-coding".to_string()]
+        );
+    }
+
+    #[test]
+    fn openai_compatible_models_url_uses_models_endpoint() {
+        assert_eq!(
+            ModelRegistry::openai_compatible_models_url("https://api.example.com/v1").unwrap(),
+            "https://api.example.com/v1/models"
+        );
+        assert_eq!(
+            ModelRegistry::openai_compatible_models_url(
+                "https://api.example.com/v1/chat/completions"
+            )
+            .unwrap(),
+            "https://api.example.com/v1/models"
+        );
+        assert_eq!(
+            ModelRegistry::openai_compatible_models_url("https://api.example.com/v1/models")
+                .unwrap(),
+            "https://api.example.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn custom_models_override_fallback_for_openai_compatible() {
+        let registry = ModelRegistry::new();
+        registry.set_provider_models(
+            ProviderKind::OpenAICompatible,
+            vec!["custom-a".to_string(), "custom-b".to_string()],
+        );
+        assert_eq!(
+            registry.models_for(&ProviderKind::OpenAICompatible),
+            vec!["custom-a".to_string(), "custom-b".to_string()]
         );
     }
 }
