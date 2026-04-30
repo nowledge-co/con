@@ -7445,7 +7445,16 @@ impl Render for ConWorkspace {
             .min_w_0()
             .min_h_0()
             .bg(theme.transparent)
-            .child(div().flex_1().min_h_0().child(pane_tree_rendered));
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(pane_tree_rendered),
+            );
 
         if input_bar_transitioning && input_bar_progress > 0.01 {
             terminal_area = terminal_area.child(

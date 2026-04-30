@@ -89,12 +89,6 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     nsview: Option<id>,
     #[cfg(target_os = "macos")]
-    native_scroll_document_frame: Option<(f64, f64)>,
-    #[cfg(target_os = "macos")]
-    native_scroll_y: Option<f64>,
-    #[cfg(target_os = "macos")]
-    native_scroll_surface_frame: Option<(f64, f64, f64, f64)>,
-    #[cfg(target_os = "macos")]
     native_backing_color: Option<(u8, u8, u8, u8)>,
     #[cfg(target_os = "macos")]
     pending_native_layout: bool,
@@ -159,12 +153,6 @@ impl GhosttyView {
             document_view: None,
             #[cfg(target_os = "macos")]
             nsview: None,
-            #[cfg(target_os = "macos")]
-            native_scroll_document_frame: None,
-            #[cfg(target_os = "macos")]
-            native_scroll_y: None,
-            #[cfg(target_os = "macos")]
-            native_scroll_surface_frame: None,
             #[cfg(target_os = "macos")]
             native_backing_color: None,
             #[cfg(target_os = "macos")]
@@ -353,9 +341,6 @@ impl GhosttyView {
         }
         self.document_view = None;
         self.nsview = None;
-        self.native_scroll_document_frame = None;
-        self.native_scroll_y = None;
-        self.native_scroll_surface_frame = None;
         self.native_backing_color = None;
         self.pending_native_layout = false;
         self.native_layout_reveal_blocked.set(false);
@@ -383,9 +368,6 @@ impl GhosttyView {
         #[cfg(target_os = "macos")]
         {
             self.last_mouse_position = None;
-            self.native_scroll_document_frame = None;
-            self.native_scroll_y = None;
-            self.native_scroll_surface_frame = None;
             self.pending_native_layout = false;
             self.native_layout_reveal_blocked.set(false);
         }
@@ -522,7 +504,6 @@ impl GhosttyView {
                 // surface was still pending, an early-return here leaves the
                 // NSView at its bootstrap origin until a manual divider resize.
                 self.last_bounds = None;
-                self.reset_native_scroll_layout_cache();
                 log::info!(
                     "Ghostty surface created: {}x{} px, scale {}",
                     width_px,
@@ -611,12 +592,6 @@ impl GhosttyView {
         }
     }
 
-    fn reset_native_scroll_layout_cache(&mut self) {
-        self.native_scroll_document_frame = None;
-        self.native_scroll_y = None;
-        self.native_scroll_surface_frame = None;
-    }
-
     #[cfg(target_os = "macos")]
     pub fn mark_native_layout_pending(&mut self, cx: &mut Context<Self>) {
         self.pending_native_layout = true;
@@ -678,7 +653,6 @@ impl GhosttyView {
         }
 
         self.commit_surface_resize(bounds);
-        self.reset_native_scroll_layout_cache();
         self.sync_native_scroll_view();
 
         if let Some(started) = started {
@@ -751,17 +725,11 @@ impl GhosttyView {
         };
 
         unsafe {
-            let document_frame_key = (visible_width, document_height);
-            let document_frame_changed =
-                self.native_scroll_document_frame != Some(document_frame_key);
-            if document_frame_changed {
-                let document_frame = NSRect::new(
-                    cocoa::foundation::NSPoint::new(0.0, 0.0),
-                    cocoa::foundation::NSSize::new(visible_width, document_height),
-                );
-                let _: () = msg_send![document_view, setFrame:document_frame];
-                self.native_scroll_document_frame = Some(document_frame_key);
-            }
+            let document_frame = NSRect::new(
+                cocoa::foundation::NSPoint::new(0.0, 0.0),
+                cocoa::foundation::NSSize::new(visible_width, document_height),
+            );
+            let _: () = msg_send![document_view, setFrame:document_frame];
 
             let content_view: id = msg_send![scroll_view, contentView];
             let scroll_y = if let Some(scrollbar) = scrollbar {
@@ -779,33 +747,24 @@ impl GhosttyView {
             } else {
                 0.0
             };
-            let scroll_changed = self.native_scroll_y != Some(scroll_y);
-            if scroll_changed {
-                let _: () = msg_send![
-                    content_view,
-                    scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
-                ];
-                self.native_scroll_y = Some(scroll_y);
-            }
-            if document_frame_changed || scroll_changed {
-                let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
-            }
+            let _: () = msg_send![
+                content_view,
+                scrollToPoint:cocoa::foundation::NSPoint::new(0.0, scroll_y)
+            ];
+            let _: () = msg_send![scroll_view, reflectScrolledClipView:content_view];
 
-            // Do not read `documentVisibleRect` here. Con drives this AppKit
-            // hierarchy from GPUI layout callbacks, so the clip view can still
-            // report stale geometry immediately after split/zoom frame changes.
-            // The terminal surface frame must come from Con-owned pane bounds
-            // plus Ghostty's scrollbar state.
-            let surface_frame_key = (0.0, scroll_y, visible_width, visible_height);
-            if self.native_scroll_surface_frame == Some(surface_frame_key) {
-                return;
-            }
+            // Do not read `documentVisibleRect` here and do not skip this frame
+            // mutation through a local tuple cache. Con drives this AppKit
+            // hierarchy from GPUI layout callbacks, so split/zoom topology
+            // changes can leave AppKit's computed geometry or an old host
+            // placement stale until the next layout pass. The terminal surface
+            // frame must be deterministically reapplied from Con-owned pane
+            // bounds plus Ghostty's scrollbar state.
             let surface_frame = NSRect::new(
                 cocoa::foundation::NSPoint::new(0.0, scroll_y),
                 cocoa::foundation::NSSize::new(visible_width, visible_height),
             );
             let _: () = msg_send![nsview, setFrame:surface_frame];
-            self.native_scroll_surface_frame = Some(surface_frame_key);
         }
     }
 
