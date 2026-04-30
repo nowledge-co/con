@@ -10,7 +10,9 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Settings**
 
-- Settings now opens as a separate window. You can adjust appearance, shortcuts, and provider configuration, apply changes, and keep the settings window open while checking the terminal.
+- Settings now opens as a separate window. You can adjust appearance, shortcuts, and provider configuration, save changes, and keep the settings window open while checking the terminal.
+- Appearance controls now preview immediately while Settings stays open. Transparency, blur, background image strength, image layout, terminal font, UI font, and cursor style update live; Save Changes persists the current values.
+- Polished the Settings save action so it uses Con's active theme colors instead of the generic primary button treatment.
 - OpenAI-compatible providers can now fetch available models from the provider's `/models` endpoint when a Base URL and API key are configured.
 
 **Keyboard**
