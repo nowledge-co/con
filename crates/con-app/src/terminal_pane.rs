@@ -298,14 +298,6 @@ impl TerminalPane {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    pub fn cell_size_px(&self, cx: &App) -> Option<(u32, u32)> {
-        self.entity.read(cx).terminal().map(|terminal| {
-            let size = terminal.size();
-            (size.cell_width_px, size.cell_height_px)
-        })
-    }
-
     pub fn search_text(&self, pattern: &str, limit: usize, cx: &App) -> Vec<(usize, String)> {
         self.entity
             .read(cx)
