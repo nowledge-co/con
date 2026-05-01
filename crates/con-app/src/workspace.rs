@@ -8684,13 +8684,23 @@ impl Render for ConWorkspace {
         let effective_agent_panel_width = self
             .agent_panel_width
             .min(max_agent_panel_width(window_width));
+        #[cfg(not(target_os = "macos"))]
         let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
+        #[cfg(target_os = "macos")]
+        let agent_panel_visible_for_layout = self.agent_panel_open || agent_panel_progress > 0.01;
         let vertical_tabs_width = if self.vertical_tabs_active() {
             self.sidebar.read(cx).occupied_width()
         } else {
             0.0
         };
         let vertical_tabs_pinned = self.vertical_tabs_active() && self.sidebar.read(cx).is_pinned();
+        #[cfg(target_os = "macos")]
+        let agent_panel_outer_width = if agent_panel_visible_for_layout {
+            effective_agent_panel_width + 1.0
+        } else {
+            0.0
+        };
+        #[cfg(not(target_os = "macos"))]
         let agent_panel_outer_width = if agent_panel_progress > 0.01 {
             animated_panel_width + 1.0
         } else {
@@ -8802,10 +8812,20 @@ impl Render for ConWorkspace {
             );
         }
 
-        if agent_panel_progress > 0.01 {
+        #[cfg(target_os = "macos")]
+        let render_agent_panel = agent_panel_visible_for_layout;
+        #[cfg(not(target_os = "macos"))]
+        let render_agent_panel = agent_panel_progress > 0.01;
+
+        if render_agent_panel {
+            #[cfg(target_os = "macos")]
+            let panel_width = effective_agent_panel_width + 1.0;
+            #[cfg(not(target_os = "macos"))]
+            let panel_width = animated_panel_width + 1.0;
+
             main_area = main_area.child(
                 div()
-                    .w(px(animated_panel_width + 1.0))
+                    .w(px(panel_width))
                     .h_full()
                     .overflow_hidden()
                     .flex_shrink_0()
@@ -9572,13 +9592,18 @@ impl Render for ConWorkspace {
             );
         }
 
-        if agent_panel_transitioning && agent_panel_progress > 0.01 {
+        if agent_panel_transitioning && render_agent_panel {
+            #[cfg(target_os = "macos")]
+            let agent_panel_seam_right = effective_agent_panel_width;
+            #[cfg(not(target_os = "macos"))]
+            let agent_panel_seam_right = animated_panel_width;
+
             root = root.child(
                 div()
                     .absolute()
                     .top(px(top_bar_height))
                     .bottom_0()
-                    .right(px(animated_panel_width))
+                    .right(px(agent_panel_seam_right))
                     .w(px(CHROME_TRANSITION_SEAM_COVER))
                     .bg(chrome_transition_seam_color),
             );
