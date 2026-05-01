@@ -19,6 +19,7 @@ The earlier full-surface matte approach solved the leak but created a worse blin
 - Pane dividers receive the same terminal-derived divider color from the workspace, so split seams match the adjacent terminal surface instead of the UI chrome.
 - MacOS chrome surfaces that sit outside the native terminal area are now precomposed over the terminal background before being painted by GPUI. They visually read like translucent chrome over the terminal, but they no longer blend against the desktop through a clear window pixel.
 - The native Ghostty host view now keeps a tiny backing overdraw under GPUI seams while keeping the Metal surface aligned to the pane bounds. If GPUI and AppKit disagree for a frame during split, zoom, sidebar, agent-panel, or input-bar motion, the revealed backing is terminal-colored instead of clear.
+- During macOS chrome transitions, the workspace enables a shared native underlay below all Ghostty hosts in the window. It fills otherwise-clear window backing during input-bar, agent-panel, tab-strip, and vertical-tabs geometry races, then hides after the transition guard expires.
 - On macOS, the right agent panel no longer uses its animated width as terminal layout input. The terminal/panel boundary snaps to stable open/closed geometry while the panel content animates, avoiding a fast-moving native/GPUI seam that no fixed strip can cover reliably.
 - Windows and Linux keep their existing GPUI divider colors; the leak is specific to the macOS transparent-window/native-NSView composition path.
 
@@ -28,5 +29,6 @@ The earlier full-surface matte approach solved the leak but created a worse blin
 - A seam cover must visually match the adjacent surface and be opaque unless it is backed by the same native blur/compositing path as the terminal.
 - When chrome is outside the native terminal view but visually adjacent to it, precompose the chrome over the terminal background on macOS. Relying on alpha against a transparent root lets the desktop become part of the UI color.
 - Native embedded surfaces should slightly overdraw their backing under GPUI seams, while keeping terminal content geometry exact. Exact-fit native frames are fragile when two layout systems update in different phases.
+- A temporary native underlay is preferable to a GPUI matte for transition races: below-terminal backing can catch clear pixels without veiling terminal text.
 - Do not feed decorative chrome animation directly into native terminal layout when that chrome owns a terminal boundary. Animate visual reveal separately from terminal geometry.
 - Do not hide edge artifacts with full-area mattes. They trade a small seam bug for a whole-terminal blink and make future animation polish harder.

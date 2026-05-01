@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "macos")]
 use cocoa::base::id;
@@ -386,6 +386,8 @@ pub struct ConWorkspace {
     /// Last macOS content-resize increment applied to the window, in 1/1000th points.
     #[cfg(target_os = "macos")]
     last_window_resize_increment_millipoints: Option<(u32, u32)>,
+    #[cfg(target_os = "macos")]
+    chrome_transition_underlay_until: Option<Instant>,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -665,6 +667,37 @@ impl ConWorkspace {
 
     fn elevated_ui_surface_opacity(&self) -> f32 {
         (self.ui_surface_opacity() + 0.02).min(0.98)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn arm_chrome_transition_underlay(&mut self, duration: Duration) {
+        let until = Instant::now() + duration;
+        self.chrome_transition_underlay_until = Some(
+            self.chrome_transition_underlay_until
+                .map_or(until, |prev| prev.max(until)),
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_chrome_transition_underlay(&self, visible: bool, cx: &App) {
+        if visible {
+            if self.has_active_tab()
+                && let Some(terminal) = self.tabs[self.active_tab]
+                    .pane_tree
+                    .all_terminals()
+                    .into_iter()
+                    .next()
+            {
+                terminal.set_native_transition_underlay_visible(true, cx);
+            }
+            return;
+        }
+
+        for tab in &self.tabs {
+            for terminal in tab.pane_tree.all_terminals() {
+                terminal.set_native_transition_underlay_visible(false, cx);
+            }
+        }
     }
 
     pub fn from_session(
@@ -1304,6 +1337,8 @@ impl ConWorkspace {
             last_ghostty_wake_generation,
             #[cfg(target_os = "macos")]
             last_window_resize_increment_millipoints: None,
+            #[cfg(target_os = "macos")]
+            chrome_transition_underlay_until: None,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             pending_surface_control_requests: Vec::new(),
@@ -4864,6 +4899,8 @@ impl ConWorkspace {
         if self.tabs_orientation == orientation {
             return;
         }
+        #[cfg(target_os = "macos")]
+        self.arm_chrome_transition_underlay(Duration::from_millis(260));
         self.config.appearance.tabs_orientation = orientation;
         self.tabs_orientation = orientation;
         if persist_config {
@@ -6276,10 +6313,11 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.agent_panel_open = !self.agent_panel_open;
-        self.agent_panel_motion.set_target(
-            if self.agent_panel_open { 1.0 } else { 0.0 },
-            std::time::Duration::from_millis(if self.agent_panel_open { 290 } else { 220 }),
-        );
+        let duration = Duration::from_millis(if self.agent_panel_open { 290 } else { 220 });
+        #[cfg(target_os = "macos")]
+        self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
+        self.agent_panel_motion
+            .set_target(if self.agent_panel_open { 1.0 } else { 0.0 }, duration);
         if self.agent_panel_open {
             if self.input_bar_visible {
                 self.input_bar.focus_handle(cx).focus(window, cx);
@@ -6308,10 +6346,11 @@ impl ConWorkspace {
         if !self.input_bar_visible {
             self.pane_scope_picker_open = false;
         }
-        self.input_bar_motion.set_target(
-            if self.input_bar_visible { 1.0 } else { 0.0 },
-            std::time::Duration::from_millis(if self.input_bar_visible { 210 } else { 160 }),
-        );
+        let duration = Duration::from_millis(if self.input_bar_visible { 210 } else { 160 });
+        #[cfg(target_os = "macos")]
+        self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
+        self.input_bar_motion
+            .set_target(if self.input_bar_visible { 1.0 } else { 0.0 }, duration);
         if self.input_bar_visible {
             self.input_bar.focus_handle(cx).focus(window, cx);
         } else if self.agent_panel_open {
@@ -8611,6 +8650,25 @@ impl Render for ConWorkspace {
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
         let tab_strip_transitioning = self.tab_strip_motion.is_animating();
+        #[cfg(target_os = "macos")]
+        {
+            let guard_active = if let Some(until) = self.chrome_transition_underlay_until {
+                if Instant::now() < until {
+                    window.request_animation_frame();
+                    true
+                } else {
+                    self.chrome_transition_underlay_until = None;
+                    false
+                }
+            } else {
+                false
+            };
+            let underlay_active = agent_panel_transitioning
+                || input_bar_transitioning
+                || tab_strip_transitioning
+                || guard_active;
+            self.sync_chrome_transition_underlay(underlay_active, cx);
+        }
 
         // Render the vertical-tabs hover-card overlay up front so it
         // takes the (re-entrant) sidebar borrow before `theme` claims
