@@ -8740,6 +8740,38 @@ impl Render for ConWorkspace {
             self.sync_chrome_transition_underlay(underlay_active, cx);
         }
 
+        let window_width = window.bounds().size.width.as_f32();
+        let effective_agent_panel_width = self
+            .agent_panel_width
+            .min(max_agent_panel_width(window_width));
+        #[cfg(not(target_os = "macos"))]
+        let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
+        #[cfg(target_os = "macos")]
+        let agent_panel_visible_for_layout = self.agent_panel_open || agent_panel_progress > 0.01;
+        #[cfg(target_os = "macos")]
+        let agent_panel_outer_width = if agent_panel_visible_for_layout {
+            effective_agent_panel_width + 1.0
+        } else {
+            0.0
+        };
+        #[cfg(not(target_os = "macos"))]
+        let agent_panel_outer_width = if agent_panel_progress > 0.01 {
+            animated_panel_width + 1.0
+        } else {
+            0.0
+        };
+        let max_vertical_tabs_width =
+            max_sidebar_panel_width(window_width, agent_panel_outer_width);
+        let vertical_tabs_width = if self.vertical_tabs_active() {
+            self.sidebar.update(cx, |sidebar, _cx| {
+                sidebar.set_effective_panel_max_width(max_vertical_tabs_width);
+                sidebar.occupied_width_with_max(max_vertical_tabs_width)
+            })
+        } else {
+            0.0
+        };
+        let vertical_tabs_pinned = self.vertical_tabs_active() && self.sidebar.read(cx).is_pinned();
+
         // Render the vertical-tabs hover-card overlay up front so it
         // takes the (re-entrant) sidebar borrow before `theme` claims
         // the immutable cx borrow that the rest of `render` relies on.
@@ -8761,7 +8793,6 @@ impl Render for ConWorkspace {
             .clamp(0.0, 1.0)
             .powf(0.92);
         let compact_titlebar_progress = 1.0 - tab_strip_progress;
-        let window_width = window.bounds().size.width.as_f32();
         #[cfg(target_os = "macos")]
         let terminal_background = self.terminal_theme.background;
         #[cfg(target_os = "macos")]
@@ -8809,35 +8840,6 @@ impl Render for ConWorkspace {
         );
         #[cfg(not(target_os = "macos"))]
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
-        let effective_agent_panel_width = self
-            .agent_panel_width
-            .min(max_agent_panel_width(window_width));
-        #[cfg(not(target_os = "macos"))]
-        let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
-        #[cfg(target_os = "macos")]
-        let agent_panel_visible_for_layout = self.agent_panel_open || agent_panel_progress > 0.01;
-        #[cfg(target_os = "macos")]
-        let agent_panel_outer_width = if agent_panel_visible_for_layout {
-            effective_agent_panel_width + 1.0
-        } else {
-            0.0
-        };
-        #[cfg(not(target_os = "macos"))]
-        let agent_panel_outer_width = if agent_panel_progress > 0.01 {
-            animated_panel_width + 1.0
-        } else {
-            0.0
-        };
-        let max_vertical_tabs_width =
-            max_sidebar_panel_width(window_width, agent_panel_outer_width);
-        let vertical_tabs_width = if self.vertical_tabs_active() {
-            self.sidebar
-                .read(cx)
-                .occupied_width_with_max(max_vertical_tabs_width)
-        } else {
-            0.0
-        };
-        let vertical_tabs_pinned = self.vertical_tabs_active() && self.sidebar.read(cx).is_pinned();
         let terminal_content_left = vertical_tabs_width;
         let terminal_content_width =
             (window_width - terminal_content_left - agent_panel_outer_width).max(0.0);

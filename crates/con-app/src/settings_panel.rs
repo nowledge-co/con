@@ -3151,12 +3151,14 @@ impl SettingsPanel {
                                 // doesn't lose the change, and emit
                                 // a narrow event so the workspace
                                 // applies only the orientation switch.
+                                let previous_orientation = this.config.appearance.tabs_orientation;
                                 this.config.appearance.tabs_orientation = if *checked {
                                     con_core::config::TabsOrientation::Vertical
                                 } else {
                                     con_core::config::TabsOrientation::Horizontal
                                 };
-                                if let Err(err) = this.persist_config() {
+                                if let Err(err) = this.config.save() {
+                                    this.config.appearance.tabs_orientation = previous_orientation;
                                     log::warn!("settings: persist tabs_orientation failed: {err}");
                                     this.save_error = Some(err.to_string());
                                     cx.notify();
