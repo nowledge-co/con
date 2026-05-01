@@ -247,6 +247,7 @@ struct RichSvgRenderKey {
     source: SharedString,
     metric: u32,
     theme_mode: RichSvgThemeMode,
+    color: Option<SharedString>,
 }
 
 struct RichSvgRenderEntry {
@@ -560,7 +561,11 @@ impl ChatMarkdownBlockView {
                                     &options,
                                 )
                                 .map_err(anyhow::Error::msg)?;
-                                math_svg_for_theme(svg, background_key.theme_mode)
+                                if let Some(color) = background_key.color.as_ref() {
+                                    apply_svg_root_color(svg, color.as_ref())
+                                } else {
+                                    math_svg_for_theme(svg, background_key.theme_mode)
+                                }
                             }
                         };
                         svg_renderer
@@ -1776,7 +1781,7 @@ fn math_font_size_metric(style: &ChatMarkdownStyle<'_>) -> u32 {
 }
 
 fn inline_math_font_size_metric(base_style: &TextStyle) -> u32 {
-    let font_size: f32 = (text_style_font_size(base_style) * 0.9).into();
+    let font_size: f32 = text_style_font_size(base_style).into();
     (font_size * 1000.0).round().max(1.0) as u32
 }
 
@@ -1786,6 +1791,19 @@ fn math_svg_for_theme(svg: String, theme_mode: RichSvgThemeMode) -> String {
         RichSvgThemeMode::Dark => "#F8FAFC",
     };
     apply_svg_root_color(svg, color)
+}
+
+fn svg_color_for_hsla_over_background(color: Hsla, background: Hsla) -> String {
+    let fg = color.to_rgb();
+    let bg = background.to_rgb();
+    let alpha = fg.a.clamp(0.0, 1.0);
+    let blend = |fg: f32, bg: f32| ((fg * alpha + bg * (1.0 - alpha)) * 255.0).round() as u8;
+    format!(
+        "#{:02X}{:02X}{:02X}",
+        blend(fg.r, bg.r),
+        blend(fg.g, bg.g),
+        blend(fg.b, bg.b)
+    )
 }
 
 fn apply_svg_root_color(mut svg: String, color: &str) -> String {
@@ -1948,12 +1966,14 @@ fn rich_svg_key_for_block(
             source: code.clone(),
             metric: *scale,
             theme_mode: rich_svg_theme_mode(style),
+            color: None,
         }),
         MarkdownBlock::MathBlock { math, .. } => Some(RichSvgRenderKey {
             kind: RichSvgRenderKind::Math,
             source: math.clone(),
             metric: math_font_size_metric(style),
             theme_mode: rich_svg_theme_mode(style),
+            color: None,
         }),
         _ => None,
     }
@@ -2389,6 +2409,10 @@ fn render_inline_flow_content(
                     source: SharedString::from(value.clone()),
                     metric: inline_math_font_size_metric(base_style),
                     theme_mode: rich_svg_theme_mode(style),
+                    color: Some(SharedString::from(svg_color_for_hsla_over_background(
+                        style.text_color,
+                        style.theme.background,
+                    ))),
                 };
                 let mut math_path = path.to_vec();
                 math_path.push(index);
@@ -2436,16 +2460,14 @@ fn render_inline_math_item(
         Some(Ok(image)) => div()
             .id(id)
             .relative()
-            .top(px(-1.0))
-            .mx(px(3.0))
+            .top(px(1.0))
             .flex_none()
             .child(img(ImageSource::Render(image.clone())).flex_none())
             .into_any_element(),
         Some(Err(_)) | None => div()
             .id(id)
             .relative()
-            .top(px(-1.0))
-            .mx(px(3.0))
+            .top(px(1.0))
             .px(px(3.0))
             .py(px(0.0))
             .rounded(px(4.0))
@@ -2953,6 +2975,7 @@ mod tests {
             source: "flowchart TD\n  A-->B".into(),
             metric: 100,
             theme_mode: RichSvgThemeMode::Light,
+            color: None,
         };
 
         let first = rich_svg_render_id(&[0, 0, 0], &key);
