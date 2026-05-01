@@ -13,6 +13,7 @@
 //! and layout state. The Windows D3D11 path remains the model for the
 //! eventual native renderer.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use con_ghostty::{
@@ -24,6 +25,7 @@ use futures::channel::mpsc::unbounded;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
+use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
     TerminalPastePayload, copy_selection_to_clipboard, payload_from_clipboard,
@@ -91,6 +93,8 @@ pub struct GhosttyView {
     seen_any_output: bool,
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
+    ime_marked_text: Option<String>,
+    ime_selected_range: Option<Range<usize>>,
     last_surface_size: Option<(u32, u32, u16, u16)>,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
@@ -164,6 +168,8 @@ impl GhosttyView {
             seen_any_output: false,
             pane_bounds: None,
             scale_factor: 1.0,
+            ime_marked_text: None,
+            ime_selected_range: None,
             last_surface_size: None,
             mouse_down_link: None,
             suppress_link_mouse_up: false,
@@ -230,6 +236,8 @@ impl GhosttyView {
         self.row_cache_style = None;
         self.row_cache_shape = None;
         self.seen_any_output = false;
+        self.ime_marked_text = None;
+        self.ime_selected_range = None;
         self.last_surface_size = None;
         self.mouse_down_link = None;
         self.suppress_link_mouse_up = false;
@@ -571,6 +579,15 @@ impl GhosttyView {
             return true;
         }
 
+        if event.prefer_character_input
+            && keystroke
+                .key_char
+                .as_deref()
+                .is_some_and(|text| !text.is_empty())
+        {
+            return false;
+        }
+
         if keystroke.modifiers.control
             && !keystroke.modifiers.alt
             && !keystroke.modifiers.shift
@@ -602,16 +619,46 @@ impl GhosttyView {
             .as_deref()
             .filter(|text| !text.is_empty())
         {
+            if !keystroke.modifiers.control
+                && !keystroke.modifiers.alt
+                && !keystroke.modifiers.platform
+            {
+                return false;
+            }
             terminal.send_text(text);
             return true;
         }
 
         if keystroke.key.len() == 1 {
+            if !keystroke.modifiers.control
+                && !keystroke.modifiers.alt
+                && !keystroke.modifiers.platform
+            {
+                return false;
+            }
             terminal.send_text(&keystroke.key);
             return true;
         }
 
         false
+    }
+
+    fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
+        let bounds = self.pane_bounds?;
+        let snapshot = self.snapshot.as_ref()?;
+        let font_size_px = effective_font_size(self.initial_font_size);
+        let cell_width = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0);
+        let cell_height = (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0);
+        let col = snapshot.cursor.col.min(snapshot.cols.saturating_sub(1)) as f32;
+        let row = snapshot.cursor.row.min(snapshot.rows.saturating_sub(1)) as f32;
+
+        Some(Bounds::new(
+            point(
+                bounds.origin.x + px(TERMINAL_PADDING_X_PX + col * cell_width),
+                bounds.origin.y + px(TERMINAL_PADDING_Y_PX + row * cell_height),
+            ),
+            size(px(cell_width.max(1.0)), px(cell_height.max(1.0))),
+        ))
     }
 
     fn sync_row_cache(
@@ -723,11 +770,50 @@ impl Focusable for GhosttyView {
     }
 }
 
+type LinuxTerminalInputHandler = TerminalImeInputHandler<GhosttyView>;
+
+impl TerminalImeView for GhosttyView {
+    fn ime_marked_text(&self) -> Option<&str> {
+        self.ime_marked_text.as_deref()
+    }
+
+    fn ime_selected_range(&self) -> Option<Range<usize>> {
+        self.ime_selected_range.clone()
+    }
+
+    fn set_ime_state(&mut self, marked_text: Option<String>, selected_range: Option<Range<usize>>) {
+        self.ime_marked_text = marked_text;
+        self.ime_selected_range = selected_range;
+    }
+
+    fn clear_ime_state(&mut self) {
+        self.ime_marked_text = None;
+        self.ime_selected_range = None;
+    }
+
+    fn send_ime_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let _ = self.ensure_session(cx);
+        if let Some(terminal) = &self.terminal {
+            terminal.send_text(text);
+        }
+    }
+
+    fn prepare_ime_marked_text(&mut self, cx: &mut Context<Self>) {
+        let _ = self.ensure_session(cx);
+    }
+
+    fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
+        GhosttyView::ime_cursor_bounds(self)
+    }
+}
+
 impl Render for GhosttyView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let focus = self.focus_handle.clone();
+        let input_focus = focus.clone();
         let entity = cx.entity().downgrade();
+        let input_entity = entity.clone();
         let font_size_px = effective_font_size(self.initial_font_size);
         let line_height_px = (font_size_px * 1.45).round();
         let cell_width_px = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0);
@@ -978,6 +1064,7 @@ impl Render for GhosttyView {
             )
             .child(
                 div()
+                    .relative()
                     .flex()
                     .flex_col()
                     .size_full()
@@ -999,7 +1086,21 @@ impl Render for GhosttyView {
                             });
                         }
                     })
-                    .child(terminal_layer),
+                    .child(terminal_layer)
+                    .child(
+                        canvas(
+                            |_, _, _| {},
+                            move |_, _, window, cx| {
+                                window.handle_input(
+                                    &input_focus,
+                                    LinuxTerminalInputHandler::new(input_entity.clone()),
+                                    cx,
+                                );
+                            },
+                        )
+                        .absolute()
+                        .size_full(),
+                    ),
             )
     }
 }

@@ -8,6 +8,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Added
 
+**Terminal, Windows and Linux Backends**
+
+- Added CJK IME text input for Windows and Linux terminal panes. IME commits now enter through GPUI's platform text-input path, preedit state tracks candidate positioning at the terminal cursor, and terminal-local control / alt / special key handling remains unchanged. The macOS embedded Ghostty path is unchanged.
+
 **Control Plane**
 
 - Added pane-local terminal surfaces for external orchestrators. Existing `panes.*` APIs, built-in agent tools, and benchmarks keep the active-surface pane contract, while new `tree.get` and `surfaces.*` RPC/CLI commands can create, split, wait for readiness, focus, rename, drive, read, and close terminal sessions inside a pane.

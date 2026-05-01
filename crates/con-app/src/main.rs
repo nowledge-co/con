@@ -55,6 +55,8 @@ mod motion;
 mod pane_tree;
 mod settings_panel;
 mod sidebar;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod terminal_ime;
 mod terminal_links;
 mod terminal_pane;
 mod terminal_paste;

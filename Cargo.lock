@@ -1290,6 +1290,7 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tracing",
+ "unicode-width",
  "url",
  "uuid",
  "windows 0.61.3",

@@ -69,6 +69,7 @@ raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"
+unicode-width.workspace = true
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Diagnostics_Debug",  # AddVectoredExceptionHandler
@@ -80,6 +81,9 @@ windows = { version = "0.61", features = [
 # `SmallVec<[image::Frame; 1]>` and it does not re-export either crate).
 image = { version = "0.25", default-features = false }
 smallvec = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+unicode-width.workspace = true
 
 [build-dependencies]
 cc = "1"
