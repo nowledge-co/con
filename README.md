@@ -14,7 +14,7 @@
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue?style=flat"></a>
   <a href="https://github.com/nowledge-co/con-terminal/releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/nowledge-co/con-terminal?sort=semver&logo=github&style=flat"></a>
-  <a href="https://developer.apple.com/macos/"><img alt="Native on macOS (Metal)" src="https://img.shields.io/badge/native-beta-3D3D3D?logo=apple&logoColor=white&style=flat"></a>
+  <a href="https://developer.apple.com/macos/"><img alt="Native on macOS (Metal)" src="https://img.shields.io/badge/macOS-beta-3D3D3D?logo=apple&logoColor=white&style=flat"></a>
   <a href="https://github.com/nowledge-co/con-terminal/issues/34"><img alt="Windows preview (tracker)" src="https://img.shields.io/badge/Windows-preview-0078D4?logo=windows&logoColor=white&style=flat"></a>
   <a href="https://github.com/nowledge-co/con-terminal/issues/18"><img alt="Linux preview (tracker)" src="https://img.shields.io/badge/Linux-preview-1D4ED8?logo=linux&logoColor=white&style=flat"></a>
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-CE422B?logo=rust&logoColor=white&style=flat"></a>
