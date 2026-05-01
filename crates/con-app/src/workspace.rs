@@ -3311,20 +3311,31 @@ impl ConWorkspace {
                 match self.resolve_control_tab_index(tab_index) {
                     Ok(tab_idx) => match self.resolve_surface_target_for_tab(tab_idx, target) {
                         Ok(resolved) => {
-                            let focused = self.tabs[tab_idx]
-                                .pane_tree
-                                .focus_surface(resolved.surface_id);
-                            if tab_idx == self.active_tab {
+                            let surface_id = resolved.surface_id;
+                            let changed = self.tabs[tab_idx].pane_tree.focus_surface(surface_id);
+                            let resolved = match self.resolve_surface_target_for_tab(
+                                tab_idx,
+                                con_core::SurfaceTarget::new(None, None, Some(surface_id)),
+                            ) {
+                                Ok(resolved) => resolved,
+                                Err(err) => {
+                                    Self::send_control_result(response_tx, Err(err));
+                                    return;
+                                }
+                            };
+                            if changed && tab_idx == self.active_tab {
                                 self.sync_active_tab_native_view_visibility(cx);
                                 self.sync_active_terminal_focus_states(cx);
                                 self.schedule_active_terminal_focus(cx);
                             }
-                            self.save_session(cx);
-                            cx.notify();
+                            if changed {
+                                self.save_session(cx);
+                                cx.notify();
+                            }
                             Self::send_control_result(
                                 response_tx,
                                 Ok(json!({
-                                    "status": if focused { "focused" } else { "unchanged" },
+                                    "status": if changed { "focused" } else { "unchanged" },
                                     "tab_index": tab_idx + 1,
                                     "pane_index": resolved.pane_index,
                                     "pane_id": resolved.pane_id,

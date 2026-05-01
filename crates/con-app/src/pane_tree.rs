@@ -146,7 +146,8 @@ impl PaneTree {
         focused_pane_id: Option<PaneId>,
         make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
     ) -> Self {
-        let mut root = Self::node_from_state(layout, make_terminal);
+        let mut restored_surface_id = 0;
+        let mut root = Self::node_from_state(layout, make_terminal, &mut restored_surface_id);
         let mut next_split_id = 0;
         Self::normalize_split_ids(&mut root, &mut next_split_id);
         let next_id = Self::max_pane_id(&root).saturating_add(1);
@@ -1358,13 +1359,18 @@ impl PaneTree {
     fn node_from_state(
         state: &PaneLayoutState,
         make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
+        next_surface_id: &mut SurfaceId,
     ) -> PaneNode {
         match state {
-            PaneLayoutState::Leaf { pane_id, cwd } => PaneNode::Leaf {
-                id: *pane_id,
-                surfaces: vec![PaneSurface::new(*pane_id, make_terminal(cwd.as_deref()))],
-                active_surface_id: *pane_id,
-            },
+            PaneLayoutState::Leaf { pane_id, cwd } => {
+                let surface_id = *next_surface_id;
+                *next_surface_id = (*next_surface_id).saturating_add(1);
+                PaneNode::Leaf {
+                    id: *pane_id,
+                    surfaces: vec![PaneSurface::new(surface_id, make_terminal(cwd.as_deref()))],
+                    active_surface_id: surface_id,
+                }
+            }
             PaneLayoutState::Split {
                 direction,
                 ratio,
@@ -1376,8 +1382,12 @@ impl PaneTree {
                     PaneSplitDirection::Horizontal => SplitDirection::Horizontal,
                     PaneSplitDirection::Vertical => SplitDirection::Vertical,
                 },
-                first: Box::new(Self::node_from_state(first, make_terminal)),
-                second: Box::new(Self::node_from_state(second, make_terminal)),
+                first: Box::new(Self::node_from_state(first, make_terminal, next_surface_id)),
+                second: Box::new(Self::node_from_state(
+                    second,
+                    make_terminal,
+                    next_surface_id,
+                )),
                 ratio: ratio.clamp(0.05, 0.95),
             },
         }
