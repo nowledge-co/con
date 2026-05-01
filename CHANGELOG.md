@@ -6,6 +6,15 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+## `v0.1.0-beta.50` - 2026-05-01
+
+**Terminal, macOS**
+
+- Now zoom window can be done double-click on titlebar
+- Zoomed window fixed buttom one pixel spacing leaked
+
+### Fixed
+
 ## `v0.1.0-beta.49` - 2026-05-01
 
 ### Fixed
