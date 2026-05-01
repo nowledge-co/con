@@ -53,6 +53,42 @@ impl PaneTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SurfaceTarget {
+    pub pane_index: Option<usize>,
+    pub pane_id: Option<usize>,
+    pub surface_id: Option<usize>,
+}
+
+impl SurfaceTarget {
+    pub const fn new(
+        pane_index: Option<usize>,
+        pane_id: Option<usize>,
+        surface_id: Option<usize>,
+    ) -> Self {
+        Self {
+            pane_index,
+            pane_id,
+            surface_id,
+        }
+    }
+
+    pub fn pane_target(self) -> PaneTarget {
+        PaneTarget::new(self.pane_index, self.pane_id)
+    }
+
+    pub fn describe(self) -> String {
+        match (self.surface_id, self.pane_index, self.pane_id) {
+            (Some(surface_id), _, _) => format!("surface id {surface_id}"),
+            (None, Some(index), Some(id)) => format!("active surface in pane {index} (id {id})"),
+            (None, Some(index), None) => format!("active surface in pane {index}"),
+            (None, None, Some(id)) => format!("active surface in pane id {id}"),
+            (None, None, None) => "active surface in focused pane".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ControlMethodInfo {
     pub method: &'static str,
@@ -95,6 +131,41 @@ const CONTROL_METHODS: &[(&str, &str)] = &[
     (
         "panes.probe_shell",
         "Run a read-only shell probe against a proven shell prompt.",
+    ),
+    (
+        "tree.get",
+        "Return the tab, pane, and pane-local surface tree.",
+    ),
+    (
+        "surfaces.list",
+        "List pane-local terminal surfaces without changing pane semantics.",
+    ),
+    (
+        "surfaces.create",
+        "Create a terminal surface inside an existing pane.",
+    ),
+    (
+        "surfaces.split",
+        "Create a split pane with an initial terminal surface.",
+    ),
+    ("surfaces.focus", "Focus a pane-local terminal surface."),
+    ("surfaces.rename", "Rename a pane-local terminal surface."),
+    ("surfaces.close", "Close a pane-local terminal surface."),
+    (
+        "surfaces.read",
+        "Read recent content from a terminal surface.",
+    ),
+    (
+        "surfaces.send_text",
+        "Send text bytes to a terminal surface.",
+    ),
+    (
+        "surfaces.send_key",
+        "Send a named key to a terminal surface.",
+    ),
+    (
+        "surfaces.wait_ready",
+        "Wait for a terminal surface to become ready and return readiness metadata.",
     ),
     ("tmux.inspect", "Inspect tmux control state for a pane."),
     (
@@ -195,6 +266,64 @@ pub enum ControlCommand {
         tab_index: Option<usize>,
         target: PaneTarget,
     },
+    TreeGet {
+        tab_index: Option<usize>,
+    },
+    SurfacesList {
+        tab_index: Option<usize>,
+        pane: PaneTarget,
+    },
+    SurfacesCreate {
+        tab_index: Option<usize>,
+        pane: PaneTarget,
+        title: Option<String>,
+        command: Option<String>,
+        owner: Option<String>,
+        close_pane_when_last: bool,
+    },
+    SurfacesSplit {
+        tab_index: Option<usize>,
+        source: SurfaceTarget,
+        location: PaneCreateLocation,
+        title: Option<String>,
+        command: Option<String>,
+        owner: Option<String>,
+        close_pane_when_last: bool,
+    },
+    SurfacesFocus {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+    },
+    SurfacesRename {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+        title: String,
+    },
+    SurfacesClose {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+        close_empty_owned_pane: bool,
+    },
+    SurfacesRead {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+        lines: usize,
+    },
+    SurfacesSendText {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+        text: String,
+    },
+    SurfacesSendKey {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+        key: String,
+    },
+    SurfacesWaitReady {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+        timeout_secs: Option<u64>,
+    },
     TmuxInspect {
         tab_index: Option<usize>,
         target: PaneTarget,
@@ -253,6 +382,17 @@ impl ControlCommand {
             Self::PanesCreate { .. } => "panes.create",
             Self::PanesWait { .. } => "panes.wait",
             Self::PanesProbeShell { .. } => "panes.probe_shell",
+            Self::TreeGet { .. } => "tree.get",
+            Self::SurfacesList { .. } => "surfaces.list",
+            Self::SurfacesCreate { .. } => "surfaces.create",
+            Self::SurfacesSplit { .. } => "surfaces.split",
+            Self::SurfacesFocus { .. } => "surfaces.focus",
+            Self::SurfacesRename { .. } => "surfaces.rename",
+            Self::SurfacesClose { .. } => "surfaces.close",
+            Self::SurfacesRead { .. } => "surfaces.read",
+            Self::SurfacesSendText { .. } => "surfaces.send_text",
+            Self::SurfacesSendKey { .. } => "surfaces.send_key",
+            Self::SurfacesWaitReady { .. } => "surfaces.wait_ready",
             Self::TmuxInspect { .. } => "tmux.inspect",
             Self::TmuxList { .. } => "tmux.list",
             Self::TmuxCapture { .. } => "tmux.capture",
@@ -327,6 +467,119 @@ impl ControlCommand {
                 "tab_index": tab_index,
                 "pane_index": target.pane_index,
                 "pane_id": target.pane_id,
+            }),
+            Self::TreeGet { tab_index } => json!({ "tab_index": tab_index }),
+            Self::SurfacesList { tab_index, pane } => json!({
+                "tab_index": tab_index,
+                "pane_index": pane.pane_index,
+                "pane_id": pane.pane_id,
+            }),
+            Self::SurfacesCreate {
+                tab_index,
+                pane,
+                title,
+                command,
+                owner,
+                close_pane_when_last,
+            } => json!({
+                "tab_index": tab_index,
+                "pane_index": pane.pane_index,
+                "pane_id": pane.pane_id,
+                "title": title,
+                "command": command,
+                "owner": owner,
+                "close_pane_when_last": close_pane_when_last,
+            }),
+            Self::SurfacesSplit {
+                tab_index,
+                source,
+                location,
+                title,
+                command,
+                owner,
+                close_pane_when_last,
+            } => json!({
+                "tab_index": tab_index,
+                "pane_index": source.pane_index,
+                "pane_id": source.pane_id,
+                "surface_id": source.surface_id,
+                "location": location,
+                "title": title,
+                "command": command,
+                "owner": owner,
+                "close_pane_when_last": close_pane_when_last,
+            }),
+            Self::SurfacesFocus { tab_index, target } => json!({
+                "tab_index": tab_index,
+                "pane_index": target.pane_index,
+                "pane_id": target.pane_id,
+                "surface_id": target.surface_id,
+            }),
+            Self::SurfacesWaitReady {
+                tab_index,
+                target,
+                timeout_secs,
+            } => json!({
+                "tab_index": tab_index,
+                "pane_index": target.pane_index,
+                "pane_id": target.pane_id,
+                "surface_id": target.surface_id,
+                "timeout_secs": timeout_secs,
+            }),
+            Self::SurfacesRename {
+                tab_index,
+                target,
+                title,
+            } => json!({
+                "tab_index": tab_index,
+                "pane_index": target.pane_index,
+                "pane_id": target.pane_id,
+                "surface_id": target.surface_id,
+                "title": title,
+            }),
+            Self::SurfacesClose {
+                tab_index,
+                target,
+                close_empty_owned_pane,
+            } => json!({
+                "tab_index": tab_index,
+                "pane_index": target.pane_index,
+                "pane_id": target.pane_id,
+                "surface_id": target.surface_id,
+                "close_empty_owned_pane": close_empty_owned_pane,
+            }),
+            Self::SurfacesRead {
+                tab_index,
+                target,
+                lines,
+            } => json!({
+                "tab_index": tab_index,
+                "pane_index": target.pane_index,
+                "pane_id": target.pane_id,
+                "surface_id": target.surface_id,
+                "lines": lines,
+            }),
+            Self::SurfacesSendText {
+                tab_index,
+                target,
+                text,
+            } => json!({
+                "tab_index": tab_index,
+                "pane_index": target.pane_index,
+                "pane_id": target.pane_id,
+                "surface_id": target.surface_id,
+                "text": text,
+            }),
+            Self::SurfacesSendKey {
+                tab_index,
+                target,
+                key,
+            } => json!({
+                "tab_index": tab_index,
+                "pane_index": target.pane_index,
+                "pane_id": target.pane_id,
+                "surface_id": target.surface_id,
+                "key": key,
             }),
             Self::TmuxCapture {
                 tab_index,
@@ -455,6 +708,97 @@ impl ControlCommand {
                 Ok(Self::PanesProbeShell {
                     tab_index: params.tab_index,
                     target: params.target(),
+                })
+            }
+            "tree.get" => {
+                let params: TabScopedParams = decode_params(params)?;
+                Ok(Self::TreeGet {
+                    tab_index: params.tab_index,
+                })
+            }
+            "surfaces.list" => {
+                let params: PaneTargetParams = decode_params(params)?;
+                Ok(Self::SurfacesList {
+                    tab_index: params.tab_index,
+                    pane: params.target(),
+                })
+            }
+            "surfaces.create" => {
+                let params: SurfaceCreateParams = decode_params(params)?;
+                Ok(Self::SurfacesCreate {
+                    tab_index: params.tab_index,
+                    pane: params.pane_target(),
+                    title: params.title,
+                    command: params.command,
+                    owner: params.owner,
+                    close_pane_when_last: params.close_pane_when_last,
+                })
+            }
+            "surfaces.split" => {
+                let params: SurfaceSplitParams = decode_params(params)?;
+                Ok(Self::SurfacesSplit {
+                    tab_index: params.tab_index,
+                    source: params.surface_target(),
+                    location: params.location,
+                    title: params.title,
+                    command: params.command,
+                    owner: params.owner,
+                    close_pane_when_last: params.close_pane_when_last,
+                })
+            }
+            "surfaces.focus" => {
+                let params: SurfaceTargetParams = decode_params(params)?;
+                Ok(Self::SurfacesFocus {
+                    tab_index: params.tab_index,
+                    target: params.target(),
+                })
+            }
+            "surfaces.rename" => {
+                let params: SurfaceRenameParams = decode_params(params)?;
+                Ok(Self::SurfacesRename {
+                    tab_index: params.tab_index,
+                    target: params.target(),
+                    title: params.title,
+                })
+            }
+            "surfaces.close" => {
+                let params: SurfaceCloseParams = decode_params(params)?;
+                Ok(Self::SurfacesClose {
+                    tab_index: params.tab_index,
+                    target: params.target(),
+                    close_empty_owned_pane: params.close_empty_owned_pane,
+                })
+            }
+            "surfaces.read" => {
+                let params: SurfaceReadParams = decode_params(params)?;
+                Ok(Self::SurfacesRead {
+                    tab_index: params.tab_index,
+                    target: params.target(),
+                    lines: params.lines,
+                })
+            }
+            "surfaces.send_text" => {
+                let params: SurfaceSendTextParams = decode_params(params)?;
+                Ok(Self::SurfacesSendText {
+                    tab_index: params.tab_index,
+                    target: params.target(),
+                    text: params.text,
+                })
+            }
+            "surfaces.send_key" => {
+                let params: SurfaceSendKeyParams = decode_params(params)?;
+                Ok(Self::SurfacesSendKey {
+                    tab_index: params.tab_index,
+                    target: params.target(),
+                    key: params.key,
+                })
+            }
+            "surfaces.wait_ready" => {
+                let params: SurfaceWaitReadyParams = decode_params(params)?;
+                Ok(Self::SurfacesWaitReady {
+                    tab_index: params.tab_index,
+                    target: params.target(),
+                    timeout_secs: params.timeout_secs,
                 })
             }
             "tmux.inspect" => {
@@ -934,6 +1278,184 @@ impl PaneTargetParams {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SurfaceTargetParams {
+    tab_index: Option<usize>,
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    surface_id: Option<usize>,
+}
+
+impl SurfaceTargetParams {
+    fn target(&self) -> SurfaceTarget {
+        SurfaceTarget::new(self.pane_index, self.pane_id, self.surface_id)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SurfaceWaitReadyParams {
+    tab_index: Option<usize>,
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    surface_id: Option<usize>,
+    timeout_secs: Option<u64>,
+}
+
+impl SurfaceWaitReadyParams {
+    fn target(&self) -> SurfaceTarget {
+        SurfaceTarget::new(self.pane_index, self.pane_id, self.surface_id)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SurfaceCreateParams {
+    tab_index: Option<usize>,
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    title: Option<String>,
+    command: Option<String>,
+    owner: Option<String>,
+    close_pane_when_last: bool,
+}
+
+impl SurfaceCreateParams {
+    fn pane_target(&self) -> PaneTarget {
+        PaneTarget::new(self.pane_index, self.pane_id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct SurfaceSplitParams {
+    tab_index: Option<usize>,
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    surface_id: Option<usize>,
+    location: PaneCreateLocation,
+    title: Option<String>,
+    command: Option<String>,
+    owner: Option<String>,
+    close_pane_when_last: bool,
+}
+
+impl Default for SurfaceSplitParams {
+    fn default() -> Self {
+        Self {
+            tab_index: None,
+            pane_index: None,
+            pane_id: None,
+            surface_id: None,
+            location: PaneCreateLocation::Right,
+            title: None,
+            command: None,
+            owner: None,
+            close_pane_when_last: true,
+        }
+    }
+}
+
+impl SurfaceSplitParams {
+    fn surface_target(&self) -> SurfaceTarget {
+        SurfaceTarget::new(self.pane_index, self.pane_id, self.surface_id)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SurfaceRenameParams {
+    tab_index: Option<usize>,
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    surface_id: Option<usize>,
+    title: String,
+}
+
+impl SurfaceRenameParams {
+    fn target(&self) -> SurfaceTarget {
+        SurfaceTarget::new(self.pane_index, self.pane_id, self.surface_id)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SurfaceCloseParams {
+    tab_index: Option<usize>,
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    surface_id: Option<usize>,
+    close_empty_owned_pane: bool,
+}
+
+impl SurfaceCloseParams {
+    fn target(&self) -> SurfaceTarget {
+        SurfaceTarget::new(self.pane_index, self.pane_id, self.surface_id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct SurfaceReadParams {
+    tab_index: Option<usize>,
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    surface_id: Option<usize>,
+    #[serde(default = "default_read_lines")]
+    lines: usize,
+}
+
+impl Default for SurfaceReadParams {
+    fn default() -> Self {
+        Self {
+            tab_index: None,
+            pane_index: None,
+            pane_id: None,
+            surface_id: None,
+            lines: default_read_lines(),
+        }
+    }
+}
+
+impl SurfaceReadParams {
+    fn target(&self) -> SurfaceTarget {
+        SurfaceTarget::new(self.pane_index, self.pane_id, self.surface_id)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SurfaceSendTextParams {
+    tab_index: Option<usize>,
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    surface_id: Option<usize>,
+    text: String,
+}
+
+impl SurfaceSendTextParams {
+    fn target(&self) -> SurfaceTarget {
+        SurfaceTarget::new(self.pane_index, self.pane_id, self.surface_id)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SurfaceSendKeyParams {
+    tab_index: Option<usize>,
+    pane_index: Option<usize>,
+    pane_id: Option<usize>,
+    surface_id: Option<usize>,
+    key: String,
+}
+
+impl SurfaceSendKeyParams {
+    fn target(&self) -> SurfaceTarget {
+        SurfaceTarget::new(self.pane_index, self.pane_id, self.surface_id)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct PaneReadParams {
@@ -1149,6 +1671,84 @@ mod tests {
                 assert_eq!(tab_index, Some(2));
                 assert_eq!(target.pane_id, Some(7));
                 assert_eq!(command, "cargo test");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn surface_command_round_trips_from_rpc() {
+        let command = ControlCommand::SurfacesSplit {
+            tab_index: Some(3),
+            source: SurfaceTarget::new(None, Some(9), Some(12)),
+            location: PaneCreateLocation::Down,
+            title: Some("worker".to_string()),
+            command: Some("codex".to_string()),
+            owner: Some("subagent".to_string()),
+            close_pane_when_last: true,
+        };
+
+        let parsed = ControlCommand::from_rpc(command.method_name(), command.params_json())
+            .expect("round-trip parse");
+
+        match parsed {
+            ControlCommand::SurfacesSplit {
+                tab_index,
+                source,
+                location,
+                title,
+                command,
+                owner,
+                close_pane_when_last,
+            } => {
+                assert_eq!(tab_index, Some(3));
+                assert_eq!(source.pane_id, Some(9));
+                assert_eq!(source.surface_id, Some(12));
+                assert_eq!(location, PaneCreateLocation::Down);
+                assert_eq!(title.as_deref(), Some("worker"));
+                assert_eq!(command.as_deref(), Some("codex"));
+                assert_eq!(owner.as_deref(), Some("subagent"));
+                assert!(close_pane_when_last);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn surface_split_defaults_to_ephemeral_pane_close() {
+        let parsed = ControlCommand::from_rpc("surfaces.split", json!({}))
+            .expect("default surface split parse");
+
+        match parsed {
+            ControlCommand::SurfacesSplit {
+                close_pane_when_last,
+                ..
+            } => assert!(close_pane_when_last),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn surface_wait_ready_accepts_timeout() {
+        let parsed = ControlCommand::from_rpc(
+            "surfaces.wait_ready",
+            json!({
+                "tab_index": 2,
+                "surface_id": 7,
+                "timeout_secs": 15,
+            }),
+        )
+        .expect("surface wait-ready parse");
+
+        match parsed {
+            ControlCommand::SurfacesWaitReady {
+                tab_index,
+                target,
+                timeout_secs,
+            } => {
+                assert_eq!(tab_index, Some(2));
+                assert_eq!(target.surface_id, Some(7));
+                assert_eq!(timeout_secs, Some(15));
             }
             other => panic!("unexpected command: {other:?}"),
         }

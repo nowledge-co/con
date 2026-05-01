@@ -76,6 +76,20 @@ JSON-RPC 2.0 over a Unix domain socket, one JSON request per line and one JSON r
 - `panes.wait`
 - `panes.probe_shell`
 
+### Tree / Surfaces
+
+- `tree.get`
+- `surfaces.list`
+- `surfaces.create`
+- `surfaces.split`
+- `surfaces.focus`
+- `surfaces.rename`
+- `surfaces.close`
+- `surfaces.read`
+- `surfaces.send_text`
+- `surfaces.send_key`
+- `surfaces.wait_ready`
+
 ### tmux
 
 - `tmux.inspect`
@@ -107,6 +121,17 @@ con-cli panes send-keys --tab 1 --pane-id 3 $'\u0003'
 con-cli panes create --tab 1 --location right --command "htop"
 con-cli panes wait --tab 1 --pane-id 3 --timeout 20
 
+con-cli tree --tab 1
+con-cli surfaces list --tab 1
+con-cli surfaces split --tab 1 --pane-id 3 --location right --title worker-1 --owner subagent --command "codex"
+con-cli surfaces create --tab 1 --pane-id 4 --title worker-2 --owner subagent --command "codex"
+con-cli surfaces wait-ready --tab 1 --surface-id 7 --timeout 10
+con-cli surfaces focus --tab 1 --surface-id 7
+con-cli surfaces send-text --surface-id 7 "explain this repo"
+con-cli surfaces send-key --surface-id 7 enter
+con-cli surfaces read --surface-id 7 --lines 120
+con-cli surfaces close --surface-id 7 --close-empty-owned-pane
+
 con-cli tmux list --tab 1 --pane-id 3
 con-cli tmux capture --tab 1 --pane-id 3 --target %17 --lines 80
 con-cli tmux run --tab 1 --pane-id 3 --location new-window -- cargo test
@@ -130,6 +155,18 @@ For automation, every command also supports `--json`.
 - `pane_index` is the current visible position in the split layout
 - `pane_id` is the stable identity for the life of that pane inside the tab
 - follow-up automation should prefer `pane_id`
+
+### Surfaces are opt-in pane-local sessions
+
+- a pane is a visible split rectangle
+- a surface is a live terminal session inside a pane
+- every pane has one active surface
+- `panes.*` continues to operate only on the active surface
+- `surfaces.*` exposes additional pane-local tabs without changing pane
+  semantics for the built-in agent or existing benchmarks
+- follow-up surface automation should prefer `surface_id`
+
+See `docs/impl/pane-surfaces.md` for the full compatibility contract.
 
 ### Pane actions reuse existing guards
 
@@ -168,6 +205,8 @@ The render loop stays authoritative, but the socket never blocks on it directly.
 - no auth modes beyond local socket file permissions yet
 - `agent.ask` assumes one automation request at a time per tab
 - the socket surface only exposes capabilities that already exist in con's runtime and agent layers; it does not yet add a new app-native Codex/OpenCode attachment
+- pane-local surfaces are live-session control primitives; session restore
+  persists the active pane layout as before, not every hidden live surface
 
 Those are acceptable limits for phase one. The important part is that the control transport now exists and is wired to real product semantics instead of placeholder CLI text.
 
