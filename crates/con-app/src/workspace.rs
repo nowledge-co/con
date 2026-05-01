@@ -7180,104 +7180,39 @@ impl ConWorkspace {
 
     fn reindex_pending_surface_control_requests_after_tab_close(&mut self, closed_tab_idx: usize) {
         let mut shifted = Vec::new();
-        for request in std::mem::take(&mut self.pending_surface_control_requests) {
-            match request {
-                PendingSurfaceControlRequest::Create {
-                    tab_idx,
-                    pane,
-                    title,
-                    command,
-                    owner,
-                    close_pane_when_last,
-                    response_tx,
-                } => {
-                    if tab_idx == closed_tab_idx {
-                        Self::send_control_result(
-                            response_tx,
-                            Err(ControlError::internal(format!(
-                                "Tab {} was closed while surfaces.create was pending",
-                                closed_tab_idx + 1
-                            ))),
-                        );
-                        continue;
+        for mut request in std::mem::take(&mut self.pending_surface_control_requests) {
+            let tab_idx = match &mut request {
+                PendingSurfaceControlRequest::Create { tab_idx, .. }
+                | PendingSurfaceControlRequest::Split { tab_idx, .. }
+                | PendingSurfaceControlRequest::Close { tab_idx, .. } => tab_idx,
+            };
+
+            if *tab_idx == closed_tab_idx {
+                let (method, response_tx) = match request {
+                    PendingSurfaceControlRequest::Create { response_tx, .. } => {
+                        ("surfaces.create", response_tx)
                     }
-                    shifted.push(PendingSurfaceControlRequest::Create {
-                        tab_idx: if tab_idx > closed_tab_idx {
-                            tab_idx - 1
-                        } else {
-                            tab_idx
-                        },
-                        pane,
-                        title,
-                        command,
-                        owner,
-                        close_pane_when_last,
-                        response_tx,
-                    });
-                }
-                PendingSurfaceControlRequest::Split {
-                    tab_idx,
-                    source,
-                    location,
-                    title,
-                    command,
-                    owner,
-                    close_pane_when_last,
-                    response_tx,
-                } => {
-                    if tab_idx == closed_tab_idx {
-                        Self::send_control_result(
-                            response_tx,
-                            Err(ControlError::internal(format!(
-                                "Tab {} was closed while surfaces.split was pending",
-                                closed_tab_idx + 1
-                            ))),
-                        );
-                        continue;
+                    PendingSurfaceControlRequest::Split { response_tx, .. } => {
+                        ("surfaces.split", response_tx)
                     }
-                    shifted.push(PendingSurfaceControlRequest::Split {
-                        tab_idx: if tab_idx > closed_tab_idx {
-                            tab_idx - 1
-                        } else {
-                            tab_idx
-                        },
-                        source,
-                        location,
-                        title,
-                        command,
-                        owner,
-                        close_pane_when_last,
-                        response_tx,
-                    });
-                }
-                PendingSurfaceControlRequest::Close {
-                    tab_idx,
-                    target,
-                    close_empty_owned_pane,
-                    response_tx,
-                } => {
-                    if tab_idx == closed_tab_idx {
-                        Self::send_control_result(
-                            response_tx,
-                            Err(ControlError::internal(format!(
-                                "Tab {} was closed while surfaces.close was pending",
-                                closed_tab_idx + 1
-                            ))),
-                        );
-                        continue;
+                    PendingSurfaceControlRequest::Close { response_tx, .. } => {
+                        ("surfaces.close", response_tx)
                     }
-                    shifted.push(PendingSurfaceControlRequest::Close {
-                        tab_idx: if tab_idx > closed_tab_idx {
-                            tab_idx - 1
-                        } else {
-                            tab_idx
-                        },
-                        target,
-                        close_empty_owned_pane,
-                        response_tx,
-                    });
-                }
+                };
+                Self::send_control_result(
+                    response_tx,
+                    Err(ControlError::internal(format!(
+                        "Tab {} was closed while {method} was pending",
+                        closed_tab_idx + 1
+                    ))),
+                );
+                continue;
             }
+
+            if *tab_idx > closed_tab_idx {
+                *tab_idx -= 1;
+            }
+            shifted.push(request);
         }
         self.pending_surface_control_requests = shifted;
     }
