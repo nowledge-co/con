@@ -17,6 +17,8 @@ use std::ops::Range;
 use std::os::raw::c_void;
 use std::sync::Arc;
 use std::sync::OnceLock;
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use con_ghostty::ffi;
@@ -54,6 +56,10 @@ const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
 const NATIVE_SEAM_OVERDRAW_PT: f64 = 2.0;
 #[cfg(target_os = "macos")]
 static NATIVE_TRANSITION_UNDERLAY_ASSOCIATION_KEY: u8 = 0;
+#[cfg(target_os = "macos")]
+static NATIVE_TRANSITION_UNDERLAY_OWNERS_ASSOCIATION_KEY: u8 = 0;
+#[cfg(target_os = "macos")]
+static NEXT_NATIVE_TRANSITION_OWNER_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
@@ -135,6 +141,8 @@ pub struct GhosttyView {
     last_mouse_position: Option<Point<Pixels>>,
     #[cfg(target_os = "macos")]
     native_transition_underlay_visible: Cell<bool>,
+    #[cfg(target_os = "macos")]
+    native_transition_underlay_owner_id: u64,
     ime_marked_text: Option<String>,
 }
 
@@ -189,6 +197,9 @@ impl GhosttyView {
             last_mouse_position: None,
             #[cfg(target_os = "macos")]
             native_transition_underlay_visible: Cell::new(false),
+            #[cfg(target_os = "macos")]
+            native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
+                .fetch_add(1, Ordering::Relaxed),
             ime_marked_text: None,
         }
     }
@@ -346,6 +357,13 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn detach_host_view(&mut self) {
+        if let Some(underlay_view) = self.native_underlay_view {
+            Self::set_transition_underlay_owner_visible(
+                underlay_view,
+                self.native_transition_underlay_owner_id,
+                false,
+            );
+        }
         self.native_underlay_view = None;
         if let Some(host_view) = self.host_view.take() {
             unsafe {
@@ -399,6 +417,56 @@ impl GhosttyView {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn transition_underlay_owners_for_parent(parent_nsview: id) -> id {
+        unsafe {
+            let key =
+                &NATIVE_TRANSITION_UNDERLAY_OWNERS_ASSOCIATION_KEY as *const u8 as *const c_void;
+            let existing = objc_getAssociatedObject(parent_nsview, key);
+            if !existing.is_null() {
+                return existing;
+            }
+
+            let owners: id = msg_send![class!(NSMutableSet), set];
+            objc_setAssociatedObject(
+                parent_nsview,
+                key,
+                owners,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
+            owners
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_transition_underlay_owner_visible(underlay_view: id, owner_id: u64, visible: bool) {
+        if underlay_view.is_null() {
+            return;
+        }
+
+        unsafe {
+            let parent_nsview: id = msg_send![underlay_view, superview];
+            if parent_nsview.is_null() {
+                return;
+            }
+
+            let owners = Self::transition_underlay_owners_for_parent(parent_nsview);
+            let owner: id = msg_send![class!(NSNumber), numberWithUnsignedLongLong:owner_id];
+            if visible {
+                let _: () = msg_send![owners, addObject:owner];
+            } else {
+                let _: () = msg_send![owners, removeObject:owner];
+            }
+
+            let owner_count: usize = msg_send![owners, count];
+            let hidden = if owner_count == 0 { YES } else { NO };
+            let _: () = msg_send![underlay_view, setHidden:hidden];
+            if hidden == NO {
+                let _: () = msg_send![underlay_view, setNeedsDisplay:YES];
+            }
+        }
+    }
+
     pub fn shutdown_surface(&mut self) {
         self.native_view_visible.set(false);
 
@@ -419,6 +487,7 @@ impl GhosttyView {
         {
             self.last_mouse_position = None;
             self.pending_native_layout = false;
+            self.native_transition_underlay_visible.set(false);
         }
         self.ime_marked_text = None;
     }
@@ -668,17 +737,11 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     fn apply_transition_underlay_visibility(&self) {
         if let Some(underlay_view) = self.native_underlay_view {
-            unsafe {
-                let hidden = if self.native_transition_underlay_visible.get() {
-                    NO
-                } else {
-                    YES
-                };
-                let _: () = msg_send![underlay_view, setHidden:hidden];
-                if hidden == NO {
-                    let _: () = msg_send![underlay_view, setNeedsDisplay:YES];
-                }
-            }
+            Self::set_transition_underlay_owner_visible(
+                underlay_view,
+                self.native_transition_underlay_owner_id,
+                self.native_transition_underlay_visible.get(),
+            );
         }
     }
 
