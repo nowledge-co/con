@@ -1,7 +1,8 @@
 use anyhow::Result;
 use con_agent::AgentConfig;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 pub const MIN_UI_FONT_SIZE: f32 = 12.0;
 pub const MAX_UI_FONT_SIZE: f32 = 24.0;
@@ -436,17 +437,78 @@ impl Config {
 
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(&path, &content)?;
+        write_private_atomic(&path, content.as_bytes())
+    }
+}
+
+fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let tmp_path = {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        path.with_extension(format!("tmp.{}.{}", std::process::id(), unique))
+    };
+
+    let write_result = (|| -> Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).write(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
+        let mut file = options.open(&tmp_path)?;
+        file.write_all(content)?;
+        file.sync_all()?;
         Ok(())
+    })();
+
+    if let Err(err) = write_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    replace_file(&tmp_path, path)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
+    std::fs::rename(tmp_path, path)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
+    if !path.exists() {
+        std::fs::rename(tmp_path, path)?;
+        return Ok(());
+    }
+
+    let backup_path = {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        path.with_extension(format!("bak.{}.{}", std::process::id(), unique))
+    };
+
+    std::fs::rename(path, &backup_path)?;
+    match std::fs::rename(tmp_path, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&backup_path);
+            Ok(())
+        }
+        Err(err) => {
+            let _ = std::fs::rename(&backup_path, path);
+            Err(err.into())
+        }
     }
 }
 

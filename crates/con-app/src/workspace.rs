@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::OnceLock;
 use std::time::Duration;
 #[cfg(target_os = "macos")]
@@ -67,6 +68,11 @@ fn chrome_tooltip(
 
 fn max_agent_panel_width(window_width: f32) -> f32 {
     (window_width - TERMINAL_MIN_CONTENT_WIDTH).max(AGENT_PANEL_MIN_WIDTH)
+}
+
+fn max_sidebar_panel_width(window_width: f32, agent_panel_outer_width: f32) -> f32 {
+    (window_width - agent_panel_outer_width - TERMINAL_MIN_CONTENT_WIDTH)
+        .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
 }
 
 /// Windows / Linux caption buttons (Min / Max+Restore / Close).
@@ -355,6 +361,7 @@ pub struct ConWorkspace {
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
     settings_window: Option<AnyWindowHandle>,
+    settings_window_panel: Option<Entity<SettingsPanel>>,
     command_palette: Entity<CommandPalette>,
     model_registry: ModelRegistry,
     harness: AgentHarness,
@@ -709,7 +716,22 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let initial_vertical_pinned = session.vertical_tabs_pinned;
-        let initial_vertical_width = session.vertical_tabs_width;
+        let agent_panel_open = session.agent_panel_open;
+        let agent_panel_width = session
+            .agent_panel_width
+            .unwrap_or(AGENT_PANEL_DEFAULT_WIDTH);
+        let initial_agent_outer_width = if agent_panel_open {
+            agent_panel_width.min(max_agent_panel_width(window.bounds().size.width.as_f32())) + 1.0
+        } else {
+            0.0
+        };
+        let initial_sidebar_max_width = max_sidebar_panel_width(
+            window.bounds().size.width.as_f32(),
+            initial_agent_outer_width,
+        );
+        let initial_vertical_width = session
+            .vertical_tabs_width
+            .map(|width| SessionSidebar::clamped_panel_width(width, initial_sidebar_max_width));
         let sidebar = cx.new(|cx| {
             let mut s = SessionSidebar::new(cx);
             if let Some(width) = initial_vertical_width {
@@ -918,10 +940,6 @@ impl ConWorkspace {
             Self::merge_shell_histories(global_shell_history, &persisted_history);
         let global_input_history =
             Self::restore_global_input_history(&session, &persisted_history, &global_shell_history);
-        let agent_panel_open = session.agent_panel_open;
-        let agent_panel_width = session
-            .agent_panel_width
-            .unwrap_or(AGENT_PANEL_DEFAULT_WIDTH);
         // Take the active tab's restored panel state for the AgentPanel
         let initial_panel_state =
             std::mem::replace(&mut tabs[active_tab].panel_state, PanelState::new());
@@ -1316,6 +1334,7 @@ impl ConWorkspace {
             input_bar,
             settings_panel,
             settings_window: None,
+            settings_window_panel: None,
             command_palette,
             model_registry,
             harness,
@@ -4906,22 +4925,57 @@ impl ConWorkspace {
         self.config.appearance.tabs_orientation = orientation;
         self.tabs_orientation = orientation;
         if persist_config {
-            self.settings_panel.update(cx, |panel, cx| {
-                panel.set_tabs_orientation(orientation);
-                cx.notify();
-            });
+            self.sync_settings_panels_tabs_orientation(orientation, cx);
         }
         self.sync_tab_strip_motion();
         if self.vertical_tabs_active() {
             self.request_tab_summaries(cx);
         }
         if persist_config {
-            if let Err(err) = self.config.save() {
+            if let Err(err) = self.persist_tabs_orientation(orientation) {
                 log::warn!("workspace: persist tabs_orientation failed: {err}");
             }
         }
         self.save_session(cx);
         cx.notify();
+    }
+
+    fn sync_settings_panels_tabs_orientation(
+        &mut self,
+        orientation: TabsOrientation,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_tabs_orientation(orientation);
+            cx.notify();
+        });
+
+        let mut settings_window_open = false;
+        if let Some(handle) = self.settings_window {
+            settings_window_open = handle.update(cx, |_, _, _| {}).is_ok();
+        }
+        if settings_window_open {
+            if let Some(panel) = self.settings_window_panel.clone() {
+                panel.update(cx, |panel, cx| {
+                    panel.set_tabs_orientation(orientation);
+                    cx.notify();
+                });
+            }
+        } else {
+            self.settings_window = None;
+            self.settings_window_panel = None;
+        }
+    }
+
+    fn persist_tabs_orientation(&self, orientation: TabsOrientation) -> anyhow::Result<()> {
+        let mut config = Config::load().unwrap_or_else(|err| {
+            log::warn!(
+                "workspace: reload config before tabs_orientation save failed: {err}; using workspace config"
+            );
+            self.config.clone()
+        });
+        config.appearance.tabs_orientation = orientation;
+        config.save()
     }
 
     fn on_theme_preview(
@@ -6846,6 +6900,7 @@ impl ConWorkspace {
                 return;
             }
             self.settings_window = None;
+            self.settings_window_panel = None;
         }
 
         let config = self.config.clone();
@@ -6853,6 +6908,8 @@ impl ConWorkspace {
         let runtime = self.harness.runtime_handle();
         let workspace = cx.weak_entity();
         let main_window = window.window_handle();
+        let opened_panel: Rc<RefCell<Option<Entity<SettingsPanel>>>> = Rc::new(RefCell::new(None));
+        let opened_panel_for_window = opened_panel.clone();
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(920.0), px(680.0)), cx)),
             titlebar: Some(TitlebarOptions {
@@ -6871,6 +6928,7 @@ impl ConWorkspace {
                 panel.open_standalone(settings_window, cx);
                 panel
             });
+            *opened_panel_for_window.borrow_mut() = Some(panel.clone());
 
             let workspace_for_save = workspace.clone();
             let main_window_for_save = main_window;
@@ -6918,9 +6976,17 @@ impl ConWorkspace {
             .detach();
 
             let panel_for_close = panel.clone();
+            let workspace_for_close = workspace.clone();
+            let main_window_for_close = main_window;
             settings_window.on_window_should_close(cx, move |_window, cx| {
                 let _ = panel_for_close.update(cx, |panel, cx| {
                     panel.revert_standalone_preview(cx);
+                });
+                let _ = main_window_for_close.update(cx, |_, _window, cx| {
+                    let _ = workspace_for_close.update(cx, |workspace, _cx| {
+                        workspace.settings_window = None;
+                        workspace.settings_window_panel = None;
+                    });
                 });
                 true
             });
@@ -6934,6 +7000,7 @@ impl ConWorkspace {
         }) {
             Ok(handle) => {
                 self.settings_window = Some(handle.into());
+                self.settings_window_panel = opened_panel.borrow().clone();
             }
             Err(err) => {
                 log::error!("Failed to open settings window: {err}");
@@ -7186,6 +7253,7 @@ impl ConWorkspace {
         self.flush_session_save(cx);
 
         if let Some(settings_window) = self.settings_window.take() {
+            self.settings_window_panel = None;
             let _ = settings_window.update(cx, |_, window, _| {
                 window.remove_window();
             });
@@ -8748,12 +8816,6 @@ impl Render for ConWorkspace {
         let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
         #[cfg(target_os = "macos")]
         let agent_panel_visible_for_layout = self.agent_panel_open || agent_panel_progress > 0.01;
-        let vertical_tabs_width = if self.vertical_tabs_active() {
-            self.sidebar.read(cx).occupied_width()
-        } else {
-            0.0
-        };
-        let vertical_tabs_pinned = self.vertical_tabs_active() && self.sidebar.read(cx).is_pinned();
         #[cfg(target_os = "macos")]
         let agent_panel_outer_width = if agent_panel_visible_for_layout {
             effective_agent_panel_width + 1.0
@@ -8766,6 +8828,16 @@ impl Render for ConWorkspace {
         } else {
             0.0
         };
+        let max_vertical_tabs_width =
+            max_sidebar_panel_width(window_width, agent_panel_outer_width);
+        let vertical_tabs_width = if self.vertical_tabs_active() {
+            self.sidebar
+                .read(cx)
+                .occupied_width_with_max(max_vertical_tabs_width)
+        } else {
+            0.0
+        };
+        let vertical_tabs_pinned = self.vertical_tabs_active() && self.sidebar.read(cx).is_pinned();
         let terminal_content_left = vertical_tabs_width;
         let terminal_content_width =
             (window_width - terminal_content_left - agent_panel_outer_width).max(0.0);
@@ -9398,247 +9470,248 @@ impl Render for ConWorkspace {
             root = root.rounded(px(14.0)).overflow_hidden();
         }
 
-        root = root
-            .key_context("ConWorkspace")
-            // Pane drag-to-resize: capture mouse move/up on root so it works
-            // even when cursor is over terminal views (which capture mouse events).
-            .on_mouse_move({
-                let pending = self.pending_drag_init.clone();
-                cx.listener(move |this, event: &MouseMoveEvent, win, cx| {
-                    if let Some((start_x, start_width)) = this.sidebar_drag {
-                        let win_w = win.bounds().size.width.as_f32();
-                        let agent_w = if this.agent_panel_open {
-                            this.agent_panel_width.min(max_agent_panel_width(win_w)) + 1.0
+        root =
+            root.key_context("ConWorkspace")
+                // Pane drag-to-resize: capture mouse move/up on root so it works
+                // even when cursor is over terminal views (which capture mouse events).
+                .on_mouse_move({
+                    let pending = self.pending_drag_init.clone();
+                    cx.listener(move |this, event: &MouseMoveEvent, win, cx| {
+                        if let Some((start_x, start_width)) = this.sidebar_drag {
+                            let win_w = win.bounds().size.width.as_f32();
+                            let agent_w = if this.agent_panel_open {
+                                this.agent_panel_width.min(max_agent_panel_width(win_w)) + 1.0
+                            } else {
+                                0.0
+                            };
+                            let max_width = max_sidebar_panel_width(win_w, agent_w);
+                            let delta = f32::from(event.position.x) - start_x;
+                            let new_width = (start_width + delta).clamp(PANEL_MIN_WIDTH, max_width);
+                            let current_width = this.sidebar.read(cx).panel_width();
+                            if (current_width - new_width).abs() > 0.5 {
+                                this.sidebar.update(cx, |sidebar, cx| {
+                                    sidebar.set_panel_width(new_width, cx)
+                                });
+                                cx.notify();
+                            }
+                            return;
+                        }
+
+                        // Agent panel resize drag
+                        if let Some((start_x, start_width)) = this.agent_panel_drag {
+                            let delta = start_x - f32::from(event.position.x);
+                            let max_width = max_agent_panel_width(win.bounds().size.width.as_f32());
+                            let new_width =
+                                (start_width + delta).clamp(AGENT_PANEL_MIN_WIDTH, max_width);
+                            if (this.agent_panel_width - new_width).abs() > 1.0 {
+                                this.agent_panel_width = new_width;
+                                if this.active_tab >= this.tabs.len() {
+                                    cx.notify();
+                                    return;
+                                }
+                                cx.notify();
+                            }
+                            return;
+                        }
+
+                        if this.active_tab >= this.tabs.len() {
+                            return;
+                        }
+
+                        let top_bar_height = this.current_top_bar_height();
+                        let input_bar_height = if this.input_bar_visible { 42.0 } else { 0.0 };
+                        // Consume a pending drag initiation written by divider on_mouse_down
+                        if let Ok(mut guard) = pending.lock() {
+                            if let Some((split_id, start_pos)) = guard.take() {
+                                this.release_active_terminal_mouse_selection(cx);
+                                let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
+                                pane_tree.begin_drag(split_id, start_pos);
+                            }
+                        }
+
+                        // Compute layout-dependent inputs *before* re-borrowing
+                        // `this` mutably for the pane tree, otherwise we
+                        // collide with the immutable borrow needed by
+                        // `vertical_tabs_active` / `sidebar.read`.
+                        let win_w = f32::from(win.bounds().size.width);
+                        let win_h = f32::from(win.bounds().size.height);
+                        let effective_agent_panel_width =
+                            this.agent_panel_width.min(max_agent_panel_width(win_w));
+                        let agent_panel_drag_width = if this.agent_panel_open {
+                            effective_agent_panel_width + 7.0
                         } else {
                             0.0
                         };
-                        let max_width = (win_w - agent_w - TERMINAL_MIN_CONTENT_WIDTH)
-                            .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
-                        let delta = f32::from(event.position.x) - start_x;
-                        let new_width = (start_width + delta).clamp(PANEL_MIN_WIDTH, max_width);
-                        let current_width = this.sidebar.read(cx).panel_width();
-                        if (current_width - new_width).abs() > 0.5 {
-                            this.sidebar
-                                .update(cx, |sidebar, cx| sidebar.set_panel_width(new_width, cx));
-                            cx.notify();
-                        }
-                        return;
-                    }
+                        let vertical_tabs_w =
+                            if this.vertical_tabs_active() {
+                                this.sidebar.read(cx).occupied_width_with_max(
+                                    max_sidebar_panel_width(win_w, agent_panel_drag_width),
+                                )
+                            } else {
+                                0.0
+                            };
 
-                    // Agent panel resize drag
-                    if let Some((start_x, start_width)) = this.agent_panel_drag {
-                        let delta = start_x - f32::from(event.position.x);
-                        let max_width = max_agent_panel_width(win.bounds().size.width.as_f32());
-                        let new_width =
-                            (start_width + delta).clamp(AGENT_PANEL_MIN_WIDTH, max_width);
-                        if (this.agent_panel_width - new_width).abs() > 1.0 {
-                            this.agent_panel_width = new_width;
-                            if this.active_tab >= this.tabs.len() {
-                                cx.notify();
-                                return;
-                            }
-                            cx.notify();
-                        }
-                        return;
-                    }
+                        let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
 
-                    if this.active_tab >= this.tabs.len() {
-                        return;
-                    }
-
-                    let top_bar_height = this.current_top_bar_height();
-                    let input_bar_height = if this.input_bar_visible { 42.0 } else { 0.0 };
-                    // Consume a pending drag initiation written by divider on_mouse_down
-                    if let Ok(mut guard) = pending.lock() {
-                        if let Some((split_id, start_pos)) = guard.take() {
-                            this.release_active_terminal_mouse_selection(cx);
-                            let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
-                            pane_tree.begin_drag(split_id, start_pos);
-                        }
-                    }
-
-                    // Compute layout-dependent inputs *before* re-borrowing
-                    // `this` mutably for the pane tree, otherwise we
-                    // collide with the immutable borrow needed by
-                    // `vertical_tabs_active` / `sidebar.read`.
-                    let vertical_tabs_w = if this.vertical_tabs_active() {
-                        this.sidebar.read(cx).occupied_width()
-                    } else {
-                        0.0
-                    };
-
-                    let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
-
-                    if !pane_tree.is_dragging() {
-                        return;
-                    }
-
-                    // Estimate terminal area from window bounds minus fixed chrome
-                    // (tab bar ~38px, input bar ~40px, agent panel if open,
-                    // vertical-tabs panel on the leading edge if enabled).
-                    let win_w = f32::from(win.bounds().size.width);
-                    let win_h = f32::from(win.bounds().size.height);
-                    let effective_agent_panel_width =
-                        this.agent_panel_width.min(max_agent_panel_width(win_w));
-                    let (current_pos, total_size) =
-                        if let Some(dir) = pane_tree.dragging_direction() {
-                            match dir {
-                                SplitDirection::Horizontal => {
-                                    let panel_w = if this.agent_panel_open {
-                                        effective_agent_panel_width + 7.0
-                                    } else {
-                                        0.0
-                                    };
-                                    (
-                                        f32::from(event.position.x) - vertical_tabs_w,
-                                        win_w - panel_w - vertical_tabs_w,
-                                    )
-                                }
-                                SplitDirection::Vertical => (
-                                    f32::from(event.position.y),
-                                    win_h - top_bar_height - input_bar_height,
-                                ),
-                            }
-                        } else {
+                        if !pane_tree.is_dragging() {
                             return;
-                        };
-
-                    if pane_tree.update_drag(current_pos, total_size) {
-                        cx.notify();
-                    }
-                })
-            })
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if this.sidebar_drag.is_some() {
-                        this.sidebar_drag = None;
-                        this.save_session(cx);
-                        cx.notify();
-                        return;
-                    }
-                    if this.agent_panel_drag.is_some() {
-                        this.agent_panel_drag = None;
-                        this.save_session(cx);
-                        cx.notify();
-                        return;
-                    }
-                    if this.active_tab >= this.tabs.len() {
-                        return;
-                    }
-                    let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
-                    if pane_tree.is_dragging() {
-                        pane_tree.end_drag();
-                        for terminal in pane_tree.all_terminals() {
-                            terminal.notify(cx);
                         }
-                        cx.notify();
+
+                        // Estimate terminal area from window bounds minus fixed chrome
+                        // (tab bar ~38px, input bar ~40px, agent panel if open,
+                        // vertical-tabs panel on the leading edge if enabled).
+                        let (current_pos, total_size) =
+                            if let Some(dir) = pane_tree.dragging_direction() {
+                                match dir {
+                                    SplitDirection::Horizontal => (
+                                        f32::from(event.position.x) - vertical_tabs_w,
+                                        win_w - agent_panel_drag_width - vertical_tabs_w,
+                                    ),
+                                    SplitDirection::Vertical => (
+                                        f32::from(event.position.y),
+                                        win_h - top_bar_height - input_bar_height,
+                                    ),
+                                }
+                            } else {
+                                return;
+                            };
+
+                        if pane_tree.update_drag(current_pos, total_size) {
+                            cx.notify();
+                        }
+                    })
+                })
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                        if this.sidebar_drag.is_some() {
+                            this.sidebar_drag = None;
+                            this.save_session(cx);
+                            cx.notify();
+                            return;
+                        }
+                        if this.agent_panel_drag.is_some() {
+                            this.agent_panel_drag = None;
+                            this.save_session(cx);
+                            cx.notify();
+                            return;
+                        }
+                        if this.active_tab >= this.tabs.len() {
+                            return;
+                        }
+                        let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
+                        if pane_tree.is_dragging() {
+                            pane_tree.end_drag();
+                            for terminal in pane_tree.all_terminals() {
+                                terminal.notify(cx);
+                            }
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_action(cx.listener(Self::quit))
+                .on_action(cx.listener(Self::toggle_agent_panel))
+                .on_action(cx.listener(Self::toggle_input_bar))
+                .on_action(cx.listener(Self::toggle_vertical_tabs))
+                .on_action(cx.listener(Self::toggle_settings))
+                .on_action(cx.listener(Self::toggle_command_palette))
+                .on_action(cx.listener(Self::new_tab))
+                .on_action(cx.listener(Self::next_tab))
+                .on_action(cx.listener(Self::previous_tab))
+                .on_action(cx.listener(Self::select_tab_1))
+                .on_action(cx.listener(Self::select_tab_2))
+                .on_action(cx.listener(Self::select_tab_3))
+                .on_action(cx.listener(Self::select_tab_4))
+                .on_action(cx.listener(Self::select_tab_5))
+                .on_action(cx.listener(Self::select_tab_6))
+                .on_action(cx.listener(Self::select_tab_7))
+                .on_action(cx.listener(Self::select_tab_8))
+                .on_action(cx.listener(Self::select_tab_9))
+                .on_action(cx.listener(Self::close_tab))
+                .on_action(cx.listener(Self::close_pane))
+                .on_action(cx.listener(Self::toggle_pane_zoom))
+                .on_action(cx.listener(Self::split_right))
+                .on_action(cx.listener(Self::split_down))
+                .on_action(cx.listener(Self::focus_input))
+                .on_action(cx.listener(Self::cycle_input_mode))
+                .on_action(cx.listener(Self::toggle_pane_scope_picker))
+                .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if !this.pane_scope_picker_open {
+                        return;
                     }
-                }),
-            )
-            .on_action(cx.listener(Self::quit))
-            .on_action(cx.listener(Self::toggle_agent_panel))
-            .on_action(cx.listener(Self::toggle_input_bar))
-            .on_action(cx.listener(Self::toggle_vertical_tabs))
-            .on_action(cx.listener(Self::toggle_settings))
-            .on_action(cx.listener(Self::toggle_command_palette))
-            .on_action(cx.listener(Self::new_tab))
-            .on_action(cx.listener(Self::next_tab))
-            .on_action(cx.listener(Self::previous_tab))
-            .on_action(cx.listener(Self::select_tab_1))
-            .on_action(cx.listener(Self::select_tab_2))
-            .on_action(cx.listener(Self::select_tab_3))
-            .on_action(cx.listener(Self::select_tab_4))
-            .on_action(cx.listener(Self::select_tab_5))
-            .on_action(cx.listener(Self::select_tab_6))
-            .on_action(cx.listener(Self::select_tab_7))
-            .on_action(cx.listener(Self::select_tab_8))
-            .on_action(cx.listener(Self::select_tab_9))
-            .on_action(cx.listener(Self::close_tab))
-            .on_action(cx.listener(Self::close_pane))
-            .on_action(cx.listener(Self::toggle_pane_zoom))
-            .on_action(cx.listener(Self::split_right))
-            .on_action(cx.listener(Self::split_down))
-            .on_action(cx.listener(Self::focus_input))
-            .on_action(cx.listener(Self::cycle_input_mode))
-            .on_action(cx.listener(Self::toggle_pane_scope_picker))
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if !this.pane_scope_picker_open {
-                    return;
-                }
 
-                let mods = &event.keystroke.modifiers;
-                let key = event.keystroke.key.as_str();
-                let local_picker_key = !mods.control && !mods.alt && !mods.platform;
-                let unshifted_local_picker_key = local_picker_key && !mods.shift;
+                    let mods = &event.keystroke.modifiers;
+                    let key = event.keystroke.key.as_str();
+                    let local_picker_key = !mods.control && !mods.alt && !mods.platform;
+                    let unshifted_local_picker_key = local_picker_key && !mods.shift;
 
-                let mut handled = false;
-                if key == "escape" {
-                    this.close_pane_scope_picker(cx);
-                    handled = true;
-                } else if local_picker_key && key.eq_ignore_ascii_case("a") {
-                    this.set_scope_broadcast(window, cx);
-                    handled = true;
-                } else if local_picker_key && key.eq_ignore_ascii_case("f") {
-                    this.set_scope_focused(window, cx);
-                    handled = true;
-                } else if unshifted_local_picker_key
-                    && let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10))
-                {
-                    let pane_index = if digit == 0 { 9 } else { (digit - 1) as usize };
-                    this.toggle_scope_pane_by_index(pane_index, window, cx);
-                    handled = true;
-                }
-
-                if handled {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                }
-            }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                // Don't handle workspace shortcuts when a modal overlay is open
-                if this.settings_panel.read(cx).is_overlay_visible()
-                    || this.command_palette.read(cx).is_visible()
-                {
-                    return;
-                }
-
-                let mods = &event.keystroke.modifiers;
-                let key = event.keystroke.key.as_str();
-
-                #[cfg(target_os = "macos")]
-                if mods.platform
-                    && !mods.control
-                    && !mods.alt
-                    && matches!(key, "`" | "~" | ">" | "<")
-                {
-                    if mods.shift || matches!(key, "~" | "<") {
-                        cx.dispatch_action(&crate::PreviousWindow);
-                    } else {
-                        cx.dispatch_action(&crate::NextWindow);
+                    let mut handled = false;
+                    if key == "escape" {
+                        this.close_pane_scope_picker(cx);
+                        handled = true;
+                    } else if local_picker_key && key.eq_ignore_ascii_case("a") {
+                        this.set_scope_broadcast(window, cx);
+                        handled = true;
+                    } else if local_picker_key && key.eq_ignore_ascii_case("f") {
+                        this.set_scope_focused(window, cx);
+                        handled = true;
+                    } else if unshifted_local_picker_key
+                        && let Some(digit) = key.chars().next().and_then(|c| c.to_digit(10))
+                    {
+                        let pane_index = if digit == 0 { 9 } else { (digit - 1) as usize };
+                        this.toggle_scope_pane_by_index(pane_index, window, cx);
+                        handled = true;
                     }
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    return;
-                }
 
-                // Browser-style fallbacks. The configurable actions also bind
-                // Control-Tab / Control-Shift-Tab by default.
-                if mods.platform && mods.shift && key == "[" {
-                    this.previous_tab(&PreviousTab, window, cx);
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    return;
-                }
+                    if handled {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
+                }))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    // Don't handle workspace shortcuts when a modal overlay is open
+                    if this.settings_panel.read(cx).is_overlay_visible()
+                        || this.command_palette.read(cx).is_visible()
+                    {
+                        return;
+                    }
 
-                if mods.platform && mods.shift && key == "]" {
-                    this.next_tab(&NextTab, window, cx);
-                    window.prevent_default();
-                    cx.stop_propagation();
-                }
-            }))
-            .child(top_bar)
-            .child(main_area);
+                    let mods = &event.keystroke.modifiers;
+                    let key = event.keystroke.key.as_str();
+
+                    #[cfg(target_os = "macos")]
+                    if mods.platform
+                        && !mods.control
+                        && !mods.alt
+                        && matches!(key, "`" | "~" | ">" | "<")
+                    {
+                        if mods.shift || matches!(key, "~" | "<") {
+                            cx.dispatch_action(&crate::PreviousWindow);
+                        } else {
+                            cx.dispatch_action(&crate::NextWindow);
+                        }
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        return;
+                    }
+
+                    // Browser-style fallbacks. The configurable actions also bind
+                    // Control-Tab / Control-Shift-Tab by default.
+                    if mods.platform && mods.shift && key == "[" {
+                        this.previous_tab(&PreviousTab, window, cx);
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        return;
+                    }
+
+                    if mods.platform && mods.shift && key == "]" {
+                        this.next_tab(&NextTab, window, cx);
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(top_bar)
+                .child(main_area);
 
         if tab_strip_transitioning {
             root = root.child(

@@ -107,7 +107,7 @@ The engine lives in `con-core::tab_summary` and is constructed via `AgentHarness
 
 ## Code map
 
-```
+```text
 crates/con-core/src/config.rs
   + TabsOrientation enum (Horizontal | Vertical) on AppearanceConfig
   + keybindings.toggle_vertical_tabs (Cmd+B on macOS, Ctrl+Shift+B on

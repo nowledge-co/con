@@ -267,13 +267,17 @@ impl SessionSidebar {
         }
     }
 
-    /// Width the panel currently occupies in the workspace flex row.
-    /// Tweens between RAIL_WIDTH and PANEL_WIDTH during pin/unpin.
-    /// Hover cards float over the terminal area and never contribute
-    /// to occupied width.
-    pub fn occupied_width(&self) -> f32 {
+    pub fn clamped_panel_width(width: f32, effective_max_width: f32) -> f32 {
+        width.clamp(
+            PANEL_MIN_WIDTH,
+            effective_max_width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH),
+        )
+    }
+
+    pub fn occupied_width_with_max(&self, effective_max_width: f32) -> f32 {
         let t = self.width_motion.current().clamp(0.0, 1.0);
-        RAIL_WIDTH + (self.panel_width - RAIL_WIDTH) * t
+        let panel_width = Self::clamped_panel_width(self.panel_width, effective_max_width);
+        RAIL_WIDTH + (panel_width - RAIL_WIDTH) * t
     }
 
     pub fn toggle_pinned(&mut self, cx: &mut Context<Self>) {

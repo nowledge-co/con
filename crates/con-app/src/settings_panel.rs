@@ -2201,7 +2201,11 @@ impl SettingsPanel {
 
     pub fn set_tabs_orientation(&mut self, orientation: con_core::config::TabsOrientation) {
         self.config.appearance.tabs_orientation = orientation;
-        self.preview_snapshot = Some(self.config.clone());
+        if let Some(snapshot) = &mut self.preview_snapshot {
+            snapshot.appearance.tabs_orientation = orientation;
+        } else {
+            self.preview_snapshot = Some(self.config.clone());
+        }
     }
 
     pub fn config(&self) -> &Config {
@@ -2214,18 +2218,7 @@ impl SettingsPanel {
         &self.config.appearance
     }
     fn persist_config(&self) -> anyhow::Result<()> {
-        let path = Config::config_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let content = toml::to_string_pretty(&self.config)?;
-        std::fs::write(&path, &content)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
+        self.config.save()
     }
 
     fn select_provider(
