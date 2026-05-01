@@ -1043,8 +1043,7 @@ impl PaneTree {
                                 .left(px(-2.0))
                                 .w(px(5.0))
                                 .cursor_col_resize()
-                                .bg(divider_color.opacity(0.01))
-                                .hover(move |s| s.bg(divider_color.opacity(0.10)))
+                                .bg(gpui::transparent_black())
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     move |event: &MouseDownEvent, _window, _cx| {
@@ -1067,8 +1066,7 @@ impl PaneTree {
                                 .top(px(-2.0))
                                 .h(px(5.0))
                                 .cursor_row_resize()
-                                .bg(divider_color.opacity(0.01))
-                                .hover(move |s| s.bg(divider_color.opacity(0.10)))
+                                .bg(gpui::transparent_black())
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     move |event: &MouseDownEvent, _window, _cx| {

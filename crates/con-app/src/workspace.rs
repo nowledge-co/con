@@ -8605,6 +8605,7 @@ impl Render for ConWorkspace {
         let tab_strip_progress = self.tab_strip_motion.value(window);
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
+        let tab_strip_transitioning = self.tab_strip_motion.is_animating();
 
         // Render the vertical-tabs hover-card overlay up front so it
         // takes the (re-entrant) sidebar borrow before `theme` claims
@@ -8635,13 +8636,21 @@ impl Render for ConWorkspace {
             r: f32::from(terminal_background.r) / 255.0,
             g: f32::from(terminal_background.g) / 255.0,
             b: f32::from(terminal_background.b) / 255.0,
-            a: self.terminal_opacity.clamp(0.0, 1.0),
+            // Seam covers do not get Ghostty's native blur/compositing.
+            // Keep them opaque and tiny; a translucent GPUI seam is the
+            // exact path that lets bright desktop/window backdrops leak
+            // through during fast macOS chrome motion.
+            a: 1.0,
         }
         .into();
         #[cfg(target_os = "macos")]
         let chrome_transition_seam_color = terminal_surface_color;
         #[cfg(not(target_os = "macos"))]
         let chrome_transition_seam_color = theme.background.opacity(elevated_ui_surface_opacity);
+        #[cfg(target_os = "macos")]
+        let chrome_static_seam_color = terminal_surface_color;
+        #[cfg(not(target_os = "macos"))]
+        let chrome_static_seam_color = theme.title_bar_border;
         #[cfg(target_os = "macos")]
         let pane_divider_color = terminal_surface_color;
         #[cfg(not(target_os = "macos"))]
@@ -8722,7 +8731,7 @@ impl Render for ConWorkspace {
                     .h(px(43.0 * input_bar_progress))
                     .flex_shrink_0()
                     .bg(theme.title_bar.opacity(ui_surface_opacity))
-                    .child(div().h(px(1.0)).bg(theme.title_bar_border))
+                    .child(div().h(px(1.0)).bg(chrome_static_seam_color))
                     .child(
                         div()
                             .h(px(42.0))
@@ -8739,6 +8748,18 @@ impl Render for ConWorkspace {
         }
 
         main_area = main_area.child(terminal_area);
+
+        if self.vertical_tabs_active() && vertical_tabs_width > 0.0 {
+            main_area = main_area.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px((vertical_tabs_width - 1.0).max(0.0)))
+                    .w(px(1.0))
+                    .bg(chrome_static_seam_color),
+            );
+        }
 
         if agent_panel_progress > 0.01 {
             main_area = main_area.child(
@@ -8757,7 +8778,7 @@ impl Render for ConWorkspace {
                             .w(px(1.0))
                             .h_full()
                             .flex_shrink_0()
-                            .bg(theme.title_bar_border)
+                            .bg(chrome_static_seam_color)
                             .child(
                                 div()
                                     .absolute()
@@ -8766,12 +8787,8 @@ impl Render for ConWorkspace {
                                     .left(px(-2.0))
                                     .w(px(5.0))
                                     .cursor_col_resize()
-                                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
-                                    .hover(|s| {
-                                        s.bg(theme
-                                            .background
-                                            .opacity((elevated_ui_surface_opacity + 0.08).min(1.0)))
-                                    })
+                                    .bg(theme.transparent)
+                                    .hover(|s| s.bg(chrome_static_seam_color.opacity(0.18)))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(
@@ -9501,6 +9518,18 @@ impl Render for ConWorkspace {
             }))
             .child(top_bar)
             .child(main_area);
+
+        if tab_strip_transitioning {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(top_bar_height))
+                    .left_0()
+                    .right_0()
+                    .h(px(CHROME_TRANSITION_SEAM_COVER))
+                    .bg(chrome_transition_seam_color),
+            );
+        }
 
         if agent_panel_transitioning && agent_panel_progress > 0.01 {
             root = root.child(

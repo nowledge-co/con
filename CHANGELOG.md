@@ -25,7 +25,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Terminal, macOS**
 
-- Reduced transparent-window flashes along moving chrome seams. Agent-panel transitions, input-bar transitions, and pane dividers now use a terminal-colored seam cover on macOS instead of exposing a fully transparent gap or a UI-colored matte.
+- Reduced transparent-window flashes along moving chrome seams. Agent-panel transitions, input-bar transitions, the top-bar transition, the vertical-tabs edge, the input-bar edge, and pane dividers now use tiny opaque terminal-colored seam covers on macOS instead of exposing a transparent gap or UI-colored matte.
 
 **Control Plane**
 
