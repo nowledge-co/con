@@ -8770,14 +8770,22 @@ impl Render for ConWorkspace {
         let mut main_area = div().relative().flex().flex_1().min_h_0();
 
         if self.vertical_tabs_active() {
-            main_area = main_area.child(
-                div()
-                    .h_full()
-                    .flex_shrink_0()
-                    .overflow_hidden()
-                    .bg(elevated_panel_surface_color)
-                    .child(self.sidebar.clone()),
-            );
+            #[cfg(target_os = "macos")]
+            {
+                main_area = main_area.child(
+                    div()
+                        .h_full()
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .bg(elevated_panel_surface_color)
+                        .child(self.sidebar.clone()),
+                );
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                main_area = main_area.child(self.sidebar.clone());
+            }
         }
 
         main_area = main_area.child(terminal_area);
