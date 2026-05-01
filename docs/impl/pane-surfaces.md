@@ -62,7 +62,8 @@ The JSON-RPC methods are:
 - `surfaces.send_key`: sends a small named key set (`escape`, `enter`, `tab`,
   `backspace`, `ctrl-c`, `ctrl-d`) to a surface.
 - `surfaces.wait_ready`: waits until the surface has a live terminal session
-  or the timeout expires, then returns readiness and shell-integration metadata.
+  with shell integration or the timeout expires, then returns readiness
+  metadata.
 
 Surface targeting accepts:
 

@@ -85,6 +85,20 @@ impl SurfaceCreateOptions {
     }
 }
 
+pub struct SurfaceCloseOutcome {
+    pub pane_id: PaneId,
+    pub terminal: TerminalPane,
+    pub closed_pane: bool,
+}
+
+struct SurfaceCloseCandidate {
+    pane_id: PaneId,
+    terminal: TerminalPane,
+    is_last_surface: bool,
+    owner: Option<String>,
+    close_pane_when_last: bool,
+}
+
 /// A node in the pane tree — either a pane slot or a split.
 enum PaneNode {
     Leaf {
@@ -331,8 +345,33 @@ impl PaneTree {
         Self::rename_surface_node(&mut self.root, surface_id, title)
     }
 
-    pub fn close_surface(&mut self, surface_id: SurfaceId) -> Option<(PaneId, TerminalPane)> {
-        let removed = Self::remove_surface(&mut self.root, surface_id)?;
+    pub fn close_surface(
+        &mut self,
+        surface_id: SurfaceId,
+        close_empty_owned_pane: bool,
+    ) -> Option<SurfaceCloseOutcome> {
+        let candidate = Self::surface_close_candidate(&self.root, surface_id)?;
+        let outcome = if candidate.is_last_surface {
+            let can_close_pane = close_empty_owned_pane
+                && candidate.owner.is_some()
+                && candidate.close_pane_when_last
+                && self.pane_count() > 1;
+            if !can_close_pane || !self.close_pane(candidate.pane_id) {
+                return None;
+            }
+            SurfaceCloseOutcome {
+                pane_id: candidate.pane_id,
+                terminal: candidate.terminal,
+                closed_pane: true,
+            }
+        } else {
+            let removed = Self::remove_surface(&mut self.root, surface_id)?;
+            SurfaceCloseOutcome {
+                pane_id: removed.0,
+                terminal: removed.1,
+                closed_pane: false,
+            }
+        };
         if self.pane_count() <= 1
             || self
                 .zoomed_pane_id
@@ -343,7 +382,7 @@ impl PaneTree {
         if Self::find_terminal(&self.root, self.focused_pane_id).is_none() {
             self.focused_pane_id = Self::first_pane_id(&self.root);
         }
-        Some(removed)
+        Some(outcome)
     }
 
     /// Close the focused pane, returning true if the tree still has panes
@@ -876,6 +915,28 @@ impl PaneTree {
         }
     }
 
+    fn surface_close_candidate(
+        node: &PaneNode,
+        surface_id: SurfaceId,
+    ) -> Option<SurfaceCloseCandidate> {
+        match node {
+            PaneNode::Leaf { id, surfaces, .. } => {
+                let surface = surfaces.iter().find(|surface| surface.id == surface_id)?;
+                Some(SurfaceCloseCandidate {
+                    pane_id: *id,
+                    terminal: surface.terminal.clone(),
+                    is_last_surface: surfaces.len() <= 1,
+                    owner: surface.owner.clone(),
+                    close_pane_when_last: surface.close_pane_when_last,
+                })
+            }
+            PaneNode::Split { first, second, .. } => {
+                Self::surface_close_candidate(first, surface_id)
+                    .or_else(|| Self::surface_close_candidate(second, surface_id))
+            }
+        }
+    }
+
     #[allow(dead_code)]
     fn remove_leaf(node: PaneNode, target_id: PaneId) -> PaneNode {
         match node {
@@ -1091,6 +1152,7 @@ impl PaneTree {
         }
 
         let mut strip = div()
+            .id(("surface-tab-strip", pane_id))
             .flex()
             .items_center()
             .gap(px(3.0))
@@ -1100,7 +1162,7 @@ impl PaneTree {
             .bg(theme
                 .background
                 .opacity(if pane_id == focused_id { 0.20 } else { 0.12 }))
-            .overflow_hidden();
+            .overflow_x_scroll();
 
         for (index, surface) in surfaces.iter().enumerate() {
             let is_active = surface.id == active_surface_id;
@@ -1128,7 +1190,7 @@ impl PaneTree {
                     .items_center()
                     .h(px(18.0))
                     .max_w(px(180.0))
-                    .min_w(px(0.0))
+                    .flex_shrink_0()
                     .px(px(6.0))
                     .bg(bg)
                     .cursor_pointer()
@@ -1178,14 +1240,11 @@ impl PaneTree {
 
     fn check_terminal_pane_id(node: &PaneNode, entity_id: EntityId, pane_id: PaneId) -> bool {
         match node {
-            PaneNode::Leaf {
-                id,
-                surfaces,
-                active_surface_id,
-            } => {
+            PaneNode::Leaf { id, surfaces, .. } => {
                 *id == pane_id
-                    && Self::active_surface(surfaces, *active_surface_id)
-                        .is_some_and(|surface| surface.terminal.entity_id() == entity_id)
+                    && surfaces
+                        .iter()
+                        .any(|surface| surface.terminal.entity_id() == entity_id)
             }
             PaneNode::Split { first, second, .. } => {
                 Self::check_terminal_pane_id(first, entity_id, pane_id)

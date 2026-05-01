@@ -12,6 +12,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Added pane-local terminal surfaces for external orchestrators. Existing `panes.*` APIs, built-in agent tools, and benchmarks keep the active-surface pane contract, while new `tree.get` and `surfaces.*` RPC/CLI commands can create, split, wait for readiness, focus, rename, drive, read, and close terminal sessions inside a pane.
 
+### Fixed
+
+**Control Plane**
+
+- Hardened pane-local surface lifecycle behavior so owned ephemeral worker panes can close when their final surface closes, inactive surfaces keep correct pane membership, replacement surfaces are materialized before focus moves to them, and `surfaces.wait_ready` only reports `ready` once the terminal is live with shell integration.
+
 ## `v0.1.0-beta.46` - 2026-04-30
 
 ### Added

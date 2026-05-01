@@ -19,7 +19,7 @@ Default workflow:
 4. Use `con-cli --json identify`, `tabs list`, and `panes list` before acting.
 5. Only use `panes exec` on panes that expose `exec_visible_shell`.
 6. Use `tree` / `surfaces list` only for pane-local surface validation.
-7. After `surfaces create` or `surfaces split`, use `surfaces wait-ready --surface-id <id> --timeout 10` before sending input.
+7. After `surfaces create` or `surfaces split`, use `surfaces wait-ready --surface-id <id> --timeout 10` before sending input that assumes an initialized shell.
 8. Use `agent ask` to verify the real in-tab built-in agent session.
 
 Rules:

@@ -119,7 +119,8 @@ For follow-up shell control, wait until the pane reports:
   sessions. Existing pane and agent benchmarks should stay on `panes.*`.
 - Use `surface_id` for surface follow-up targeting.
 - After `surfaces create` or `surfaces split`, call
-  `surfaces wait-ready --surface-id <id> --timeout 10` before sending input.
+  `surfaces wait-ready --surface-id <id> --timeout 10` before sending input that
+  assumes an initialized shell.
 - Keep assertions concrete and machine-checkable
 - Record the exact tab index you used
 - Capture both the command result and a follow-up `panes list` snapshot when reporting regressions

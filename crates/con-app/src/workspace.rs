@@ -2068,77 +2068,63 @@ impl ConWorkspace {
                         .iter()
                         .find(|surface| surface.surface_id == resolved.surface_id)
                         .cloned();
-                    let surface_count = surfaces.len();
                     let closing_was_focused = current
                         .as_ref()
                         .is_some_and(|surface| surface.is_active && surface.is_focused_pane);
-                    if surface_count > 1 {
-                        let Some((_pane_id, closing)) = self.tabs[tab_idx]
-                            .pane_tree
-                            .close_surface(resolved.surface_id)
-                        else {
-                            Self::send_control_result(
-                                response_tx,
-                                Err(ControlError::invalid_params(format!(
-                                    "Surface id {} could not be closed.",
-                                    resolved.surface_id
-                                ))),
-                            );
-                            continue;
-                        };
-                        closing.set_focus_state(false, cx);
-                        closing.set_native_view_visible(false, cx);
-                        closing.shutdown_surface(cx);
-                        if tab_idx == self.active_tab {
-                            self.sync_active_tab_native_view_visibility(cx);
-                            if closing_was_focused {
-                                let replacement =
-                                    self.tabs[tab_idx].pane_tree.focused_terminal().clone();
-                                replacement.ensure_surface(window, cx);
-                                replacement.focus(window, cx);
-                            }
-                            self.sync_active_terminal_focus_states(cx);
-                        }
-                        self.save_session(cx);
+                    let Some(close_outcome) = self.tabs[tab_idx]
+                        .pane_tree
+                        .close_surface(resolved.surface_id, close_empty_owned_pane)
+                    else {
                         Self::send_control_result(
                             response_tx,
-                            Ok(json!({
-                                "status": "closed",
-                                "closed_pane": false,
-                                "tab_index": tab_idx + 1,
-                                "pane_id": resolved.pane_id,
-                                "surface_id": resolved.surface_id,
-                            })),
+                            Err(ControlError::invalid_params(
+                                "Refusing to close the last surface in a pane unless it is an owned ephemeral pane and close_empty_owned_pane=true.",
+                            )),
                         );
-                    } else {
-                        let owned_empty_close = current.as_ref().is_some_and(|surface| {
-                            surface.owner.is_some() && surface.close_pane_when_last
-                        });
-                        if close_empty_owned_pane
-                            && owned_empty_close
-                            && self.tabs[tab_idx].pane_tree.pane_count() > 1
-                        {
-                            let closed =
-                                self.close_pane_in_tab(tab_idx, resolved.pane_id, window, cx);
-                            Self::send_control_result(
-                                response_tx,
-                                Ok(json!({
-                                    "status": if closed { "closed" } else { "unchanged" },
-                                    "closed_pane": closed,
-                                    "tab_index": tab_idx + 1,
-                                    "pane_id": resolved.pane_id,
-                                    "surface_id": resolved.surface_id,
-                                })),
-                            );
-                        } else {
-                            Self::send_control_result(
-                                response_tx,
-                                Err(ControlError::invalid_params(
-                                    "Refusing to close the last surface in a pane unless it is an owned ephemeral pane and close_empty_owned_pane=true.",
-                                )),
-                            );
+                        continue;
+                    };
+                    let closing = close_outcome.terminal.clone();
+                    closing.set_focus_state(false, cx);
+                    closing.set_native_view_visible(false, cx);
+                    closing.shutdown_surface(cx);
+                    if tab_idx == self.active_tab {
+                        if close_outcome.closed_pane {
+                            #[cfg(target_os = "macos")]
+                            self.mark_active_tab_terminal_native_layout_pending(cx);
+                            for terminal in self.tabs[tab_idx]
+                                .pane_tree
+                                .all_terminals()
+                                .into_iter()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                            {
+                                terminal.ensure_surface(window, cx);
+                                terminal.notify(cx);
+                            }
                         }
+                        self.sync_active_tab_native_view_visibility(cx);
+                        if closing_was_focused || close_outcome.closed_pane {
+                            let replacement =
+                                self.tabs[tab_idx].pane_tree.focused_terminal().clone();
+                            replacement.ensure_surface(window, cx);
+                            replacement.focus(window, cx);
+                        }
+                        self.sync_active_terminal_focus_states(cx);
                     }
+                    if close_outcome.closed_pane {
+                        self.reconcile_runtime_trackers_for_tab(tab_idx);
+                    }
+                    self.save_session(cx);
+                    Self::send_control_result(
+                        response_tx,
+                        Ok(json!({
+                            "status": "closed",
+                            "closed_pane": close_outcome.closed_pane,
+                            "tab_index": tab_idx + 1,
+                            "pane_id": close_outcome.pane_id,
+                            "surface_id": resolved.surface_id,
+                        })),
+                    );
                 }
             }
         }
@@ -3323,12 +3309,13 @@ impl ConWorkspace {
                                     return;
                                 }
                             };
-                            if changed && tab_idx == self.active_tab {
-                                self.sync_active_tab_native_view_visibility(cx);
-                                self.sync_active_terminal_focus_states(cx);
-                                self.schedule_active_terminal_focus(cx);
-                            }
                             if changed {
+                                if tab_idx == self.active_tab {
+                                    self.sync_active_tab_native_view_visibility(cx);
+                                    self.sync_active_terminal_focus_states(cx);
+                                    self.schedule_active_terminal_focus(cx);
+                                }
+                                self.sync_sidebar(cx);
                                 self.save_session(cx);
                                 cx.notify();
                             }
@@ -3513,7 +3500,8 @@ impl ConWorkspace {
                                     Err(err) => return Some(Err(err)),
                                 };
                                 let is_ready = resolved.terminal.surface_ready(cx)
-                                    && resolved.terminal.is_alive(cx);
+                                    && resolved.terminal.is_alive(cx)
+                                    && resolved.terminal.has_shell_integration(cx);
                                 let timed_out = started.elapsed() >= timeout;
                                 if is_ready || timed_out {
                                     let status = if is_ready { "ready" } else { "timeout" };
@@ -8249,6 +8237,7 @@ impl ConWorkspace {
             .clone();
         terminal.ensure_surface(window, cx);
         self.sync_active_tab_native_view_visibility(cx);
+        self.sync_sidebar(cx);
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
         self.save_session(cx);
@@ -8346,10 +8335,11 @@ impl ConWorkspace {
         if pane_surface_count > 1 {
             let should_focus_replacement =
                 tab_idx == self.active_tab && surface.is_active && surface.is_focused_pane;
-            if let Some((_pane_id, terminal)) = self.tabs[tab_idx]
+            if let Some(outcome) = self.tabs[tab_idx]
                 .pane_tree
-                .close_surface(surface.surface_id)
+                .close_surface(surface.surface_id, false)
             {
+                let terminal = outcome.terminal;
                 terminal.set_native_view_visible(false, cx);
                 terminal.shutdown_surface(cx);
             }
@@ -8357,6 +8347,7 @@ impl ConWorkspace {
                 self.sync_active_tab_native_view_visibility(cx);
                 if should_focus_replacement {
                     let replacement = self.tabs[tab_idx].pane_tree.focused_terminal().clone();
+                    replacement.ensure_surface(window, cx);
                     replacement.focus(window, cx);
                 }
                 self.sync_active_terminal_focus_states(cx);
