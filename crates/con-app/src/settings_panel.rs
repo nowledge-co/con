@@ -4696,12 +4696,10 @@ impl Render for SettingsPanel {
             .overflow_y_scroll()
             .p(content_pad)
             .child(content);
-        let apply_button_style = ButtonCustomVariant::new(cx)
-            .color(theme.primary.opacity(0.12))
-            .foreground(theme.primary)
-            .hover(theme.primary.opacity(0.18))
-            .active(theme.primary.opacity(0.24));
-
+        let save_button_tint = theme
+            .foreground
+            .opacity(if theme.is_dark() { 0.84 } else { 0.78 });
+        let save_button_style = ButtonCustomVariant::new(cx).color(save_button_tint);
         let surface_rounding = if self.standalone { px(0.0) } else { px(12.0) };
         let surface = div()
             .id("settings-card")
@@ -4815,7 +4813,9 @@ impl Render for SettingsPanel {
                                     .children(self.standalone.then(|| {
                                         Button::new("settings-apply")
                                             .small()
-                                            .custom(apply_button_style)
+                                            .compact()
+                                            .rounded(px(8.0))
+                                            .custom(save_button_style)
                                             .icon(Icon::default().path("phosphor/check.svg"))
                                             .label("Save Changes")
                                             .on_click(cx.listener(|this, _, window, cx| {
