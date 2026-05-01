@@ -1469,13 +1469,19 @@ fn gpui_key_to_keycode(key: &str) -> Option<(u32, u32)> {
 
 impl Drop for GhosttyView {
     fn drop(&mut self) {
-        self.host_view = None;
         #[cfg(target_os = "macos")]
         {
+            if let Some(underlay_view) = self.native_underlay_view.take() {
+                Self::set_transition_underlay_owner_visible(
+                    underlay_view,
+                    self.native_transition_underlay_owner_id,
+                    false,
+                );
+            }
             self.document_view = None;
             self.nsview = None;
-            self.native_underlay_view = None;
         }
+        self.host_view = None;
     }
 }
 
