@@ -6,6 +6,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+### Fixed
+
+**Terminal, macOS**
+
+- Improved macOS Monterey fallback for the embedded Ghostty terminal. On macOS 12 and older, Con now explicitly keeps Ghostty's hosted IOSurface layer geometry synchronized with the native surface view, addressing reports where old macOS showed an opaque black terminal area but no visible output. Modern macOS keeps Ghostty's existing layer ownership unchanged. Tracks [#20](https://github.com/nowledge-co/con-terminal/issues/20).
+
 ## `v0.1.0-beta.48` - 2026-05-01
 
 ### Fixed
