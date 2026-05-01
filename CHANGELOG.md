@@ -26,6 +26,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, macOS**
 
 - Reduced transparent-window flashes along moving chrome seams. Agent-panel transitions, input-bar transitions, the top-bar transition, the vertical-tabs edge, the input-bar edge, and pane dividers now use tiny opaque terminal-colored seam covers on macOS instead of exposing a transparent gap or UI-colored matte.
+- Further hardened macOS transparent-window composition by precomposing chrome surfaces over the terminal color and letting the native Ghostty host backing slightly overdraw under GPUI seams. Fast sidebar, agent-panel, input-bar, split, and zoom motion should no longer reveal bright desktop pixels through clear backing gaps.
 
 **Control Plane**
 

@@ -50,6 +50,8 @@ const NS_VIEW_WIDTH_SIZABLE: usize = 1 << 1;
 const NS_VIEW_HEIGHT_SIZABLE: usize = 1 << 4;
 #[cfg(target_os = "macos")]
 const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
+#[cfg(target_os = "macos")]
+const NATIVE_SEAM_OVERDRAW_PT: f64 = 2.0;
 
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -623,15 +625,20 @@ impl GhosttyView {
             unsafe {
                 let superview: id = msg_send![host_view, superview];
                 let super_frame: NSRect = msg_send![superview, frame];
+                let overdraw = NATIVE_SEAM_OVERDRAW_PT;
                 let flipped_y = super_frame.size.height
                     - f64::from(bounds.origin.y)
-                    - f64::from(bounds.size.height);
+                    - f64::from(bounds.size.height)
+                    - overdraw;
 
                 let frame = NSRect::new(
-                    cocoa::foundation::NSPoint::new(f64::from(bounds.origin.x), flipped_y),
+                    cocoa::foundation::NSPoint::new(
+                        f64::from(bounds.origin.x) - overdraw,
+                        flipped_y,
+                    ),
                     cocoa::foundation::NSSize::new(
-                        f64::from(bounds.size.width),
-                        f64::from(bounds.size.height),
+                        f64::from(bounds.size.width) + overdraw * 2.0,
+                        f64::from(bounds.size.height) + overdraw * 2.0,
                     ),
                 );
                 let _: () = msg_send![host_view, setFrame:frame];
@@ -686,6 +693,7 @@ impl GhosttyView {
 
         let visible_width = f64::from(bounds.size.width.as_f32().max(1.0));
         let visible_height = f64::from(bounds.size.height.as_f32().max(1.0));
+        let overdraw = NATIVE_SEAM_OVERDRAW_PT;
         let size = terminal.size();
         let cell_height = if size.cell_height_px > 0 && self.scale_factor > 0.0 {
             f64::from(size.cell_height_px) / f64::from(self.scale_factor)
@@ -713,7 +721,10 @@ impl GhosttyView {
         unsafe {
             let document_frame = NSRect::new(
                 cocoa::foundation::NSPoint::new(0.0, 0.0),
-                cocoa::foundation::NSSize::new(visible_width, document_height),
+                cocoa::foundation::NSSize::new(
+                    visible_width + overdraw * 2.0,
+                    document_height + overdraw * 2.0,
+                ),
             );
             let _: () = msg_send![document_view, setFrame:document_frame];
 
@@ -747,7 +758,7 @@ impl GhosttyView {
             // frame must be deterministically reapplied from Con-owned pane
             // bounds plus Ghostty's scrollbar state.
             let surface_frame = NSRect::new(
-                cocoa::foundation::NSPoint::new(0.0, scroll_y),
+                cocoa::foundation::NSPoint::new(overdraw, scroll_y + overdraw),
                 cocoa::foundation::NSSize::new(visible_width, visible_height),
             );
             let _: () = msg_send![nsview, setFrame:surface_frame];

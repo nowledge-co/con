@@ -66,7 +66,7 @@ The engine lives in `con-core::tab_summary` and is constructed via `AgentHarness
 
 - **Single selection signal.** Active row uses the elevated pill bg + foreground text + medium font weight. **No accent bar.** A single unambiguous cue is enough; doubling it (pill + bar + bold + accent color) is decorative chrome.
 - **Quiet by default.** Action affordances (rename pencil, close X) are hover-only on every row, including the active one. Reveal on intent.
-- **Surface separation via opacity.** `surface_tone()` blends a desaturated extreme-luminance overlay into `theme.background` at 0.10 (rail), 0.18 (panel body), 0.22 (hover card), 0.32 (card edge stripe). No borders, no shadows.
+- **Surface separation via opacity.** `surface_tone()` blends a desaturated extreme-luminance overlay into `theme.background` at 0.10 (rail), 0.18 (panel body), 0.22 (hover card), 0.32 (card edge stripe). No borders, no shadows. On macOS, the workspace gives the sidebar an opaque terminal-colored backing first, so those translucent surfaces visually blend over the terminal instead of over the desktop through the transparent root window.
 - **Mono font for technical detail only.** Tab names use `theme.font_family` (system) — tabs are named *things*. Subtitles (`~/proj/path`, `user@host`) use `theme.mono_font_family`.
 
 ## User-visible surface

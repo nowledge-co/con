@@ -25,6 +25,11 @@ const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
 
+#[cfg(target_os = "macos")]
+fn solid_over_terminal_backdrop(backdrop: Hsla, overlay: Hsla) -> Hsla {
+    backdrop.blend(overlay).alpha(1.0)
+}
+
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -8655,6 +8660,27 @@ impl Render for ConWorkspace {
         let pane_divider_color = terminal_surface_color;
         #[cfg(not(target_os = "macos"))]
         let pane_divider_color = theme.title_bar_border;
+        #[cfg(target_os = "macos")]
+        let top_bar_surface_color = solid_over_terminal_backdrop(
+            terminal_surface_color,
+            theme.title_bar.opacity(ui_surface_opacity),
+        );
+        #[cfg(not(target_os = "macos"))]
+        let top_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
+        #[cfg(target_os = "macos")]
+        let input_bar_surface_color = solid_over_terminal_backdrop(
+            terminal_surface_color,
+            theme.title_bar.opacity(ui_surface_opacity),
+        );
+        #[cfg(not(target_os = "macos"))]
+        let input_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
+        #[cfg(target_os = "macos")]
+        let elevated_panel_surface_color = solid_over_terminal_backdrop(
+            terminal_surface_color,
+            theme.background.opacity(elevated_ui_surface_opacity),
+        );
+        #[cfg(not(target_os = "macos"))]
+        let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
         let effective_agent_panel_width = self
             .agent_panel_width
             .min(max_agent_panel_width(window_width));
@@ -8730,7 +8756,7 @@ impl Render for ConWorkspace {
                     .overflow_hidden()
                     .h(px(43.0 * input_bar_progress))
                     .flex_shrink_0()
-                    .bg(theme.title_bar.opacity(ui_surface_opacity))
+                    .bg(input_bar_surface_color)
                     .child(div().h(px(1.0)).bg(chrome_static_seam_color))
                     .child(
                         div()
@@ -8744,7 +8770,14 @@ impl Render for ConWorkspace {
         let mut main_area = div().relative().flex().flex_1().min_h_0();
 
         if self.vertical_tabs_active() {
-            main_area = main_area.child(self.sidebar.clone());
+            main_area = main_area.child(
+                div()
+                    .h_full()
+                    .flex_shrink_0()
+                    .overflow_hidden()
+                    .bg(elevated_panel_surface_color)
+                    .child(self.sidebar.clone()),
+            );
         }
 
         main_area = main_area.child(terminal_area);
@@ -8770,7 +8803,7 @@ impl Render for ConWorkspace {
                     .flex_shrink_0()
                     .flex()
                     .flex_row()
-                    .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                    .bg(elevated_panel_surface_color)
                     .child(
                         div()
                             .id("agent-panel-divider")
@@ -8863,7 +8896,7 @@ impl Render for ConWorkspace {
             .items_end()
             .pl(px(leading_pad))
             .pr(px(6.0))
-            .bg(theme.title_bar.opacity(ui_surface_opacity));
+            .bg(top_bar_surface_color);
 
         #[cfg(not(target_os = "macos"))]
         {
