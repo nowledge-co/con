@@ -27,6 +27,12 @@ The corrected Monterey fallback keeps two separate rules:
 
 This preserves the embedded Ghostty architecture while giving Monterey users a solid window frame without hiding the terminal itself.
 
+New feedback on beta 37 showed a third failure mode: the terminal area became an opaque black rectangle, but shell output was still not visible. That points at the embedded Ghostty layer rather than the GPUI chrome: Ghostty turns the passed surface `NSView` into a layer-hosting view by assigning its IOSurface `CALayer` directly, and older AppKit compositors can fail to keep that hosted layer's bounds synchronized when Con mutates the native frame from GPUI layout callbacks.
+
+On macOS 12 and older, Con now explicitly re-syncs the Ghostty-owned hosted layer's frame, bounds, contents scale, and display invalidation whenever the embedded surface backing or deterministic surface frame is updated. The fallback still does not make the GPUI root opaque, and it remains macOS-only. Modern macOS keeps Ghostty's existing layer ownership unchanged because forcing the hosted layer geometry there changes edge composition around the terminal surface.
+
 ## What We Learned
 
 Native transparency around embedded Metal views must be treated as an OS-version capability, not just a user preference. Just as important: for embedded native views, "make the window opaque" and "make the UI root opaque" are not interchangeable fixes. The window can safely fall back to opaque while the host UI above the embedded surface still needs transparency to avoid painting over the terminal.
+
+For embedded layer-hosting views, the host app sometimes owns geometry invariants. Passing an `NSView` to Ghostty is not enough if Con later drives that view's frame outside normal AppKit layout; on old macOS releases, the hosted CALayer must be kept in lockstep with the view bounds. On modern macOS, Ghostty's own layer geometry should be left alone unless a concrete compositor bug proves otherwise.

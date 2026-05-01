@@ -693,6 +693,55 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
+    fn sync_native_layer_geometry(view: id, contents_scale: f32) {
+        if view.is_null() {
+            return;
+        }
+        if !Self::needs_legacy_native_layer_geometry_sync() {
+            return;
+        }
+
+        unsafe {
+            let layer: id = msg_send![view, layer];
+            if layer.is_null() {
+                return;
+            }
+
+            // Ghostty turns the surface NSView into a layer-hosting view by
+            // assigning its IOSurface CALayer directly. On older AppKit
+            // compositors (Monterey), layer-hosting views can fail to keep
+            // their hosted layer bounds in lockstep with command-driven
+            // frame mutations, leaving only our opaque backing color visible.
+            let bounds: NSRect = msg_send![view, bounds];
+            let _: () = msg_send![layer, setFrame:bounds];
+            let _: () = msg_send![layer, setBounds:bounds];
+            let _: () = msg_send![layer, setContentsScale:f64::from(contents_scale)];
+            let _: () = msg_send![layer, setNeedsDisplay];
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn needs_legacy_native_layer_geometry_sync() -> bool {
+        static NEEDS_SYNC: OnceLock<bool> = OnceLock::new();
+        *NEEDS_SYNC.get_or_init(|| unsafe {
+            #[repr(C)]
+            struct NSOperatingSystemVersion {
+                major_version: isize,
+                minor_version: isize,
+                patch_version: isize,
+            }
+
+            let process_info: id = msg_send![class!(NSProcessInfo), processInfo];
+            if process_info.is_null() {
+                return false;
+            }
+
+            let version: NSOperatingSystemVersion = msg_send![process_info, operatingSystemVersion];
+            version.major_version <= 12
+        })
+    }
+
+    #[cfg(target_os = "macos")]
     fn sync_native_backing_background(&mut self) {
         let Some(rgba) = self.native_backing_rgba() else {
             return;
@@ -715,6 +764,7 @@ impl GhosttyView {
         }
         if let Some(nsview) = self.nsview {
             Self::apply_native_backing_color(nsview, rgba);
+            Self::sync_native_layer_geometry(nsview, self.scale_factor);
         }
         if let Some(underlay_view) = self.native_underlay_view
             && let Some(underlay_rgba) = self.native_underlay_rgba()
@@ -929,6 +979,7 @@ impl GhosttyView {
                 cocoa::foundation::NSSize::new(visible_width, visible_height),
             );
             let _: () = msg_send![nsview, setFrame:surface_frame];
+            Self::sync_native_layer_geometry(nsview, self.scale_factor);
         }
     }
 
