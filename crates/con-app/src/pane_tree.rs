@@ -575,7 +575,6 @@ impl PaneTree {
                 zoomed_id,
                 self.focused_pane_id,
                 focus_surface_cb.clone(),
-                divider_color,
                 cx,
             ) {
                 return zoomed;
@@ -1112,7 +1111,6 @@ impl PaneTree {
         target_id: PaneId,
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        divider_color: Hsla,
         cx: &App,
     ) -> Option<AnyElement> {
         match node {
@@ -1129,24 +1127,18 @@ impl PaneTree {
                 cx,
             )),
             PaneNode::Leaf { .. } => None,
-            PaneNode::Split { first, second, .. } => Self::render_zoomed_leaf(
-                first,
-                target_id,
-                focused_id,
-                focus_surface_cb.clone(),
-                divider_color,
-                cx,
-            )
-            .or_else(|| {
-                Self::render_zoomed_leaf(
-                    second,
-                    target_id,
-                    focused_id,
-                    focus_surface_cb,
-                    divider_color,
-                    cx,
-                )
-            }),
+            PaneNode::Split { first, second, .. } => {
+                Self::render_zoomed_leaf(first, target_id, focused_id, focus_surface_cb.clone(), cx)
+                    .or_else(|| {
+                        Self::render_zoomed_leaf(
+                            second,
+                            target_id,
+                            focused_id,
+                            focus_surface_cb,
+                            cx,
+                        )
+                    })
+            }
         }
     }
 

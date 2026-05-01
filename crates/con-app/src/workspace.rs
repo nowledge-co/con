@@ -690,14 +690,10 @@ impl ConWorkspace {
     #[cfg(target_os = "macos")]
     fn sync_chrome_transition_underlay(&self, visible: bool, cx: &App) {
         if visible {
-            if self.has_active_tab()
-                && let Some(terminal) = self.tabs[self.active_tab]
-                    .pane_tree
-                    .all_terminals()
-                    .into_iter()
-                    .next()
-            {
-                terminal.set_native_transition_underlay_visible(true, cx);
+            if self.has_active_tab() {
+                for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
+                    terminal.set_native_transition_underlay_visible(true, cx);
+                }
             }
             return;
         }
