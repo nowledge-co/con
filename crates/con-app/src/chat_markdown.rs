@@ -1776,7 +1776,7 @@ fn math_font_size_metric(style: &ChatMarkdownStyle<'_>) -> u32 {
 }
 
 fn inline_math_font_size_metric(base_style: &TextStyle) -> u32 {
-    let font_size: f32 = text_style_font_size(base_style).into();
+    let font_size: f32 = (text_style_font_size(base_style) * 0.9).into();
     (font_size * 1000.0).round().max(1.0) as u32
 }
 
@@ -2436,17 +2436,18 @@ fn render_inline_math_item(
         Some(Ok(image)) => div()
             .id(id)
             .relative()
-            .top(px(2.0))
-            .mx(px(1.0))
+            .top(px(-1.0))
+            .mx(px(3.0))
+            .flex_none()
             .child(img(ImageSource::Render(image.clone())).flex_none())
             .into_any_element(),
         Some(Err(_)) | None => div()
             .id(id)
             .relative()
-            .top(px(1.0))
-            .mx(px(1.0))
+            .top(px(-1.0))
+            .mx(px(3.0))
             .px(px(3.0))
-            .py(px(1.0))
+            .py(px(0.0))
             .rounded(px(4.0))
             .bg(style.inline_math_background)
             .font_family(style.theme.mono_font_family.clone())
