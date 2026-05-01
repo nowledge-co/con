@@ -7,16 +7,10 @@ use std::time::Duration;
 #[cfg(target_os = "macos")]
 use std::time::Instant;
 
-#[cfg(target_os = "macos")]
-use cocoa::base::id;
-#[cfg(target_os = "macos")]
-use cocoa::foundation::NSSize;
 use gpui::{prelude::FluentBuilder as _, *};
 #[cfg(target_os = "macos")]
 use gpui_component::Theme;
 use gpui_component::{ActiveTheme, tooltip::Tooltip};
-#[cfg(target_os = "macos")]
-use objc::{msg_send, sel, sel_impl};
 use serde_json::json;
 use tokio::sync::oneshot;
 
@@ -400,9 +394,6 @@ pub struct ConWorkspace {
     ghostty_app: std::sync::Arc<con_ghostty::GhosttyApp>,
     /// Last wake generation observed from Ghostty's embedded runtime.
     last_ghostty_wake_generation: u64,
-    /// Last macOS content-resize increment applied to the window, in 1/1000th points.
-    #[cfg(target_os = "macos")]
-    last_window_resize_increment_millipoints: Option<(u32, u32)>,
     #[cfg(target_os = "macos")]
     chrome_transition_underlay_until: Option<Instant>,
     /// Pending create-pane requests that need a window context to process.
@@ -1361,8 +1352,6 @@ impl ConWorkspace {
             ghostty_app,
             last_ghostty_wake_generation,
             #[cfg(target_os = "macos")]
-            last_window_resize_increment_millipoints: None,
-            #[cfg(target_os = "macos")]
             chrome_transition_underlay_until: None,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
@@ -1649,52 +1638,6 @@ impl ConWorkspace {
 
         changed
     }
-
-    #[cfg(target_os = "macos")]
-    fn sync_window_resize_increments(&mut self, window: &mut Window, cx: &App) {
-        let Some((cell_width_px, cell_height_px)) = self.active_terminal().cell_size_px(cx) else {
-            return;
-        };
-        if cell_width_px == 0 || cell_height_px == 0 {
-            return;
-        }
-
-        let scale = window.scale_factor().max(1.0);
-        let width_pt = (cell_width_px as f32 / scale).max(1.0);
-        let height_pt = (cell_height_px as f32 / scale).max(1.0);
-        let key = (
-            (width_pt * 1000.0).round() as u32,
-            (height_pt * 1000.0).round() as u32,
-        );
-        if self.last_window_resize_increment_millipoints == Some(key) {
-            return;
-        }
-
-        let raw_handle: raw_window_handle::WindowHandle<'_> =
-            match <Window as raw_window_handle::HasWindowHandle>::window_handle(window) {
-                Ok(handle) => handle,
-                Err(_) => return,
-            };
-        let gpui_nsview = match raw_handle.as_raw() {
-            raw_window_handle::RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr() as id,
-            _ => return,
-        };
-
-        unsafe {
-            let nswindow: id = msg_send![gpui_nsview, window];
-            if nswindow.is_null() {
-                return;
-            }
-            let _: () = msg_send![
-                nswindow,
-                setContentResizeIncrements: NSSize::new(f64::from(width_pt), f64::from(height_pt))
-            ];
-        }
-        self.last_window_resize_increment_millipoints = Some(key);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn sync_window_resize_increments(&mut self, _window: &mut Window, _cx: &App) {}
 
     fn schedule_terminal_bootstrap_reassert(
         terminal: &TerminalPane,
@@ -8580,8 +8523,6 @@ impl Render for ConWorkspace {
             return div().size_full().into_any_element();
         }
 
-        self.sync_window_resize_increments(window, cx);
-
         let active_terminal = self.active_terminal().clone();
 
         // If a modal was dismissed internally (escape/backdrop), restore terminal focus
@@ -9063,6 +9004,17 @@ impl Render for ConWorkspace {
             .pl(px(leading_pad))
             .pr(px(6.0))
             .bg(top_bar_surface_color);
+
+        #[cfg(target_os = "macos")]
+        {
+            top_bar = top_bar
+                .window_control_area(WindowControlArea::Drag)
+                .on_click(|event, window, _cx| {
+                    if event.click_count() == 2 {
+                        window.titlebar_double_click();
+                    }
+                });
+        }
 
         #[cfg(not(target_os = "macos"))]
         {
