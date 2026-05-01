@@ -21,6 +21,7 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// — that's known-good on macOS.
 const GHOSTTY_REV: &str = "ca7516bea60190ee2e9a4f9182b61d318d107c6e";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
+const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
 
 fn main() {
     // Rerun the build script when any of our own env vars flip — cargo
@@ -33,8 +34,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CON_SKIP_GHOSTTY_VT");
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_SIMD");
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_STEP");
+    println!("cargo:rerun-if-env-changed={GHOSTTY_VT_TARGET_ENV}");
     println!("cargo:rerun-if-env-changed=CON_ZIG_BIN");
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_OPTIMIZE");
+    println!("cargo:rerun-if-env-changed=TARGET");
     println!("cargo:rerun-if-env-changed=ZIG_GLOBAL_CACHE_DIR");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -265,6 +268,7 @@ fn build_vt_backend(target_os: &str) {
     };
 
     let optimize = ghostty_optimize();
+    let zig_target = ghostty_vt_zig_target();
 
     let mut cmd = Command::new(&zig_bin);
     cmd.current_dir(&ghostty_dir);
@@ -272,6 +276,19 @@ fn build_vt_backend(target_os: &str) {
     cmd.arg("build");
     for arg in &invocation {
         cmd.arg(arg);
+    }
+    if let Some(zig_target) = &zig_target {
+        // Do not let Zig default to the build machine's native CPU for
+        // release artifacts. GitHub runners can expose ISA extensions
+        // that WSL / older x86_64 hosts do not support, and a native-built
+        // static lib can SIGILL even when the Rust binary itself is generic.
+        println!("cargo:warning=building libghostty-vt for Zig target {zig_target}");
+        cmd.arg(format!("-Dtarget={zig_target}"));
+    } else {
+        println!(
+            "cargo:warning=building libghostty-vt without explicit Zig target; \
+             set {GHOSTTY_VT_TARGET_ENV} to avoid native CPU codegen"
+        );
     }
     cmd.args([&format!("-Doptimize={optimize}"), simd_flag]);
 
@@ -431,6 +448,32 @@ fn pick_vt_invocation(
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────
+
+fn ghostty_vt_zig_target() -> Option<String> {
+    if let Some(target) = env::var_os(GHOSTTY_VT_TARGET_ENV) {
+        let target = target.to_string_lossy().trim().to_string();
+        if !target.is_empty() {
+            return Some(target);
+        }
+    }
+
+    let cargo_target = env::var("TARGET").ok()?;
+    cargo_target_to_zig_target(&cargo_target).map(str::to_string)
+}
+
+fn cargo_target_to_zig_target(cargo_target: &str) -> Option<&'static str> {
+    match cargo_target {
+        "x86_64-unknown-linux-gnu" => Some("x86_64-linux-gnu"),
+        "aarch64-unknown-linux-gnu" => Some("aarch64-linux-gnu"),
+        "x86_64-unknown-linux-musl" => Some("x86_64-linux-musl"),
+        "aarch64-unknown-linux-musl" => Some("aarch64-linux-musl"),
+        "x86_64-pc-windows-msvc" => Some("x86_64-windows-msvc"),
+        "aarch64-pc-windows-msvc" => Some("aarch64-windows-msvc"),
+        "x86_64-pc-windows-gnu" => Some("x86_64-windows-gnu"),
+        "aarch64-pc-windows-gnullvm" => Some("aarch64-windows-gnu"),
+        _ => None,
+    }
+}
 
 fn resolve_ghostty_source() -> PathBuf {
     if let Some(source_dir) = env::var_os(GHOSTTY_ENV) {
@@ -605,5 +648,39 @@ fn writable_dir(path: &Path) -> bool {
 fn configure_zig_command(command: &mut Command, zig_global_cache_dir: Option<&std::path::Path>) {
     if let Some(dir) = zig_global_cache_dir {
         command.env("ZIG_GLOBAL_CACHE_DIR", dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cargo_target_to_zig_target;
+
+    #[test]
+    fn maps_linux_targets_to_generic_zig_targets() {
+        assert_eq!(
+            cargo_target_to_zig_target("x86_64-unknown-linux-gnu"),
+            Some("x86_64-linux-gnu")
+        );
+        assert_eq!(
+            cargo_target_to_zig_target("aarch64-unknown-linux-gnu"),
+            Some("aarch64-linux-gnu")
+        );
+    }
+
+    #[test]
+    fn maps_windows_targets_to_generic_zig_targets() {
+        assert_eq!(
+            cargo_target_to_zig_target("x86_64-pc-windows-msvc"),
+            Some("x86_64-windows-msvc")
+        );
+        assert_eq!(
+            cargo_target_to_zig_target("aarch64-pc-windows-msvc"),
+            Some("aarch64-windows-msvc")
+        );
+    }
+
+    #[test]
+    fn leaves_unknown_targets_unmodified() {
+        assert_eq!(cargo_target_to_zig_target("wasm32-unknown-unknown"), None);
     }
 }
