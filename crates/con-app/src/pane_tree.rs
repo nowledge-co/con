@@ -565,6 +565,7 @@ impl PaneTree {
         &self,
         begin_drag_cb: impl Fn(SplitId, f32) + 'static,
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
+        divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
         let focus_surface_cb = std::sync::Arc::new(focus_surface_cb);
@@ -574,6 +575,7 @@ impl PaneTree {
                 zoomed_id,
                 self.focused_pane_id,
                 focus_surface_cb.clone(),
+                divider_color,
                 cx,
             ) {
                 return zoomed;
@@ -586,6 +588,7 @@ impl PaneTree {
             self.pane_count() > 1,
             std::sync::Arc::new(begin_drag_cb),
             focus_surface_cb,
+            divider_color,
             cx,
         )
     }
@@ -971,10 +974,9 @@ impl PaneTree {
         has_splits: bool,
         begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32) + 'static>,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
-        let theme = cx.theme();
-
         match node {
             PaneNode::Leaf {
                 id,
@@ -1005,14 +1007,22 @@ impl PaneTree {
                 let focus_cb_first = focus_surface_cb.clone();
                 let focus_cb_second = focus_surface_cb.clone();
 
-                let first_el =
-                    Self::render_node(first, focused_id, has_splits, cb_first, focus_cb_first, cx);
+                let first_el = Self::render_node(
+                    first,
+                    focused_id,
+                    has_splits,
+                    cb_first,
+                    focus_cb_first,
+                    divider_color,
+                    cx,
+                );
                 let second_el = Self::render_node(
                     second,
                     focused_id,
                     has_splits,
                     cb_second,
                     focus_cb_second,
+                    divider_color,
                     cx,
                 );
 
@@ -1024,7 +1034,7 @@ impl PaneTree {
                         .w(px(1.0))
                         .h_full()
                         .flex_shrink_0()
-                        .bg(theme.title_bar_border)
+                        .bg(divider_color)
                         .child(
                             div()
                                 .absolute()
@@ -1033,8 +1043,8 @@ impl PaneTree {
                                 .left(px(-2.0))
                                 .w(px(5.0))
                                 .cursor_col_resize()
-                                .bg(theme.background.opacity(0.035))
-                                .hover(|s| s.bg(theme.background.opacity(0.08)))
+                                .bg(divider_color.opacity(0.01))
+                                .hover(move |s| s.bg(divider_color.opacity(0.10)))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     move |event: &MouseDownEvent, _window, _cx| {
@@ -1048,7 +1058,7 @@ impl PaneTree {
                         .h(px(1.0))
                         .w_full()
                         .flex_shrink_0()
-                        .bg(theme.title_bar_border)
+                        .bg(divider_color)
                         .child(
                             div()
                                 .absolute()
@@ -1057,8 +1067,8 @@ impl PaneTree {
                                 .top(px(-2.0))
                                 .h(px(5.0))
                                 .cursor_row_resize()
-                                .bg(theme.background.opacity(0.035))
-                                .hover(|s| s.bg(theme.background.opacity(0.08)))
+                                .bg(divider_color.opacity(0.01))
+                                .hover(move |s| s.bg(divider_color.opacity(0.10)))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     move |event: &MouseDownEvent, _window, _cx| {
@@ -1104,6 +1114,7 @@ impl PaneTree {
         target_id: PaneId,
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        divider_color: Hsla,
         cx: &App,
     ) -> Option<AnyElement> {
         match node {
@@ -1120,18 +1131,24 @@ impl PaneTree {
                 cx,
             )),
             PaneNode::Leaf { .. } => None,
-            PaneNode::Split { first, second, .. } => {
-                Self::render_zoomed_leaf(first, target_id, focused_id, focus_surface_cb.clone(), cx)
-                    .or_else(|| {
-                        Self::render_zoomed_leaf(
-                            second,
-                            target_id,
-                            focused_id,
-                            focus_surface_cb,
-                            cx,
-                        )
-                    })
-            }
+            PaneNode::Split { first, second, .. } => Self::render_zoomed_leaf(
+                first,
+                target_id,
+                focused_id,
+                focus_surface_cb.clone(),
+                divider_color,
+                cx,
+            )
+            .or_else(|| {
+                Self::render_zoomed_leaf(
+                    second,
+                    target_id,
+                    focused_id,
+                    focus_surface_cb,
+                    divider_color,
+                    cx,
+                )
+            }),
         }
     }
 

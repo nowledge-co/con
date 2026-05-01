@@ -25,6 +25,11 @@ pub struct Session {
     /// orientation later restores the previous expansion state.
     #[serde(default)]
     pub vertical_tabs_pinned: bool,
+    /// User-resized width for the pinned vertical-tabs panel. Collapsed
+    /// rail mode always uses the fixed rail width; this value is only
+    /// consulted when `vertical_tabs_pinned` is true.
+    #[serde(default)]
+    pub vertical_tabs_width: Option<f32>,
 }
 
 /// App-wide command history, stored separately from window layout so it survives
@@ -151,6 +156,7 @@ impl Default for Session {
             input_history: Vec::new(),
             conversation_id: None,
             vertical_tabs_pinned: false,
+            vertical_tabs_width: None,
         }
     }
 }

@@ -12,11 +12,20 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Added CJK IME text input for Windows and Linux terminal panes. IME commits now enter through GPUI's platform text-input path, preedit state tracks candidate positioning at the terminal cursor, and terminal-local control / alt / special key handling remains unchanged. The macOS embedded Ghostty path is unchanged.
 
+**Workspace**
+
+- Added a quick vertical-tabs toggle in the top bar, Command Palette, and Keyboard Shortcuts. Defaults: Cmd+B on macOS, Ctrl+Shift+B on Windows and Linux.
+- Added draggable resizing for the pinned vertical-tabs panel. The resized width is persisted in session state and restored across launches.
+
 **Control Plane**
 
 - Added pane-local terminal surfaces for external orchestrators. Existing `panes.*` APIs, built-in agent tools, and benchmarks keep the active-surface pane contract, while new `tree.get` and `surfaces.*` RPC/CLI commands can create, split, wait for readiness, focus, rename, drive, read, and close terminal sessions inside a pane.
 
 ### Fixed
+
+**Terminal, macOS**
+
+- Reduced transparent-window flashes along moving chrome seams. Agent-panel transitions, input-bar transitions, and pane dividers now use a terminal-colored seam cover on macOS instead of exposing a fully transparent gap or a UI-colored matte.
 
 **Control Plane**
 

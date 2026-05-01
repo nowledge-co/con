@@ -96,6 +96,7 @@ actions!(
         ToggleSummon,
         ToggleAgentPanel,
         ToggleInputBar,
+        ToggleVerticalTabs,
         CloseTab,
         ClosePane,
         TogglePaneZoom,
@@ -823,6 +824,7 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, None),
         KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
         KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, None),
+        KeyBinding::new(&kb.toggle_vertical_tabs, ToggleVerticalTabs, None),
         KeyBinding::new(&kb.quit, Quit, Some("Input")),
         KeyBinding::new(&kb.new_window, NewWindow, Some("Input")),
         KeyBinding::new(&kb.new_tab, NewTab, Some("Input")),
@@ -855,6 +857,7 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, Some("Input")),
         KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, Some("Input")),
         KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, Some("Input")),
+        KeyBinding::new(&kb.toggle_vertical_tabs, ToggleVerticalTabs, Some("Input")),
     ]);
 
     // Hide app / Hide others / Show all are macOS system-menu conventions

@@ -262,6 +262,18 @@ fn default_cycle_input_mode() -> String {
 fn default_toggle_pane_scope() -> String {
     "secondary-'".into()
 }
+#[cfg(target_os = "macos")]
+fn default_toggle_vertical_tabs() -> String {
+    // Cmd+B is the established macOS/editor convention for showing or
+    // hiding a sidebar, and Cmd chords do not steal terminal input.
+    "secondary-b".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_toggle_vertical_tabs() -> String {
+    // Avoid bare Ctrl+B on Windows/Linux: it is tmux's prefix and a
+    // real terminal control character. Ctrl+Shift+B stays app-level.
+    "ctrl-shift-b".into()
+}
 fn default_global_summon() -> String {
     "alt-space".into()
 }
@@ -289,6 +301,7 @@ pub struct KeybindingConfig {
     pub cycle_input_mode: String,
     pub toggle_input_bar: String,
     pub toggle_pane_scope: String,
+    pub toggle_vertical_tabs: String,
     pub global_summon_enabled: bool,
     pub global_summon: String,
 }
@@ -313,6 +326,7 @@ impl Default for KeybindingConfig {
             cycle_input_mode: default_cycle_input_mode(),
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
+            toggle_vertical_tabs: default_toggle_vertical_tabs(),
             global_summon_enabled: default_global_summon_enabled(),
             global_summon: default_global_summon(),
         }
@@ -418,6 +432,21 @@ impl Config {
 
     pub fn config_path() -> PathBuf {
         con_paths::config_file()
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(&path, &content)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
     }
 }
 

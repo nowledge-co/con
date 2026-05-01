@@ -176,6 +176,8 @@ One macOS embedding invariant is subtle but important: after GPUI changes split 
 
 Con also no longer tries to outsmart Ghostty's resize path with host-side coalescing. The embedded surface now updates its core size immediately on layout using AppKit backing-size conversion, which is much closer to how Ghostty's own macOS app drives `ghostty_surface_set_size`.
 
+Chrome seams around macOS embedded terminals are native-surface seams, not generic GPUI borders. The window root is transparent and the terminal can be translucent, so a fully transparent 1–4 px gap during agent-panel, input-bar, split-divider, or vertical-sidebar motion can expose the desktop/backdrop as a white flash. Cover only the moving seam, and tint that cover from the adjacent terminal background at terminal opacity; do not reintroduce a full terminal matte, which hides the leak by veiling the whole surface and creates a different blink.
+
 One build-time rule matters too: the embedded Ghostty runtime itself must be compiled as a release-class library. Con now passes Zig `-Doptimize=ReleaseFast` for the macOS Ghostty build by default. Without that, traces are dominated by Ghostty's own formatter, reflow, integrity-check, and debug-allocation paths, which makes Con look fundamentally slower than standalone Ghostty even when the host integration is not the main bottleneck.
 
 ## Agent execution
