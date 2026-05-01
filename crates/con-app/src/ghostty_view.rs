@@ -53,7 +53,16 @@ const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
 #[cfg(target_os = "macos")]
 const NATIVE_SEAM_OVERDRAW_PT: f64 = 2.0;
 #[cfg(target_os = "macos")]
-const NATIVE_TRANSITION_UNDERLAY_TAG: isize = 0x434f_4e55;
+static NATIVE_TRANSITION_UNDERLAY_ASSOCIATION_KEY: u8 = 0;
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn objc_getAssociatedObject(object: id, key: *const c_void) -> id;
+    fn objc_setAssociatedObject(object: id, key: *const c_void, value: id, policy: usize);
+}
+
+#[cfg(target_os = "macos")]
+const OBJC_ASSOCIATION_RETAIN_NONATOMIC: usize = 1;
 
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -359,7 +368,8 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     fn transition_underlay_for_parent(parent_nsview: id) -> id {
         unsafe {
-            let existing: id = msg_send![parent_nsview, viewWithTag:NATIVE_TRANSITION_UNDERLAY_TAG];
+            let key = &NATIVE_TRANSITION_UNDERLAY_ASSOCIATION_KEY as *const u8 as *const c_void;
+            let existing = objc_getAssociatedObject(parent_nsview, key);
             if !existing.is_null() {
                 return existing;
             }
@@ -367,7 +377,6 @@ impl GhosttyView {
             let frame: NSRect = msg_send![parent_nsview, bounds];
             let underlay: id = msg_send![class!(NSView), alloc];
             let underlay: id = msg_send![underlay, initWithFrame:frame];
-            let _: () = msg_send![underlay, setTag:NATIVE_TRANSITION_UNDERLAY_TAG];
             let _: () = msg_send![underlay, setWantsLayer:YES];
             let _: () = msg_send![
                 underlay,
@@ -380,6 +389,12 @@ impl GhosttyView {
                 positioned: NSWindowOrderingMode::NSWindowBelow
                 relativeTo: nil
             ];
+            objc_setAssociatedObject(
+                parent_nsview,
+                key,
+                underlay,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
             underlay
         }
     }
