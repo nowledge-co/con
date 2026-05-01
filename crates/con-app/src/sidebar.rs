@@ -57,6 +57,8 @@ use std::time::Duration;
 pub const RAIL_WIDTH: f32 = 44.0;
 /// Width of the full panel in pinned mode.
 pub const PANEL_WIDTH: f32 = 240.0;
+pub const PANEL_MIN_WIDTH: f32 = 184.0;
+pub const PANEL_MAX_WIDTH: f32 = 360.0;
 /// Width of the floating hover card shown when the cursor is over a
 /// rail icon. Slightly wider than the panel so two-line rows are
 /// comfortable at this magnification.
@@ -144,6 +146,13 @@ pub struct SessionSidebar {
     leading_top_pad: f32,
     /// Smooth width animation between rail (0.0) and pinned (1.0).
     width_motion: MotionValue,
+    /// User-resized width of the pinned panel. Collapsed mode ignores
+    /// this and stays at the fixed rail width.
+    panel_width: f32,
+    /// Render-time maximum supplied by the workspace after reserving
+    /// terminal and agent-panel width. This keeps the sidebar's actual
+    /// painted edge aligned with workspace seam and resize-handle math.
+    effective_panel_max_width: f32,
     /// Inline rename state, `Some` while the user is editing a label.
     rename: Option<RenameState>,
     /// The rail-icon index currently under the cursor. Drives the
@@ -213,6 +222,8 @@ impl SessionSidebar {
             // vertical-tab controls.
             leading_top_pad: 6.0,
             width_motion: MotionValue::new(0.0),
+            panel_width: PANEL_WIDTH,
+            effective_panel_max_width: PANEL_MAX_WIDTH,
             rename: None,
             hovered_rail: None,
             drop_slot: None,
@@ -249,13 +260,37 @@ impl SessionSidebar {
         matches!(self.mode, PanelMode::Pinned)
     }
 
-    /// Width the panel currently occupies in the workspace flex row.
-    /// Tweens between RAIL_WIDTH and PANEL_WIDTH during pin/unpin.
-    /// Hover cards float over the terminal area and never contribute
-    /// to occupied width.
-    pub fn occupied_width(&self) -> f32 {
+    pub fn panel_width(&self) -> f32 {
+        self.panel_width
+    }
+
+    pub fn set_panel_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        let width = width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+        if (self.panel_width - width).abs() > f32::EPSILON {
+            self.panel_width = width;
+            cx.notify();
+        }
+    }
+
+    pub fn set_effective_panel_max_width(&mut self, width: f32) {
+        self.effective_panel_max_width = width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+    }
+
+    pub fn clamped_panel_width(width: f32, effective_max_width: f32) -> f32 {
+        width.clamp(
+            PANEL_MIN_WIDTH,
+            effective_max_width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH),
+        )
+    }
+
+    fn effective_panel_width(&self) -> f32 {
+        Self::clamped_panel_width(self.panel_width, self.effective_panel_max_width)
+    }
+
+    pub fn occupied_width_with_max(&self, effective_max_width: f32) -> f32 {
         let t = self.width_motion.current().clamp(0.0, 1.0);
-        RAIL_WIDTH + (PANEL_WIDTH - RAIL_WIDTH) * t
+        let panel_width = Self::clamped_panel_width(self.panel_width, effective_max_width);
+        RAIL_WIDTH + (panel_width - RAIL_WIDTH) * t
     }
 
     pub fn toggle_pinned(&mut self, cx: &mut Context<Self>) {
@@ -816,7 +851,7 @@ impl SessionSidebar {
             .flex()
             .flex_col()
             .h_full()
-            .w(px(PANEL_WIDTH))
+            .w(px(self.effective_panel_width()))
             .flex_shrink_0()
             .bg(body_bg)
             .child(header)
@@ -1099,7 +1134,7 @@ impl Render for SessionSidebar {
         match self.mode {
             PanelMode::Pinned => {
                 let t = self.width_motion.current().clamp(0.0, 1.0);
-                let visible_w = RAIL_WIDTH + (PANEL_WIDTH - RAIL_WIDTH) * t;
+                let visible_w = RAIL_WIDTH + (self.effective_panel_width() - RAIL_WIDTH) * t;
                 let panel = self.render_panel_body(false, window, cx);
                 div()
                     .flex()

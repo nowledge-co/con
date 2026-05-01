@@ -1,7 +1,8 @@
 use anyhow::Result;
 use con_agent::AgentConfig;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 pub const MIN_UI_FONT_SIZE: f32 = 12.0;
 pub const MAX_UI_FONT_SIZE: f32 = 24.0;
@@ -262,6 +263,18 @@ fn default_cycle_input_mode() -> String {
 fn default_toggle_pane_scope() -> String {
     "secondary-'".into()
 }
+#[cfg(target_os = "macos")]
+fn default_toggle_vertical_tabs() -> String {
+    // Cmd+B is the established macOS/editor convention for showing or
+    // hiding a sidebar, and Cmd chords do not steal terminal input.
+    "secondary-b".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_toggle_vertical_tabs() -> String {
+    // Avoid bare Ctrl+B on Windows/Linux: it is tmux's prefix and a
+    // real terminal control character. Ctrl+Shift+B stays app-level.
+    "ctrl-shift-b".into()
+}
 fn default_global_summon() -> String {
     "alt-space".into()
 }
@@ -289,6 +302,7 @@ pub struct KeybindingConfig {
     pub cycle_input_mode: String,
     pub toggle_input_bar: String,
     pub toggle_pane_scope: String,
+    pub toggle_vertical_tabs: String,
     pub global_summon_enabled: bool,
     pub global_summon: String,
 }
@@ -313,6 +327,7 @@ impl Default for KeybindingConfig {
             cycle_input_mode: default_cycle_input_mode(),
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
+            toggle_vertical_tabs: default_toggle_vertical_tabs(),
             global_summon_enabled: default_global_summon_enabled(),
             global_summon: default_global_summon(),
         }
@@ -418,6 +433,82 @@ impl Config {
 
     pub fn config_path() -> PathBuf {
         con_paths::config_file()
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let path = Self::config_path();
+        let content = toml::to_string_pretty(self)?;
+        write_private_atomic(&path, content.as_bytes())
+    }
+}
+
+fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let tmp_path = {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        path.with_extension(format!("tmp.{}.{}", std::process::id(), unique))
+    };
+
+    let write_result = (|| -> Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp_path)?;
+        file.write_all(content)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(err) = write_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    replace_file(&tmp_path, path)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
+    std::fs::rename(tmp_path, path)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
+    if !path.exists() {
+        std::fs::rename(tmp_path, path)?;
+        return Ok(());
+    }
+
+    let backup_path = {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        path.with_extension(format!("bak.{}.{}", std::process::id(), unique))
+    };
+
+    std::fs::rename(path, &backup_path)?;
+    match std::fs::rename(tmp_path, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&backup_path);
+            Ok(())
+        }
+        Err(err) => {
+            let _ = std::fs::rename(&backup_path, path);
+            Err(err.into())
+        }
     }
 }
 

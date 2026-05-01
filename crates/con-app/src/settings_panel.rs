@@ -2165,6 +2165,7 @@ impl SettingsPanel {
             "split_right" => self.config.keybindings.split_right = binding,
             "split_down" => self.config.keybindings.split_down = binding,
             "toggle_pane_scope" => self.config.keybindings.toggle_pane_scope = binding,
+            "toggle_vertical_tabs" => self.config.keybindings.toggle_vertical_tabs = binding,
             "quit" => self.config.keybindings.quit = binding,
             _ => {}
         }
@@ -2192,8 +2193,18 @@ impl SettingsPanel {
             "split_right" => &self.config.keybindings.split_right,
             "split_down" => &self.config.keybindings.split_down,
             "toggle_pane_scope" => &self.config.keybindings.toggle_pane_scope,
+            "toggle_vertical_tabs" => &self.config.keybindings.toggle_vertical_tabs,
             "quit" => &self.config.keybindings.quit,
             _ => "",
+        }
+    }
+
+    pub fn set_tabs_orientation(&mut self, orientation: con_core::config::TabsOrientation) {
+        self.config.appearance.tabs_orientation = orientation;
+        if let Some(snapshot) = &mut self.preview_snapshot {
+            snapshot.appearance.tabs_orientation = orientation;
+        } else {
+            self.preview_snapshot = Some(self.config.clone());
         }
     }
 
@@ -2207,18 +2218,7 @@ impl SettingsPanel {
         &self.config.appearance
     }
     fn persist_config(&self) -> anyhow::Result<()> {
-        let path = Config::config_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let content = toml::to_string_pretty(&self.config)?;
-        std::fs::write(&path, &content)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
+        self.config.save()
     }
 
     fn select_provider(
@@ -3151,12 +3151,14 @@ impl SettingsPanel {
                                 // doesn't lose the change, and emit
                                 // a narrow event so the workspace
                                 // applies only the orientation switch.
+                                let previous_orientation = this.config.appearance.tabs_orientation;
                                 this.config.appearance.tabs_orientation = if *checked {
                                     con_core::config::TabsOrientation::Vertical
                                 } else {
                                     con_core::config::TabsOrientation::Horizontal
                                 };
-                                if let Err(err) = this.persist_config() {
+                                if let Err(err) = this.config.save() {
+                                    this.config.appearance.tabs_orientation = previous_orientation;
                                     log::warn!("settings: persist tabs_orientation failed: {err}");
                                     this.save_error = Some(err.to_string());
                                     cx.notify();
@@ -4198,6 +4200,7 @@ impl SettingsPanel {
             ("Toggle Input / Terminal", "focus_input"),
             ("Cycle Input Mode", "cycle_input_mode"),
             ("Toggle Pane Scope", "toggle_pane_scope"),
+            ("Toggle Vertical Tabs", "toggle_vertical_tabs"),
             ("Quit", "quit"),
         ];
 

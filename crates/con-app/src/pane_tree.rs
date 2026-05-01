@@ -565,6 +565,7 @@ impl PaneTree {
         &self,
         begin_drag_cb: impl Fn(SplitId, f32) + 'static,
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
+        divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
         let focus_surface_cb = std::sync::Arc::new(focus_surface_cb);
@@ -586,6 +587,7 @@ impl PaneTree {
             self.pane_count() > 1,
             std::sync::Arc::new(begin_drag_cb),
             focus_surface_cb,
+            divider_color,
             cx,
         )
     }
@@ -971,10 +973,9 @@ impl PaneTree {
         has_splits: bool,
         begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32) + 'static>,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
-        let theme = cx.theme();
-
         match node {
             PaneNode::Leaf {
                 id,
@@ -1005,67 +1006,83 @@ impl PaneTree {
                 let focus_cb_first = focus_surface_cb.clone();
                 let focus_cb_second = focus_surface_cb.clone();
 
-                let first_el =
-                    Self::render_node(first, focused_id, has_splits, cb_first, focus_cb_first, cx);
+                let first_el = Self::render_node(
+                    first,
+                    focused_id,
+                    has_splits,
+                    cb_first,
+                    focus_cb_first,
+                    divider_color,
+                    cx,
+                );
                 let second_el = Self::render_node(
                     second,
                     focused_id,
                     has_splits,
                     cb_second,
                     focus_cb_second,
+                    divider_color,
                     cx,
                 );
 
                 let divider_id = ElementId::Name(format!("divider-{}", sid).into());
                 let divider = match dir {
-                    SplitDirection::Horizontal => div()
-                        .id(divider_id)
-                        .relative()
-                        .w(px(1.0))
-                        .h_full()
-                        .flex_shrink_0()
-                        .bg(theme.title_bar_border)
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .bottom_0()
-                                .left(px(-2.0))
-                                .w(px(5.0))
-                                .cursor_col_resize()
-                                .bg(theme.background.opacity(0.035))
-                                .hover(|s| s.bg(theme.background.opacity(0.08)))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    move |event: &MouseDownEvent, _window, _cx| {
-                                        cb_divider(sid, f32::from(event.position.x));
-                                    },
-                                ),
-                        ),
-                    SplitDirection::Vertical => div()
-                        .id(divider_id)
-                        .relative()
-                        .h(px(1.0))
-                        .w_full()
-                        .flex_shrink_0()
-                        .bg(theme.title_bar_border)
-                        .child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .right_0()
-                                .top(px(-2.0))
-                                .h(px(5.0))
-                                .cursor_row_resize()
-                                .bg(theme.background.opacity(0.035))
-                                .hover(|s| s.bg(theme.background.opacity(0.08)))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    move |event: &MouseDownEvent, _window, _cx| {
-                                        cb_divider(sid, f32::from(event.position.y));
-                                    },
-                                ),
-                        ),
+                    SplitDirection::Horizontal => {
+                        let handle = div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left(px(-2.0))
+                            .w(px(5.0))
+                            .cursor_col_resize()
+                            .bg(gpui::transparent_black());
+                        #[cfg(not(target_os = "macos"))]
+                        let handle = {
+                            let hover_color = cx.theme().foreground.opacity(0.10);
+                            handle.hover(move |s| s.bg(hover_color))
+                        };
+                        div()
+                            .id(divider_id)
+                            .relative()
+                            .w(px(1.0))
+                            .h_full()
+                            .flex_shrink_0()
+                            .bg(divider_color)
+                            .child(handle.on_mouse_down(
+                                MouseButton::Left,
+                                move |event: &MouseDownEvent, _window, _cx| {
+                                    cb_divider(sid, f32::from(event.position.x));
+                                },
+                            ))
+                    }
+                    SplitDirection::Vertical => {
+                        let handle = div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top(px(-2.0))
+                            .h(px(5.0))
+                            .cursor_row_resize()
+                            .bg(gpui::transparent_black());
+                        #[cfg(not(target_os = "macos"))]
+                        let handle = {
+                            let hover_color = cx.theme().foreground.opacity(0.10);
+                            handle.hover(move |s| s.bg(hover_color))
+                        };
+                        div()
+                            .id(divider_id)
+                            .relative()
+                            .h(px(1.0))
+                            .w_full()
+                            .flex_shrink_0()
+                            .bg(divider_color)
+                            .child(handle.on_mouse_down(
+                                MouseButton::Left,
+                                move |event: &MouseDownEvent, _window, _cx| {
+                                    cb_divider(sid, f32::from(event.position.y));
+                                },
+                            ))
+                    }
                 };
 
                 let make_pane = |child: AnyElement, basis: f32| -> Div {

@@ -23,6 +23,10 @@ struct PaletteAction {
 const TOGGLE_PANE_ZOOM_SHORTCUT: &str = "secondary-shift-enter";
 #[cfg(not(target_os = "macos"))]
 const TOGGLE_PANE_ZOOM_SHORTCUT: &str = "alt-shift-enter";
+#[cfg(target_os = "macos")]
+const TOGGLE_VERTICAL_TABS_SHORTCUT: &str = "secondary-b";
+#[cfg(not(target_os = "macos"))]
+const TOGGLE_VERTICAL_TABS_SHORTCUT: &str = "ctrl-shift-b";
 
 const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
@@ -101,6 +105,12 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         id: "toggle-input-bar",
         label: "Toggle Input Bar",
         shortcut: "ctrl-`",
+        category: "View",
+    },
+    PaletteAction {
+        id: "toggle-vertical-tabs",
+        label: "Toggle Vertical Tabs",
+        shortcut: TOGGLE_VERTICAL_TABS_SHORTCUT,
         category: "View",
     },
     PaletteAction {

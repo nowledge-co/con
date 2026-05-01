@@ -17,6 +17,8 @@ use std::ops::Range;
 use std::os::raw::c_void;
 use std::sync::Arc;
 use std::sync::OnceLock;
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use con_ghostty::ffi;
@@ -36,7 +38,7 @@ actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 #[cfg(target_os = "macos")]
 use cocoa::appkit::NSWindowOrderingMode;
 #[cfg(target_os = "macos")]
-use cocoa::base::{NO, YES, id};
+use cocoa::base::{NO, YES, id, nil};
 #[cfg(target_os = "macos")]
 use cocoa::foundation::NSRect;
 #[cfg(target_os = "macos")]
@@ -50,6 +52,23 @@ const NS_VIEW_WIDTH_SIZABLE: usize = 1 << 1;
 const NS_VIEW_HEIGHT_SIZABLE: usize = 1 << 4;
 #[cfg(target_os = "macos")]
 const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
+#[cfg(target_os = "macos")]
+const NATIVE_SEAM_OVERDRAW_PT: f64 = 2.0;
+#[cfg(target_os = "macos")]
+static NATIVE_TRANSITION_UNDERLAY_ASSOCIATION_KEY: u8 = 0;
+#[cfg(target_os = "macos")]
+static NATIVE_TRANSITION_UNDERLAY_OWNERS_ASSOCIATION_KEY: u8 = 0;
+#[cfg(target_os = "macos")]
+static NEXT_NATIVE_TRANSITION_OWNER_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn objc_getAssociatedObject(object: id, key: *const c_void) -> id;
+    fn objc_setAssociatedObject(object: id, key: *const c_void, value: id, policy: usize);
+}
+
+#[cfg(target_os = "macos")]
+const OBJC_ASSOCIATION_RETAIN_NONATOMIC: usize = 1;
 
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -89,7 +108,11 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     nsview: Option<id>,
     #[cfg(target_os = "macos")]
+    native_underlay_view: Option<id>,
+    #[cfg(target_os = "macos")]
     native_backing_color: Option<(u8, u8, u8, u8)>,
+    #[cfg(target_os = "macos")]
+    native_underlay_color: Option<(u8, u8, u8, u8)>,
     #[cfg(target_os = "macos")]
     pending_native_layout: bool,
     initialized: bool,
@@ -116,6 +139,10 @@ pub struct GhosttyView {
     /// mouse-move event when the pointer is stationary.
     #[cfg(target_os = "macos")]
     last_mouse_position: Option<Point<Pixels>>,
+    #[cfg(target_os = "macos")]
+    native_transition_underlay_visible: Cell<bool>,
+    #[cfg(target_os = "macos")]
+    native_transition_underlay_owner_id: u64,
     ime_marked_text: Option<String>,
 }
 
@@ -149,7 +176,11 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             nsview: None,
             #[cfg(target_os = "macos")]
+            native_underlay_view: None,
+            #[cfg(target_os = "macos")]
             native_backing_color: None,
+            #[cfg(target_os = "macos")]
+            native_underlay_color: None,
             #[cfg(target_os = "macos")]
             pending_native_layout: false,
             initialized: false,
@@ -164,6 +195,11 @@ impl GhosttyView {
             next_surface_init_retry_at: None,
             #[cfg(target_os = "macos")]
             last_mouse_position: None,
+            #[cfg(target_os = "macos")]
+            native_transition_underlay_visible: Cell::new(false),
+            #[cfg(target_os = "macos")]
+            native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
+                .fetch_add(1, Ordering::Relaxed),
             ime_marked_text: None,
         }
     }
@@ -321,6 +357,14 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn detach_host_view(&mut self) {
+        if let Some(underlay_view) = self.native_underlay_view {
+            Self::set_transition_underlay_owner_visible(
+                underlay_view,
+                self.native_transition_underlay_owner_id,
+                false,
+            );
+        }
+        self.native_underlay_view = None;
         if let Some(host_view) = self.host_view.take() {
             unsafe {
                 let superview: id = msg_send![host_view, superview];
@@ -332,11 +376,96 @@ impl GhosttyView {
         self.document_view = None;
         self.nsview = None;
         self.native_backing_color = None;
+        self.native_underlay_color = None;
         self.pending_native_layout = false;
     }
 
     #[cfg(not(target_os = "macos"))]
     fn detach_host_view(&mut self) {}
+
+    #[cfg(target_os = "macos")]
+    fn transition_underlay_for_parent(parent_nsview: id) -> id {
+        unsafe {
+            let key = &NATIVE_TRANSITION_UNDERLAY_ASSOCIATION_KEY as *const u8 as *const c_void;
+            let existing = objc_getAssociatedObject(parent_nsview, key);
+            if !existing.is_null() {
+                return existing;
+            }
+
+            let frame: NSRect = msg_send![parent_nsview, bounds];
+            let underlay: id = msg_send![class!(NSView), alloc];
+            let underlay: id = msg_send![underlay, initWithFrame:frame];
+            let _: () = msg_send![underlay, setWantsLayer:YES];
+            let _: () = msg_send![
+                underlay,
+                setAutoresizingMask:NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE
+            ];
+            let _: () = msg_send![underlay, setHidden:YES];
+            let _: () = msg_send![
+                parent_nsview,
+                addSubview: underlay
+                positioned: NSWindowOrderingMode::NSWindowBelow
+                relativeTo: nil
+            ];
+            objc_setAssociatedObject(
+                parent_nsview,
+                key,
+                underlay,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
+            underlay
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn transition_underlay_owners_for_parent(parent_nsview: id) -> id {
+        unsafe {
+            let key =
+                &NATIVE_TRANSITION_UNDERLAY_OWNERS_ASSOCIATION_KEY as *const u8 as *const c_void;
+            let existing = objc_getAssociatedObject(parent_nsview, key);
+            if !existing.is_null() {
+                return existing;
+            }
+
+            let owners: id = msg_send![class!(NSMutableSet), set];
+            objc_setAssociatedObject(
+                parent_nsview,
+                key,
+                owners,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
+            owners
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_transition_underlay_owner_visible(underlay_view: id, owner_id: u64, visible: bool) {
+        if underlay_view.is_null() {
+            return;
+        }
+
+        unsafe {
+            let parent_nsview: id = msg_send![underlay_view, superview];
+            if parent_nsview.is_null() {
+                return;
+            }
+
+            let owners = Self::transition_underlay_owners_for_parent(parent_nsview);
+            let owner: id = msg_send![class!(NSNumber), numberWithUnsignedLongLong:owner_id];
+            if visible {
+                let _: () = msg_send![owners, addObject:owner];
+            } else {
+                let _: () = msg_send![owners, removeObject:owner];
+            }
+
+            let owner_count: usize = msg_send![owners, count];
+            let hidden = if owner_count == 0 { YES } else { NO };
+            let _: () = msg_send![underlay_view, setHidden:hidden];
+            if hidden == NO {
+                let _: () = msg_send![underlay_view, setNeedsDisplay:YES];
+            }
+        }
+    }
 
     pub fn shutdown_surface(&mut self) {
         self.native_view_visible.set(false);
@@ -358,6 +487,7 @@ impl GhosttyView {
         {
             self.last_mouse_position = None;
             self.pending_native_layout = false;
+            self.native_transition_underlay_visible.set(false);
         }
         self.ime_marked_text = None;
     }
@@ -415,7 +545,7 @@ impl GhosttyView {
 
         // Create with a zero-origin frame — update_frame() will set the
         // correct flipped position immediately after initialization.
-        let (host_view, document_view, nsview): (id, id, id) = unsafe {
+        let (host_view, document_view, nsview, underlay_view): (id, id, id, id) = unsafe {
             let frame = NSRect::new(
                 cocoa::foundation::NSPoint::new(0.0, 0.0),
                 cocoa::foundation::NSSize::new(
@@ -447,6 +577,8 @@ impl GhosttyView {
                 relativeTo: gpui_nsview
             ];
 
+            let underlay = Self::transition_underlay_for_parent(parent_nsview);
+
             let document: id = msg_send![class!(NSView), alloc];
             let document: id = msg_send![document, initWithFrame:frame];
             let _: () = msg_send![host, setDocumentView:document];
@@ -463,7 +595,7 @@ impl GhosttyView {
                 setLayerContentsRedrawPolicy:NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE
             ];
             let _: () = msg_send![document, addSubview:surface];
-            (host, document, surface)
+            (host, document, surface, underlay)
         };
 
         let scale = self.scale_factor as f64;
@@ -483,9 +615,11 @@ impl GhosttyView {
                 self.host_view = Some(host_view);
                 self.document_view = Some(document_view);
                 self.nsview = Some(nsview);
+                self.native_underlay_view = Some(underlay_view);
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
                 self.sync_native_backing_background();
+                self.apply_transition_underlay_visibility();
                 self.sync_window_background_blur();
                 // Force update_frame() to position the newly-created host.
                 // If a previous layout recorded the same bounds while the
@@ -514,6 +648,7 @@ impl GhosttyView {
                 self.host_view = Some(host_view);
                 self.document_view = Some(document_view);
                 self.nsview = Some(nsview);
+                self.native_underlay_view = Some(underlay_view);
                 self.detach_host_view();
             }
         }
@@ -524,6 +659,12 @@ impl GhosttyView {
         let rgb = self.app.background_rgb()?;
         let alpha = self.app.background_opacity().unwrap_or(1.0).clamp(0.0, 1.0);
         Some((rgb[0], rgb[1], rgb[2], (alpha * 255.0).round() as u8))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn native_underlay_rgba(&self) -> Option<(u8, u8, u8, u8)> {
+        let rgb = self.app.background_rgb()?;
+        Some((rgb[0], rgb[1], rgb[2], 255))
     }
 
     #[cfg(target_os = "macos")]
@@ -575,8 +716,32 @@ impl GhosttyView {
         if let Some(nsview) = self.nsview {
             Self::apply_native_backing_color(nsview, rgba);
         }
+        if let Some(underlay_view) = self.native_underlay_view
+            && let Some(underlay_rgba) = self.native_underlay_rgba()
+            && self.native_underlay_color != Some(underlay_rgba)
+        {
+            Self::apply_native_backing_color(underlay_view, underlay_rgba);
+            self.native_underlay_color = Some(underlay_rgba);
+        }
         if has_native_views {
             self.native_backing_color = Some(rgba);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn set_transition_underlay_visible(&self, visible: bool) {
+        self.native_transition_underlay_visible.set(visible);
+        self.apply_transition_underlay_visibility();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_transition_underlay_visibility(&self) {
+        if let Some(underlay_view) = self.native_underlay_view {
+            Self::set_transition_underlay_owner_visible(
+                underlay_view,
+                self.native_transition_underlay_owner_id,
+                self.native_transition_underlay_visible.get(),
+            );
         }
     }
 
@@ -623,15 +788,24 @@ impl GhosttyView {
             unsafe {
                 let superview: id = msg_send![host_view, superview];
                 let super_frame: NSRect = msg_send![superview, frame];
+                if let Some(underlay_view) = self.native_underlay_view {
+                    let super_bounds: NSRect = msg_send![superview, bounds];
+                    let _: () = msg_send![underlay_view, setFrame:super_bounds];
+                }
+                let overdraw = NATIVE_SEAM_OVERDRAW_PT;
                 let flipped_y = super_frame.size.height
                     - f64::from(bounds.origin.y)
-                    - f64::from(bounds.size.height);
+                    - f64::from(bounds.size.height)
+                    - overdraw;
 
                 let frame = NSRect::new(
-                    cocoa::foundation::NSPoint::new(f64::from(bounds.origin.x), flipped_y),
+                    cocoa::foundation::NSPoint::new(
+                        f64::from(bounds.origin.x) - overdraw,
+                        flipped_y,
+                    ),
                     cocoa::foundation::NSSize::new(
-                        f64::from(bounds.size.width),
-                        f64::from(bounds.size.height),
+                        f64::from(bounds.size.width) + overdraw * 2.0,
+                        f64::from(bounds.size.height) + overdraw * 2.0,
                     ),
                 );
                 let _: () = msg_send![host_view, setFrame:frame];
@@ -686,6 +860,7 @@ impl GhosttyView {
 
         let visible_width = f64::from(bounds.size.width.as_f32().max(1.0));
         let visible_height = f64::from(bounds.size.height.as_f32().max(1.0));
+        let overdraw = NATIVE_SEAM_OVERDRAW_PT;
         let size = terminal.size();
         let cell_height = if size.cell_height_px > 0 && self.scale_factor > 0.0 {
             f64::from(size.cell_height_px) / f64::from(self.scale_factor)
@@ -713,7 +888,10 @@ impl GhosttyView {
         unsafe {
             let document_frame = NSRect::new(
                 cocoa::foundation::NSPoint::new(0.0, 0.0),
-                cocoa::foundation::NSSize::new(visible_width, document_height),
+                cocoa::foundation::NSSize::new(
+                    visible_width + overdraw * 2.0,
+                    document_height + overdraw * 2.0,
+                ),
             );
             let _: () = msg_send![document_view, setFrame:document_frame];
 
@@ -747,7 +925,7 @@ impl GhosttyView {
             // frame must be deterministically reapplied from Con-owned pane
             // bounds plus Ghostty's scrollbar state.
             let surface_frame = NSRect::new(
-                cocoa::foundation::NSPoint::new(0.0, scroll_y),
+                cocoa::foundation::NSPoint::new(overdraw, scroll_y + overdraw),
                 cocoa::foundation::NSSize::new(visible_width, visible_height),
             );
             let _: () = msg_send![nsview, setFrame:surface_frame];
@@ -1291,12 +1469,19 @@ fn gpui_key_to_keycode(key: &str) -> Option<(u32, u32)> {
 
 impl Drop for GhosttyView {
     fn drop(&mut self) {
-        self.host_view = None;
         #[cfg(target_os = "macos")]
         {
+            if let Some(underlay_view) = self.native_underlay_view.take() {
+                Self::set_transition_underlay_owner_visible(
+                    underlay_view,
+                    self.native_transition_underlay_owner_id,
+                    false,
+                );
+            }
             self.document_view = None;
             self.nsview = None;
         }
+        self.host_view = None;
     }
 }
 

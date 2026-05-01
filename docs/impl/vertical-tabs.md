@@ -10,10 +10,11 @@ shipped beta.
 
 | Capability | Trigger | Notes |
 |---|---|---|
-| Toggle orientation | *Settings → Appearance → Tabs → Vertical Tabs* | Live; no restart. |
+| Toggle orientation | *Settings → Appearance → Tabs → Vertical Tabs*, top-bar sidebar button, Command Palette, or shortcut | Live; no restart. Shortcut defaults to Cmd+B on macOS and Ctrl+Shift+B on Windows/Linux. |
 | Collapsed icon rail | default in vertical mode | Smart icon per tab. |
 | Floating hover card | cursor over rail icon | Anchored to cursor; shows name + subtitle + pane count + SSH/unread badges. **Does not displace** rail or terminal pane. |
-| Pinned panel | click sidebar-toggle in rail or header | Width tweens 220 ms; persists across restart. |
+| Pinned panel | click sidebar-toggle in rail or header | Width tweens 220 ms; pin state persists across restart. |
+| Resize pinned panel | drag the right edge of the pinned panel | Width clamps to 184–360 px and persists across restart. |
 | Activate tab | left-click row | |
 | Close tab | middle-click row, or hover-X (pinned mode) | |
 | New tab | `+` in rail or panel header | |
@@ -65,7 +66,7 @@ The engine lives in `con-core::tab_summary` and is constructed via `AgentHarness
 
 - **Single selection signal.** Active row uses the elevated pill bg + foreground text + medium font weight. **No accent bar.** A single unambiguous cue is enough; doubling it (pill + bar + bold + accent color) is decorative chrome.
 - **Quiet by default.** Action affordances (rename pencil, close X) are hover-only on every row, including the active one. Reveal on intent.
-- **Surface separation via opacity.** `surface_tone()` blends a desaturated extreme-luminance overlay into `theme.background` at 0.10 (rail), 0.18 (panel body), 0.22 (hover card), 0.32 (card edge stripe). No borders, no shadows.
+- **Surface separation via opacity.** `surface_tone()` blends a desaturated extreme-luminance overlay into `theme.background` at 0.10 (rail), 0.18 (panel body), 0.22 (hover card), 0.32 (card edge stripe). No borders, no shadows. On macOS, the workspace gives the sidebar an opaque terminal-colored backing first, so those translucent surfaces visually blend over the terminal instead of over the desktop through the transparent root window.
 - **Mono font for technical detail only.** Tab names use `theme.font_family` (system) — tabs are named *things*. Subtitles (`~/proj/path`, `user@host`) use `theme.mono_font_family`.
 
 ## User-visible surface
@@ -91,25 +92,35 @@ The engine lives in `con-core::tab_summary` and is constructed via `AgentHarness
     titles.
   - **Pinned.** Click the unfold control in the rail or the
     sidebar-toggle in the panel header (top-right) to pin the panel
-    open. The panel stops floating and starts taking 220 px out of the
-    terminal area's flex row. Pinned state persists across restarts via
-    `vertical_tabs_pinned` in `~/.local/share/con/session.json`.
+    open. The panel stops floating and starts taking user-resizable
+    width out of the terminal area's flex row. Pinned state persists
+    across restarts via `vertical_tabs_pinned`; resized width persists
+    via `vertical_tabs_width` in `~/.local/share/con/session.json`.
 - **Interactions:** click activates a tab; middle-click closes it;
   pinned-mode rows expose a hover-only `X` close affordance. The `+`
   button always spawns a new tab.
+- **Quick switch:** the top-bar sidebar button, Command Palette action,
+  and `keybindings.toggle_vertical_tabs` flip between horizontal and
+  vertical orientations. The action persists `appearance.tabs_orientation`
+  immediately so Settings stays in sync and the next launch restores the
+  selected orientation.
 
 ## Code map
 
-```
+```text
 crates/con-core/src/config.rs
   + TabsOrientation enum (Horizontal | Vertical) on AppearanceConfig
+  + keybindings.toggle_vertical_tabs (Cmd+B on macOS, Ctrl+Shift+B on
+    Windows/Linux by default)
 
 crates/con-core/src/session.rs
   + Session.vertical_tabs_pinned: bool (persists pin state)
+  + Session.vertical_tabs_width: Option<f32> (persists user-resized width)
 
 crates/con-app/src/sidebar.rs       (renamed conceptually: VerticalTabsPanel)
   - SessionEntry { id, name, subtitle, icon, needs_attention, pane_count }
   - SessionSidebar with PanelMode = Collapsed | Pinned + cursor-anchored hover card
+  - Pinned panel width clamps to 184–360 px; collapsed rail width stays fixed
   - render() returns the in-flow piece (rail or pinned body)
   - render_hover_card_overlay(window, cx) returns Option<AnyElement>
     for the floating card element (used only in collapsed-with-hover state)
@@ -126,8 +137,12 @@ crates/con-app/src/workspace.rs
     collapses in vertical mode regardless of tab count)
   - main_area is .relative(); vertical-tabs sidebar prepended; hover
     card appended last so it stacks above the terminal pane
+  - workspace owns the pinned-panel resize gesture because it already
+    knows the terminal-area min width and the agent-panel width
   - on_tabs_orientation_changed propagates orientation changes; observe(sidebar)
     saves session whenever pin state changes
+  - ToggleVerticalTabs action persists config, updates Settings when open,
+    and is exposed through the top bar and Command Palette
   - sync_sidebar now forwards needs_attention
   - Pane drag-resize math subtracts the vertical-tabs panel width
     from horizontal split totals so resize handles stay aligned

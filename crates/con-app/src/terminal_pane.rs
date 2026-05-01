@@ -119,6 +119,13 @@ impl TerminalPane {
         self.entity.read(cx).set_visible(visible);
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn set_native_transition_underlay_visible(&self, visible: bool, cx: &App) {
+        self.entity
+            .read(cx)
+            .set_transition_underlay_visible(visible);
+    }
+
     pub fn shutdown_surface(&self, cx: &mut App) {
         self.entity.update(cx, |view, _| view.shutdown_surface());
     }

@@ -12,11 +12,23 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Added CJK IME text input for Windows and Linux terminal panes. IME commits now enter through GPUI's platform text-input path, preedit state tracks candidate positioning at the terminal cursor, and terminal-local control / alt / special key handling remains unchanged. The macOS embedded Ghostty path is unchanged.
 
+**Workspace**
+
+- Added a quick vertical-tabs toggle in the top bar, Command Palette, and Keyboard Shortcuts. Defaults: Cmd+B on macOS, Ctrl+Shift+B on Windows and Linux.
+- Added draggable resizing for the pinned vertical-tabs panel. The resized width is persisted in session state and restored across launches.
+
 **Control Plane**
 
 - Added pane-local terminal surfaces for external orchestrators. Existing `panes.*` APIs, built-in agent tools, and benchmarks keep the active-surface pane contract, while new `tree.get` and `surfaces.*` RPC/CLI commands can create, split, wait for readiness, focus, rename, drive, read, and close terminal sessions inside a pane.
 
 ### Fixed
+
+**Terminal, macOS**
+
+- Reduced transparent-window flashes along moving chrome seams. Agent-panel transitions, input-bar transitions, the top-bar transition, the vertical-tabs edge, the input-bar edge, and pane dividers now use tiny opaque terminal-colored seam covers on macOS instead of exposing a transparent gap or UI-colored matte.
+- Further hardened macOS transparent-window composition by precomposing chrome surfaces over the terminal color and letting the native Ghostty host backing slightly overdraw under GPUI seams. Fast sidebar, agent-panel, input-bar, split, and zoom motion should no longer reveal bright desktop pixels through clear backing gaps.
+- Stopped continuously reflowing the macOS terminal layout during the right agent-panel hide/show animation. The panel content still animates, but the terminal/panel boundary snaps to a stable geometry so fast toggles do not expose clear backing between GPUI and the native Ghostty view.
+- Added a temporary native underlay below visible macOS Ghostty surfaces during chrome transitions. It catches clear-window backing during rapid input-bar, agent-panel, tab-strip, and vertical-tabs toggles without drawing a matte over terminal text.
 
 **Control Plane**
 
