@@ -339,7 +339,7 @@ phase keeps the macOS build green.
 | 3c | Input + selection | Beta-baseline input, selection, scrollback, clipboard, and ConPTY launch behavior are landed; details below. | Beta-baseline terminal interactivity is landed. Remaining polish belongs in Phase 4 hardening. ✅ largely landed |
 | 3d | (Parallel, upstream) | `WindowsWindow::attach_external_swap_chain_handle(bounds, HANDLE)` PR to `zed-industries/zed`. When merged, swap the current offscreen readback/image bridge to a composition swap chain that GPUI can place directly in its DComp tree. | No con-side merge blocker; still upstream-facing work. This is the remaining structural performance cleanup. — |
 | 3e | renderer perf tuning | The current pipeline draws into an offscreen D3D11 texture, reads back BGRA bytes (`RenderSession::render_frame`), wraps them as `ImageSource::Render(Arc<RenderImage>)`, and lets GPUI re-upload them into its DComp tree. The GPU→CPU readback per dirty frame plus the CPU→GPU re-upload adds structural overhead versus Windows Terminal's direct-DComp present path. Landed mitigations: (1) ✅ wake GPUI from the ConPTY reader thread so freshly arrived shell output paints on the next prepaint instead of waiting for user input; (2) ✅ move steady-state terminal image generation into the main render path so freshly rendered images can appear in the current frame rather than always one frame later; (3) ✅ skip default-background blank-cell instances that are already covered by the render-target clear; (4) ✅ avoid a full-frame zero-fill before D3D readback; (5) ✅ only stable-sort the instance stream when a frame actually contains overflowing wide glyphs; (6) ✅ keep low-latency presents armed until the triggering input actually advances the VT generation, so shell echo/prompt redraws do not miss the fresh-frame path; (7) ✅ treat the staging ring as a mailbox so maximize/fullscreen backlog never blocks GPUI's thread trying to rescue stale readbacks; (8) ✅ snapshot Ghostty's actual render-state rows/cols during asynchronous resize catch-up and include snapshot geometry in the renderer invalidation key so resize catch-up frames are not skipped as "unchanged"; (9) ✅ keep the fresh-frame preference armed across a short interactive typing/paste burst so repeated echoed generations do not periodically fall back to stale-frame presents mid-burst; (10) ✅ stop forcing speculative GPUI repaints on handled key input before ConPTY echo has advanced the VT, so steady typing rides the real output wake path instead of paying for an extra unchanged prepaint; (11) ✅ preserve successive output wakes from the ConPTY reader instead of draining them into one repaint request, so bursty commands like `ls` can advance across multiple prepaints rather than visibly batching intermediate output; (12) ✅ when a fresher VT snapshot has already been submitted, stop presenting an older completed readback ahead of it, so PTY-driven redraws use true mailbox semantics instead of sliding through stale intermediate frames; (13) ✅ compute exact changed VT rows even when libghostty-vt reports full dirty, and use D3D `CopySubresourceRegion` to read back only those pixel rows for small updates while keeping full-readback fallbacks for resize/selection/theme changes; (14) ✅ replace dirty rows inside a CPU-side BGRA backing frame before publishing one GPUI image, so partial D3D readbacks keep replacement semantics even with translucent terminal backgrounds; (15) ✅ keep command-start output latency-critical for long enough to cover delayed shell output; (16) ✅ control shell/profile as a benchmark variable by honoring Windows Terminal's `defaultProfile` where possible. Runtime instrumentation behind `CON_GHOSTTY_PROFILE` now logs the full chain: `conpty_read` for chunk cadence, `vt_snapshot` for shared render-state + clone cost, `win_renderer` for drain/draw/submit/readback timing, partial-readback row counts, and ring state, `win_render_frame` for session-level timing, and `win_sync_render` for GPUI image-wrap/upload timing. Use `CON_LOG_FILE=con-profile.log` to capture these logs without shell redirection; idle unchanged frames are filtered by default to keep the app usable during profiling, and `CON_GHOSTTY_PROFILE_VERBOSE=1` enables every-frame traces. Postmortem: `postmortem/2026-04-26-windows-command-render-latency.md`. Long-term plan: once Phase 3d lands, present the swap chain directly via `attach_external_swap_chain_handle` and drop the readback entirely; profile with PIX / GPUView / ETW to verify Enter→glyph latency parity with WT. | Wins in `crates/con-app/src/windows_view.rs` (output wake handling + same-frame image swap + CPU-backed row replacement + image-wrap timing), `crates/con-ghostty/src/windows/conpty.rs` (chunk cadence timing + spawn-handle marker + Windows Terminal default-profile shell resolution), `crates/con-ghostty/src/windows/host_view.rs` (VT-generation-aware low-latency presents + frame instrumentation), `crates/con-ghostty/src/vt.rs` (render-state geometry snapshot + exact dirty-row derivation + shared snapshot instrumentation), and `crates/con-ghostty/src/windows/render/mod.rs` (instance/readback hot path + partial-row staging copies + per-stage timing + true mailbox presentation policy). ✅ substantially improved; direct swap-chain composition remains the long-term cleanup |
-| 4 | Hardening | Multi-pane, splits, IME, focus, resize, copy/paste, drag/drop, OSC 133 shell integration, ligatures | Beta-quality polish and correctness backlog. — |
+| 4 | Hardening | Multi-pane, splits, IME edge-case validation, focus, resize, copy/paste, drag/drop, OSC 133 shell integration, ligatures | Beta-quality polish and correctness backlog. — |
 | 5 | Distribution | Installer/signing strategy (MSI/MSIX/winget/`cargo dist`), code signing, update verification / hardening, `con-app.exe` rename via feature-gated twin `[[bin]]` | ZIP + PowerShell installer + in-place beta update flow exist; release-trust hardening remains. — |
 
 Phase 3c details now covered by the beta baseline:
@@ -348,6 +348,11 @@ Phase 3c details now covered by the beta baseline:
 - Wheel and touchpad input scroll libghostty-vt viewport state when mouse tracking is inactive. Alternate-screen mode-1007 wheel gestures translate into cursor keys with the same fractional row accumulator used by primary scrollback.
 - The Windows pane has a visible GPUI scrollback scrollbar backed by cached libghostty-vt scrollbar state, so render no longer polls the expensive scrollbar query on every paint.
 - OSC 52 and ordinary clipboard operations are wired through the Win32 clipboard.
+- CJK IME commit/preedit input is wired through GPUI's platform
+  `InputHandler`. The terminal still owns control, alt/meta, and
+  special-key encoding, while printable text and IME commits enter the
+  PTY as text. Composition ranges report cursor-relative bounds so
+  candidate windows anchor to the terminal cursor.
 - ConPTY child launch passes the pseudo-console with `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`, avoids inheriting con's unrelated stdout/stderr handles, starts from a valid absolute cwd when provided, then falls back to the user's home directory and finally `%TEMP%`.
 - Profiling uses `CON_LOG_FILE` instead of shell redirection so the child shell never sees redirected log handles.
 
@@ -421,14 +426,14 @@ ConPTY spawns the Windows Terminal default profile shell when its
 settings are readable, libghostty-vt parses the VT
 stream, and the D3D11/DirectWrite atlas renderer draws the grid at
 native refresh rate — IoskeleyMono ASCII, box-drawing, Powerline
-separators, CJK/wide fallback glyphs, and the Nerd-Font icon set
+separators, CJK/wide fallback glyphs, CJK IME text input, and the Nerd-Font icon set
 (folder, git, status, …) all render correctly, cursor lands on the
 right column, Tab / Shift+Tab reach shells and TUIs, wheel gestures
 respect the platform scroll intent, and normal-shell scrollback is
 reachable through both the mouse wheel and the visible scrollbar.
 Resize works. Window close kills the shell. The remaining Windows work
-is now direct-composition presentation, IME input / resize / advanced
-selection polish, and distribution hardening rather than basic
+is now direct-composition presentation, IME edge-case validation /
+resize / advanced selection polish, and distribution hardening rather than basic
 input/selection bring-up.
 
 Caveats:
@@ -459,9 +464,10 @@ remaining decisions are narrower:
 2. **Shell integration scope.** Decide whether OSC 133 / OSC 7 and
    related shell-integration features belong in the shared VT layer or in
    per-platform shell adapters.
-3. **Windows hardening.** Finish IME coverage, drag-to-scroll selection
-   polish, column selection, extreme resize behavior, ligatures, and
-   remaining multi-monitor/GPU edge cases.
+3. **Windows hardening.** Broaden IME/dead-key/international-keyboard
+   validation, drag-to-scroll selection polish, column selection,
+   extreme resize behavior, ligatures, and remaining multi-monitor/GPU
+   edge cases.
 4. **Distribution.** Choose the installer/signing path (MSIX/MSI/cargo
    dist/winget), code-sign the binary, and harden the existing beta
    in-place update flow with artifact signature verification.

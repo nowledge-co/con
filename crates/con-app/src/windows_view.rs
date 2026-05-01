@@ -36,6 +36,7 @@
 //!    stalling GPUI's thread.
 //! 4. Drop releases the `RenderSession` and ends the child shell.
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -48,6 +49,7 @@ use gpui_component::ActiveTheme;
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
+use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
     TerminalPastePayload, copy_selection_to_clipboard, payload_from_clipboard,
@@ -113,6 +115,8 @@ pub struct GhosttyView {
     /// Pane bounds in logical window pixels, captured during prepaint.
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
+    ime_marked_text: Option<String>,
+    ime_selected_range: Option<Range<usize>>,
     /// Last physical-pixel size we sent to `session.resize`. Avoids
     /// resize churn when the logical bounds round to the same physical
     /// size frame-to-frame.
@@ -205,6 +209,8 @@ impl GhosttyView {
             process_exit_emitted: false,
             pane_bounds: None,
             scale_factor: 1.0,
+            ime_marked_text: None,
+            ime_selected_range: None,
             last_physical_size: None,
             last_scale_factor: 0.0,
             cached_image: None,
@@ -266,6 +272,8 @@ impl GhosttyView {
         self.cached_frame_size = None;
         self.scrollbar_cache = None;
         self.scrollbar_drag = None;
+        self.ime_marked_text = None;
+        self.ime_selected_range = None;
         self.mouse_down_link = None;
         self.suppress_link_mouse_up = false;
         self.hovered_link = None;
@@ -1019,6 +1027,15 @@ impl GhosttyView {
             return true;
         }
 
+        if event.prefer_character_input
+            && keystroke
+                .key_char
+                .as_deref()
+                .is_some_and(|text| !text.is_empty())
+        {
+            return false;
+        }
+
         // Ctrl + ascii letter → control char (Ctrl-C = 0x03 etc.)
         if keystroke.modifiers.control
             && !keystroke.modifiers.alt
@@ -1059,16 +1076,55 @@ impl GhosttyView {
 
         if let Some(ch) = keystroke.key_char.as_deref() {
             if !ch.is_empty() {
+                if !keystroke.modifiers.control
+                    && !keystroke.modifiers.alt
+                    && !keystroke.modifiers.platform
+                {
+                    return false;
+                }
                 terminal.send_text(ch);
                 return true;
             }
         }
         if keystroke.key.len() == 1 {
+            if !keystroke.modifiers.control
+                && !keystroke.modifiers.alt
+                && !keystroke.modifiers.platform
+            {
+                return false;
+            }
             terminal.send_text(&keystroke.key);
             return true;
         }
 
         false
+    }
+
+    fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
+        let bounds = self.pane_bounds?;
+        let terminal = self.terminal.as_ref()?;
+        let inner = terminal.inner();
+        let guard = inner.lock();
+        let session = guard.as_ref()?;
+        let snapshot = session.vt().snapshot();
+        let metrics = session.metrics();
+        if metrics.cell_width_px == 0 || metrics.cell_height_px == 0 {
+            return None;
+        }
+
+        let scale = self.scale_factor.max(f32::EPSILON);
+        let cell_width = metrics.cell_width_px as f32 / scale;
+        let cell_height = metrics.cell_height_px as f32 / scale;
+        let col = snapshot.cursor.col.min(snapshot.cols.saturating_sub(1)) as f32;
+        let row = snapshot.cursor.row.min(snapshot.rows.saturating_sub(1)) as f32;
+
+        Some(Bounds::new(
+            point(
+                bounds.origin.x + px(col * cell_width),
+                bounds.origin.y + px(row * cell_height),
+            ),
+            size(px(cell_width.max(1.0)), px(cell_height.max(1.0))),
+        ))
     }
 
     fn placeholder_background(&self) -> Option<Hsla> {
@@ -1233,6 +1289,38 @@ impl Focusable for GhosttyView {
     }
 }
 
+type WindowsTerminalInputHandler = TerminalImeInputHandler<GhosttyView>;
+
+impl TerminalImeView for GhosttyView {
+    fn ime_marked_text(&self) -> Option<&str> {
+        self.ime_marked_text.as_deref()
+    }
+
+    fn ime_selected_range(&self) -> Option<Range<usize>> {
+        self.ime_selected_range.clone()
+    }
+
+    fn set_ime_state(&mut self, marked_text: Option<String>, selected_range: Option<Range<usize>>) {
+        self.ime_marked_text = marked_text;
+        self.ime_selected_range = selected_range;
+    }
+
+    fn clear_ime_state(&mut self) {
+        self.ime_marked_text = None;
+        self.ime_selected_range = None;
+    }
+
+    fn send_ime_text(&mut self, text: &str, _cx: &mut Context<Self>) {
+        if let Some(terminal) = &self.terminal {
+            terminal.send_text(text);
+        }
+    }
+
+    fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
+        GhosttyView::ime_cursor_bounds(self)
+    }
+}
+
 impl Render for GhosttyView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.sync_render(window) {
@@ -1248,6 +1336,7 @@ impl Render for GhosttyView {
         let background =
             placeholder_background.unwrap_or_else(|| cx.theme().background.opacity(0.0));
         let entity = cx.entity().downgrade();
+        let input_entity = entity.clone();
         let mut terminal_children = self.image_children();
         if let Some(overlay) = self.render_link_cursor_overlay() {
             terminal_children.push(overlay);
@@ -1257,6 +1346,7 @@ impl Render for GhosttyView {
         }
 
         let focus = self.focus_handle.clone();
+        let input_focus = focus.clone();
 
         div()
             .flex()
@@ -1460,7 +1550,21 @@ impl Render for GhosttyView {
                             .relative()
                             .size_full()
                             .overflow_hidden()
-                            .children(terminal_children),
+                            .children(terminal_children)
+                            .child(
+                                canvas(
+                                    |_, _, _| {},
+                                    move |_, _, window, cx| {
+                                        window.handle_input(
+                                            &input_focus,
+                                            WindowsTerminalInputHandler::new(input_entity.clone()),
+                                            cx,
+                                        );
+                                    },
+                                )
+                                .absolute()
+                                .size_full(),
+                            ),
                     ),
             )
     }
