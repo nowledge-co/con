@@ -470,6 +470,7 @@ fn cargo_target_to_zig_target(cargo_target: &str) -> Option<&'static str> {
         "x86_64-pc-windows-msvc" => Some("x86_64-windows-msvc"),
         "aarch64-pc-windows-msvc" => Some("aarch64-windows-msvc"),
         "x86_64-pc-windows-gnu" => Some("x86_64-windows-gnu"),
+        "x86_64-pc-windows-gnullvm" => Some("x86_64-windows-gnu"),
         "aarch64-pc-windows-gnullvm" => Some("aarch64-windows-gnu"),
         _ => None,
     }
@@ -672,6 +673,10 @@ mod tests {
         assert_eq!(
             cargo_target_to_zig_target("x86_64-pc-windows-msvc"),
             Some("x86_64-windows-msvc")
+        );
+        assert_eq!(
+            cargo_target_to_zig_target("x86_64-pc-windows-gnullvm"),
+            Some("x86_64-windows-gnu")
         );
         assert_eq!(
             cargo_target_to_zig_target("aarch64-pc-windows-msvc"),
