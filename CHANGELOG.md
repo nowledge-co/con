@@ -6,8 +6,17 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
----
----
+## `v0.1.0-beta.48` - 2026-05-01
+
+### Fixed
+
+**Terminal, Linux Backend (preview)**
+
+- Fixed Linux release artifacts so `libghostty-vt` is built for a generic Zig target instead of the CI runner's native CPU. This avoids `Illegal instruction` startup crashes on WSL and older x86_64 hosts whose CPUs do not expose the same instruction-set extensions as the release builder. Fixes [#97](https://github.com/nowledge-co/con-terminal/issues/97).
+
+**Agent Panel**
+
+- Fixed inline LaTeX in markdown responses so `$...$` formulas are typeset through the same cached SVG pipeline as block math instead of being shown as raw formula text. Inline formulas now inherit the surrounding text color and sit inside the prose line box for cleaner spacing. Fixes [#88](https://github.com/nowledge-co/con-terminal/issues/88).
 
 ## `v0.1.0-beta.47` - 2026-05-01
 
@@ -27,14 +36,6 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added pane-local terminal surfaces for external orchestrators. Existing `panes.*` APIs, built-in agent tools, and benchmarks keep the active-surface pane contract, while new `tree.get` and `surfaces.*` RPC/CLI commands can create, split, wait for readiness, focus, rename, drive, read, and close terminal sessions inside a pane.
 
 ### Fixed
-
-**Terminal, Linux Backend (preview)**
-
-- Fixed Linux release artifacts so `libghostty-vt` is built for a generic Zig target instead of the CI runner's native CPU. This avoids `Illegal instruction` startup crashes on WSL and older x86_64 hosts whose CPUs do not expose the same instruction-set extensions as the release builder.
-
-**Agent Panel**
-
-- Fixed inline LaTeX in markdown responses so `$...$` formulas are typeset through the same cached SVG pipeline as block math instead of being shown as raw formula text.
 
 **Terminal, macOS**
 
