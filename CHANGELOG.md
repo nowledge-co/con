@@ -46,6 +46,8 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, macOS**
 
 - Reduced transparent-window flashes along moving chrome seams. Agent-panel transitions, input-bar transitions, the top-bar transition, the vertical-tabs edge, the input-bar edge, and pane dividers now use tiny opaque terminal-colored seam covers on macOS instead of exposing a transparent gap or UI-colored matte.
+- Restored visible macOS terminal pane dividers without reopening the transparent-window leak path. Split separators are now a subtle opaque foreground tint precomposed over the terminal background, so users can read pane boundaries while every separator pixel still stays fully opaque.
+- Polished the standalone Settings window's `Save Changes` action so it reads as compact header chrome: visible enough to find, but no longer a loud primary-blue slab.
 - Further hardened macOS transparent-window composition by precomposing chrome surfaces over the terminal color and letting the native Ghostty host backing slightly overdraw under GPUI seams. Fast sidebar, agent-panel, input-bar, split, and zoom motion should no longer reveal bright desktop pixels through clear backing gaps.
 - Stopped continuously reflowing the macOS terminal layout during the right agent-panel hide/show animation. The panel content still animates, but the terminal/panel boundary snaps to a stable geometry so fast toggles do not expose clear backing between GPUI and the native Ghostty view.
 - Added a temporary native underlay below visible macOS Ghostty surfaces during chrome transitions. It catches clear-window backing during rapid input-bar, agent-panel, tab-strip, and vertical-tabs toggles without drawing a matte over terminal text.

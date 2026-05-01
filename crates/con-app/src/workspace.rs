@@ -12,6 +12,8 @@ use cocoa::base::id;
 #[cfg(target_os = "macos")]
 use cocoa::foundation::NSSize;
 use gpui::{prelude::FluentBuilder as _, *};
+#[cfg(target_os = "macos")]
+use gpui_component::Theme;
 use gpui_component::{ActiveTheme, tooltip::Tooltip};
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl};
@@ -31,6 +33,12 @@ const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
 #[cfg(target_os = "macos")]
 fn solid_over_terminal_backdrop(backdrop: Hsla, overlay: Hsla) -> Hsla {
     backdrop.blend(overlay).alpha(1.0)
+}
+
+#[cfg(target_os = "macos")]
+fn terminal_separator_over_backdrop(backdrop: Hsla, theme: &Theme) -> Hsla {
+    let overlay_alpha = if theme.is_dark() { 0.14 } else { 0.11 };
+    solid_over_terminal_backdrop(backdrop, theme.foreground.opacity(overlay_alpha))
 }
 
 fn perf_trace_enabled() -> bool {
@@ -8812,7 +8820,7 @@ impl Render for ConWorkspace {
         #[cfg(not(target_os = "macos"))]
         let chrome_static_seam_color = theme.title_bar_border;
         #[cfg(target_os = "macos")]
-        let pane_divider_color = terminal_surface_color;
+        let pane_divider_color = terminal_separator_over_backdrop(terminal_surface_color, theme);
         #[cfg(not(target_os = "macos"))]
         let pane_divider_color = theme.title_bar_border;
         #[cfg(target_os = "macos")]
