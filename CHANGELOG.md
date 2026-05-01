@@ -6,6 +6,11 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+---
+---
+
+## `v0.1.0-beta.47` - 2026-05-01
+
 ### Added
 
 **Terminal, Windows and Linux Backends**
@@ -96,8 +101,6 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, Windows Backend (preview)**
 
 - Fixed Windows terminal text rendering to avoid RGB color fringing around glyphs. The DirectWrite atlas now uses grayscale antialiasing with neutral coverage compositing, making CJK and mono text look cleaner in screenshots, scaled displays, remote review, and transparent windows.
-
----
 
 ## `v0.1.0-beta.44` - 2026-04-29
 
