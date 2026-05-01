@@ -28,6 +28,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Terminal, Linux Backend (preview)**
+
+- Fixed Linux release artifacts so `libghostty-vt` is built for a generic Zig target instead of the CI runner's native CPU. This avoids `Illegal instruction` startup crashes on WSL and older x86_64 hosts whose CPUs do not expose the same instruction-set extensions as the release builder.
+
+**Agent Panel**
+
+- Fixed inline LaTeX in markdown responses so `$...$` formulas are typeset through the same cached SVG pipeline as block math instead of being shown as raw formula text.
+
 **Terminal, macOS**
 
 - Reduced transparent-window flashes along moving chrome seams. Agent-panel transitions, input-bar transitions, the top-bar transition, the vertical-tabs edge, the input-bar edge, and pane dividers now use tiny opaque terminal-colored seam covers on macOS instead of exposing a transparent gap or UI-colored matte.

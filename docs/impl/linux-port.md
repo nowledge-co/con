@@ -113,6 +113,14 @@ that the workspace still compiles there. The local Linux backend
 also requires Zig so `con-ghostty` can build `libghostty-vt`, just like
 the Windows backend does.
 
+Linux release builds pass an explicit generic Zig target to the
+`libghostty-vt` build (`x86_64-linux-gnu` for the current x86_64
+artifact) instead of relying on Zig's native host target. This keeps the
+static VT archive from inheriting CI-runner CPU extensions that may not
+exist inside WSL, older desktops, or virtualized Linux environments. Use
+`CON_GHOSTTY_VT_TARGET` only when intentionally testing a different Zig
+target triple.
+
 ## Upstream status
 
 ### GPUI / Zed on Linux
