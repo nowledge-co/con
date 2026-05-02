@@ -22,6 +22,7 @@ pub struct LinuxPtyOptions {
     pub cwd: Option<PathBuf>,
     pub program: Option<String>,
     pub size: SurfaceSize,
+    pub initial_output: Option<Vec<u8>>,
     pub wake_generation: Option<Arc<AtomicU64>>,
     pub wake_callback: Option<LinuxWakeCallback>,
     pub theme: Option<TerminalColors>,
@@ -40,6 +41,7 @@ impl Default for LinuxPtyOptions {
                 cell_width_px: 0,
                 cell_height_px: 0,
             },
+            initial_output: None,
             wake_generation: None,
             wake_callback: None,
             theme: None,
@@ -207,6 +209,13 @@ impl LinuxPtySession {
             )
             .context("failed to create linux vt screen")?,
         );
+        if let Some(output) = options
+            .initial_output
+            .as_deref()
+            .filter(|output| !output.is_empty())
+        {
+            screen.feed(output);
+        }
         let child = pair
             .slave
             .spawn_command(command)
@@ -217,6 +226,11 @@ impl LinuxPtySession {
             options.wake_generation,
             options.wake_callback,
         ));
+        if let Some(output) = options.initial_output.as_deref()
+            && let Ok(text) = std::str::from_utf8(output)
+        {
+            shared.transcript.lock().push(text);
+        }
         spawn_reader_thread(reader, shared.clone());
 
         Ok(Self {

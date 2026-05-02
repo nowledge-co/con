@@ -11,7 +11,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Restorable Workspaces**
 
 - Added the first restorable-workspace implementation slice. Private session layout now round-trips every pane-local surface, including surface id, title, owner, cwd, active surface, and close-pane-when-last policy, instead of restoring only the active surface in each pane.
-- Added the first private screen-text continuity slice. Con now snapshots bounded recent terminal text per pane-local surface and seeds it back through Ghostty's terminal parser before the shell starts, so restored text lives in terminal scrollback instead of a UI overlay. This does not replay commands or export terminal text into workspace layouts.
+- Added the first private screen-text continuity slice. Con now snapshots bounded recent terminal text per pane-local surface and seeds it back through the terminal parser before the shell starts on macOS, Windows, and Linux, so restored text lives in terminal content instead of a UI overlay. This does not replay commands or export terminal text into workspace layouts.
 - Added a typed, validated, layout-only `.con/workspace.toml` schema for future Con-generated export/import flows. The schema covers tabs, panes, surfaces, split geometry, cwd, and optional agent defaults, but deliberately excludes commands, conversations, history, scrollback, credentials, and trust decisions.
 - Documented the production restore model: local continuity and project-local memory come first, exported layouts are generated from user-tuned workspaces, and command/task files remain a separate future workflow.
 
@@ -20,6 +20,12 @@ con is still pre-release, so entries may group related beta work while the produ
 **Startup**
 
 - When a second Con process sees an already-live control endpoint, it now opens a fresh window session with shared history instead of cloning the last restored layout and agent conversation again. Full single-instance forwarding remains a follow-up under the app-state workspace model.
+
+### Fixed
+
+**Terminal, Windows and Linux Backends**
+
+- Hardened split-pane dividers on Windows and Linux by giving the resize seam a real hit target while keeping the visible separator at one pixel. This avoids fragile overflow hit testing around terminal panes.
 
 ## `v0.1.0-beta.54` - 2026-05-02
 

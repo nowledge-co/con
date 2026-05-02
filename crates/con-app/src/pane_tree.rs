@@ -1109,6 +1109,37 @@ impl PaneTree {
                 let divider_id = ElementId::Name(format!("divider-{}", sid).into());
                 let divider = match dir {
                     SplitDirection::Horizontal => {
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            let hover_color = cx.theme().foreground.opacity(0.10);
+                            div()
+                                .id(divider_id)
+                                .relative()
+                                .w(px(5.0))
+                                .ml(px(-2.0))
+                                .mr(px(-2.0))
+                                .h_full()
+                                .flex_shrink_0()
+                                .cursor_col_resize()
+                                .bg(gpui::transparent_black())
+                                .hover(move |s| s.bg(hover_color))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .left(px(2.0))
+                                        .w(px(1.0))
+                                        .bg(divider_color),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    move |event: &MouseDownEvent, _window, _cx| {
+                                        cb_divider(sid, f32::from(event.position.x));
+                                    },
+                                )
+                        }
+                        #[cfg(target_os = "macos")]
                         let handle = div()
                             .absolute()
                             .top_0()
@@ -1117,11 +1148,7 @@ impl PaneTree {
                             .w(px(5.0))
                             .cursor_col_resize()
                             .bg(gpui::transparent_black());
-                        #[cfg(not(target_os = "macos"))]
-                        let handle = {
-                            let hover_color = cx.theme().foreground.opacity(0.10);
-                            handle.hover(move |s| s.bg(hover_color))
-                        };
+                        #[cfg(target_os = "macos")]
                         div()
                             .id(divider_id)
                             .relative()
@@ -1137,6 +1164,37 @@ impl PaneTree {
                             ))
                     }
                     SplitDirection::Vertical => {
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            let hover_color = cx.theme().foreground.opacity(0.10);
+                            div()
+                                .id(divider_id)
+                                .relative()
+                                .h(px(5.0))
+                                .mt(px(-2.0))
+                                .mb(px(-2.0))
+                                .w_full()
+                                .flex_shrink_0()
+                                .cursor_row_resize()
+                                .bg(gpui::transparent_black())
+                                .hover(move |s| s.bg(hover_color))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .right_0()
+                                        .top(px(2.0))
+                                        .h(px(1.0))
+                                        .bg(divider_color),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    move |event: &MouseDownEvent, _window, _cx| {
+                                        cb_divider(sid, f32::from(event.position.y));
+                                    },
+                                )
+                        }
+                        #[cfg(target_os = "macos")]
                         let handle = div()
                             .absolute()
                             .left_0()
@@ -1145,11 +1203,7 @@ impl PaneTree {
                             .h(px(5.0))
                             .cursor_row_resize()
                             .bg(gpui::transparent_black());
-                        #[cfg(not(target_os = "macos"))]
-                        let handle = {
-                            let hover_color = cx.theme().foreground.opacity(0.10);
-                            handle.hover(move |s| s.bg(hover_color))
-                        };
+                        #[cfg(target_os = "macos")]
                         div()
                             .id(divider_id)
                             .relative()

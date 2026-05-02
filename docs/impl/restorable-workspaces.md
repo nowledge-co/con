@@ -32,9 +32,9 @@ Implemented in the first issue #111 PR:
 - private session restore now round-trips every pane-local surface in a pane
 - each surface stores id, title, owner, cwd, and close-pane-when-last policy
 - each surface stores bounded private screen text for restart continuity
-- macOS seeds that text through Ghostty's terminal parser before the shell
-  starts, so restored text belongs to the terminal screen/scrollback layer
-  rather than a GPUI overlay
+- macOS, Windows, and Linux seed that text through the terminal parser before
+  the shell starts, so restored text belongs to terminal content rather than a
+  GPUI overlay
 - each pane stores its active surface id
 - old session files that only stored a leaf cwd still load correctly
 - New Window uses a fresh session seeded with global history, not a clone of
@@ -438,9 +438,11 @@ Status: schema foundation exists; UI and task files are deferred.
 Status: first visual continuity slice implemented in this PR. On macOS, Con
 adds a narrow embedded-Ghostty `initial_output` hook at build time and feeds the
 snapshot through Ghostty's own terminal parser before the shell IO thread starts.
-This keeps restored text selectable, scrollable, and clipped by the terminal
-renderer instead of rendering a separate UI layer. Deeper native scrollback
-integration remains future work.
+On Windows and Linux, Con feeds the same sanitized snapshot into the
+`libghostty-vt` parser before starting ConPTY / the Unix PTY. This keeps
+restored text selectable, scrollable, and clipped by the terminal renderer
+instead of rendering a separate UI layer. Deeper native scrollback integration
+remains future work.
 
 - Add bounded transcript capture per pane/surface.
 - Persist private scrollback snapshots with AppState/project memory.

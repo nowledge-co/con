@@ -279,11 +279,15 @@ impl WindowsGhosttyTerminal {
     pub fn selection_text(&self) -> Option<String> {
         self.inner.lock().as_ref().and_then(|s| s.selection_text())
     }
-    pub fn read_screen_text(&self, _max_lines: usize) -> Vec<String> {
-        Vec::new()
+    pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(|session| session.read_screen_text(max_lines))
+            .unwrap_or_default()
     }
-    pub fn read_recent_lines(&self, _max_lines: usize) -> Vec<String> {
-        Vec::new()
+    pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {
+        self.read_screen_text(max_lines)
     }
     pub fn search_text(&self, _pattern: &str, _limit: usize) -> Vec<(usize, String)> {
         Vec::new()

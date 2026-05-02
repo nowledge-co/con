@@ -74,6 +74,7 @@ pub struct GhosttyView {
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
     initial_cwd: Option<String>,
+    restored_screen_text: Option<Vec<String>>,
     initial_font_size: f32,
     initialized: bool,
     process_exit_emitted: bool,
@@ -117,7 +118,7 @@ impl GhosttyView {
     pub fn new(
         app: Arc<GhosttyApp>,
         cwd: Option<String>,
-        _restored_screen_text: Option<Vec<String>>,
+        restored_screen_text: Option<Vec<String>>,
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -156,6 +157,7 @@ impl GhosttyView {
             terminal: Some(terminal),
             focus_handle: cx.focus_handle(),
             initial_cwd: cwd,
+            restored_screen_text,
             initial_font_size: font_size,
             initialized: false,
             process_exit_emitted: false,
@@ -358,9 +360,11 @@ impl GhosttyView {
             return false;
         }
 
-        let options = self.app.default_pty_options(self.initial_cwd.as_deref());
+        let mut options = self.app.default_pty_options(self.initial_cwd.as_deref());
+        options.initial_output = restored_terminal_output(self.restored_screen_text.as_deref());
         match terminal.spawn_with_options(options) {
             Ok(()) => {
+                self.restored_screen_text = None;
                 self.initialized = true;
                 self.process_exit_emitted = false;
                 if let Some(pending) = self.pending_write.take() {
@@ -1201,6 +1205,25 @@ fn rows_needing_refresh(
     }
 
     rows
+}
+
+fn restored_terminal_output(lines: Option<&[String]>) -> Option<Vec<u8>> {
+    let lines = lines?;
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut output = String::new();
+    for line in lines {
+        for ch in line.chars() {
+            if ch == '\t' || !ch.is_control() {
+                output.push(ch);
+            }
+        }
+        output.push_str("\r\n");
+    }
+
+    (!output.trim().is_empty()).then(|| output.into_bytes())
 }
 
 fn render_cached_terminal_row(
