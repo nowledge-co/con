@@ -8,7 +8,7 @@ This folder collects research notes, implementation notes, and design handoff do
 - `../CHANGELOG.md` — release notes and product changes
 - `../DESIGN.md` — vision and architecture
 - `../HACKING.md` — contributor quickstart
-- `restorable-workspaces-guide.md` — user-facing guide to workspace restore
+- `workspace-layout-profiles-guide.md` — user-facing guide to exported layout profiles
 
 ## Design
 
