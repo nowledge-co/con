@@ -8,7 +8,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - No unreleased changes.
 
-## `v0.1.0-beta.51` - 2026-05-02
+## `v0.1.0-beta.52` - 2026-05-02
 
 ### Added
 
