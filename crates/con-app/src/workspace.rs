@@ -10057,7 +10057,7 @@ impl Render for ConWorkspace {
                 }))
                 .child(
                     svg()
-                        .path("phosphor/sidebar-simple.svg")
+                        .path("phosphor/sidebar-fill.svg")
                         .size(px(12.0))
                         .text_color(if self.vertical_tabs_active() {
                             theme.primary
