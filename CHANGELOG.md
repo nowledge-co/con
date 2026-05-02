@@ -11,7 +11,8 @@ con is still pre-release, so entries may group related beta work while the produ
 **Control Plane**
 
 - Added human-facing rename for pane-local surfaces. Surface names can now be changed from Command Palette, the terminal context menu, the app menu, or by double-clicking a surface tab in the pane-local strip. This complements the existing `surfaces.rename` CLI/API path for orchestrators.
-- Polished pane-local surface chrome so humans can distinguish panes from surfaces: owned or named single-surface panes now show an in-pane surface rail, surface tabs use stable `Surface N` fallback names instead of duplicate terminal cwd titles, and tabs expose close plus right-click Rename/Close actions.
+- Added configurable shortcuts for every human surface action: create in pane, split right/down, next/previous, rename, and close. These now show in menus, Command Palette, and Keyboard Shortcuts.
+- Polished pane-local surface chrome so humans can distinguish panes from surfaces: owned or named single-surface panes now show an in-pane surface rail, surface tabs use stable `Surface N` fallback names instead of duplicate terminal cwd titles, rename edits inline in the rail, and tabs expose close plus right-click Rename/Close actions.
 
 ### Fixed
 

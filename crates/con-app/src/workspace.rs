@@ -11,9 +11,8 @@ use gpui::{prelude::FluentBuilder as _, *};
 #[cfg(target_os = "macos")]
 use gpui_component::Theme;
 use gpui_component::{
-    ActiveTheme, Sizable, WindowExt,
-    dialog::DialogButtonProps,
-    input::{Input, InputEvent, InputState},
+    ActiveTheme,
+    input::{InputEvent, InputState},
     tooltip::Tooltip,
 };
 use serde_json::json;
@@ -238,7 +237,9 @@ use crate::input_bar::{
 };
 use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
-use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement, SurfaceCreateOptions};
+use crate::pane_tree::{
+    PaneTree, SplitDirection, SplitPlacement, SurfaceCreateOptions, SurfaceRenameEditor,
+};
 use crate::settings_panel::{
     self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
@@ -431,6 +432,8 @@ pub struct ConWorkspace {
     pending_window_control_requests: Vec<PendingWindowControlRequest>,
     /// Pending surface-control requests that need a window context to allocate a terminal view.
     pending_surface_control_requests: Vec<PendingSurfaceControlRequest>,
+    /// Inline editor for the pane-local surface rail.
+    surface_rename: Option<SurfaceRenameEditor>,
     /// Control-plane requests from the external `con-cli` socket bridge.
     control_request_rx: crossbeam_channel::Receiver<ControlRequestEnvelope>,
     /// Keeps the Unix socket alive for this workspace instance.
@@ -1481,6 +1484,7 @@ impl ConWorkspace {
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             pending_surface_control_requests: Vec::new(),
+            surface_rename: None,
             control_request_rx,
             control_socket,
             pending_control_agent_requests: HashMap::new(),
@@ -8394,7 +8398,7 @@ impl ConWorkspace {
         true
     }
 
-    fn open_surface_rename_dialog(
+    fn begin_surface_rename(
         &mut self,
         surface_id: usize,
         window: &mut Window,
@@ -8416,7 +8420,6 @@ impl ConWorkspace {
         let initial = surface
             .title
             .clone()
-            .or_else(|| surface.terminal.title(cx))
             .unwrap_or_else(|| format!("Surface {}", surface.surface_index + 1));
 
         let input = cx.new(|cx| {
@@ -8428,7 +8431,7 @@ impl ConWorkspace {
 
         let workspace_for_enter = cx.weak_entity();
         cx.subscribe_in(&input, window, {
-            move |_this, input_entity, event: &InputEvent, window, cx| {
+            move |_this, input_entity, event: &InputEvent, _window, cx| {
                 if !matches!(event, InputEvent::PressEnter { .. }) {
                     return;
                 }
@@ -8436,53 +8439,20 @@ impl ConWorkspace {
                 if let Some(workspace) = workspace_for_enter.upgrade() {
                     workspace.update(cx, |workspace, cx| {
                         workspace.rename_surface_title(tab_idx, surface_id, value, cx);
+                        workspace.surface_rename = None;
+                        cx.notify();
                     });
                 }
-                window.close_dialog(cx);
             }
         })
         .detach();
 
-        let workspace_for_ok = cx.weak_entity();
-        let input_for_content = input.clone();
-        let input_for_ok = input.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let input_for_content = input_for_content.clone();
-            let input_for_ok = input_for_ok.clone();
-            let workspace_for_ok = workspace_for_ok.clone();
-
-            dialog
-                .width(px(360.0))
-                .title("Rename Surface")
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text("Rename")
-                        .show_cancel(true),
-                )
-                .content(move |content, _, cx| {
-                    let theme = cx.theme();
-                    content
-                        .gap(px(10.0))
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .line_height(px(17.0))
-                                .text_color(theme.muted_foreground)
-                                .child("Name this pane-local terminal session."),
-                        )
-                        .child(Input::new(&input_for_content).small())
-                })
-                .on_ok(move |_, _window, cx| {
-                    let value = input_for_ok.read(cx).value().to_string();
-                    if let Some(workspace) = workspace_for_ok.upgrade() {
-                        workspace.update(cx, |workspace, cx| {
-                            workspace.rename_surface_title(tab_idx, surface_id, value, cx);
-                        });
-                    }
-                    true
-                })
+        self.surface_rename = Some(SurfaceRenameEditor {
+            surface_id,
+            input: input.clone(),
         });
         input.update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
     }
 
     fn close_surface_by_id_in_active_tab(
@@ -8496,6 +8466,13 @@ impl ConWorkspace {
         }
 
         let tab_idx = self.active_tab;
+        if self
+            .surface_rename
+            .as_ref()
+            .is_some_and(|editor| editor.surface_id == surface_id)
+        {
+            self.surface_rename = None;
+        }
         let Some(close_outcome) = self.tabs[tab_idx].pane_tree.close_surface(surface_id, true)
         else {
             return;
@@ -8682,7 +8659,7 @@ impl ConWorkspace {
         else {
             return;
         };
-        self.open_surface_rename_dialog(surface_id, window, cx);
+        self.begin_surface_rename(surface_id, window, cx);
     }
 
     fn close_surface(&mut self, _: &CloseSurface, window: &mut Window, cx: &mut Context<Self>) {
@@ -9543,7 +9520,7 @@ impl Render for ConWorkspace {
             let rename_surface_cb = move |surface_id: usize, window: &mut Window, cx: &mut App| {
                 if let Some(workspace) = workspace.upgrade() {
                     workspace.update(cx, |workspace, cx| {
-                        workspace.open_surface_rename_dialog(surface_id, window, cx);
+                        workspace.begin_surface_rename(surface_id, window, cx);
                     });
                 }
             };
@@ -9560,6 +9537,7 @@ impl Render for ConWorkspace {
                 focus_surface_cb,
                 rename_surface_cb,
                 close_surface_cb,
+                self.surface_rename.clone(),
                 pane_divider_color,
                 cx,
             )
@@ -10442,6 +10420,13 @@ impl Render for ConWorkspace {
 
                     let mods = &event.keystroke.modifiers;
                     let key = event.keystroke.key.as_str();
+
+                    if key == "escape" && this.surface_rename.take().is_some() {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
 
                     #[cfg(target_os = "macos")]
                     if mods.platform

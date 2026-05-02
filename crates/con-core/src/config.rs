@@ -275,6 +275,70 @@ fn default_toggle_vertical_tabs() -> String {
     // real terminal control character. Ctrl+Shift+B stays app-level.
     "ctrl-shift-b".into()
 }
+
+#[cfg(target_os = "macos")]
+fn default_new_surface() -> String {
+    "secondary-alt-t".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_new_surface() -> String {
+    "alt-shift-t".into()
+}
+
+#[cfg(target_os = "macos")]
+fn default_new_surface_split_right() -> String {
+    "secondary-alt-d".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_new_surface_split_right() -> String {
+    "alt-shift-right".into()
+}
+
+#[cfg(target_os = "macos")]
+fn default_new_surface_split_down() -> String {
+    "secondary-alt-shift-d".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_new_surface_split_down() -> String {
+    "alt-shift-down".into()
+}
+
+#[cfg(target_os = "macos")]
+fn default_next_surface() -> String {
+    "secondary-alt-]".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_next_surface() -> String {
+    "alt-shift-]".into()
+}
+
+#[cfg(target_os = "macos")]
+fn default_previous_surface() -> String {
+    "secondary-alt-[".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_previous_surface() -> String {
+    "alt-shift-[".into()
+}
+
+#[cfg(target_os = "macos")]
+fn default_rename_surface() -> String {
+    "secondary-alt-r".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_rename_surface() -> String {
+    "alt-shift-r".into()
+}
+
+#[cfg(target_os = "macos")]
+fn default_close_surface() -> String {
+    "secondary-alt-shift-w".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_close_surface() -> String {
+    "alt-shift-x".into()
+}
+
 fn default_global_summon() -> String {
     "alt-space".into()
 }
@@ -303,6 +367,13 @@ pub struct KeybindingConfig {
     pub toggle_input_bar: String,
     pub toggle_pane_scope: String,
     pub toggle_vertical_tabs: String,
+    pub new_surface: String,
+    pub new_surface_split_right: String,
+    pub new_surface_split_down: String,
+    pub next_surface: String,
+    pub previous_surface: String,
+    pub rename_surface: String,
+    pub close_surface: String,
     pub global_summon_enabled: bool,
     pub global_summon: String,
 }
@@ -328,6 +399,13 @@ impl Default for KeybindingConfig {
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
             toggle_vertical_tabs: default_toggle_vertical_tabs(),
+            new_surface: default_new_surface(),
+            new_surface_split_right: default_new_surface_split_right(),
+            new_surface_split_down: default_new_surface_split_down(),
+            next_surface: default_next_surface(),
+            previous_surface: default_previous_surface(),
+            rename_surface: default_rename_surface(),
+            close_surface: default_close_surface(),
             global_summon_enabled: default_global_summon_enabled(),
             global_summon: default_global_summon(),
         }

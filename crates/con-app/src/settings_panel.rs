@@ -2166,6 +2166,13 @@ impl SettingsPanel {
             "split_down" => self.config.keybindings.split_down = binding,
             "toggle_pane_scope" => self.config.keybindings.toggle_pane_scope = binding,
             "toggle_vertical_tabs" => self.config.keybindings.toggle_vertical_tabs = binding,
+            "new_surface" => self.config.keybindings.new_surface = binding,
+            "new_surface_split_right" => self.config.keybindings.new_surface_split_right = binding,
+            "new_surface_split_down" => self.config.keybindings.new_surface_split_down = binding,
+            "next_surface" => self.config.keybindings.next_surface = binding,
+            "previous_surface" => self.config.keybindings.previous_surface = binding,
+            "rename_surface" => self.config.keybindings.rename_surface = binding,
+            "close_surface" => self.config.keybindings.close_surface = binding,
             "quit" => self.config.keybindings.quit = binding,
             _ => {}
         }
@@ -2194,6 +2201,13 @@ impl SettingsPanel {
             "split_down" => &self.config.keybindings.split_down,
             "toggle_pane_scope" => &self.config.keybindings.toggle_pane_scope,
             "toggle_vertical_tabs" => &self.config.keybindings.toggle_vertical_tabs,
+            "new_surface" => &self.config.keybindings.new_surface,
+            "new_surface_split_right" => &self.config.keybindings.new_surface_split_right,
+            "new_surface_split_down" => &self.config.keybindings.new_surface_split_down,
+            "next_surface" => &self.config.keybindings.next_surface,
+            "previous_surface" => &self.config.keybindings.previous_surface,
+            "rename_surface" => &self.config.keybindings.rename_surface,
+            "close_surface" => &self.config.keybindings.close_surface,
             "quit" => &self.config.keybindings.quit,
             _ => "",
         }
@@ -4211,6 +4225,16 @@ impl SettingsPanel {
             ("Close Pane", "close_pane"),
         ];
 
+        let surface_keys: &[(&str, &str)] = &[
+            ("New Surface in Pane", "new_surface"),
+            ("New Surface Split Right", "new_surface_split_right"),
+            ("New Surface Split Down", "new_surface_split_down"),
+            ("Next Surface", "next_surface"),
+            ("Previous Surface", "previous_surface"),
+            ("Rename Surface", "rename_surface"),
+            ("Close Surface", "close_surface"),
+        ];
+
         let build_card = |keys: &[(&str, &str)],
                           recording: &Option<String>,
                           this: &mut Self,
@@ -4288,6 +4312,7 @@ impl SettingsPanel {
         let general_card = build_card(general_keys, &recording, self, cx);
         let pane_card_keys = pane_keys;
         let pane_card = build_card(pane_card_keys, &recording, self, cx);
+        let surface_card = build_card(surface_keys, &recording, self, cx);
         let global_summon_enabled = self.config.keybindings.global_summon_enabled;
         let global_summon_value = self.config.keybindings.global_summon.clone();
         let global_summon_recording = recording.as_deref() == Some("global_summon");
@@ -4506,6 +4531,14 @@ impl SettingsPanel {
                 .gap(px(8.0))
                 .child(group_label("Panes", &theme))
                 .child(pane_card),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Surfaces", &theme))
+                .child(surface_card),
         )
         .child(
             div()

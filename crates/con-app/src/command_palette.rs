@@ -27,6 +27,34 @@ const TOGGLE_PANE_ZOOM_SHORTCUT: &str = "alt-shift-enter";
 const TOGGLE_VERTICAL_TABS_SHORTCUT: &str = "secondary-b";
 #[cfg(not(target_os = "macos"))]
 const TOGGLE_VERTICAL_TABS_SHORTCUT: &str = "ctrl-shift-b";
+#[cfg(target_os = "macos")]
+const NEW_SURFACE_SHORTCUT: &str = "secondary-alt-t";
+#[cfg(not(target_os = "macos"))]
+const NEW_SURFACE_SHORTCUT: &str = "alt-shift-t";
+#[cfg(target_os = "macos")]
+const NEW_SURFACE_SPLIT_RIGHT_SHORTCUT: &str = "secondary-alt-d";
+#[cfg(not(target_os = "macos"))]
+const NEW_SURFACE_SPLIT_RIGHT_SHORTCUT: &str = "alt-shift-right";
+#[cfg(target_os = "macos")]
+const NEW_SURFACE_SPLIT_DOWN_SHORTCUT: &str = "secondary-alt-shift-d";
+#[cfg(not(target_os = "macos"))]
+const NEW_SURFACE_SPLIT_DOWN_SHORTCUT: &str = "alt-shift-down";
+#[cfg(target_os = "macos")]
+const NEXT_SURFACE_SHORTCUT: &str = "secondary-alt-]";
+#[cfg(not(target_os = "macos"))]
+const NEXT_SURFACE_SHORTCUT: &str = "alt-shift-]";
+#[cfg(target_os = "macos")]
+const PREVIOUS_SURFACE_SHORTCUT: &str = "secondary-alt-[";
+#[cfg(not(target_os = "macos"))]
+const PREVIOUS_SURFACE_SHORTCUT: &str = "alt-shift-[";
+#[cfg(target_os = "macos")]
+const RENAME_SURFACE_SHORTCUT: &str = "secondary-alt-r";
+#[cfg(not(target_os = "macos"))]
+const RENAME_SURFACE_SHORTCUT: &str = "alt-shift-r";
+#[cfg(target_os = "macos")]
+const CLOSE_SURFACE_SHORTCUT: &str = "secondary-alt-shift-w";
+#[cfg(not(target_os = "macos"))]
+const CLOSE_SURFACE_SHORTCUT: &str = "alt-shift-x";
 
 const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
@@ -116,43 +144,43 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         id: "new-surface",
         label: "New Surface in Pane",
-        shortcut: "",
+        shortcut: NEW_SURFACE_SHORTCUT,
         category: "Surface",
     },
     PaletteAction {
         id: "new-surface-split-right",
         label: "New Surface Split Right",
-        shortcut: "",
+        shortcut: NEW_SURFACE_SPLIT_RIGHT_SHORTCUT,
         category: "Surface",
     },
     PaletteAction {
         id: "new-surface-split-down",
         label: "New Surface Split Down",
-        shortcut: "",
+        shortcut: NEW_SURFACE_SPLIT_DOWN_SHORTCUT,
         category: "Surface",
     },
     PaletteAction {
         id: "next-surface",
         label: "Next Surface in Pane",
-        shortcut: "",
+        shortcut: NEXT_SURFACE_SHORTCUT,
         category: "Surface",
     },
     PaletteAction {
         id: "previous-surface",
         label: "Previous Surface in Pane",
-        shortcut: "",
+        shortcut: PREVIOUS_SURFACE_SHORTCUT,
         category: "Surface",
     },
     PaletteAction {
         id: "rename-surface",
         label: "Rename Current Surface",
-        shortcut: "",
+        shortcut: RENAME_SURFACE_SHORTCUT,
         category: "Surface",
     },
     PaletteAction {
         id: "close-surface",
         label: "Close Current Surface",
-        shortcut: "",
+        shortcut: CLOSE_SURFACE_SHORTCUT,
         category: "Surface",
     },
     PaletteAction {

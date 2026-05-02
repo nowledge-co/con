@@ -112,10 +112,20 @@ The visual rule is intentionally scoped:
 Surface tabs support direct manipulation:
 
 - Click a surface tab to focus that surface in its pane.
-- Double-click a surface tab to rename it.
+- Double-click a surface tab to rename it inline. Press Enter to commit or
+  Escape to cancel.
 - Right-click a surface tab for Rename / Close.
 - Use the close glyph on a closable surface tab to remove that surface without
   opening the full terminal context menu.
+
+Default surface shortcuts are configurable in Settings -> Keyboard Shortcuts:
+
+- macOS: Cmd-Option-T creates a surface in the focused pane; Cmd-Option-D /
+  Cmd-Option-Shift-D create surface splits; Cmd-Option-[ and Cmd-Option-]
+  cycle; Cmd-Option-R renames; Cmd-Option-Shift-W closes.
+- Windows/Linux: Alt-Shift-T creates a surface in the focused pane;
+  Alt-Shift-Right / Alt-Shift-Down create surface splits; Alt-Shift-[ and
+  Alt-Shift-] cycle; Alt-Shift-R renames; Alt-Shift-X closes.
 
 These palette actions are deliberately pane-local. They do not change the
 existing `panes.*` control-plane contract, the built-in agent harness target

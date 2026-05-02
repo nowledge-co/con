@@ -1,7 +1,9 @@
 use con_core::session::{PaneLayoutState, PaneSplitDirection};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, InteractiveElementExt,
+    ActiveTheme, InteractiveElementExt, Sizable,
+    input::{Input, InputState},
     menu::{ContextMenuExt, PopupMenuItem},
     tooltip::Tooltip,
 };
@@ -70,6 +72,12 @@ pub struct PaneSurfaceInfo {
     pub owner: Option<String>,
     pub close_pane_when_last: bool,
     pub terminal: TerminalPane,
+}
+
+#[derive(Clone)]
+pub struct SurfaceRenameEditor {
+    pub surface_id: SurfaceId,
+    pub input: Entity<InputState>,
 }
 
 #[derive(Debug, Clone)]
@@ -571,6 +579,7 @@ impl PaneTree {
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         rename_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         close_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
+        rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
@@ -585,6 +594,7 @@ impl PaneTree {
                 focus_surface_cb.clone(),
                 rename_surface_cb.clone(),
                 close_surface_cb.clone(),
+                rename_editor.clone(),
                 cx,
             ) {
                 return zoomed;
@@ -599,6 +609,7 @@ impl PaneTree {
             focus_surface_cb,
             rename_surface_cb,
             close_surface_cb,
+            rename_editor,
             divider_color,
             cx,
         )
@@ -987,6 +998,7 @@ impl PaneTree {
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
@@ -1003,6 +1015,7 @@ impl PaneTree {
                 focus_surface_cb,
                 rename_surface_cb,
                 close_surface_cb,
+                rename_editor,
                 cx,
             ),
             PaneNode::Split {
@@ -1025,6 +1038,8 @@ impl PaneTree {
                 let rename_cb_second = rename_surface_cb.clone();
                 let close_cb_first = close_surface_cb.clone();
                 let close_cb_second = close_surface_cb.clone();
+                let rename_editor_first = rename_editor.clone();
+                let rename_editor_second = rename_editor.clone();
 
                 let first_el = Self::render_node(
                     first,
@@ -1034,6 +1049,7 @@ impl PaneTree {
                     focus_cb_first,
                     rename_cb_first,
                     close_cb_first,
+                    rename_editor_first,
                     divider_color,
                     cx,
                 );
@@ -1045,6 +1061,7 @@ impl PaneTree {
                     focus_cb_second,
                     rename_cb_second,
                     close_cb_second,
+                    rename_editor_second,
                     divider_color,
                     cx,
                 );
@@ -1147,6 +1164,7 @@ impl PaneTree {
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_editor: Option<SurfaceRenameEditor>,
         cx: &App,
     ) -> Option<AnyElement> {
         match node {
@@ -1162,6 +1180,7 @@ impl PaneTree {
                 focus_surface_cb,
                 rename_surface_cb,
                 close_surface_cb,
+                rename_editor,
                 cx,
             )),
             PaneNode::Leaf { .. } => None,
@@ -1172,6 +1191,7 @@ impl PaneTree {
                 focus_surface_cb.clone(),
                 rename_surface_cb.clone(),
                 close_surface_cb.clone(),
+                rename_editor.clone(),
                 cx,
             )
             .or_else(|| {
@@ -1182,6 +1202,7 @@ impl PaneTree {
                     focus_surface_cb,
                     rename_surface_cb,
                     close_surface_cb,
+                    rename_editor,
                     cx,
                 )
             }),
@@ -1196,6 +1217,7 @@ impl PaneTree {
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_editor: Option<SurfaceRenameEditor>,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -1213,12 +1235,15 @@ impl PaneTree {
             .flex()
             .items_center()
             .gap(px(5.0))
-            .h(px(28.0))
+            .h(px(25.0))
             .w_full()
-            .px(px(8.0))
-            .bg(theme
-                .title_bar
-                .opacity(if pane_id == focused_id { 0.88 } else { 0.76 }))
+            .pl(px(7.0))
+            .pr(px(6.0))
+            .bg(if pane_id == focused_id {
+                theme.foreground.opacity(0.055)
+            } else {
+                theme.foreground.opacity(0.035)
+            })
             .overflow_x_scroll();
 
         strip = strip.child(
@@ -1227,16 +1252,16 @@ impl PaneTree {
                 .items_center()
                 .gap(px(4.0))
                 .flex_shrink_0()
-                .pr(px(2.0))
-                .text_size(px(10.0))
-                .line_height(px(12.0))
+                .pr(px(3.0))
+                .text_size(px(9.0))
+                .line_height(px(11.0))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.muted_foreground.opacity(0.50))
+                .text_color(theme.muted_foreground.opacity(0.44))
                 .child(
                     svg()
                         .path("phosphor/stack.svg")
-                        .size(px(10.0))
-                        .text_color(theme.muted_foreground.opacity(0.46)),
+                        .size(px(9.0))
+                        .text_color(theme.muted_foreground.opacity(0.40)),
                 )
                 .child("surfaces"),
         );
@@ -1248,12 +1273,12 @@ impl PaneTree {
                 .clone()
                 .unwrap_or_else(|| format!("Surface {}", index + 1));
             let color = if is_active {
-                theme.foreground.opacity(0.84)
+                theme.foreground.opacity(0.88)
             } else {
-                theme.muted_foreground.opacity(0.58)
+                theme.muted_foreground.opacity(0.54)
             };
             let bg = if is_active {
-                theme.foreground.opacity(0.08)
+                theme.foreground.opacity(0.07)
             } else {
                 theme.transparent
             };
@@ -1270,13 +1295,17 @@ impl PaneTree {
             let close_cb_for_button = close_surface_cb.clone();
             let can_close =
                 surfaces.len() > 1 || surface.close_pane_when_last && surface.owner.is_some();
+            let editing_input = rename_editor
+                .as_ref()
+                .filter(|editor| editor.surface_id == sid)
+                .map(|editor| editor.input.clone());
 
             let mut tab = div()
                 .id(ElementId::Name(format!("surface-tab-{sid}").into()))
                 .flex()
                 .items_center()
                 .gap(px(4.0))
-                .h(px(20.0))
+                .h(px(19.0))
                 .max_w(px(190.0))
                 .flex_shrink_0()
                 .pl(px(6.0))
@@ -1297,13 +1326,33 @@ impl PaneTree {
                         .flex_shrink_0()
                         .text_color(icon_color),
                 )
-                .child(
-                    div()
-                        .truncate()
-                        .text_xs()
-                        .line_height(px(13.0))
-                        .text_color(color)
-                        .child(title),
+                .when_some(editing_input, |tab, input| {
+                    tab.child(
+                        div().w(px(104.0)).child(
+                            Input::new(&input)
+                                .small()
+                                .appearance(false)
+                                .text_size(px(12.0))
+                                .line_height(px(14.0))
+                                .text_color(theme.foreground.opacity(0.92)),
+                        ),
+                    )
+                })
+                .when(
+                    rename_editor
+                        .as_ref()
+                        .is_none_or(|editor| editor.surface_id != sid),
+                    |tab| {
+                        tab.child(
+                            div()
+                                .truncate()
+                                .text_size(px(12.0))
+                                .line_height(px(14.0))
+                                .font_family(theme.font_family.clone())
+                                .text_color(color)
+                                .child(title),
+                        )
+                    },
                 );
 
             if can_close {
