@@ -23,7 +23,7 @@ const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
 #[cfg(target_os = "macos")]
 const CHROME_MOTION_SEAM_OVERDRAW: f32 = 6.0;
 #[cfg(target_os = "macos")]
-const CHROME_SNAP_GUARD_MS: u64 = 80;
+const CHROME_SNAP_GUARD_MS: u64 = 160;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
@@ -10226,40 +10226,6 @@ impl Render for ConWorkspace {
                         .bg(chrome_transition_seam_color),
                 );
             }
-        }
-
-        #[cfg(target_os = "macos")]
-        if input_bar_transitioning {
-            let input_bar_seam_bottom = (43.0 * input_bar_progress).max(0.0);
-            let input_bar_seam_height = CHROME_MOTION_SEAM_OVERDRAW;
-
-            root = root.child(
-                div()
-                    .absolute()
-                    .left(px(terminal_content_left))
-                    .right(px(agent_panel_outer_width))
-                    .bottom(px(input_bar_seam_bottom))
-                    .h(px(input_bar_seam_height))
-                    .bg(chrome_transition_seam_color),
-            );
-        }
-
-        #[cfg(target_os = "macos")]
-        if agent_panel_transitioning {
-            let agent_panel_seam_right = (effective_agent_panel_width
-                - (CHROME_MOTION_SEAM_OVERDRAW - CHROME_TRANSITION_SEAM_COVER))
-                .max(0.0);
-            let agent_panel_seam_width = CHROME_MOTION_SEAM_OVERDRAW;
-
-            root = root.child(
-                div()
-                    .absolute()
-                    .top(px(top_bar_height))
-                    .bottom_0()
-                    .right(px(agent_panel_seam_right))
-                    .w(px(agent_panel_seam_width))
-                    .bg(chrome_transition_seam_color),
-            );
         }
 
         #[cfg(target_os = "macos")]
