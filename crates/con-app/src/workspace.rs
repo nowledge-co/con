@@ -8037,6 +8037,7 @@ impl ConWorkspace {
                 startup_command: None,
             },
         );
+        self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -8099,6 +8100,7 @@ impl ConWorkspace {
                 startup_command: None,
             },
         );
+        self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -8174,6 +8176,7 @@ impl ConWorkspace {
         replacement.ensure_surface(window, cx);
         replacement.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
+        self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
     }
