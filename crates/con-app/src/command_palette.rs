@@ -1,6 +1,5 @@
 use gpui::*;
 use gpui_component::input::InputState;
-use gpui_component::kbd::Kbd;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, input::Input};
 
@@ -243,7 +242,7 @@ impl CommandPalette {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
-            state.set_placeholder("Type a command...", window, cx);
+            state.set_placeholder("Search commands", window, cx);
             state
         });
 
@@ -355,14 +354,18 @@ impl Render for CommandPalette {
         };
 
         let theme = cx.theme();
+        let selected_bg = theme.foreground.opacity(0.075);
+        let selected_hover_bg = theme.foreground.opacity(0.095);
+        let row_hover_bg = theme.foreground.opacity(0.045);
+        let selected_marker = theme.primary.opacity(0.82);
 
         let mut list_content = div()
             .id("palette-list")
             .flex()
             .flex_col()
             .size_full()
-            .py(px(6.0))
-            .px(px(6.0))
+            .py(px(8.0))
+            .px(px(8.0))
             .overflow_y_scroll()
             .track_scroll(&self.scroll_handle);
 
@@ -370,26 +373,17 @@ impl Render for CommandPalette {
             let is_selected = i == selected;
             let idx = i;
             let shortcut = if action.shortcut.is_empty() {
-                div().min_w(px(56.0)).into_any_element()
-            } else if let Ok(stroke) = Keystroke::parse(action.shortcut) {
                 div()
-                    .min_w(px(56.0))
+                    .min_w(px(96.0))
                     .flex()
                     .justify_end()
-                    .child(Kbd::new(stroke).outline())
                     .into_any_element()
             } else {
                 div()
-                    .min_w(px(56.0))
-                    .text_xs()
+                    .min_w(px(96.0))
                     .flex()
                     .justify_end()
-                    .text_color(if is_selected {
-                        theme.primary_foreground
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .child(action.shortcut)
+                    .child(crate::keycaps::keycaps_for_binding(action.shortcut, theme))
                     .into_any_element()
             };
 
@@ -399,19 +393,23 @@ impl Render for CommandPalette {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap(px(12.0))
                     .px(px(10.0))
-                    .py(px(6.0))
-                    .rounded(px(6.0))
+                    .py(px(7.0))
+                    .rounded(px(8.0))
                     .cursor_pointer()
                     .bg(if is_selected {
-                        theme.primary
+                        selected_bg
                     } else {
                         theme.transparent
                     })
-                    .text_color(if is_selected {
-                        theme.primary_foreground
-                    } else {
-                        theme.foreground
+                    .text_color(theme.foreground)
+                    .hover(move |s| {
+                        s.bg(if is_selected {
+                            selected_hover_bg
+                        } else {
+                            row_hover_bg
+                        })
                     })
                     .on_mouse_down(
                         MouseButton::Left,
@@ -431,22 +429,52 @@ impl Render for CommandPalette {
                             .flex()
                             .flex_1()
                             .items_center()
-                            .gap(px(8.0))
+                            .gap(px(12.0))
                             .overflow_x_hidden()
                             .child(
                                 div()
-                                    .text_size(px(10.0))
+                                    .w(px(3.0))
+                                    .h(px(18.0))
+                                    .rounded(px(2.0))
+                                    .flex_shrink_0()
+                                    .bg(if is_selected {
+                                        selected_marker
+                                    } else {
+                                        theme.transparent
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .line_height(px(14.0))
                                     .font_weight(FontWeight::MEDIUM)
                                     .flex_shrink_0()
                                     .text_color(if is_selected {
-                                        theme.primary_foreground
+                                        theme.foreground.opacity(0.68)
                                     } else {
-                                        theme.muted_foreground
+                                        theme.muted_foreground.opacity(0.58)
                                     })
-                                    .min_w(px(68.0))
+                                    .min_w(px(78.0))
                                     .child(action.category.to_uppercase()),
                             )
-                            .child(div().text_sm().child(action.label)),
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(13.0))
+                                    .line_height(px(18.0))
+                                    .font_weight(if is_selected {
+                                        FontWeight::MEDIUM
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .text_color(if is_selected {
+                                        theme.foreground.opacity(0.94)
+                                    } else {
+                                        theme.foreground.opacity(0.82)
+                                    })
+                                    .child(action.label),
+                            ),
                     )
                     .child(shortcut),
             );
@@ -456,9 +484,10 @@ impl Render for CommandPalette {
             list_content = list_content.child(
                 div()
                     .px(px(16.0))
-                    .py(px(12.0))
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
+                    .py(px(20.0))
+                    .text_size(px(13.0))
+                    .line_height(px(18.0))
+                    .text_color(theme.muted_foreground.opacity(0.74))
                     .child("No matching commands"),
             );
         }
@@ -470,7 +499,7 @@ impl Render for CommandPalette {
 
         let list = div()
             .relative()
-            .max_h(px(320.0))
+            .max_h(px(360.0))
             .min_h_0()
             .child(list_content)
             .vertical_scrollbar(&self.scroll_handle);
@@ -494,14 +523,15 @@ impl Render for CommandPalette {
             .left_0()
             .right_0()
             .mx_auto()
-            .w(px(520.0))
-            .rounded(px(12.0))
-            .bg(theme.title_bar.opacity(self.ui_opacity))
+            .w(px(560.0))
+            .rounded(px(16.0))
+            .bg(theme.popover.opacity(self.ui_opacity))
             .opacity(overlay_progress)
             .flex()
             .flex_col()
             .overflow_hidden()
             .occlude()
+            .font_family(theme.font_family.clone())
             .pt(vertical_reveal_offset(overlay_progress, 16.0))
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
@@ -535,7 +565,34 @@ impl Render for CommandPalette {
                     _ => {}
                 }
             }))
-            .child(div().p(px(12.0)).child(Input::new(&self.query)))
+            .child(
+                div().p(px(12.0)).child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .h(px(44.0))
+                        .px(px(12.0))
+                        .rounded(px(12.0))
+                        .bg(theme.foreground.opacity(0.055))
+                        .child(
+                            svg()
+                                .path("phosphor/magnifying-glass.svg")
+                                .size(px(15.0))
+                                .flex_shrink_0()
+                                .text_color(theme.muted_foreground.opacity(0.72)),
+                        )
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                Input::new(&self.query)
+                                    .appearance(false)
+                                    .text_size(px(15.0))
+                                    .line_height(px(20.0))
+                                    .text_color(theme.foreground.opacity(0.90)),
+                            ),
+                        ),
+                ),
+            )
             .child(list);
 
         div()

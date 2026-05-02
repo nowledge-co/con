@@ -3,7 +3,6 @@ use gpui::{
     Styled as _, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
-use gpui_component::kbd::Kbd;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 
 fn action_item(label: &'static str, action: Box<dyn Action>) -> PopupMenuItem {
@@ -19,8 +18,7 @@ fn action_row(
     cx: &mut App,
 ) -> AnyElement {
     let theme = cx.theme();
-    let shortcut =
-        crate::keycaps::first_action_keystroke(action, window).map(|stroke| Kbd::format(&stroke));
+    let shortcut = crate::keycaps::first_action_keystroke(action, window);
 
     div()
         .flex()
@@ -38,15 +36,9 @@ fn action_row(
                 .child(SharedString::from(label)),
         )
         .child(
-            div()
-                .flex()
-                .min_w(px(54.0))
-                .justify_end()
-                .text_size(px(11.0))
-                .line_height(px(14.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.muted_foreground.opacity(0.72))
-                .children(shortcut),
+            div().flex().min_w(px(54.0)).justify_end().children(
+                shortcut.map(|stroke| crate::keycaps::keycaps_for_stroke(&stroke, theme)),
+            ),
         )
         .into_any_element()
 }

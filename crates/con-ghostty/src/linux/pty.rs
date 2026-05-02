@@ -299,6 +299,11 @@ impl LinuxPtySession {
         Ok(())
     }
 
+    pub fn clear_screen_and_scrollback(&self) {
+        self.shared.screen.clear_screen_and_scrollback();
+        self.mark_needs_render();
+    }
+
     pub fn title(&self) -> Option<String> {
         self.title.clone()
     }

@@ -724,7 +724,13 @@ impl GhosttyTerminal {
 
     pub fn perform_binding_action(&self, action: &str) -> Result<bool, String> {
         let action = CString::new(action).map_err(|e| format!("CString: {}", e))?;
-        Ok(unsafe { ffi::ghostty_surface_binding_action(self.surface, action.as_ptr(), 0) })
+        Ok(unsafe {
+            ffi::ghostty_surface_binding_action(
+                self.surface,
+                action.as_ptr(),
+                action.as_bytes().len(),
+            )
+        })
     }
 
     pub fn clear_screen_and_scrollback(&self) -> Result<(), String> {

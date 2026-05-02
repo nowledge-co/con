@@ -16,12 +16,31 @@ con is still pre-release, so entries may group related beta work while the produ
 - Clarified the human surface model in menus and docs: surfaces are tab-like sessions inside one pane, while surface split commands create a new visible pane first. The terminal context menu now also includes Settings for direct access.
 - Refined the in-pane surface rail from a full-width header into compact local chrome, so a pane with multiple surfaces no longer looks like another nested pane split.
 
+### Changed
+
+**Command Palette**
+
+- Normalized the command palette to Con's current design language: system UI typography, quieter selected-row treatment, a softer search well, and cleaner shortcut alignment.
+- Rendered shortcuts as separate keycaps in the Command Palette and terminal context menu, with platform-aware labels on macOS, Windows, and Linux.
+
 ### Fixed
 
 **Control Plane**
 
 - Kept inactive pane-local surfaces sized to their host pane while they are hidden. TUI coding agents launched in background surfaces now receive the same terminal rows/columns they will have when focused, avoiding incorrect layout assumptions in multi-surface orchestrator workflows. Fixes [#108](https://github.com/nowledge-co/con-terminal/issues/108).
 - Fixed a crash when committing an inline surface rename from the pane-local surface rail.
+
+**Terminal, macOS**
+
+- Fixed Clear Terminal from the app menu and Command Palette by passing the Ghostty binding action name correctly to the embedded terminal.
+
+**Terminal, Windows and Linux Backends**
+
+- Wired Clear Terminal for the preview backends so the shared menu and Command Palette action clears the local VT screen and scrollback there as well.
+
+**Input Bar**
+
+- Made AI command suggestions more tolerant of provider latency: if a completion arrives after the user has typed further into the same suggested command, Con now still shows the remaining ghost text instead of dropping the result as stale.
 
 ## `v0.1.0-beta.53` - 2026-05-02
 
