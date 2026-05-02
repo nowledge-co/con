@@ -390,6 +390,11 @@ impl RenderSession {
         let _ = self.conpty.write(data);
     }
 
+    pub fn clear_screen_and_scrollback(&self) {
+        self.vt.clear_screen_and_scrollback();
+        self.request_low_latency_present();
+    }
+
     /// Mouse-left-down at the given cell.
     ///
     /// Xterm convention: Shift bypasses mouse tracking so the user can

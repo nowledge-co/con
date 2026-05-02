@@ -891,6 +891,13 @@ impl VtScreen {
         inner.generation = inner.generation.wrapping_add(1);
     }
 
+    pub fn clear_screen_and_scrollback(&self) {
+        if self.is_alternate_screen() {
+            return;
+        }
+        self.feed(b"\x1b[H\x1b[2J\x1b[3J");
+    }
+
     pub fn resize(
         &self,
         cols: u16,

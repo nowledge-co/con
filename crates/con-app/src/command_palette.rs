@@ -1,6 +1,5 @@
 use gpui::*;
 use gpui_component::input::InputState;
-use gpui_component::kbd::Kbd;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme, input::Input};
 
@@ -374,27 +373,17 @@ impl Render for CommandPalette {
             let is_selected = i == selected;
             let idx = i;
             let shortcut = if action.shortcut.is_empty() {
-                div().min_w(px(72.0)).into_any_element()
-            } else if let Ok(stroke) = Keystroke::parse(action.shortcut) {
                 div()
-                    .min_w(px(72.0))
+                    .min_w(px(96.0))
                     .flex()
                     .justify_end()
-                    .child(Kbd::new(stroke).outline())
                     .into_any_element()
             } else {
                 div()
-                    .min_w(px(72.0))
-                    .text_size(px(11.0))
-                    .line_height(px(14.0))
+                    .min_w(px(96.0))
                     .flex()
                     .justify_end()
-                    .text_color(if is_selected {
-                        theme.foreground.opacity(0.78)
-                    } else {
-                        theme.muted_foreground.opacity(0.72)
-                    })
-                    .child(action.shortcut)
+                    .child(crate::keycaps::keycaps_for_binding(action.shortcut, theme))
                     .into_any_element()
             };
 

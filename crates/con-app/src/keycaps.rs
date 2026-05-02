@@ -6,9 +6,9 @@ use gpui::{
 fn key_label(key: &str) -> String {
     match key {
         "space" => "Space".to_string(),
-        "enter" => "Return".to_string(),
+        "enter" => enter_label().to_string(),
         "escape" => "Esc".to_string(),
-        "backspace" => "Delete".to_string(),
+        "backspace" => backspace_label().to_string(),
         "delete" => "Del".to_string(),
         "tab" => "Tab".to_string(),
         "left" => "←".to_string(),
@@ -33,21 +33,81 @@ fn key_label(key: &str) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn control_label() -> &'static str {
+    "⌃"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn control_label() -> &'static str {
+    "Ctrl"
+}
+
+#[cfg(target_os = "macos")]
+fn alt_label() -> &'static str {
+    "⌥"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn alt_label() -> &'static str {
+    "Alt"
+}
+
+#[cfg(target_os = "macos")]
+fn shift_label() -> &'static str {
+    "⇧"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn shift_label() -> &'static str {
+    "Shift"
+}
+
+#[cfg(target_os = "macos")]
+fn platform_label() -> &'static str {
+    "⌘"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_label() -> &'static str {
+    "Ctrl"
+}
+
+#[cfg(target_os = "macos")]
+fn enter_label() -> &'static str {
+    "Return"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn enter_label() -> &'static str {
+    "Enter"
+}
+
+#[cfg(target_os = "macos")]
+fn backspace_label() -> &'static str {
+    "Delete"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn backspace_label() -> &'static str {
+    "Backspace"
+}
+
 fn keycap(label: String, theme: &gpui_component::Theme) -> Div {
     let wide = label.chars().count() > 1;
     div()
-        .h(px(19.0))
-        .min_w(if wide { px(31.0) } else { px(19.0) })
+        .h(px(20.0))
+        .min_w(if wide { px(30.0) } else { px(20.0) })
         .px(px(if wide { 6.0 } else { 0.0 }))
         .rounded(px(5.0))
         .flex()
         .items_center()
         .justify_center()
-        .bg(theme.muted.opacity(0.16))
-        .font_family(theme.mono_font_family.clone())
-        .text_color(theme.foreground.opacity(0.78))
+        .bg(theme.foreground.opacity(0.070))
+        .font_family(theme.font_family.clone())
+        .text_color(theme.foreground.opacity(0.76))
         .text_size(px(10.5))
-        .line_height(px(11.0))
+        .line_height(px(12.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .child(label)
 }
@@ -55,16 +115,16 @@ fn keycap(label: String, theme: &gpui_component::Theme) -> Div {
 pub(crate) fn keycaps_for_stroke(stroke: &Keystroke, theme: &gpui_component::Theme) -> Div {
     let mut parts = Vec::new();
     if stroke.modifiers.control {
-        parts.push("⌃".to_string());
+        parts.push(control_label().to_string());
     }
     if stroke.modifiers.alt {
-        parts.push("⌥".to_string());
+        parts.push(alt_label().to_string());
     }
     if stroke.modifiers.shift {
-        parts.push("⇧".to_string());
+        parts.push(shift_label().to_string());
     }
     if stroke.modifiers.platform {
-        parts.push("⌘".to_string());
+        parts.push(platform_label().to_string());
     }
     parts.push(key_label(&stroke.key));
 
@@ -72,7 +132,7 @@ pub(crate) fn keycaps_for_stroke(stroke: &Keystroke, theme: &gpui_component::The
         .flex()
         .items_center()
         .justify_end()
-        .gap(px(2.0))
+        .gap(px(3.0))
         .children(parts.into_iter().map(|part| keycap(part, theme)))
 }
 

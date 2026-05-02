@@ -181,6 +181,9 @@ impl WindowsGhosttyTerminal {
         Ok(false)
     }
     pub fn clear_screen_and_scrollback(&self) -> Result<(), String> {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.clear_screen_and_scrollback();
+        }
         Ok(())
     }
     pub fn request_split(&self, _direction: GhosttySplitDirection) {}

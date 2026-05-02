@@ -8010,8 +8010,7 @@ impl ConWorkspace {
             (bar.current_text(cx), bar.mode(), bar.target_pane_ids())
         });
 
-        if text != result.prefix
-            || matches!(mode, InputMode::Agent)
+        if matches!(mode, InputMode::Agent)
             || target_ids.as_slice() != [result.pane_id]
             || text.trim().starts_with('/')
             || text.contains('\n')
@@ -8023,6 +8022,8 @@ impl ConWorkspace {
             );
             return;
         }
+
+        let input_changed = text != result.prefix;
 
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
         let cwd = pane_tree
@@ -8056,6 +8057,37 @@ impl ConWorkspace {
                 "drop ai suggestion prefix={:?}: history match became available",
                 result.prefix
             );
+            return;
+        }
+
+        if input_changed {
+            let full_suggestion = if result.completion.starts_with(&result.prefix) {
+                result.completion.clone()
+            } else {
+                format!("{}{}", result.prefix, result.completion)
+            };
+
+            if !full_suggestion.starts_with(&text) || full_suggestion == text {
+                log::debug!(
+                    target: "con::suggestions",
+                    "drop ai suggestion prefix={:?}: text changed to incompatible prefix {:?}",
+                    result.prefix,
+                    text
+                );
+                return;
+            }
+
+            log::debug!(
+                target: "con::suggestions",
+                "apply ai suggestion prefix={:?} current={:?} completion={:?}",
+                result.prefix,
+                text,
+                full_suggestion
+            );
+            self.input_bar.update(cx, |bar, _cx| {
+                bar.set_ai_inline_suggestion(&text, &full_suggestion);
+            });
+            cx.notify();
             return;
         }
 
