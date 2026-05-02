@@ -24,6 +24,8 @@ const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
 const CHROME_MOTION_SEAM_OVERDRAW: f32 = 6.0;
 #[cfg(target_os = "macos")]
 const CHROME_SNAP_GUARD_MS: u64 = 160;
+#[cfg(target_os = "macos")]
+const CHROME_RELEASE_COVER_MS: u64 = 48;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
@@ -411,6 +413,16 @@ pub struct ConWorkspace {
     sidebar_snap_guard_until: Option<Instant>,
     #[cfg(target_os = "macos")]
     sidebar_snap_guard_width: f32,
+    #[cfg(target_os = "macos")]
+    agent_panel_release_cover_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    input_bar_release_cover_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    top_chrome_release_cover_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    sidebar_release_cover_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    sidebar_release_cover_width: f32,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -759,16 +771,21 @@ impl ConWorkspace {
 
     #[cfg(target_os = "macos")]
     fn snap_guard_active(until: &mut Option<Instant>, window: &mut Window) -> bool {
+        Self::snap_guard_state(until, window).0
+    }
+
+    #[cfg(target_os = "macos")]
+    fn snap_guard_state(until: &mut Option<Instant>, window: &mut Window) -> (bool, bool) {
         let Some(deadline) = *until else {
-            return false;
+            return (false, false);
         };
 
         if Instant::now() >= deadline {
             *until = None;
-            false
+            (false, true)
         } else {
             window.request_animation_frame();
-            true
+            (true, false)
         }
     }
 
@@ -1449,6 +1466,16 @@ impl ConWorkspace {
             sidebar_snap_guard_until: None,
             #[cfg(target_os = "macos")]
             sidebar_snap_guard_width: 0.0,
+            #[cfg(target_os = "macos")]
+            agent_panel_release_cover_until: None,
+            #[cfg(target_os = "macos")]
+            input_bar_release_cover_until: None,
+            #[cfg(target_os = "macos")]
+            top_chrome_release_cover_until: None,
+            #[cfg(target_os = "macos")]
+            sidebar_release_cover_until: None,
+            #[cfg(target_os = "macos")]
+            sidebar_release_cover_width: 0.0,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             pending_surface_control_requests: Vec::new(),
@@ -9140,20 +9167,52 @@ impl Render for ConWorkspace {
         let input_bar_transitioning = self.input_bar_motion.is_animating();
         let tab_strip_transitioning = self.tab_strip_motion.is_animating();
         #[cfg(target_os = "macos")]
-        let agent_panel_snap_guard_active =
-            Self::snap_guard_active(&mut self.agent_panel_snap_guard_until, window);
+        let (agent_panel_snap_guard_active, agent_panel_snap_guard_expired) =
+            Self::snap_guard_state(&mut self.agent_panel_snap_guard_until, window);
         #[cfg(target_os = "macos")]
-        let input_bar_snap_guard_active =
-            Self::snap_guard_active(&mut self.input_bar_snap_guard_until, window);
+        let (input_bar_snap_guard_active, input_bar_snap_guard_expired) =
+            Self::snap_guard_state(&mut self.input_bar_snap_guard_until, window);
         #[cfg(target_os = "macos")]
-        let top_chrome_snap_guard_active =
-            Self::snap_guard_active(&mut self.top_chrome_snap_guard_until, window);
+        let (top_chrome_snap_guard_active, top_chrome_snap_guard_expired) =
+            Self::snap_guard_state(&mut self.top_chrome_snap_guard_until, window);
         #[cfg(target_os = "macos")]
-        let sidebar_snap_guard_active =
-            Self::snap_guard_active(&mut self.sidebar_snap_guard_until, window);
+        let (sidebar_snap_guard_active, sidebar_snap_guard_expired) =
+            Self::snap_guard_state(&mut self.sidebar_snap_guard_until, window);
         #[cfg(target_os = "macos")]
-        if !sidebar_snap_guard_active {
+        {
+            let release_cover = Duration::from_millis(CHROME_RELEASE_COVER_MS);
+            if agent_panel_snap_guard_expired && !self.agent_panel_open {
+                Self::extend_guard(&mut self.agent_panel_release_cover_until, release_cover);
+            }
+            if input_bar_snap_guard_expired && !self.input_bar_visible {
+                Self::extend_guard(&mut self.input_bar_release_cover_until, release_cover);
+            }
+            if top_chrome_snap_guard_expired && !self.horizontal_tabs_visible() {
+                Self::extend_guard(&mut self.top_chrome_release_cover_until, release_cover);
+            }
+            if sidebar_snap_guard_expired && !self.vertical_tabs_active() {
+                self.sidebar_release_cover_width = self
+                    .sidebar_release_cover_width
+                    .max(self.sidebar_snap_guard_width);
+                Self::extend_guard(&mut self.sidebar_release_cover_until, release_cover);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        let agent_panel_release_cover_active =
+            Self::snap_guard_active(&mut self.agent_panel_release_cover_until, window);
+        #[cfg(target_os = "macos")]
+        let input_bar_release_cover_active =
+            Self::snap_guard_active(&mut self.input_bar_release_cover_until, window);
+        #[cfg(target_os = "macos")]
+        let top_chrome_release_cover_active =
+            Self::snap_guard_active(&mut self.top_chrome_release_cover_until, window);
+        #[cfg(target_os = "macos")]
+        let sidebar_release_cover_active =
+            Self::snap_guard_active(&mut self.sidebar_release_cover_until, window);
+        #[cfg(target_os = "macos")]
+        if !sidebar_snap_guard_active && !sidebar_release_cover_active {
             self.sidebar_snap_guard_width = 0.0;
+            self.sidebar_release_cover_width = 0.0;
         }
         #[cfg(target_os = "macos")]
         {
@@ -10241,6 +10300,19 @@ impl Render for ConWorkspace {
         }
 
         #[cfg(target_os = "macos")]
+        if top_chrome_release_cover_active {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(TOP_BAR_COMPACT_HEIGHT))
+                    .left(px(terminal_content_left))
+                    .right(px(agent_panel_outer_width))
+                    .h(px(TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT))
+                    .bg(chrome_transition_seam_color),
+            );
+        }
+
+        #[cfg(target_os = "macos")]
         if sidebar_snap_guard_active {
             if self.vertical_tabs_active() {
                 root = root.child(
@@ -10255,6 +10327,19 @@ impl Render for ConWorkspace {
                         .bg(chrome_transition_seam_color),
                 );
             }
+        }
+
+        #[cfg(target_os = "macos")]
+        if sidebar_release_cover_active && self.sidebar_release_cover_width > 0.0 {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(top_bar_height))
+                    .bottom_0()
+                    .left_0()
+                    .w(px(self.sidebar_release_cover_width))
+                    .bg(chrome_transition_seam_color),
+            );
         }
 
         #[cfg(target_os = "macos")]
@@ -10273,6 +10358,19 @@ impl Render for ConWorkspace {
         }
 
         #[cfg(target_os = "macos")]
+        if input_bar_release_cover_active {
+            root = root.child(
+                div()
+                    .absolute()
+                    .left(px(terminal_content_left))
+                    .right(px(agent_panel_outer_width))
+                    .bottom_0()
+                    .h(px(43.0))
+                    .bg(chrome_transition_seam_color),
+            );
+        }
+
+        #[cfg(target_os = "macos")]
         if agent_panel_snap_guard_active {
             if self.agent_panel_open {
                 let agent_panel_seam_right = (effective_agent_panel_width
@@ -10288,6 +10386,19 @@ impl Render for ConWorkspace {
                         .bg(chrome_transition_seam_color),
                 );
             }
+        }
+
+        #[cfg(target_os = "macos")]
+        if agent_panel_release_cover_active {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(top_bar_height))
+                    .bottom_0()
+                    .right_0()
+                    .w(px(effective_agent_panel_width + 1.0))
+                    .bg(chrome_transition_seam_color),
+            );
         }
 
         #[cfg(not(target_os = "macos"))]
