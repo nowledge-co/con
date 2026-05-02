@@ -24,11 +24,13 @@ run_codesign() {
   local attempt
 
   for attempt in $(seq 1 "$max_attempts"); do
+    local status=0
     if codesign "$@"; then
       return 0
+    else
+      status=$?
     fi
 
-    local status=$?
     if [[ "$attempt" -ge "$max_attempts" ]]; then
       return "$status"
     fi
