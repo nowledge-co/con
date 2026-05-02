@@ -85,7 +85,7 @@ fn trim_restored_screen_text(lines: Vec<String>) -> Vec<String> {
     let mut total = 0usize;
     let mut keep_from = trimmed.len();
     for (idx, line) in trimmed.iter().enumerate().rev() {
-        total = total.saturating_add(line.len()).saturating_add(1);
+        total = total.saturating_add(line.len()).saturating_add(2);
         if total > RESTORED_SCREEN_TEXT_MAX_BYTES {
             break;
         }
@@ -1768,10 +1768,11 @@ impl PaneTree {
                         used_surface_ids,
                     );
                     let restore_cwd = state.cwd.as_deref().or(cwd.as_deref());
-                    let restored_text = if state.screen_text.is_empty() {
+                    let clamped_screen_text = trim_restored_screen_text(state.screen_text.clone());
+                    let restored_text = if clamped_screen_text.is_empty() {
                         None
                     } else {
-                        Some(state.screen_text.as_slice())
+                        Some(clamped_screen_text.as_slice())
                     };
                     let mut surface =
                         PaneSurface::new(surface_id, make_terminal(restore_cwd, restored_text));

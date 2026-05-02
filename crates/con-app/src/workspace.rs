@@ -628,13 +628,7 @@ fn make_ghostty_terminal(
     let app = app.clone();
     let cwd = cwd.map(str::to_string);
     let restored_screen_text = restored_screen_text
-        .map(|lines| {
-            lines
-                .iter()
-                .filter(|line| !line.is_empty())
-                .cloned()
-                .collect::<Vec<_>>()
-        })
+        .map(|lines| lines.to_vec())
         .filter(|lines| !lines.is_empty());
     let view = cx.new(|cx| {
         crate::ghostty_view::GhosttyView::new(app, cwd, restored_screen_text, font_size, cx)
