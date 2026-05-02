@@ -31,14 +31,11 @@ const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
 
 #[cfg(target_os = "macos")]
-fn solid_over_terminal_backdrop(backdrop: Hsla, overlay: Hsla) -> Hsla {
-    backdrop.blend(overlay).alpha(1.0)
-}
-
-#[cfg(target_os = "macos")]
 fn terminal_separator_over_backdrop(backdrop: Hsla, theme: &Theme) -> Hsla {
     let overlay_alpha = if theme.is_dark() { 0.14 } else { 0.11 };
-    solid_over_terminal_backdrop(backdrop, theme.foreground.opacity(overlay_alpha))
+    backdrop
+        .blend(theme.foreground.opacity(overlay_alpha))
+        .alpha(1.0)
 }
 
 fn perf_trace_enabled() -> bool {
