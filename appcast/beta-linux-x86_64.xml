@@ -6,6 +6,14 @@
     <description>Most recent changes</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.0-beta.52</title>
+      <pubDate/>
+      <sparkle:version>19</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-beta.52</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>0.0.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.52/con-0.1.0-beta.52-linux-x86_64.tar.gz" length="44311953" type="application/octet-stream" sparkle:edSignature="VkDlK8lB6ymlsEITyH75s3uky4yK2MR7/mwE/eZRPsD6uPe5U+GzVvpOYzCICNtFEUdxM0SKqsqAbuVUltDuAQ=="/>
+    </item>
+    <item>
       <title>Version 0.1.0-beta.51</title>
       <pubDate/>
       <sparkle:version>18</sparkle:version>
