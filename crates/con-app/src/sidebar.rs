@@ -75,7 +75,10 @@ const RAIL_TOP_CONTROLS_HEIGHT: f32 =
     28.0 + RAIL_ICON_GAP + 28.0 + RAIL_ICON_GAP + 5.0 + RAIL_ICON_GAP;
 
 /// Cubic ease-out feel for the panel width animation.
+#[cfg(not(target_os = "macos"))]
 const PANEL_TWEEN: Duration = Duration::from_millis(220);
+#[cfg(target_os = "macos")]
+const PANEL_TWEEN: Duration = Duration::ZERO;
 
 /// One row in the vertical tabs panel.
 pub struct SessionEntry {

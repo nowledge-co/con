@@ -405,6 +405,12 @@ pub struct ConWorkspace {
     agent_panel_snap_guard_until: Option<Instant>,
     #[cfg(target_os = "macos")]
     input_bar_snap_guard_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    top_chrome_snap_guard_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    sidebar_snap_guard_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    sidebar_snap_guard_width: f32,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -729,6 +735,25 @@ impl ConWorkspace {
             &mut self.input_bar_snap_guard_until,
             Duration::from_millis(CHROME_SNAP_GUARD_MS),
         );
+        self.mark_active_tab_terminal_native_layout_pending(cx);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn arm_top_chrome_snap_guard(&mut self, cx: &mut App) {
+        Self::extend_guard(
+            &mut self.top_chrome_snap_guard_until,
+            Duration::from_millis(CHROME_SNAP_GUARD_MS),
+        );
+        self.mark_active_tab_terminal_native_layout_pending(cx);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn arm_sidebar_snap_guard(&mut self, width: f32, cx: &mut App) {
+        Self::extend_guard(
+            &mut self.sidebar_snap_guard_until,
+            Duration::from_millis(CHROME_SNAP_GUARD_MS),
+        );
+        self.sidebar_snap_guard_width = self.sidebar_snap_guard_width.max(width.max(0.0));
         self.mark_active_tab_terminal_native_layout_pending(cx);
     }
 
@@ -1418,6 +1443,12 @@ impl ConWorkspace {
             agent_panel_snap_guard_until: None,
             #[cfg(target_os = "macos")]
             input_bar_snap_guard_until: None,
+            #[cfg(target_os = "macos")]
+            top_chrome_snap_guard_until: None,
+            #[cfg(target_os = "macos")]
+            sidebar_snap_guard_until: None,
+            #[cfg(target_os = "macos")]
+            sidebar_snap_guard_width: 0.0,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             pending_surface_control_requests: Vec::new(),
@@ -1458,14 +1489,18 @@ impl ConWorkspace {
         matches!(self.tabs_orientation, TabsOrientation::Vertical)
     }
 
-    fn sync_tab_strip_motion(&mut self) {
+    fn sync_tab_strip_motion(&mut self) -> bool {
         let target = if self.horizontal_tabs_visible() {
             1.0
         } else {
             0.0
         };
-        self.tab_strip_motion
-            .set_target(target, std::time::Duration::from_millis(180));
+        let changed = (self.tab_strip_motion.current() - target).abs() > 0.001;
+        self.tab_strip_motion.set_target(
+            target,
+            Self::terminal_adjacent_chrome_duration(target > 0.5, 180, 180),
+        );
+        changed
     }
 
     fn current_top_bar_height(&self) -> f32 {
@@ -4539,7 +4574,10 @@ impl ConWorkspace {
             shell_history: HashMap::new(),
         });
         let new_index = self.tabs.len() - 1;
-        self.sync_tab_strip_motion();
+        if self.sync_tab_strip_motion() {
+            #[cfg(target_os = "macos")]
+            self.arm_top_chrome_snap_guard(cx);
+        }
         self.activate_tab(new_index, window, cx);
     }
 
@@ -4972,13 +5010,37 @@ impl ConWorkspace {
             return;
         }
         #[cfg(target_os = "macos")]
-        self.arm_chrome_transition_underlay(Duration::from_millis(260));
+        let previous_sidebar_width = if self.vertical_tabs_active() {
+            self.sidebar
+                .read(cx)
+                .occupied_width_with_max(PANEL_MAX_WIDTH)
+        } else {
+            0.0
+        };
+        #[cfg(target_os = "macos")]
+        if self.terminal_opacity >= 0.999 {
+            self.arm_chrome_transition_underlay(Duration::from_millis(260));
+        }
         self.config.appearance.tabs_orientation = orientation;
         self.tabs_orientation = orientation;
         if persist_config {
             self.sync_settings_panels_tabs_orientation(orientation, cx);
         }
-        self.sync_tab_strip_motion();
+        if self.sync_tab_strip_motion() {
+            #[cfg(target_os = "macos")]
+            self.arm_top_chrome_snap_guard(cx);
+        }
+        #[cfg(target_os = "macos")]
+        self.arm_sidebar_snap_guard(
+            if self.vertical_tabs_active() {
+                self.sidebar
+                    .read(cx)
+                    .occupied_width_with_max(PANEL_MAX_WIDTH)
+            } else {
+                previous_sidebar_width
+            },
+            cx,
+        );
         if self.vertical_tabs_active() {
             self.request_tab_summaries(cx);
         }
@@ -5105,11 +5167,33 @@ impl ConWorkspace {
         self.background_image_repeat = next_background_image_repeat;
 
         if self.tabs_orientation != appearance_config.tabs_orientation {
+            #[cfg(target_os = "macos")]
+            let previous_sidebar_width = if self.vertical_tabs_active() {
+                self.sidebar
+                    .read(cx)
+                    .occupied_width_with_max(PANEL_MAX_WIDTH)
+            } else {
+                0.0
+            };
             self.tabs_orientation = appearance_config.tabs_orientation;
             // Tab strip motion drives the top-bar height. In vertical
             // mode the strip is always hidden, so collapse the motion now
             // and avoid an unrelated transition.
-            self.sync_tab_strip_motion();
+            if self.sync_tab_strip_motion() {
+                #[cfg(target_os = "macos")]
+                self.arm_top_chrome_snap_guard(cx);
+            }
+            #[cfg(target_os = "macos")]
+            self.arm_sidebar_snap_guard(
+                if self.vertical_tabs_active() {
+                    self.sidebar
+                        .read(cx)
+                        .occupied_width_with_max(PANEL_MAX_WIDTH)
+                } else {
+                    previous_sidebar_width
+                },
+                cx,
+            );
             self.save_session(cx);
             cx.notify();
         }
@@ -7124,7 +7208,10 @@ impl ConWorkspace {
             runtime_cache: RefCell::new(HashMap::new()),
             shell_history: HashMap::new(),
         });
-        self.sync_tab_strip_motion();
+        if self.sync_tab_strip_motion() {
+            #[cfg(target_os = "macos")]
+            self.arm_top_chrome_snap_guard(cx);
+        }
         self.active_tab = self.tabs.len() - 1;
 
         // Swap panel state: stash old tab's state, load new tab's (empty) state
@@ -7264,7 +7351,10 @@ impl ConWorkspace {
         // assigned the same summary_id (which won't happen, since
         // ids are monotonic) doesn't inherit stale state.
         self.tab_summary_engine.forget(removed.summary_id);
-        self.sync_tab_strip_motion();
+        if self.sync_tab_strip_motion() {
+            #[cfg(target_os = "macos")]
+            self.arm_top_chrome_snap_guard(cx);
+        }
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
         } else if self.active_tab > index {
@@ -9056,6 +9146,16 @@ impl Render for ConWorkspace {
         let input_bar_snap_guard_active =
             Self::snap_guard_active(&mut self.input_bar_snap_guard_until, window);
         #[cfg(target_os = "macos")]
+        let top_chrome_snap_guard_active =
+            Self::snap_guard_active(&mut self.top_chrome_snap_guard_until, window);
+        #[cfg(target_os = "macos")]
+        let sidebar_snap_guard_active =
+            Self::snap_guard_active(&mut self.sidebar_snap_guard_until, window);
+        #[cfg(target_os = "macos")]
+        if !sidebar_snap_guard_active {
+            self.sidebar_snap_guard_width = 0.0;
+        }
+        #[cfg(target_os = "macos")]
         {
             let allow_native_transition_underlay = self.terminal_opacity >= 0.999;
             let guard_active = if allow_native_transition_underlay {
@@ -10086,6 +10186,46 @@ impl Render for ConWorkspace {
                     .h(px(CHROME_TRANSITION_SEAM_COVER))
                     .bg(chrome_transition_seam_color),
             );
+        }
+
+        #[cfg(target_os = "macos")]
+        if top_chrome_snap_guard_active {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(TOP_BAR_COMPACT_HEIGHT))
+                    .left(px(terminal_content_left))
+                    .right(px(agent_panel_outer_width))
+                    .h(px(TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT))
+                    .bg(chrome_transition_seam_color),
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        if sidebar_snap_guard_active {
+            if self.vertical_tabs_active() {
+                root = root.child(
+                    div()
+                        .absolute()
+                        .top(px(top_bar_height))
+                        .bottom_0()
+                        .left(px(
+                            (vertical_tabs_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)
+                        ))
+                        .w(px(CHROME_MOTION_SEAM_OVERDRAW))
+                        .bg(chrome_transition_seam_color),
+                );
+            } else if self.sidebar_snap_guard_width > 0.0 {
+                root = root.child(
+                    div()
+                        .absolute()
+                        .top(px(top_bar_height))
+                        .bottom_0()
+                        .left_0()
+                        .w(px(self.sidebar_snap_guard_width))
+                        .bg(chrome_transition_seam_color),
+                );
+            }
         }
 
         #[cfg(target_os = "macos")]

@@ -11,7 +11,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, macOS**
 
 - Restored terminal glass after the macOS seam-leak hardening work. Modern macOS now lets Ghostty own terminal opacity/blur again instead of drawing a second translucent AppKit backing behind the Metal surface, while legacy macOS keeps its opaque fallback.
-- Restored configured UI chrome opacity for the tab bar, input bar, side bar, and agent panel. Opaque terminal-colored mattes now stay limited to seam guards; the native full-window transition underlay is disabled whenever terminal glass is active so hide/show animations no longer make the terminal temporarily opaque. Modern macOS now also uses GPUI's native blurred window backdrop when terminal blur is enabled, and terminal-adjacent bottom bar / agent panel geometry snaps with a short catch-up guard to avoid native-view seam flashes.
+- Restored configured UI chrome opacity for the tab bar, input bar, side bar, and agent panel. Opaque terminal-colored mattes now stay limited to seam guards; the native full-window transition underlay is disabled whenever terminal glass is active so hide/show animations no longer make the terminal temporarily opaque. Modern macOS now also uses GPUI's native blurred window backdrop when terminal blur is enabled, and terminal-adjacent bottom bar, agent panel, top tab strip, and vertical-tabs geometry snap with short catch-up guards to avoid native-view seam flashes.
 
 ## `v0.1.0-beta.52` - 2026-05-02
 
