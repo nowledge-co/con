@@ -1230,49 +1230,62 @@ impl PaneTree {
             return div().size_full().child(terminal).into_any_element();
         }
 
-        let rail_label = if surfaces.len() > 1 {
-            format!("{} tabs", surfaces.len())
-        } else {
+        let rail_label = if surfaces.len() == 1 {
             "surface".to_string()
+        } else {
+            format!("{} tabs", surfaces.len())
         };
+        let rail_bg = if pane_id == focused_id {
+            theme.tab_bar_segmented.opacity(0.88)
+        } else {
+            theme.tab_bar_segmented.opacity(0.68)
+        };
+        let rail_text =
+            theme
+                .tab_foreground
+                .opacity(if pane_id == focused_id { 0.64 } else { 0.50 });
 
         let mut surface_rail = div()
             .id(("surface-tab-strip", pane_id))
             .flex()
             .items_center()
             .gap(px(4.0))
-            .h(px(21.0))
+            .h(px(22.0))
             .max_w(relative(1.0))
-            .ml(px(7.0))
-            .mr(px(7.0))
+            .ml(px(8.0))
+            .mr(px(8.0))
             .px(px(4.0))
-            .rounded(px(7.0))
+            .rounded(px(8.0))
             .font_family(theme.font_family.clone())
-            .bg(if pane_id == focused_id {
-                theme.foreground.opacity(0.075)
-            } else {
-                theme.foreground.opacity(0.050)
-            })
+            .bg(rail_bg)
             .overflow_x_scroll();
 
         surface_rail = surface_rail.child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(3.0))
+                .gap(px(4.0))
                 .flex_shrink_0()
-                .pr(px(2.0))
-                .text_size(px(9.0))
-                .line_height(px(11.0))
+                .pl(px(2.0))
+                .pr(px(4.0))
+                .text_size(px(10.0))
+                .line_height(px(12.0))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.muted_foreground.opacity(0.56))
+                .text_color(rail_text)
                 .child(
                     svg()
                         .path("phosphor/stack.svg")
                         .size(px(9.0))
-                        .text_color(theme.muted_foreground.opacity(0.50)),
+                        .text_color(rail_text.opacity(0.86)),
                 )
                 .child(SharedString::from(rail_label)),
+        );
+        surface_rail = surface_rail.child(
+            div()
+                .w(px(1.0))
+                .h(px(12.0))
+                .flex_shrink_0()
+                .bg(theme.tab_foreground.opacity(0.10)),
         );
 
         for (index, surface) in surfaces.iter().enumerate() {
@@ -1282,19 +1295,24 @@ impl PaneTree {
                 .clone()
                 .unwrap_or_else(|| format!("Surface {}", index + 1));
             let color = if is_active {
-                theme.foreground.opacity(0.88)
+                theme.tab_active_foreground.opacity(0.92)
             } else {
-                theme.muted_foreground.opacity(0.54)
+                theme.tab_foreground.opacity(0.58)
             };
             let bg = if is_active {
-                theme.primary.opacity(0.10)
+                theme.tab_active.opacity(0.88)
             } else {
                 theme.transparent
             };
             let icon_color = if is_active {
-                theme.primary.opacity(0.78)
+                theme.tab_active_foreground.opacity(0.70)
             } else {
-                theme.muted_foreground.opacity(0.42)
+                theme.tab_foreground.opacity(0.42)
+            };
+            let hover_bg = if is_active {
+                theme.tab_active.opacity(0.96)
+            } else {
+                theme.tab_active.opacity(0.42)
             };
             let sid = surface.id;
             let focus_cb = focus_surface_cb.clone();
@@ -1314,15 +1332,15 @@ impl PaneTree {
                 .flex()
                 .items_center()
                 .gap(px(4.0))
-                .h(px(17.0))
+                .h(px(18.0))
                 .max_w(px(190.0))
                 .flex_shrink_0()
                 .pl(px(6.0))
-                .pr(if can_close { px(3.0) } else { px(7.0) })
-                .rounded(px(5.0))
+                .pr(if can_close { px(2.0) } else { px(8.0) })
+                .rounded(px(6.0))
                 .bg(bg)
                 .cursor_pointer()
-                .hover(|s| s.bg(theme.foreground.opacity(0.12)))
+                .hover(move |s| s.bg(hover_bg))
                 .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                     focus_cb(sid, window, cx);
                 })
@@ -1359,6 +1377,11 @@ impl PaneTree {
                                 .text_size(px(12.0))
                                 .line_height(px(14.0))
                                 .font_family(theme.font_family.clone())
+                                .font_weight(if is_active {
+                                    FontWeight::MEDIUM
+                                } else {
+                                    FontWeight::NORMAL
+                                })
                                 .text_color(color)
                                 .child(title),
                         )
@@ -1373,19 +1396,25 @@ impl PaneTree {
                         .justify_center()
                         .size(px(14.0))
                         .flex_shrink_0()
-                        .text_color(theme.muted_foreground.opacity(0.48))
-                        .hover(|s| s.bg(theme.foreground.opacity(0.12)))
+                        .rounded(px(4.0))
+                        .text_color(if is_active {
+                            theme.tab_active_foreground.opacity(0.56)
+                        } else {
+                            theme.tab_foreground.opacity(0.46)
+                        })
+                        .hover(|s| s.bg(theme.tab_active.opacity(0.62)))
                         .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                             close_cb_for_button(sid, window, cx);
                             window.prevent_default();
                             cx.stop_propagation();
                         })
-                        .child(
-                            svg()
-                                .path("phosphor/x.svg")
-                                .size(px(8.0))
-                                .text_color(theme.muted_foreground.opacity(0.58)),
-                        ),
+                        .child(svg().path("phosphor/x.svg").size(px(8.0)).text_color(
+                            if is_active {
+                                theme.tab_active_foreground.opacity(0.62)
+                            } else {
+                                theme.tab_foreground.opacity(0.52)
+                            },
+                        )),
                 );
             }
 
@@ -1420,7 +1449,7 @@ impl PaneTree {
         let strip = div()
             .flex()
             .items_center()
-            .h(px(27.0))
+            .h(px(28.0))
             .w_full()
             .bg(theme.transparent)
             .child(surface_rail);
