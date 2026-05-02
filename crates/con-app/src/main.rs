@@ -61,6 +61,8 @@ mod terminal_ime;
 mod terminal_links;
 mod terminal_pane;
 mod terminal_paste;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod terminal_restore;
 mod terminal_shortcuts;
 mod theme;
 mod updater;
@@ -572,7 +574,36 @@ fn startup_session() -> Session {
 
 #[cfg(unix)]
 fn live_control_endpoint_exists() -> bool {
-    std::os::unix::net::UnixStream::connect(con_core::control_socket_path()).is_ok()
+    let path = con_core::control_socket_path();
+    let addr = match socket2::SockAddr::unix(&path) {
+        Ok(addr) => addr,
+        Err(err) => {
+            log::debug!(
+                "skipping con control endpoint probe for invalid socket path {}: {err}",
+                path.display()
+            );
+            return false;
+        }
+    };
+
+    let socket = match socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None) {
+        Ok(socket) => socket,
+        Err(err) => {
+            log::debug!("failed to create con control endpoint probe socket: {err}");
+            return false;
+        }
+    };
+
+    match socket.connect_timeout(&addr, std::time::Duration::from_millis(75)) {
+        Ok(()) => true,
+        Err(err) => {
+            log::debug!(
+                "con control endpoint probe did not find a live server at {}: {err}",
+                path.display()
+            );
+            false
+        }
+    }
 }
 
 #[cfg(windows)]

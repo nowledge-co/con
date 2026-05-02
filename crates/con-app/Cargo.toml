@@ -85,6 +85,9 @@ smallvec = "1"
 [target.'cfg(target_os = "linux")'.dependencies]
 unicode-width.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+socket2 = "0.6"
+
 [build-dependencies]
 cc = "1"
 

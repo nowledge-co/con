@@ -32,6 +32,7 @@ use crate::terminal_paste::{
     TerminalPastePayload, copy_selection_to_clipboard, payload_from_clipboard,
     payload_from_external_paths,
 };
+use crate::terminal_restore::restored_terminal_output;
 
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const MIN_FONT_SIZE_PX: f32 = 12.0;
@@ -1205,25 +1206,6 @@ fn rows_needing_refresh(
     }
 
     rows
-}
-
-fn restored_terminal_output(lines: Option<&[String]>) -> Option<Vec<u8>> {
-    let lines = lines?;
-    if lines.is_empty() {
-        return None;
-    }
-
-    let mut output = String::new();
-    for line in lines {
-        for ch in line.chars() {
-            if ch == '\t' || !ch.is_control() {
-                output.push(ch);
-            }
-        }
-        output.push_str("\r\n");
-    }
-
-    (!output.trim().is_empty()).then(|| output.into_bytes())
 }
 
 fn render_cached_terminal_row(

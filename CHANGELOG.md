@@ -23,6 +23,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Startup**
+
+- Bounded the Unix control-endpoint probe used during second-process startup so a stale or wedged socket cannot hang Con while deciding whether to restore the saved workspace or open a fresh window.
+
 **Terminal, Windows and Linux Backends**
 
 - Hardened split-pane dividers on Windows and Linux by giving the resize seam a real hit target while keeping the visible separator at one pixel. This avoids fragile overflow hit testing around terminal panes.
