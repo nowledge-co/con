@@ -20,7 +20,7 @@
 //!
 //! Lifecycle:
 //!
-//! 1. `GhosttyView::new(app, cwd, font_size, cx)` pre-allocates a
+//! 1. `GhosttyView::new(app, cwd, restored_screen_text, font_size, cx)` pre-allocates a
 //!    `WindowsGhosttyTerminal` so `terminal_pane` can hold an Arc to
 //!    it. No renderer/ConPTY yet — those are built lazily.
 //! 2. `on_children_prepainted` captures the pane's bounds the first
