@@ -66,6 +66,12 @@ impl TerminalPane {
         });
     }
 
+    pub fn sync_surface_layout(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+        self.entity.update(cx, |view, cx| {
+            view.sync_surface_layout_for_host(bounds, window, cx)
+        });
+    }
+
     pub fn set_theme(
         &self,
         theme: &TerminalTheme,

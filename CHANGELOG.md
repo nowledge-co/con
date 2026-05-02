@@ -4,6 +4,25 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.54` - 2026-05-02
+
+### Added
+
+**Control Plane**
+
+- Added human-facing rename for pane-local surfaces. Surface names can now be changed from Command Palette, the terminal context menu, the app menu, or by double-clicking a surface tab in the pane-local strip. This complements the existing `surfaces.rename` CLI/API path for orchestrators.
+- Added configurable shortcuts for every human surface action: create in pane, split right/down, next/previous, rename, and close. These now show in menus, Command Palette, and Keyboard Shortcuts.
+- Polished pane-local surface chrome so humans can distinguish panes from surfaces: owned or named single-surface panes now show an in-pane surface rail, surface tabs use stable `Surface N` fallback names instead of duplicate terminal cwd titles, rename edits inline in the rail, and tabs expose close plus right-click Rename/Close actions.
+- Clarified the human surface model in menus and docs: surfaces are tab-like sessions inside one pane, while surface split commands create a new visible pane first. The terminal context menu now also includes Settings for direct access.
+- Refined the in-pane surface rail from a full-width header into compact local chrome, so a pane with multiple surfaces no longer looks like another nested pane split.
+
+### Fixed
+
+**Control Plane**
+
+- Kept inactive pane-local surfaces sized to their host pane while they are hidden. TUI coding agents launched in background surfaces now receive the same terminal rows/columns they will have when focused, avoiding incorrect layout assumptions in multi-surface orchestrator workflows. Fixes [#108](https://github.com/nowledge-co/con-terminal/issues/108).
+- Fixed a crash when committing an inline surface rename from the pane-local surface rail.
+
 ## `v0.1.0-beta.53` - 2026-05-02
 
 ### Fixed

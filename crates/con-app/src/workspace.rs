@@ -10,7 +10,11 @@ use std::time::Instant;
 use gpui::{prelude::FluentBuilder as _, *};
 #[cfg(target_os = "macos")]
 use gpui_component::Theme;
-use gpui_component::{ActiveTheme, tooltip::Tooltip};
+use gpui_component::{
+    ActiveTheme,
+    input::{InputEvent, InputState},
+    tooltip::Tooltip,
+};
 use serde_json::json;
 use tokio::sync::oneshot;
 
@@ -233,7 +237,9 @@ use crate::input_bar::{
 };
 use crate::model_registry::ModelRegistry;
 use crate::motion::MotionValue;
-use crate::pane_tree::{PaneTree, SplitDirection, SplitPlacement, SurfaceCreateOptions};
+use crate::pane_tree::{
+    PaneTree, SplitDirection, SplitPlacement, SurfaceCreateOptions, SurfaceRenameEditor,
+};
 use crate::settings_panel::{
     self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
@@ -251,8 +257,8 @@ use crate::ghostty_view::{
 use crate::{
     ClearTerminal, ClosePane, CloseSurface, CloseTab, CycleInputMode, FocusInput, NewSurface,
     NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab, PreviousSurface,
-    PreviousTab, Quit, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
-    SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
+    PreviousTab, Quit, RenameSurface, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5,
+    SelectTab6, SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
     ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
 };
 use con_agent::{
@@ -426,6 +432,8 @@ pub struct ConWorkspace {
     pending_window_control_requests: Vec<PendingWindowControlRequest>,
     /// Pending surface-control requests that need a window context to allocate a terminal view.
     pending_surface_control_requests: Vec<PendingSurfaceControlRequest>,
+    /// Inline editor for the pane-local surface rail.
+    surface_rename: Option<SurfaceRenameEditor>,
     /// Control-plane requests from the external `con-cli` socket bridge.
     control_request_rx: crossbeam_channel::Receiver<ControlRequestEnvelope>,
     /// Keeps the Unix socket alive for this workspace instance.
@@ -1476,6 +1484,7 @@ impl ConWorkspace {
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             pending_surface_control_requests: Vec::new(),
+            surface_rename: None,
             control_request_rx,
             control_socket,
             pending_control_agent_requests: HashMap::new(),
@@ -4850,6 +4859,9 @@ impl ConWorkspace {
             "previous-surface" => {
                 self.cycle_surface_in_focused_pane(-1, window, cx);
             }
+            "rename-surface" => {
+                self.rename_current_surface(&RenameSurface, window, cx);
+            }
             "close-surface" => {
                 self.close_current_surface_in_focused_pane(window, cx);
             }
@@ -8211,7 +8223,12 @@ impl ConWorkspace {
             .focused_terminal()
             .current_dir(cx);
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
-        let options = SurfaceCreateOptions::plain(None);
+        let next_surface_index = self.tabs[tab_idx]
+            .pane_tree
+            .surface_infos(Some(pane_id))
+            .len()
+            .saturating_add(1);
+        let options = SurfaceCreateOptions::plain(Some(format!("Surface {next_surface_index}")));
         let Some(_surface_id) =
             self.tabs[tab_idx]
                 .pane_tree
@@ -8266,7 +8283,7 @@ impl ConWorkspace {
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         let was_zoomed = self.tabs[tab_idx].pane_tree.zoomed_pane_id().is_some();
         let options = SurfaceCreateOptions {
-            title: None,
+            title: Some("Surface 1".to_string()),
             owner: Some("command-palette".to_string()),
             close_pane_when_last: true,
         };
@@ -8336,8 +8353,54 @@ impl ConWorkspace {
         self.focus_surface_in_active_tab(next_surface_id, window, cx);
     }
 
-    fn close_current_surface_in_focused_pane(
+    fn focused_active_surface_for_rename(&self, cx: &App) -> Option<(usize, usize, String)> {
+        let tab_idx = self.active_tab;
+        let tab = self.tabs.get(tab_idx)?;
+        let pane_id = tab.pane_tree.focused_pane_id();
+        let surface = tab
+            .pane_tree
+            .surface_infos(Some(pane_id))
+            .into_iter()
+            .find(|surface| surface.is_active)?;
+        let title = surface
+            .title
+            .clone()
+            .or_else(|| surface.terminal.title(cx))
+            .unwrap_or_else(|| format!("Surface {}", surface.surface_index + 1));
+
+        Some((tab_idx, surface.surface_id, title))
+    }
+
+    fn rename_surface_title(
         &mut self,
+        tab_idx: usize,
+        surface_id: usize,
+        value: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tab) = self.tabs.get_mut(tab_idx) else {
+            return false;
+        };
+        let value = value.trim();
+        let title = if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        };
+
+        if !tab.pane_tree.rename_surface(surface_id, title) {
+            return false;
+        }
+
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
+        true
+    }
+
+    fn begin_surface_rename(
+        &mut self,
+        surface_id: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -8346,23 +8409,65 @@ impl ConWorkspace {
         }
 
         let tab_idx = self.active_tab;
-        let pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
-        let surfaces = self.tabs[tab_idx].pane_tree.surface_infos(Some(pane_id));
-        if surfaces.len() <= 1
-            && !surfaces
-                .first()
-                .is_some_and(|surface| surface.close_pane_when_last && surface.owner.is_some())
-        {
-            return;
-        }
-        let Some(surface_id) = surfaces
-            .iter()
-            .find(|surface| surface.is_active)
-            .map(|surface| surface.surface_id)
+        let Some(surface) = self.tabs[tab_idx]
+            .pane_tree
+            .surface_infos(None)
+            .into_iter()
+            .find(|surface| surface.surface_id == surface_id)
         else {
             return;
         };
+        let initial = surface
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("Surface {}", surface.surface_index + 1));
 
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(&initial, window, cx);
+            state.set_placeholder("Surface name", window, cx);
+            state
+        });
+
+        cx.subscribe_in(&input, window, {
+            move |this, input_entity, event: &InputEvent, _window, cx| {
+                if !matches!(event, InputEvent::PressEnter { .. }) {
+                    return;
+                }
+                let value = input_entity.read(cx).value().to_string();
+                this.rename_surface_title(tab_idx, surface_id, value, cx);
+                this.surface_rename = None;
+                cx.notify();
+            }
+        })
+        .detach();
+
+        self.surface_rename = Some(SurfaceRenameEditor {
+            surface_id,
+            input: input.clone(),
+        });
+        input.update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+    }
+
+    fn close_surface_by_id_in_active_tab(
+        &mut self,
+        surface_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let tab_idx = self.active_tab;
+        if self
+            .surface_rename
+            .as_ref()
+            .is_some_and(|editor| editor.surface_id == surface_id)
+        {
+            self.surface_rename = None;
+        }
         let Some(close_outcome) = self.tabs[tab_idx].pane_tree.close_surface(surface_id, true)
         else {
             return;
@@ -8383,6 +8488,30 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    fn close_current_surface_in_focused_pane(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let tab_idx = self.active_tab;
+        let pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
+        let Some(surface_id) = self.tabs[tab_idx]
+            .pane_tree
+            .surface_infos(Some(pane_id))
+            .into_iter()
+            .find(|surface| surface.is_active)
+            .map(|surface| surface.surface_id)
+        else {
+            return;
+        };
+
+        self.close_surface_by_id_in_active_tab(surface_id, window, cx);
     }
 
     fn split_pane(
@@ -8513,6 +8642,19 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.cycle_surface_in_focused_pane(-1, window, cx);
+    }
+
+    fn rename_current_surface(
+        &mut self,
+        _: &RenameSurface,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((_tab_idx, surface_id, _title)) = self.focused_active_surface_for_rename(cx)
+        else {
+            return;
+        };
+        self.begin_surface_rename(surface_id, window, cx);
     }
 
     fn close_surface(&mut self, _: &CloseSurface, window: &mut Window, cx: &mut Context<Self>) {
@@ -9369,9 +9511,28 @@ impl Render for ConWorkspace {
                     });
                 }
             };
+            let workspace = cx.weak_entity();
+            let rename_surface_cb = move |surface_id: usize, window: &mut Window, cx: &mut App| {
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.begin_surface_rename(surface_id, window, cx);
+                    });
+                }
+            };
+            let workspace = cx.weak_entity();
+            let close_surface_cb = move |surface_id: usize, window: &mut Window, cx: &mut App| {
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.close_surface_by_id_in_active_tab(surface_id, window, cx);
+                    });
+                }
+            };
             self.tabs[self.active_tab].pane_tree.render(
                 begin_drag_cb,
                 focus_surface_cb,
+                rename_surface_cb,
+                close_surface_cb,
+                self.surface_rename.clone(),
                 pane_divider_color,
                 cx,
             )
@@ -10206,6 +10367,7 @@ impl Render for ConWorkspace {
                 .on_action(cx.listener(Self::new_surface_split_down))
                 .on_action(cx.listener(Self::next_surface))
                 .on_action(cx.listener(Self::previous_surface))
+                .on_action(cx.listener(Self::rename_current_surface))
                 .on_action(cx.listener(Self::close_surface))
                 .on_action(cx.listener(Self::focus_input))
                 .on_action(cx.listener(Self::cycle_input_mode))
@@ -10253,6 +10415,13 @@ impl Render for ConWorkspace {
 
                     let mods = &event.keystroke.modifiers;
                     let key = event.keystroke.key.as_str();
+
+                    if key == "escape" && this.surface_rename.take().is_some() {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
 
                     #[cfg(target_os = "macos")]
                     if mods.platform

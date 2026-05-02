@@ -80,21 +80,54 @@ Surface control is also available from Command Palette and the terminal
 right-click menu so humans can discover and exercise the same pane-local model
 without using `con-cli`.
 
-- `New Surface in Pane`: creates a new terminal session inside the focused
-  pane and focuses it.
-- `New Surface Split Right`: creates a new right split from the focused pane,
-  with its first terminal session represented as a surface.
-- `New Surface Split Down`: creates a new down split from the focused pane,
-  with its first terminal session represented as a surface.
-- `Next Surface in Pane`: cycles forward through surfaces hosted by the
+The visual rule is intentionally scoped:
+
+- A **pane** is the visible split region.
+- A **surface** is a tab-like terminal session selected inside one pane.
+- Ordinary one-surface panes show no surface chrome.
+- Panes with multiple surfaces, an orchestrator owner, or an explicit surface
+  title show a compact in-pane surface rail. This rail is intentionally inset
+  and pill-sized rather than full-width: pane dividers own layout structure,
+  while surface chrome only identifies terminal sessions inside that pane. The
+  rail is local to that pane; it never switches surfaces in sibling panes.
+
+- `New Surface Tab`: creates a new terminal session inside the focused
+  pane, gives it the next stable `Surface N` label, and focuses it.
+- `New Surface Pane Right`: creates a new right split from the focused pane,
+  then initializes that visible pane with its first `Surface 1` tab.
+- `New Surface Pane Down`: creates a new down split from the focused pane,
+  then initializes that visible pane with its first `Surface 1` tab.
+- `Next Surface Tab`: cycles forward through surfaces hosted by the
   focused pane.
-- `Previous Surface in Pane`: cycles backward through surfaces hosted by the
+- `Previous Surface Tab`: cycles backward through surfaces hosted by the
   focused pane.
+- `Rename Current Surface`: starts inline rename for the active
+  surface in the focused pane. The same rename action is available from the app
+  menu, terminal context menu, and by double-clicking a surface tab in the
+  pane-local strip.
 - `Close Current Surface`: closes the active surface when the focused pane has
   more than one surface. If the surface was created as an owned palette split,
   closing that last surface also closes the worker pane. It intentionally does
   nothing for the last non-owned surface in a pane; ordinary pane closing
   remains the pane-level command.
+
+Surface tabs support direct manipulation:
+
+- Click a surface tab to focus that surface in its pane.
+- Double-click a surface tab to rename it inline. Press Enter to commit or
+  Escape to cancel.
+- Right-click a surface tab for Rename / Close.
+- Use the close glyph on a closable surface tab to remove that surface without
+  opening the full terminal context menu.
+
+Default surface shortcuts are configurable in Settings -> Keyboard Shortcuts:
+
+- macOS: Cmd-Option-T creates a surface in the focused pane; Cmd-Option-D /
+  Cmd-Option-Shift-D create surface splits; Cmd-Option-[ and Cmd-Option-]
+  cycle; Cmd-Option-R renames; Cmd-Option-Shift-W closes.
+- Windows/Linux: Alt-Shift-T creates a surface in the focused pane;
+  Alt-Shift-Right / Alt-Shift-Down create surface splits; Alt-Shift-[ and
+  Alt-Shift-] cycle; Alt-Shift-R renames; Alt-Shift-X closes.
 
 These palette actions are deliberately pane-local. They do not change the
 existing `panes.*` control-plane contract, the built-in agent harness target
@@ -109,6 +142,25 @@ action path.
 This mirrors the interactive-subagent flow: create the first worker as a
 visible split, then add later workers as surfaces inside that worker pane so
 parallel agents do not keep shrinking the main terminal layout.
+
+## pi-interactive-subagents Readiness
+
+Con is API-ready for the pi-interactive-subagents pattern, but it is not a
+byte-for-byte cmux CLI clone. The preferred integration is a Con-specific
+backend that uses `con-cli --json` instead of parsing cmux text handles:
+
+- First worker: `con-cli --json surfaces split --location right --title <name>
+  --owner pi-interactive-subagents`
+- Remember the returned `pane_id` and `surface_id`.
+- Later workers: `con-cli --json surfaces create --pane-id <worker_pane_id>
+  --title <name> --owner pi-interactive-subagents`
+- Drive workers with `surfaces wait-ready`, `surfaces send-text`,
+  `surfaces send-key`, and `surfaces read`.
+- Clean up with `surfaces close --surface-id <surface_id>
+  --close-empty-owned-pane`.
+
+This avoids cmux's `identify --surface` round trip because Con returns the
+worker pane id directly from `surfaces split`.
 
 ## CLI Examples
 
@@ -171,6 +223,10 @@ closes.
 
 - Only active surfaces are visible.
 - Hidden surfaces keep running and continue receiving terminal output.
+- Hidden surfaces keep the same PTY/grid size as their host pane. Con resizes
+  inactive surfaces to the visible terminal host bounds even while they are not
+  rendered, so TUI agents that start in background surfaces see the correct
+  rows and columns before focus moves to them.
 - Tab, pane, window, and app close paths tear down every surface, not just the
   active surface.
 - If a non-last surface exits, Con removes only that surface.

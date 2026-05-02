@@ -1,6 +1,12 @@
 use con_core::session::{PaneLayoutState, PaneSplitDirection};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::{
+    ActiveTheme, InteractiveElementExt, Sizable,
+    input::{Input, InputState},
+    menu::{ContextMenuExt, PopupMenuItem},
+    tooltip::Tooltip,
+};
 
 use crate::terminal_pane::TerminalPane;
 
@@ -66,6 +72,12 @@ pub struct PaneSurfaceInfo {
     pub owner: Option<String>,
     pub close_pane_when_last: bool,
     pub terminal: TerminalPane,
+}
+
+#[derive(Clone)]
+pub struct SurfaceRenameEditor {
+    pub surface_id: SurfaceId,
+    pub input: Entity<InputState>,
 }
 
 #[derive(Debug, Clone)]
@@ -565,16 +577,24 @@ impl PaneTree {
         &self,
         begin_drag_cb: impl Fn(SplitId, f32) + 'static,
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
+        rename_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
+        close_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
+        rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
         let focus_surface_cb = std::sync::Arc::new(focus_surface_cb);
+        let rename_surface_cb = std::sync::Arc::new(rename_surface_cb);
+        let close_surface_cb = std::sync::Arc::new(close_surface_cb);
         if let Some(zoomed_id) = self.zoomed_pane_id {
             if let Some(zoomed) = Self::render_zoomed_leaf(
                 &self.root,
                 zoomed_id,
                 self.focused_pane_id,
                 focus_surface_cb.clone(),
+                rename_surface_cb.clone(),
+                close_surface_cb.clone(),
+                rename_editor.clone(),
                 cx,
             ) {
                 return zoomed;
@@ -587,6 +607,9 @@ impl PaneTree {
             self.pane_count() > 1,
             std::sync::Arc::new(begin_drag_cb),
             focus_surface_cb,
+            rename_surface_cb,
+            close_surface_cb,
+            rename_editor,
             divider_color,
             cx,
         )
@@ -973,6 +996,9 @@ impl PaneTree {
         has_splits: bool,
         begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32) + 'static>,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
@@ -987,6 +1013,9 @@ impl PaneTree {
                 *active_surface_id,
                 focused_id,
                 focus_surface_cb,
+                rename_surface_cb,
+                close_surface_cb,
+                rename_editor,
                 cx,
             ),
             PaneNode::Split {
@@ -1005,6 +1034,12 @@ impl PaneTree {
                 let cb_divider = begin_drag_cb.clone();
                 let focus_cb_first = focus_surface_cb.clone();
                 let focus_cb_second = focus_surface_cb.clone();
+                let rename_cb_first = rename_surface_cb.clone();
+                let rename_cb_second = rename_surface_cb.clone();
+                let close_cb_first = close_surface_cb.clone();
+                let close_cb_second = close_surface_cb.clone();
+                let rename_editor_first = rename_editor.clone();
+                let rename_editor_second = rename_editor.clone();
 
                 let first_el = Self::render_node(
                     first,
@@ -1012,6 +1047,9 @@ impl PaneTree {
                     has_splits,
                     cb_first,
                     focus_cb_first,
+                    rename_cb_first,
+                    close_cb_first,
+                    rename_editor_first,
                     divider_color,
                     cx,
                 );
@@ -1021,6 +1059,9 @@ impl PaneTree {
                     has_splits,
                     cb_second,
                     focus_cb_second,
+                    rename_cb_second,
+                    close_cb_second,
+                    rename_editor_second,
                     divider_color,
                     cx,
                 );
@@ -1121,6 +1162,9 @@ impl PaneTree {
         target_id: PaneId,
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_editor: Option<SurfaceRenameEditor>,
         cx: &App,
     ) -> Option<AnyElement> {
         match node {
@@ -1134,21 +1178,34 @@ impl PaneTree {
                 *active_surface_id,
                 focused_id,
                 focus_surface_cb,
+                rename_surface_cb,
+                close_surface_cb,
+                rename_editor,
                 cx,
             )),
             PaneNode::Leaf { .. } => None,
-            PaneNode::Split { first, second, .. } => {
-                Self::render_zoomed_leaf(first, target_id, focused_id, focus_surface_cb.clone(), cx)
-                    .or_else(|| {
-                        Self::render_zoomed_leaf(
-                            second,
-                            target_id,
-                            focused_id,
-                            focus_surface_cb,
-                            cx,
-                        )
-                    })
-            }
+            PaneNode::Split { first, second, .. } => Self::render_zoomed_leaf(
+                first,
+                target_id,
+                focused_id,
+                focus_surface_cb.clone(),
+                rename_surface_cb.clone(),
+                close_surface_cb.clone(),
+                rename_editor.clone(),
+                cx,
+            )
+            .or_else(|| {
+                Self::render_zoomed_leaf(
+                    second,
+                    target_id,
+                    focused_id,
+                    focus_surface_cb,
+                    rename_surface_cb,
+                    close_surface_cb,
+                    rename_editor,
+                    cx,
+                )
+            }),
         }
     }
 
@@ -1158,72 +1215,259 @@ impl PaneTree {
         active_surface_id: SurfaceId,
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_editor: Option<SurfaceRenameEditor>,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
         let active = Self::active_surface(surfaces, active_surface_id)
             .unwrap_or_else(|| surfaces.first().expect("pane leaf must have a surface"));
         let terminal = active.terminal.render_child();
-        if surfaces.len() <= 1 {
+        let show_surface_strip =
+            surfaces.len() > 1 || active.owner.is_some() || active.title.is_some();
+        if !show_surface_strip {
             return div().size_full().child(terminal).into_any_element();
         }
 
-        let mut strip = div()
+        let rail_label = format!(
+            "{} tab{}",
+            surfaces.len(),
+            if surfaces.len() == 1 { "" } else { "s" }
+        );
+        let rail_bg = if pane_id == focused_id {
+            theme.tab_bar_segmented
+        } else {
+            theme.tab_bar_segmented.opacity(0.78)
+        };
+        let rail_text = theme
+            .foreground
+            .opacity(if pane_id == focused_id { 0.68 } else { 0.56 });
+
+        let mut surface_rail = div()
             .id(("surface-tab-strip", pane_id))
             .flex()
             .items_center()
-            .gap(px(3.0))
-            .h(px(24.0))
-            .w_full()
-            .px(px(6.0))
-            .bg(theme
-                .background
-                .opacity(if pane_id == focused_id { 0.20 } else { 0.12 }))
+            .gap(px(4.0))
+            .h(px(22.0))
+            .max_w(relative(1.0))
+            .ml(px(8.0))
+            .mr(px(8.0))
+            .px(px(4.0))
+            .rounded(px(8.0))
+            .font_family(theme.font_family.clone())
+            .bg(rail_bg)
             .overflow_x_scroll();
+
+        surface_rail = surface_rail.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .flex_shrink_0()
+                .pl(px(2.0))
+                .pr(px(4.0))
+                .text_size(px(11.0))
+                .line_height(px(13.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rail_text)
+                .child(
+                    svg()
+                        .path("phosphor/stack.svg")
+                        .size(px(9.0))
+                        .text_color(rail_text.opacity(0.86)),
+                )
+                .child(SharedString::from(rail_label)),
+        );
+        surface_rail = surface_rail.child(
+            div()
+                .w(px(1.0))
+                .h(px(12.0))
+                .flex_shrink_0()
+                .bg(theme.foreground.opacity(0.14)),
+        );
 
         for (index, surface) in surfaces.iter().enumerate() {
             let is_active = surface.id == active_surface_id;
             let title = surface
                 .title
                 .clone()
-                .or_else(|| surface.terminal.title(cx))
                 .unwrap_or_else(|| format!("Surface {}", index + 1));
             let color = if is_active {
-                theme.foreground.opacity(0.86)
+                theme.foreground.opacity(0.92)
             } else {
-                theme.foreground.opacity(0.46)
+                theme.foreground.opacity(0.60)
             };
             let bg = if is_active {
-                theme.foreground.opacity(0.075)
+                theme.tab_active
             } else {
                 theme.transparent
             };
+            let icon_color = if is_active {
+                theme.foreground.opacity(0.70)
+            } else {
+                theme.foreground.opacity(0.42)
+            };
+            let hover_bg = if is_active {
+                theme.tab_active
+            } else {
+                theme.foreground.opacity(0.08)
+            };
             let sid = surface.id;
             let focus_cb = focus_surface_cb.clone();
-            strip = strip.child(
-                div()
-                    .id(ElementId::Name(format!("surface-tab-{sid}").into()))
-                    .flex()
-                    .items_center()
-                    .h(px(18.0))
-                    .max_w(px(180.0))
-                    .flex_shrink_0()
-                    .px(px(6.0))
-                    .bg(bg)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.foreground.opacity(0.10)))
-                    .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                        focus_cb(sid, window, cx);
-                    })
-                    .child(
-                        div()
-                            .truncate()
-                            .text_xs()
-                            .line_height(px(13.0))
-                            .text_color(color)
-                            .child(title),
-                    ),
-            );
+            let rename_cb = rename_surface_cb.clone();
+            let rename_cb_for_menu = rename_surface_cb.clone();
+            let close_cb_for_menu = close_surface_cb.clone();
+            let close_cb_for_button = close_surface_cb.clone();
+            let can_close =
+                surfaces.len() > 1 || surface.close_pane_when_last && surface.owner.is_some();
+            let editing_input = rename_editor
+                .as_ref()
+                .filter(|editor| editor.surface_id == sid)
+                .map(|editor| editor.input.clone());
+
+            let mut tab = div()
+                .id(ElementId::Name(format!("surface-tab-{sid}").into()))
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .h(px(18.0))
+                .max_w(px(190.0))
+                .flex_shrink_0()
+                .pl(px(6.0))
+                .pr(if can_close { px(2.0) } else { px(8.0) })
+                .rounded(px(6.0))
+                .bg(bg)
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover_bg))
+                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                    focus_cb(sid, window, cx);
+                })
+                .on_double_click(move |_, window, cx| {
+                    rename_cb(sid, window, cx);
+                })
+                .child(
+                    svg()
+                        .path("phosphor/terminal.svg")
+                        .size(px(10.0))
+                        .flex_shrink_0()
+                        .text_color(icon_color),
+                )
+                .when_some(editing_input, |tab, input| {
+                    tab.child(
+                        div().w(px(104.0)).child(
+                            Input::new(&input)
+                                .small()
+                                .appearance(false)
+                                .text_size(px(12.0))
+                                .line_height(px(14.0))
+                                .text_color(theme.foreground.opacity(0.92)),
+                        ),
+                    )
+                })
+                .when(
+                    rename_editor
+                        .as_ref()
+                        .is_none_or(|editor| editor.surface_id != sid),
+                    |tab| {
+                        tab.child(
+                            div()
+                                .truncate()
+                                .text_size(px(12.0))
+                                .line_height(px(14.0))
+                                .font_family(theme.font_family.clone())
+                                .font_weight(if is_active {
+                                    FontWeight::MEDIUM
+                                } else {
+                                    FontWeight::NORMAL
+                                })
+                                .text_color(color)
+                                .child(title),
+                        )
+                    },
+                );
+
+            if can_close {
+                tab = tab.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(14.0))
+                        .flex_shrink_0()
+                        .rounded(px(4.0))
+                        .text_color(if is_active {
+                            theme.foreground.opacity(0.56)
+                        } else {
+                            theme.foreground.opacity(0.46)
+                        })
+                        .hover(|s| s.bg(theme.foreground.opacity(0.10)))
+                        .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                            close_cb_for_button(sid, window, cx);
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        })
+                        .child(svg().path("phosphor/x.svg").size(px(8.0)).text_color(
+                            if is_active {
+                                theme.foreground.opacity(0.62)
+                            } else {
+                                theme.foreground.opacity(0.52)
+                            },
+                        )),
+                );
+            }
+
+            let tab = tab
+                .tooltip(move |window, cx| {
+                    Tooltip::new("Surface tab in this pane. Double-click to rename.")
+                        .build(window, cx)
+                })
+                .context_menu(move |menu, _window, _cx| {
+                    let rename_cb = rename_cb_for_menu.clone();
+                    let close_cb = close_cb_for_menu.clone();
+                    let mut menu = menu.item(PopupMenuItem::new("Rename Surface").on_click({
+                        let rename_cb = rename_cb.clone();
+                        move |_, window, cx| {
+                            rename_cb(sid, window, cx);
+                        }
+                    }));
+                    if can_close {
+                        menu = menu.item(PopupMenuItem::new("Close Surface").on_click({
+                            let close_cb = close_cb.clone();
+                            move |_, window, cx| {
+                                close_cb(sid, window, cx);
+                            }
+                        }));
+                    }
+                    menu
+                });
+
+            surface_rail = surface_rail.child(tab);
+        }
+
+        let strip = div()
+            .flex()
+            .items_center()
+            .h(px(28.0))
+            .w_full()
+            .bg(theme.transparent)
+            .child(surface_rail);
+
+        let inactive_terminals = surfaces
+            .iter()
+            .filter(|surface| surface.id != active_surface_id)
+            .map(|surface| surface.terminal.clone())
+            .collect::<Vec<_>>();
+        let mut terminal_host = div().flex_1().min_h_0().overflow_hidden().child(terminal);
+        if !inactive_terminals.is_empty() {
+            terminal_host = terminal_host.on_children_prepainted(move |bounds_list, window, cx| {
+                let Some(bounds) = bounds_list.first().copied() else {
+                    return;
+                };
+                for terminal in &inactive_terminals {
+                    terminal.sync_surface_layout(bounds, window, cx);
+                }
+            });
         }
 
         div()
@@ -1231,7 +1475,7 @@ impl PaneTree {
             .flex_col()
             .size_full()
             .child(strip)
-            .child(div().flex_1().min_h_0().overflow_hidden().child(terminal))
+            .child(terminal_host)
             .into_any_element()
     }
 
