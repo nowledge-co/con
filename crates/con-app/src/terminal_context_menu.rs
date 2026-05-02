@@ -91,6 +91,10 @@ pub(crate) fn terminal_context_menu(
                 .separator()
                 .item(action_item("Next", Box::new(crate::NextSurface)))
                 .item(action_item("Previous", Box::new(crate::PreviousSurface)))
+                .item(action_item(
+                    "Rename Current",
+                    Box::new(crate::RenameSurface),
+                ))
                 .item(action_item("Close Current", Box::new(crate::CloseSurface)))
         })
         .separator()

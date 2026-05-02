@@ -10,7 +10,12 @@ use std::time::Instant;
 use gpui::{prelude::FluentBuilder as _, *};
 #[cfg(target_os = "macos")]
 use gpui_component::Theme;
-use gpui_component::{ActiveTheme, tooltip::Tooltip};
+use gpui_component::{
+    ActiveTheme, Sizable, WindowExt,
+    dialog::DialogButtonProps,
+    input::{Input, InputEvent, InputState},
+    tooltip::Tooltip,
+};
 use serde_json::json;
 use tokio::sync::oneshot;
 
@@ -251,8 +256,8 @@ use crate::ghostty_view::{
 use crate::{
     ClearTerminal, ClosePane, CloseSurface, CloseTab, CycleInputMode, FocusInput, NewSurface,
     NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab, PreviousSurface,
-    PreviousTab, Quit, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
-    SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
+    PreviousTab, Quit, RenameSurface, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5,
+    SelectTab6, SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
     ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
 };
 use con_agent::{
@@ -4850,6 +4855,9 @@ impl ConWorkspace {
             "previous-surface" => {
                 self.cycle_surface_in_focused_pane(-1, window, cx);
             }
+            "rename-surface" => {
+                self.rename_current_surface(&RenameSurface, window, cx);
+            }
             "close-surface" => {
                 self.close_current_surface_in_focused_pane(window, cx);
             }
@@ -8336,6 +8344,142 @@ impl ConWorkspace {
         self.focus_surface_in_active_tab(next_surface_id, window, cx);
     }
 
+    fn focused_active_surface_for_rename(&self, cx: &App) -> Option<(usize, usize, String)> {
+        let tab_idx = self.active_tab;
+        let tab = self.tabs.get(tab_idx)?;
+        let pane_id = tab.pane_tree.focused_pane_id();
+        let surface = tab
+            .pane_tree
+            .surface_infos(Some(pane_id))
+            .into_iter()
+            .find(|surface| surface.is_active)?;
+        let title = surface
+            .title
+            .clone()
+            .or_else(|| surface.terminal.title(cx))
+            .unwrap_or_else(|| format!("Surface {}", surface.surface_index + 1));
+
+        Some((tab_idx, surface.surface_id, title))
+    }
+
+    fn rename_surface_title(
+        &mut self,
+        tab_idx: usize,
+        surface_id: usize,
+        value: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tab) = self.tabs.get_mut(tab_idx) else {
+            return false;
+        };
+        let value = value.trim();
+        let title = if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        };
+
+        if !tab.pane_tree.rename_surface(surface_id, title) {
+            return false;
+        }
+
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
+        true
+    }
+
+    fn open_surface_rename_dialog(
+        &mut self,
+        surface_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let tab_idx = self.active_tab;
+        let Some(surface) = self.tabs[tab_idx]
+            .pane_tree
+            .surface_infos(None)
+            .into_iter()
+            .find(|surface| surface.surface_id == surface_id)
+        else {
+            return;
+        };
+        let initial = surface
+            .title
+            .clone()
+            .or_else(|| surface.terminal.title(cx))
+            .unwrap_or_else(|| format!("Surface {}", surface.surface_index + 1));
+
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(&initial, window, cx);
+            state.set_placeholder("Surface name", window, cx);
+            state
+        });
+
+        let workspace_for_enter = cx.weak_entity();
+        cx.subscribe_in(&input, window, {
+            move |_this, input_entity, event: &InputEvent, window, cx| {
+                if !matches!(event, InputEvent::PressEnter { .. }) {
+                    return;
+                }
+                let value = input_entity.read(cx).value().to_string();
+                if let Some(workspace) = workspace_for_enter.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.rename_surface_title(tab_idx, surface_id, value, cx);
+                    });
+                }
+                window.close_dialog(cx);
+            }
+        })
+        .detach();
+
+        let workspace_for_ok = cx.weak_entity();
+        let input_for_content = input.clone();
+        let input_for_ok = input.clone();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let input_for_content = input_for_content.clone();
+            let input_for_ok = input_for_ok.clone();
+            let workspace_for_ok = workspace_for_ok.clone();
+
+            dialog
+                .width(px(360.0))
+                .title("Rename Surface")
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("Rename")
+                        .show_cancel(true),
+                )
+                .content(move |content, _, cx| {
+                    let theme = cx.theme();
+                    content
+                        .gap(px(10.0))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .line_height(px(17.0))
+                                .text_color(theme.muted_foreground)
+                                .child("Name this pane-local terminal session."),
+                        )
+                        .child(Input::new(&input_for_content).small())
+                })
+                .on_ok(move |_, _window, cx| {
+                    let value = input_for_ok.read(cx).value().to_string();
+                    if let Some(workspace) = workspace_for_ok.upgrade() {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.rename_surface_title(tab_idx, surface_id, value, cx);
+                        });
+                    }
+                    true
+                })
+        });
+        input.update(cx, |state, cx| state.focus(window, cx));
+    }
+
     fn close_current_surface_in_focused_pane(
         &mut self,
         window: &mut Window,
@@ -8513,6 +8657,19 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.cycle_surface_in_focused_pane(-1, window, cx);
+    }
+
+    fn rename_current_surface(
+        &mut self,
+        _: &RenameSurface,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((_tab_idx, surface_id, _title)) = self.focused_active_surface_for_rename(cx)
+        else {
+            return;
+        };
+        self.open_surface_rename_dialog(surface_id, window, cx);
     }
 
     fn close_surface(&mut self, _: &CloseSurface, window: &mut Window, cx: &mut Context<Self>) {
@@ -9369,9 +9526,18 @@ impl Render for ConWorkspace {
                     });
                 }
             };
+            let workspace = cx.weak_entity();
+            let rename_surface_cb = move |surface_id: usize, window: &mut Window, cx: &mut App| {
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.open_surface_rename_dialog(surface_id, window, cx);
+                    });
+                }
+            };
             self.tabs[self.active_tab].pane_tree.render(
                 begin_drag_cb,
                 focus_surface_cb,
+                rename_surface_cb,
                 pane_divider_color,
                 cx,
             )
@@ -10206,6 +10372,7 @@ impl Render for ConWorkspace {
                 .on_action(cx.listener(Self::new_surface_split_down))
                 .on_action(cx.listener(Self::next_surface))
                 .on_action(cx.listener(Self::previous_surface))
+                .on_action(cx.listener(Self::rename_current_surface))
                 .on_action(cx.listener(Self::close_surface))
                 .on_action(cx.listener(Self::focus_input))
                 .on_action(cx.listener(Self::cycle_input_mode))

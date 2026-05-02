@@ -1,6 +1,6 @@
 use con_core::session::{PaneLayoutState, PaneSplitDirection};
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, InteractiveElementExt};
 
 use crate::terminal_pane::TerminalPane;
 
@@ -565,16 +565,19 @@ impl PaneTree {
         &self,
         begin_drag_cb: impl Fn(SplitId, f32) + 'static,
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
+        rename_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
         let focus_surface_cb = std::sync::Arc::new(focus_surface_cb);
+        let rename_surface_cb = std::sync::Arc::new(rename_surface_cb);
         if let Some(zoomed_id) = self.zoomed_pane_id {
             if let Some(zoomed) = Self::render_zoomed_leaf(
                 &self.root,
                 zoomed_id,
                 self.focused_pane_id,
                 focus_surface_cb.clone(),
+                rename_surface_cb.clone(),
                 cx,
             ) {
                 return zoomed;
@@ -587,6 +590,7 @@ impl PaneTree {
             self.pane_count() > 1,
             std::sync::Arc::new(begin_drag_cb),
             focus_surface_cb,
+            rename_surface_cb,
             divider_color,
             cx,
         )
@@ -973,6 +977,7 @@ impl PaneTree {
         has_splits: bool,
         begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32) + 'static>,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
@@ -987,6 +992,7 @@ impl PaneTree {
                 *active_surface_id,
                 focused_id,
                 focus_surface_cb,
+                rename_surface_cb,
                 cx,
             ),
             PaneNode::Split {
@@ -1005,6 +1011,8 @@ impl PaneTree {
                 let cb_divider = begin_drag_cb.clone();
                 let focus_cb_first = focus_surface_cb.clone();
                 let focus_cb_second = focus_surface_cb.clone();
+                let rename_cb_first = rename_surface_cb.clone();
+                let rename_cb_second = rename_surface_cb.clone();
 
                 let first_el = Self::render_node(
                     first,
@@ -1012,6 +1020,7 @@ impl PaneTree {
                     has_splits,
                     cb_first,
                     focus_cb_first,
+                    rename_cb_first,
                     divider_color,
                     cx,
                 );
@@ -1021,6 +1030,7 @@ impl PaneTree {
                     has_splits,
                     cb_second,
                     focus_cb_second,
+                    rename_cb_second,
                     divider_color,
                     cx,
                 );
@@ -1121,6 +1131,7 @@ impl PaneTree {
         target_id: PaneId,
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         cx: &App,
     ) -> Option<AnyElement> {
         match node {
@@ -1134,21 +1145,28 @@ impl PaneTree {
                 *active_surface_id,
                 focused_id,
                 focus_surface_cb,
+                rename_surface_cb,
                 cx,
             )),
             PaneNode::Leaf { .. } => None,
-            PaneNode::Split { first, second, .. } => {
-                Self::render_zoomed_leaf(first, target_id, focused_id, focus_surface_cb.clone(), cx)
-                    .or_else(|| {
-                        Self::render_zoomed_leaf(
-                            second,
-                            target_id,
-                            focused_id,
-                            focus_surface_cb,
-                            cx,
-                        )
-                    })
-            }
+            PaneNode::Split { first, second, .. } => Self::render_zoomed_leaf(
+                first,
+                target_id,
+                focused_id,
+                focus_surface_cb.clone(),
+                rename_surface_cb.clone(),
+                cx,
+            )
+            .or_else(|| {
+                Self::render_zoomed_leaf(
+                    second,
+                    target_id,
+                    focused_id,
+                    focus_surface_cb,
+                    rename_surface_cb,
+                    cx,
+                )
+            }),
         }
     }
 
@@ -1158,6 +1176,7 @@ impl PaneTree {
         active_surface_id: SurfaceId,
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -1200,6 +1219,7 @@ impl PaneTree {
             };
             let sid = surface.id;
             let focus_cb = focus_surface_cb.clone();
+            let rename_cb = rename_surface_cb.clone();
             strip = strip.child(
                 div()
                     .id(ElementId::Name(format!("surface-tab-{sid}").into()))
@@ -1215,6 +1235,9 @@ impl PaneTree {
                     .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                         focus_cb(sid, window, cx);
                     })
+                    .on_double_click(move |_, window, cx| {
+                        rename_cb(sid, window, cx);
+                    })
                     .child(
                         div()
                             .truncate()
@@ -1226,12 +1249,29 @@ impl PaneTree {
             );
         }
 
+        let inactive_terminals = surfaces
+            .iter()
+            .filter(|surface| surface.id != active_surface_id)
+            .map(|surface| surface.terminal.clone())
+            .collect::<Vec<_>>();
+        let mut terminal_host = div().flex_1().min_h_0().overflow_hidden().child(terminal);
+        if !inactive_terminals.is_empty() {
+            terminal_host = terminal_host.on_children_prepainted(move |bounds_list, window, cx| {
+                let Some(bounds) = bounds_list.first().copied() else {
+                    return;
+                };
+                for terminal in &inactive_terminals {
+                    terminal.sync_surface_layout(bounds, window, cx);
+                }
+            });
+        }
+
         div()
             .flex()
             .flex_col()
             .size_full()
             .child(strip)
-            .child(div().flex_1().min_h_0().overflow_hidden().child(terminal))
+            .child(terminal_host)
             .into_any_element()
     }
 

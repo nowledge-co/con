@@ -259,6 +259,19 @@ impl GhosttyView {
         }
     }
 
+    pub fn sync_surface_layout_for_host(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = self.ensure_session(cx);
+        changed |= self.sync_surface_size(bounds, window.scale_factor());
+        if changed {
+            cx.notify();
+        }
+    }
+
     pub fn set_visible(&self, _visible: bool) {}
 
     pub fn sync_window_background_blur(&self) {}

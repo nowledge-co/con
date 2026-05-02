@@ -835,6 +835,21 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
+    pub fn sync_surface_layout_for_host(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let showed_layout_fallback = self.show_layout_fallback();
+        self.ensure_initialized(bounds, window, cx);
+        self.update_frame(bounds);
+        if showed_layout_fallback != self.show_layout_fallback() {
+            cx.notify();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     fn update_frame(&mut self, bounds: Bounds<Pixels>) {
         if self.last_bounds.as_ref() == Some(&bounds)
             && !self.awaiting_first_layout_visibility

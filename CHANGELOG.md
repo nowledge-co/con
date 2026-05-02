@@ -4,6 +4,20 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.54` - 2026-05-02
+
+### Added
+
+**Control Plane**
+
+- Added human-facing rename for pane-local surfaces. Surface names can now be changed from Command Palette, the terminal context menu, the app menu, or by double-clicking a surface tab in the pane-local strip. This complements the existing `surfaces.rename` CLI/API path for orchestrators.
+
+### Fixed
+
+**Control Plane**
+
+- Kept inactive pane-local surfaces sized to their host pane while they are hidden. TUI coding agents launched in background surfaces now receive the same terminal rows/columns they will have when focused, avoiding incorrect layout assumptions in multi-surface orchestrator workflows. Fixes [#108](https://github.com/nowledge-co/con-terminal/issues/108).
+
 ## `v0.1.0-beta.53` - 2026-05-02
 
 ### Fixed

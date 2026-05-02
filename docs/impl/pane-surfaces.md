@@ -90,6 +90,10 @@ without using `con-cli`.
   focused pane.
 - `Previous Surface in Pane`: cycles backward through surfaces hosted by the
   focused pane.
+- `Rename Current Surface`: opens a compact rename dialog for the active
+  surface in the focused pane. The same rename action is available from the app
+  menu, terminal context menu, and by double-clicking a surface tab in the
+  pane-local strip.
 - `Close Current Surface`: closes the active surface when the focused pane has
   more than one surface. If the surface was created as an owned palette split,
   closing that last surface also closes the worker pane. It intentionally does
@@ -171,6 +175,10 @@ closes.
 
 - Only active surfaces are visible.
 - Hidden surfaces keep running and continue receiving terminal output.
+- Hidden surfaces keep the same PTY/grid size as their host pane. Con resizes
+  inactive surfaces to the visible terminal host bounds even while they are not
+  rendered, so TUI agents that start in background surfaces see the correct
+  rows and columns before focus moves to them.
 - Tab, pane, window, and app close paths tear down every surface, not just the
   active surface.
 - If a non-last surface exits, Con removes only that surface.

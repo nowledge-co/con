@@ -144,6 +144,12 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Surface",
     },
     PaletteAction {
+        id: "rename-surface",
+        label: "Rename Current Surface",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
         id: "close-surface",
         label: "Close Current Surface",
         shortcut: "",

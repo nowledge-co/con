@@ -299,6 +299,26 @@ impl GhosttyView {
         // would lie about the RenderSession's existence.
     }
 
+    pub fn sync_surface_layout_for_host(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let scale = window.scale_factor();
+        let was_initialized = self.initialized;
+        let bounds_changed = self.update_pane_bounds(bounds, scale);
+        if was_initialized && !bounds_changed {
+            return;
+        }
+
+        match self.sync_render(window) {
+            SyncRenderResult::Pending | SyncRenderResult::Rendered => cx.notify(),
+            SyncRenderResult::Unchanged if bounds_changed => cx.notify(),
+            SyncRenderResult::Unchanged => {}
+        }
+    }
+
     /// Cross-platform hide hook used on macOS when switching tabs (each
     /// tab's child NSView is toggled so only the active tab's terminal
     /// paints). On Windows the renderer composites through GPUI's image
