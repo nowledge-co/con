@@ -1549,6 +1549,7 @@ impl Render for GhosttyView {
         let input_focus = focus.clone();
         let context_focus = focus.clone();
         let menu_focus = focus.clone();
+        let ui_font = cx.theme().font_family.clone();
         let entity = cx.entity().downgrade();
         let show_layout_fallback = self.show_layout_fallback();
         let layout_fallback_bg = self
@@ -1568,6 +1569,7 @@ impl Render for GhosttyView {
 
         div()
             .size_full()
+            .font_family(ui_font)
             .map(|div| {
                 if show_layout_fallback {
                     div.bg(layout_fallback_bg)

@@ -1,61 +1,102 @@
-use gpui::{Action, Context, Window};
-use gpui_component::menu::PopupMenu;
+use gpui::{
+    Action, AnyElement, App, Context, IntoElement as _, ParentElement as _, SharedString,
+    Styled as _, Window, div, px,
+};
+use gpui_component::ActiveTheme as _;
+use gpui_component::kbd::Kbd;
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
+
+fn action_item(label: &'static str, action: Box<dyn Action>) -> PopupMenuItem {
+    let render_action = action.boxed_clone();
+    PopupMenuItem::element(move |window, cx| action_row(label, render_action.as_ref(), window, cx))
+        .action(action)
+}
+
+fn action_row(
+    label: &'static str,
+    action: &dyn Action,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let theme = cx.theme();
+    let shortcut =
+        crate::keycaps::first_action_keystroke(action, window).map(|stroke| Kbd::format(&stroke));
+
+    div()
+        .flex()
+        .w_full()
+        .min_w(px(188.0))
+        .items_center()
+        .justify_between()
+        .gap(px(24.0))
+        .font_family(theme.font_family.clone())
+        .child(
+            div()
+                .min_w_0()
+                .text_size(px(13.0))
+                .line_height(px(18.0))
+                .child(SharedString::from(label)),
+        )
+        .child(
+            div()
+                .flex()
+                .min_w(px(54.0))
+                .justify_end()
+                .text_size(px(11.0))
+                .line_height(px(14.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.muted_foreground.opacity(0.72))
+                .children(shortcut),
+        )
+        .into_any_element()
+}
 
 pub(crate) fn terminal_context_menu(
     menu: PopupMenu,
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    menu.menu("Paste", Box::new(crate::Paste) as Box<dyn Action>)
-        .menu("Copy", Box::new(crate::Copy) as Box<dyn Action>)
-        .menu(
+    menu.min_w(px(220.0))
+        .item(action_item("Paste", Box::new(crate::Paste)))
+        .item(action_item("Copy", Box::new(crate::Copy)))
+        .item(action_item(
             "Clear Terminal",
-            Box::new(crate::ClearTerminal) as Box<dyn Action>,
-        )
+            Box::new(crate::ClearTerminal),
+        ))
         .separator()
         .submenu("Split Pane", window, cx, |menu, _window, _cx| {
-            menu.menu("Right", Box::new(crate::SplitRight) as Box<dyn Action>)
-                .menu("Down", Box::new(crate::SplitDown) as Box<dyn Action>)
-                .menu("Left", Box::new(crate::SplitLeft) as Box<dyn Action>)
-                .menu("Up", Box::new(crate::SplitUp) as Box<dyn Action>)
+            menu.min_w(px(164.0))
+                .item(action_item("Right", Box::new(crate::SplitRight)))
+                .item(action_item("Down", Box::new(crate::SplitDown)))
+                .item(action_item("Left", Box::new(crate::SplitLeft)))
+                .item(action_item("Up", Box::new(crate::SplitUp)))
         })
-        .menu(
+        .item(action_item(
             "Toggle Pane Zoom",
-            Box::new(crate::TogglePaneZoom) as Box<dyn Action>,
-        )
-        .menu("Close Pane", Box::new(crate::ClosePane) as Box<dyn Action>)
+            Box::new(crate::TogglePaneZoom),
+        ))
+        .item(action_item("Close Pane", Box::new(crate::ClosePane)))
         .separator()
         .submenu("Surfaces", window, cx, |menu, _window, _cx| {
-            menu.menu(
-                "New in Pane",
-                Box::new(crate::NewSurface) as Box<dyn Action>,
-            )
-            .menu(
-                "New Split Right",
-                Box::new(crate::NewSurfaceSplitRight) as Box<dyn Action>,
-            )
-            .menu(
-                "New Split Down",
-                Box::new(crate::NewSurfaceSplitDown) as Box<dyn Action>,
-            )
-            .separator()
-            .menu("Next", Box::new(crate::NextSurface) as Box<dyn Action>)
-            .menu(
-                "Previous",
-                Box::new(crate::PreviousSurface) as Box<dyn Action>,
-            )
-            .menu(
-                "Close Current",
-                Box::new(crate::CloseSurface) as Box<dyn Action>,
-            )
+            menu.min_w(px(188.0))
+                .item(action_item("New in Pane", Box::new(crate::NewSurface)))
+                .item(action_item(
+                    "New Split Right",
+                    Box::new(crate::NewSurfaceSplitRight),
+                ))
+                .item(action_item(
+                    "New Split Down",
+                    Box::new(crate::NewSurfaceSplitDown),
+                ))
+                .separator()
+                .item(action_item("Next", Box::new(crate::NextSurface)))
+                .item(action_item("Previous", Box::new(crate::PreviousSurface)))
+                .item(action_item("Close Current", Box::new(crate::CloseSurface)))
         })
         .separator()
-        .menu(
-            "Focus Input",
-            Box::new(crate::FocusInput) as Box<dyn Action>,
-        )
-        .menu(
+        .item(action_item("Focus Input", Box::new(crate::FocusInput)))
+        .item(action_item(
             "Command Palette",
-            Box::new(crate::command_palette::ToggleCommandPalette) as Box<dyn Action>,
-        )
+            Box::new(crate::command_palette::ToggleCommandPalette),
+        ))
 }

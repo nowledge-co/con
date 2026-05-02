@@ -1350,11 +1350,13 @@ impl Render for GhosttyView {
         let input_focus = focus.clone();
         let context_focus = focus.clone();
         let menu_focus = focus.clone();
+        let ui_font = cx.theme().font_family.clone();
 
         div()
             .flex()
             .flex_col()
             .size_full()
+            .font_family(ui_font)
             .min_w_0()
             .min_h_0()
             .key_context("GhosttyTerminal")

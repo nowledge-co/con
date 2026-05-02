@@ -927,6 +927,7 @@ impl Render for GhosttyView {
             .size_full()
             .min_w_0()
             .min_h_0()
+            .font_family(theme.font_family.clone())
             .key_context("GhosttyTerminal")
             .track_focus(&self.focus_handle)
             .id(&self.focus_handle)
