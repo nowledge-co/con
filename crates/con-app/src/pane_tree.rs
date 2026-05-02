@@ -1230,41 +1230,49 @@ impl PaneTree {
             return div().size_full().child(terminal).into_any_element();
         }
 
-        let mut strip = div()
+        let rail_label = if surfaces.len() > 1 {
+            format!("{} tabs", surfaces.len())
+        } else {
+            "surface".to_string()
+        };
+
+        let mut surface_rail = div()
             .id(("surface-tab-strip", pane_id))
             .flex()
             .items_center()
-            .gap(px(5.0))
-            .h(px(25.0))
-            .w_full()
-            .pl(px(7.0))
-            .pr(px(6.0))
+            .gap(px(4.0))
+            .h(px(21.0))
+            .max_w(relative(1.0))
+            .ml(px(7.0))
+            .mr(px(7.0))
+            .px(px(4.0))
+            .rounded(px(7.0))
             .font_family(theme.font_family.clone())
             .bg(if pane_id == focused_id {
-                theme.foreground.opacity(0.055)
+                theme.foreground.opacity(0.075)
             } else {
-                theme.foreground.opacity(0.035)
+                theme.foreground.opacity(0.050)
             })
             .overflow_x_scroll();
 
-        strip = strip.child(
+        surface_rail = surface_rail.child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(4.0))
+                .gap(px(3.0))
                 .flex_shrink_0()
-                .pr(px(3.0))
+                .pr(px(2.0))
                 .text_size(px(9.0))
                 .line_height(px(11.0))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.muted_foreground.opacity(0.44))
+                .text_color(theme.muted_foreground.opacity(0.56))
                 .child(
                     svg()
                         .path("phosphor/stack.svg")
                         .size(px(9.0))
-                        .text_color(theme.muted_foreground.opacity(0.40)),
+                        .text_color(theme.muted_foreground.opacity(0.50)),
                 )
-                .child("surface tabs"),
+                .child(SharedString::from(rail_label)),
         );
 
         for (index, surface) in surfaces.iter().enumerate() {
@@ -1279,12 +1287,12 @@ impl PaneTree {
                 theme.muted_foreground.opacity(0.54)
             };
             let bg = if is_active {
-                theme.foreground.opacity(0.07)
+                theme.primary.opacity(0.10)
             } else {
                 theme.transparent
             };
             let icon_color = if is_active {
-                theme.foreground.opacity(0.54)
+                theme.primary.opacity(0.78)
             } else {
                 theme.muted_foreground.opacity(0.42)
             };
@@ -1306,14 +1314,15 @@ impl PaneTree {
                 .flex()
                 .items_center()
                 .gap(px(4.0))
-                .h(px(19.0))
+                .h(px(17.0))
                 .max_w(px(190.0))
                 .flex_shrink_0()
                 .pl(px(6.0))
                 .pr(if can_close { px(3.0) } else { px(7.0) })
+                .rounded(px(5.0))
                 .bg(bg)
                 .cursor_pointer()
-                .hover(|s| s.bg(theme.foreground.opacity(0.11)))
+                .hover(|s| s.bg(theme.foreground.opacity(0.12)))
                 .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                     focus_cb(sid, window, cx);
                 })
@@ -1405,8 +1414,16 @@ impl PaneTree {
                     menu
                 });
 
-            strip = strip.child(tab);
+            surface_rail = surface_rail.child(tab);
         }
+
+        let strip = div()
+            .flex()
+            .items_center()
+            .h(px(27.0))
+            .w_full()
+            .bg(theme.transparent)
+            .child(surface_rail);
 
         let inactive_terminals = surfaces
             .iter()

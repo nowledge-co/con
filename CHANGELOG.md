@@ -14,6 +14,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added configurable shortcuts for every human surface action: create in pane, split right/down, next/previous, rename, and close. These now show in menus, Command Palette, and Keyboard Shortcuts.
 - Polished pane-local surface chrome so humans can distinguish panes from surfaces: owned or named single-surface panes now show an in-pane surface rail, surface tabs use stable `Surface N` fallback names instead of duplicate terminal cwd titles, rename edits inline in the rail, and tabs expose close plus right-click Rename/Close actions.
 - Clarified the human surface model in menus and docs: surfaces are tab-like sessions inside one pane, while surface split commands create a new visible pane first. The terminal context menu now also includes Settings for direct access.
+- Refined the in-pane surface rail from a full-width header into compact local chrome, so a pane with multiple surfaces no longer looks like another nested pane split.
 
 ### Fixed
 

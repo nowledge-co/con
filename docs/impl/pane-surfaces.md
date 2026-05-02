@@ -86,8 +86,10 @@ The visual rule is intentionally scoped:
 - A **surface** is a tab-like terminal session selected inside one pane.
 - Ordinary one-surface panes show no surface chrome.
 - Panes with multiple surfaces, an orchestrator owner, or an explicit surface
-  title show a compact in-pane surface rail. This rail is local to that pane;
-  it never switches surfaces in sibling panes.
+  title show a compact in-pane surface rail. This rail is intentionally inset
+  and pill-sized rather than full-width: pane dividers own layout structure,
+  while surface chrome only identifies terminal sessions inside that pane. The
+  rail is local to that pane; it never switches surfaces in sibling panes.
 
 - `New Surface Tab`: creates a new terminal session inside the focused
   pane, gives it the next stable `Surface N` label, and focuses it.
@@ -140,6 +142,25 @@ action path.
 This mirrors the interactive-subagent flow: create the first worker as a
 visible split, then add later workers as surfaces inside that worker pane so
 parallel agents do not keep shrinking the main terminal layout.
+
+## pi-interactive-subagents Readiness
+
+Con is API-ready for the pi-interactive-subagents pattern, but it is not a
+byte-for-byte cmux CLI clone. The preferred integration is a Con-specific
+backend that uses `con-cli --json` instead of parsing cmux text handles:
+
+- First worker: `con-cli --json surfaces split --location right --title <name>
+  --owner pi-interactive-subagents`
+- Remember the returned `pane_id` and `surface_id`.
+- Later workers: `con-cli --json surfaces create --pane-id <worker_pane_id>
+  --title <name> --owner pi-interactive-subagents`
+- Drive workers with `surfaces wait-ready`, `surfaces send-text`,
+  `surfaces send-key`, and `surfaces read`.
+- Clean up with `surfaces close --surface-id <surface_id>
+  --close-empty-owned-pane`.
+
+This avoids cmux's `identify --surface` round trip because Con returns the
+worker pane id directly from `surfaces split`.
 
 ## CLI Examples
 
