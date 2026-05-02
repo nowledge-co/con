@@ -4,14 +4,14 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `origin/main`
+## `v0.1.0-beta.53` - 2026-05-02
 
 ### Fixed
 
 **Terminal, macOS**
 
 - Restored terminal glass after the macOS seam-leak hardening work. Modern macOS now lets Ghostty own terminal opacity/blur again instead of drawing a second translucent AppKit backing behind the Metal surface, while legacy macOS keeps its opaque fallback.
-- Restored configured UI chrome opacity for the tab bar, input bar, side bar, and agent panel. Opaque terminal-colored mattes now stay limited to seam guards; the native full-window transition underlay is disabled whenever terminal glass is active so hide/show animations no longer make the terminal temporarily opaque. The right panel and bottom bar now use macOS-only absolute seam overdraw during motion instead of changing terminal layout.
+- Restored configured UI chrome opacity for the tab bar, input bar, side bar, and agent panel. Opaque terminal-colored mattes now stay limited to seam guards; the native full-window transition underlay is disabled whenever terminal glass is active so hide/show animations no longer make the terminal temporarily opaque. The right panel, bottom bar, and pane dividers now use macOS-only seam overdraw instead of changing terminal layout or drawing a full matte behind transparent cells.
 
 ## `v0.1.0-beta.52` - 2026-05-02
 

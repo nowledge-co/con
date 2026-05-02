@@ -9112,6 +9112,7 @@ impl Render for ConWorkspace {
             self.tabs[self.active_tab].pane_tree.render(
                 begin_drag_cb,
                 focus_surface_cb,
+                chrome_static_seam_color,
                 pane_divider_color,
                 cx,
             )
