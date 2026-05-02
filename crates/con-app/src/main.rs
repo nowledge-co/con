@@ -252,12 +252,24 @@ pub fn set_linux_window_blur(window: &mut Window, blur: bool) {
 }
 
 #[cfg(target_os = "macos")]
-pub fn set_macos_window_glass_backdrop(window: &mut Window, blur: bool, opacity: f32) {
-    window.set_background_appearance(if blur && opacity < 0.999 {
-        WindowBackgroundAppearance::Blurred
-    } else {
-        WindowBackgroundAppearance::Transparent
-    });
+fn should_use_macos_window_glass_backdrop(blur: bool, effective_opacity: f32) -> bool {
+    blur && effective_opacity < 0.999
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_macos_window_glass_backdrop(window: &mut Window, blur: bool, effective_opacity: f32) {
+    if !supports_transparent_main_window() {
+        window.set_background_appearance(WindowBackgroundAppearance::Opaque);
+        return;
+    }
+
+    window.set_background_appearance(
+        if should_use_macos_window_glass_backdrop(blur, effective_opacity) {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Transparent
+        },
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -360,9 +372,12 @@ fn default_window_background(
 
     #[cfg(target_os = "macos")]
     {
-        if config.appearance.terminal_blur
-            && effective_macos_terminal_glass_opacity(config.appearance.terminal_opacity) < 0.999
-        {
+        let effective_opacity =
+            effective_macos_terminal_glass_opacity(config.appearance.terminal_opacity);
+        if should_use_macos_window_glass_backdrop(
+            config.appearance.terminal_blur,
+            effective_opacity,
+        ) {
             return WindowBackgroundAppearance::Blurred;
         }
     }

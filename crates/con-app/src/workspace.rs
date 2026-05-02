@@ -5195,6 +5195,10 @@ impl ConWorkspace {
 
         if self.tabs_orientation != appearance_config.tabs_orientation {
             #[cfg(target_os = "macos")]
+            if self.terminal_opacity >= 0.999 {
+                self.arm_chrome_transition_underlay(Duration::from_millis(260));
+            }
+            #[cfg(target_os = "macos")]
             let previous_sidebar_width = if self.vertical_tabs_active() {
                 self.sidebar
                     .read(cx)
