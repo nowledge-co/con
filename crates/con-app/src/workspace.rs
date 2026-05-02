@@ -9196,9 +9196,10 @@ impl Render for ConWorkspace {
         #[cfg(not(target_os = "macos"))]
         let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
         #[cfg(target_os = "macos")]
-        let agent_panel_visible_for_layout = self.agent_panel_open || agent_panel_progress > 0.01;
+        let agent_panel_reserved_for_layout =
+            self.agent_panel_open || agent_panel_progress > 0.01 || agent_panel_snap_guard_active;
         #[cfg(target_os = "macos")]
-        let agent_panel_outer_width = if agent_panel_visible_for_layout {
+        let agent_panel_outer_width = if agent_panel_reserved_for_layout {
             effective_agent_panel_width + 1.0
         } else {
             0.0
@@ -9217,6 +9218,15 @@ impl Render for ConWorkspace {
                 sidebar.occupied_width_with_max(max_vertical_tabs_width)
             })
         } else {
+            #[cfg(target_os = "macos")]
+            {
+                if sidebar_snap_guard_active {
+                    self.sidebar_snap_guard_width
+                } else {
+                    0.0
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
             0.0
         };
         let vertical_tabs_pinned = self.vertical_tabs_active() && self.sidebar.read(cx).is_pinned();
@@ -9335,18 +9345,34 @@ impl Render for ConWorkspace {
             );
         }
 
-        if input_bar_progress > 0.01 {
+        #[cfg(target_os = "macos")]
+        let input_bar_reserved_for_layout =
+            input_bar_progress > 0.01 || input_bar_snap_guard_active;
+        #[cfg(not(target_os = "macos"))]
+        let input_bar_reserved_for_layout = input_bar_progress > 0.01;
+
+        if input_bar_reserved_for_layout {
+            let input_bar_height = if input_bar_progress > 0.01 {
+                43.0 * input_bar_progress
+            } else {
+                43.0
+            };
+            let input_bar_content_opacity = if input_bar_progress > 0.01 {
+                input_bar_content_progress
+            } else {
+                0.0
+            };
             terminal_area = terminal_area.child(
                 div()
                     .overflow_hidden()
-                    .h(px(43.0 * input_bar_progress))
+                    .h(px(input_bar_height))
                     .flex_shrink_0()
                     .bg(input_bar_surface_color)
                     .child(div().h(px(1.0)).bg(chrome_static_seam_color))
                     .child(
                         div()
                             .h(px(42.0))
-                            .opacity(input_bar_content_progress)
+                            .opacity(input_bar_content_opacity)
                             .child(self.input_bar.clone()),
                     ),
             );
@@ -9372,6 +9398,16 @@ impl Render for ConWorkspace {
                 main_area = main_area.child(self.sidebar.clone());
             }
         }
+        #[cfg(target_os = "macos")]
+        if !self.vertical_tabs_active() && sidebar_snap_guard_active && vertical_tabs_width > 0.0 {
+            main_area = main_area.child(
+                div()
+                    .w(px(vertical_tabs_width))
+                    .h_full()
+                    .flex_shrink_0()
+                    .bg(elevated_panel_surface_color),
+            );
+        }
 
         main_area = main_area.child(terminal_area);
 
@@ -9388,7 +9424,7 @@ impl Render for ConWorkspace {
         }
 
         #[cfg(target_os = "macos")]
-        let render_agent_panel = agent_panel_visible_for_layout;
+        let render_agent_panel = agent_panel_reserved_for_layout;
         #[cfg(not(target_os = "macos"))]
         let render_agent_panel = agent_panel_progress > 0.01;
 
@@ -9397,6 +9433,15 @@ impl Render for ConWorkspace {
             let panel_width = effective_agent_panel_width + 1.0;
             #[cfg(not(target_os = "macos"))]
             let panel_width = animated_panel_width + 1.0;
+            #[cfg(target_os = "macos")]
+            let agent_panel_content_opacity =
+                if self.agent_panel_open || agent_panel_progress > 0.01 {
+                    agent_panel_content_progress
+                } else {
+                    0.0
+                };
+            #[cfg(not(target_os = "macos"))]
+            let agent_panel_content_opacity = agent_panel_content_progress;
 
             main_area = main_area.child(
                 div()
@@ -9444,7 +9489,7 @@ impl Render for ConWorkspace {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .opacity(agent_panel_content_progress)
+                            .opacity(agent_panel_content_opacity)
                             .child(self.agent_panel.clone()),
                     ),
             );
@@ -9480,6 +9525,13 @@ impl Render for ConWorkspace {
         }
 
         // Top bar — compact titlebar for one tab, full strip for many
+        #[cfg(target_os = "macos")]
+        let top_bar_height = if top_chrome_snap_guard_active {
+            TOP_BAR_TABS_HEIGHT
+        } else {
+            self.current_top_bar_height()
+        };
+        #[cfg(not(target_os = "macos"))]
         let top_bar_height = self.current_top_bar_height();
         let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
@@ -10189,19 +10241,6 @@ impl Render for ConWorkspace {
         }
 
         #[cfg(target_os = "macos")]
-        if top_chrome_snap_guard_active {
-            root = root.child(
-                div()
-                    .absolute()
-                    .top(px(TOP_BAR_COMPACT_HEIGHT))
-                    .left(px(terminal_content_left))
-                    .right(px(agent_panel_outer_width))
-                    .h(px(TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT))
-                    .bg(chrome_transition_seam_color),
-            );
-        }
-
-        #[cfg(target_os = "macos")]
         if sidebar_snap_guard_active {
             if self.vertical_tabs_active() {
                 root = root.child(
@@ -10213,16 +10252,6 @@ impl Render for ConWorkspace {
                             (vertical_tabs_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)
                         ))
                         .w(px(CHROME_MOTION_SEAM_OVERDRAW))
-                        .bg(chrome_transition_seam_color),
-                );
-            } else if self.sidebar_snap_guard_width > 0.0 {
-                root = root.child(
-                    div()
-                        .absolute()
-                        .top(px(top_bar_height))
-                        .bottom_0()
-                        .left_0()
-                        .w(px(self.sidebar_snap_guard_width))
                         .bg(chrome_transition_seam_color),
                 );
             }
@@ -10238,19 +10267,6 @@ impl Render for ConWorkspace {
                         .right(px(agent_panel_outer_width))
                         .bottom(px(43.0))
                         .h(px(CHROME_MOTION_SEAM_OVERDRAW))
-                        .bg(chrome_transition_seam_color),
-                );
-            } else {
-                // When the bar snaps closed, AppKit can take one transaction to
-                // grow the embedded Ghostty NSView into the vacated strip. Keep
-                // that short catch-up area terminal-colored instead of clear.
-                root = root.child(
-                    div()
-                        .absolute()
-                        .left(px(terminal_content_left))
-                        .right(px(agent_panel_outer_width))
-                        .bottom_0()
-                        .h(px(43.0))
                         .bg(chrome_transition_seam_color),
                 );
             }
@@ -10269,19 +10285,6 @@ impl Render for ConWorkspace {
                         .bottom_0()
                         .right(px(agent_panel_seam_right))
                         .w(px(CHROME_MOTION_SEAM_OVERDRAW))
-                        .bg(chrome_transition_seam_color),
-                );
-            } else {
-                // Same catch-up guard as the bottom bar: after a snap-close,
-                // GPUI has already removed the panel, but AppKit may not have
-                // expanded Ghostty's native view into the released width yet.
-                root = root.child(
-                    div()
-                        .absolute()
-                        .top(px(top_bar_height))
-                        .bottom_0()
-                        .right_0()
-                        .w(px(effective_agent_panel_width + 1.0))
                         .bg(chrome_transition_seam_color),
                 );
             }
