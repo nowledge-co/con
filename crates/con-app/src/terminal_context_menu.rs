@@ -78,19 +78,25 @@ pub(crate) fn terminal_context_menu(
         .item(action_item("Close Pane", Box::new(crate::ClosePane)))
         .separator()
         .submenu("Surfaces", window, cx, |menu, _window, _cx| {
-            menu.min_w(px(188.0))
-                .item(action_item("New in Pane", Box::new(crate::NewSurface)))
+            menu.min_w(px(214.0))
+                .item(action_item("New Surface Tab", Box::new(crate::NewSurface)))
                 .item(action_item(
-                    "New Split Right",
+                    "New Surface Pane Right",
                     Box::new(crate::NewSurfaceSplitRight),
                 ))
                 .item(action_item(
-                    "New Split Down",
+                    "New Surface Pane Down",
                     Box::new(crate::NewSurfaceSplitDown),
                 ))
                 .separator()
-                .item(action_item("Next", Box::new(crate::NextSurface)))
-                .item(action_item("Previous", Box::new(crate::PreviousSurface)))
+                .item(action_item(
+                    "Next Surface Tab",
+                    Box::new(crate::NextSurface),
+                ))
+                .item(action_item(
+                    "Previous Surface Tab",
+                    Box::new(crate::PreviousSurface),
+                ))
                 .item(action_item(
                     "Rename Current",
                     Box::new(crate::RenameSurface),
@@ -99,6 +105,10 @@ pub(crate) fn terminal_context_menu(
         })
         .separator()
         .item(action_item("Focus Input", Box::new(crate::FocusInput)))
+        .item(action_item(
+            "Settings",
+            Box::new(crate::settings_panel::ToggleSettings),
+        ))
         .item(action_item(
             "Command Palette",
             Box::new(crate::command_palette::ToggleCommandPalette),

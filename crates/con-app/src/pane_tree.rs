@@ -1239,6 +1239,7 @@ impl PaneTree {
             .w_full()
             .pl(px(7.0))
             .pr(px(6.0))
+            .font_family(theme.font_family.clone())
             .bg(if pane_id == focused_id {
                 theme.foreground.opacity(0.055)
             } else {
@@ -1263,7 +1264,7 @@ impl PaneTree {
                         .size(px(9.0))
                         .text_color(theme.muted_foreground.opacity(0.40)),
                 )
-                .child("surfaces"),
+                .child("surface tabs"),
         );
 
         for (index, surface) in surfaces.iter().enumerate() {
@@ -1381,7 +1382,8 @@ impl PaneTree {
 
             let tab = tab
                 .tooltip(move |window, cx| {
-                    Tooltip::new("Surface in this pane. Double-click to rename.").build(window, cx)
+                    Tooltip::new("Surface tab in this pane. Double-click to rename.")
+                        .build(window, cx)
                 })
                 .context_menu(move |menu, _window, _cx| {
                     let rename_cb = rename_cb_for_menu.clone();

@@ -83,23 +83,23 @@ without using `con-cli`.
 The visual rule is intentionally scoped:
 
 - A **pane** is the visible split region.
-- A **surface** is selected inside one pane.
+- A **surface** is a tab-like terminal session selected inside one pane.
 - Ordinary one-surface panes show no surface chrome.
 - Panes with multiple surfaces, an orchestrator owner, or an explicit surface
   title show a compact in-pane surface rail. This rail is local to that pane;
   it never switches surfaces in sibling panes.
 
-- `New Surface in Pane`: creates a new terminal session inside the focused
+- `New Surface Tab`: creates a new terminal session inside the focused
   pane, gives it the next stable `Surface N` label, and focuses it.
-- `New Surface Split Right`: creates a new right split from the focused pane,
-  with its first terminal session represented as `Surface 1`.
-- `New Surface Split Down`: creates a new down split from the focused pane,
-  with its first terminal session represented as `Surface 1`.
-- `Next Surface in Pane`: cycles forward through surfaces hosted by the
+- `New Surface Pane Right`: creates a new right split from the focused pane,
+  then initializes that visible pane with its first `Surface 1` tab.
+- `New Surface Pane Down`: creates a new down split from the focused pane,
+  then initializes that visible pane with its first `Surface 1` tab.
+- `Next Surface Tab`: cycles forward through surfaces hosted by the
   focused pane.
-- `Previous Surface in Pane`: cycles backward through surfaces hosted by the
+- `Previous Surface Tab`: cycles backward through surfaces hosted by the
   focused pane.
-- `Rename Current Surface`: opens a compact rename dialog for the active
+- `Rename Current Surface`: starts inline rename for the active
   surface in the focused pane. The same rename action is available from the app
   menu, terminal context menu, and by double-clicking a surface tab in the
   pane-local strip.

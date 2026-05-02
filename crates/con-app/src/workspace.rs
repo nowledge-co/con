@@ -8429,20 +8429,15 @@ impl ConWorkspace {
             state
         });
 
-        let workspace_for_enter = cx.weak_entity();
         cx.subscribe_in(&input, window, {
-            move |_this, input_entity, event: &InputEvent, _window, cx| {
+            move |this, input_entity, event: &InputEvent, _window, cx| {
                 if !matches!(event, InputEvent::PressEnter { .. }) {
                     return;
                 }
                 let value = input_entity.read(cx).value().to_string();
-                if let Some(workspace) = workspace_for_enter.upgrade() {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.rename_surface_title(tab_idx, surface_id, value, cx);
-                        workspace.surface_rename = None;
-                        cx.notify();
-                    });
-                }
+                this.rename_surface_title(tab_idx, surface_id, value, cx);
+                this.surface_rename = None;
+                cx.notify();
             }
         })
         .detach();

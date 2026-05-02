@@ -4226,11 +4226,11 @@ impl SettingsPanel {
         ];
 
         let surface_keys: &[(&str, &str)] = &[
-            ("New Surface in Pane", "new_surface"),
-            ("New Surface Split Right", "new_surface_split_right"),
-            ("New Surface Split Down", "new_surface_split_down"),
-            ("Next Surface", "next_surface"),
-            ("Previous Surface", "previous_surface"),
+            ("New Surface Tab", "new_surface"),
+            ("New Surface Pane Right", "new_surface_split_right"),
+            ("New Surface Pane Down", "new_surface_split_down"),
+            ("Next Surface Tab", "next_surface"),
+            ("Previous Surface Tab", "previous_surface"),
             ("Rename Surface", "rename_surface"),
             ("Close Surface", "close_surface"),
         ];
