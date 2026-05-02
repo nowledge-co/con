@@ -123,6 +123,10 @@ pub struct GhosttyView {
     /// Data queued for the PTY before the surface was created.
     /// Flushed once in `ensure_initialized()` after the terminal exists.
     pending_write: Option<Vec<u8>>,
+    /// Private screen text restored from the previous app session. This is a
+    /// visual continuity layer only; it is cleared on the first user input so
+    /// we never replay commands or write synthetic bytes into the shell.
+    restored_screen_text: Option<Vec<String>>,
     /// Desired native view visibility, including before the NSView exists.
     native_view_visible: Cell<bool>,
     /// Desired Ghostty focus state. This is independent from GPUI keyboard
@@ -161,6 +165,7 @@ impl GhosttyView {
     pub fn new(
         app: Arc<GhosttyApp>,
         cwd: Option<String>,
+        restored_screen_text: Option<Vec<String>>,
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -189,6 +194,7 @@ impl GhosttyView {
             scale_factor: 1.0,
             last_title: None,
             pending_write: None,
+            restored_screen_text,
             native_view_visible: Cell::new(true),
             surface_focused: Cell::new(true),
             awaiting_first_layout_visibility: false,
@@ -322,6 +328,7 @@ impl GhosttyView {
     /// Queue data to write to the PTY. If the terminal is already initialized,
     /// writes immediately. Otherwise, buffers until `ensure_initialized()` runs.
     pub fn write_or_queue(&mut self, data: &[u8]) {
+        self.restored_screen_text = None;
         if let Some(ref terminal) = self.terminal {
             terminal.write_to_pty(data);
         } else {
@@ -483,6 +490,7 @@ impl GhosttyView {
         self.last_bounds = None;
         self.last_title = None;
         self.pending_write = None;
+        self.restored_screen_text = None;
         self.next_surface_init_retry_at = None;
         #[cfg(target_os = "macos")]
         {
@@ -1576,8 +1584,11 @@ impl Render for GhosttyView {
         let context_focus = focus.clone();
         let menu_focus = focus.clone();
         let ui_font = cx.theme().font_family.clone();
+        let mono_font = cx.theme().mono_font_family.clone();
+        let restored_text_color = cx.theme().foreground.opacity(0.88);
         let entity = cx.entity().downgrade();
         let show_layout_fallback = self.show_layout_fallback();
+        let restored_screen_text = self.restored_screen_text.clone();
         let layout_fallback_bg = self
             .app
             .background_rgb()
@@ -1655,6 +1666,7 @@ impl Render for GhosttyView {
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
+                this.restored_screen_text = None;
                 if this.paste_from_clipboard(cx) {
                     cx.notify();
                 }
@@ -1665,6 +1677,7 @@ impl Render for GhosttyView {
                     return;
                 };
                 window.focus(&this.focus_handle, cx);
+                this.restored_screen_text = None;
                 if this.send_terminal_paste_payload(payload) {
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -1746,6 +1759,7 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
+                this.restored_screen_text = None;
                 if this.handle_key_down(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
@@ -1781,6 +1795,39 @@ impl Render for GhosttyView {
                 )
                 .size_full(),
             )
+            .when_some(restored_screen_text, |element, lines| {
+                let mut overlay = div()
+                    .absolute()
+                    .inset_0()
+                    .overflow_hidden()
+                    .bg(layout_fallback_bg)
+                    .px_3()
+                    .py_2()
+                    .font_family(mono_font)
+                    .text_size(px(self.initial_font_size))
+                    .line_height(px((self.initial_font_size * 1.22).max(12.0)))
+                    .text_color(restored_text_color);
+
+                let line_count = lines.len();
+                let visible_lines = lines.into_iter().rev().take(240).collect::<Vec<_>>();
+                for line in visible_lines.into_iter().rev() {
+                    overlay = overlay.child(div().whitespace_nowrap().child(line));
+                }
+                if line_count > 240 {
+                    overlay = overlay.child(
+                        div()
+                            .pt_1()
+                            .text_size(px(11.0))
+                            .text_color(restored_text_color.opacity(0.55))
+                            .child(format!(
+                                "{} earlier restored lines hidden",
+                                line_count - 240
+                            )),
+                    );
+                }
+
+                element.child(overlay)
+            })
             .context_menu(move |menu, window, cx| {
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),

@@ -133,6 +133,10 @@ pub struct SurfaceState {
     pub cwd: Option<String>,
     #[serde(default)]
     pub close_pane_when_last: bool,
+    /// Private restored screen text. This is app-runtime continuity state, not
+    /// workspace layout intent, and must never be exported to project profiles.
+    #[serde(default)]
+    pub screen_text: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +230,7 @@ mod tests {
                     owner: None,
                     cwd: Some("/tmp/project".to_string()),
                     close_pane_when_last: false,
+                    screen_text: vec!["$ pwd".to_string(), "/tmp/project".to_string()],
                 },
                 SurfaceState {
                     surface_id: 12,
@@ -233,6 +238,7 @@ mod tests {
                     owner: Some("subagent".to_string()),
                     cwd: Some("/tmp/project/crates".to_string()),
                     close_pane_when_last: true,
+                    screen_text: Vec::new(),
                 },
             ],
         };
@@ -252,6 +258,7 @@ mod tests {
                 assert_eq!(surfaces[1].title.as_deref(), Some("Agent"));
                 assert_eq!(surfaces[1].owner.as_deref(), Some("subagent"));
                 assert!(surfaces[1].close_pane_when_last);
+                assert_eq!(surfaces[0].screen_text[1], "/tmp/project");
             }
             PaneLayoutState::Split { .. } => panic!("expected leaf"),
         }

@@ -10,6 +10,9 @@ use gpui_component::{
 
 use crate::terminal_pane::TerminalPane;
 
+const RESTORED_SCREEN_TEXT_MAX_LINES: usize = 600;
+const RESTORED_SCREEN_TEXT_MAX_BYTES: usize = 128 * 1024;
+
 /// Split direction for pane layout
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SplitDirection {
@@ -58,6 +61,37 @@ impl PaneSurface {
             close_pane_when_last: false,
         }
     }
+}
+
+fn restored_screen_text_for_surface(terminal: &TerminalPane, cx: &App) -> Vec<String> {
+    trim_restored_screen_text(terminal.recent_lines(RESTORED_SCREEN_TEXT_MAX_LINES, cx))
+}
+
+fn trim_restored_screen_text(lines: Vec<String>) -> Vec<String> {
+    let mut trimmed = Vec::with_capacity(lines.len());
+    let mut seen_non_blank = false;
+    for line in lines {
+        if !seen_non_blank && line.trim().is_empty() {
+            continue;
+        }
+        seen_non_blank = true;
+        trimmed.push(line);
+    }
+
+    while trimmed.last().is_some_and(|line| line.trim().is_empty()) {
+        trimmed.pop();
+    }
+
+    let mut total = 0usize;
+    let mut keep_from = trimmed.len();
+    for (idx, line) in trimmed.iter().enumerate().rev() {
+        total = total.saturating_add(line.len()).saturating_add(1);
+        if total > RESTORED_SCREEN_TEXT_MAX_BYTES {
+            break;
+        }
+        keep_from = idx;
+    }
+    trimmed.split_off(keep_from)
 }
 
 #[derive(Clone)]
@@ -170,7 +204,7 @@ impl PaneTree {
     pub fn from_state(
         layout: &PaneLayoutState,
         focused_pane_id: Option<PaneId>,
-        make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
+        make_terminal: &mut impl FnMut(Option<&str>, Option<&[String]>) -> TerminalPane,
     ) -> Self {
         let mut next_restored_surface_id = 0;
         let mut used_surface_ids = std::collections::HashSet::new();
@@ -1670,6 +1704,7 @@ impl PaneTree {
                         owner: surface.owner.clone(),
                         cwd: surface.terminal.current_dir(cx),
                         close_pane_when_last: surface.close_pane_when_last,
+                        screen_text: restored_screen_text_for_surface(&surface.terminal, cx),
                     })
                     .collect();
 
@@ -1700,7 +1735,7 @@ impl PaneTree {
 
     fn node_from_state(
         state: &PaneLayoutState,
-        make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
+        make_terminal: &mut impl FnMut(Option<&str>, Option<&[String]>) -> TerminalPane,
         next_surface_id: &mut SurfaceId,
         used_surface_ids: &mut std::collections::HashSet<SurfaceId>,
     ) -> PaneNode {
@@ -1716,7 +1751,10 @@ impl PaneTree {
                         Self::allocate_restored_surface_id(None, next_surface_id, used_surface_ids);
                     return PaneNode::Leaf {
                         id: *pane_id,
-                        surfaces: vec![PaneSurface::new(surface_id, make_terminal(cwd.as_deref()))],
+                        surfaces: vec![PaneSurface::new(
+                            surface_id,
+                            make_terminal(cwd.as_deref(), None),
+                        )],
                         active_surface_id: surface_id,
                     };
                 }
@@ -1730,7 +1768,13 @@ impl PaneTree {
                         used_surface_ids,
                     );
                     let restore_cwd = state.cwd.as_deref().or(cwd.as_deref());
-                    let mut surface = PaneSurface::new(surface_id, make_terminal(restore_cwd));
+                    let restored_text = if state.screen_text.is_empty() {
+                        None
+                    } else {
+                        Some(state.screen_text.as_slice())
+                    };
+                    let mut surface =
+                        PaneSurface::new(surface_id, make_terminal(restore_cwd, restored_text));
                     surface.title = state.title.clone();
                     surface.owner = state.owner.clone();
                     surface.close_pane_when_last = state.close_pane_when_last;

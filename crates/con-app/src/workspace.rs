@@ -620,13 +620,25 @@ fn theme_to_ghostty_colors(theme: &TerminalTheme) -> con_ghostty::TerminalColors
 fn make_ghostty_terminal(
     app: &std::sync::Arc<con_ghostty::GhosttyApp>,
     cwd: Option<&str>,
+    restored_screen_text: Option<&[String]>,
     font_size: f32,
     window: &mut Window,
     cx: &mut Context<ConWorkspace>,
 ) -> TerminalPane {
     let app = app.clone();
     let cwd = cwd.map(str::to_string);
-    let view = cx.new(|cx| crate::ghostty_view::GhosttyView::new(app, cwd, font_size, cx));
+    let restored_screen_text = restored_screen_text
+        .map(|lines| {
+            lines
+                .iter()
+                .filter(|line| !line.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .filter(|lines| !lines.is_empty());
+    let view = cx.new(|cx| {
+        crate::ghostty_view::GhosttyView::new(app, cwd, restored_screen_text, font_size, cx)
+    });
     let pane = TerminalPane::new(view);
     subscribe_terminal_pane(&pane, window, cx);
     pane
@@ -911,10 +923,20 @@ impl ConWorkspace {
             });
         }
 
-        let make_terminal =
-            |cwd: Option<&str>, window: &mut Window, cx: &mut Context<Self>| -> TerminalPane {
-                make_ghostty_terminal(&ghostty_app, cwd, font_size, window, cx)
-            };
+        let make_terminal = |cwd: Option<&str>,
+                             restored_screen_text: Option<&[String]>,
+                             window: &mut Window,
+                             cx: &mut Context<Self>|
+         -> TerminalPane {
+            make_ghostty_terminal(
+                &ghostty_app,
+                cwd,
+                restored_screen_text,
+                font_size,
+                window,
+                cx,
+            )
+        };
 
         let mut tabs: Vec<Tab> = session
             .tabs
@@ -947,11 +969,13 @@ impl ConWorkspace {
                 };
                 let pane_tree = if let Some(layout) = &tab_state.layout {
                     let mut restore_terminal =
-                        |restore_cwd: Option<&str>| make_terminal(restore_cwd, window, cx);
+                        |restore_cwd: Option<&str>, restored_screen_text: Option<&[String]>| {
+                            make_terminal(restore_cwd, restored_screen_text, window, cx)
+                        };
                     PaneTree::from_state(layout, tab_state.focused_pane_id, &mut restore_terminal)
                 } else {
                     let cwd = tab_state.cwd.as_deref();
-                    PaneTree::new(make_terminal(cwd, window, cx))
+                    PaneTree::new(make_terminal(cwd, None, window, cx))
                 };
                 Tab {
                     pane_tree,
@@ -979,7 +1003,7 @@ impl ConWorkspace {
             })
             .collect();
         if tabs.is_empty() {
-            let terminal = make_terminal(None, window, cx);
+            let terminal = make_terminal(None, None, window, cx);
             tabs.push(Tab {
                 pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),
@@ -1511,7 +1535,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TerminalPane {
-        make_ghostty_terminal(&self.ghostty_app, cwd, self.font_size, window, cx)
+        make_ghostty_terminal(&self.ghostty_app, cwd, None, self.font_size, window, cx)
     }
 
     fn horizontal_tabs_visible(&self) -> bool {

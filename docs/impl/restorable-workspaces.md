@@ -31,6 +31,7 @@ Implemented in the first issue #111 PR:
 
 - private session restore now round-trips every pane-local surface in a pane
 - each surface stores id, title, owner, cwd, and close-pane-when-last policy
+- each surface stores bounded private screen text for restart continuity
 - each pane stores its active surface id
 - old session files that only stored a leaf cwd still load correctly
 - New Window uses a fresh session seeded with global history, not a clone of
@@ -430,7 +431,8 @@ Status: schema foundation exists; UI and task files are deferred.
 
 ### Phase 6: Screen Text History
 
-Status: required for iTerm2-grade continuity, not part of this PR.
+Status: first visual continuity slice implemented in this PR; deeper native
+scrollback integration remains future work.
 
 - Add bounded transcript capture per pane/surface.
 - Persist private scrollback snapshots with AppState/project memory.
