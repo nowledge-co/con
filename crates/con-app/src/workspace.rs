@@ -672,7 +672,7 @@ impl ConWorkspace {
         Self::macos_major_version().is_none_or(|major| major >= 13)
     }
 
-    fn effective_terminal_opacity(value: f32) -> f32 {
+    pub(crate) fn effective_terminal_opacity(value: f32) -> f32 {
         if !Self::supports_terminal_glass() {
             return 1.0;
         }

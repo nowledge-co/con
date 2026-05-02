@@ -272,17 +272,6 @@ pub fn set_macos_window_glass_backdrop(window: &mut Window, blur: bool, effectiv
     );
 }
 
-#[cfg(target_os = "macos")]
-fn effective_macos_terminal_glass_opacity(value: f32) -> f32 {
-    fn remap_opacity(value: f32, input_floor: f32, output_floor: f32, exponent: f32) -> f32 {
-        let normalized = ((value - input_floor) / (1.0 - input_floor)).clamp(0.0, 1.0);
-        output_floor + (1.0 - output_floor) * normalized.powf(exponent)
-    }
-
-    let clamped = value.clamp(0.25, 1.0);
-    remap_opacity(clamped, 0.25, 0.72, 1.55)
-}
-
 #[cfg(target_os = "windows")]
 fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -373,7 +362,7 @@ fn default_window_background(
     #[cfg(target_os = "macos")]
     {
         let effective_opacity =
-            effective_macos_terminal_glass_opacity(config.appearance.terminal_opacity);
+            ConWorkspace::effective_terminal_opacity(config.appearance.terminal_opacity);
         if should_use_macos_window_glass_backdrop(
             config.appearance.terminal_blur,
             effective_opacity,
