@@ -1183,7 +1183,9 @@ impl PaneTree {
         let active = Self::active_surface(surfaces, active_surface_id)
             .unwrap_or_else(|| surfaces.first().expect("pane leaf must have a surface"));
         let terminal = active.terminal.render_child();
-        if surfaces.len() <= 1 {
+        let show_surface_strip =
+            surfaces.len() > 1 || active.owner.is_some() || active.title.is_some();
+        if !show_surface_strip {
             return div().size_full().child(terminal).into_any_element();
         }
 
@@ -1217,6 +1219,11 @@ impl PaneTree {
             } else {
                 theme.transparent
             };
+            let icon_color = if is_active {
+                theme.foreground.opacity(0.52)
+            } else {
+                theme.foreground.opacity(0.34)
+            };
             let sid = surface.id;
             let focus_cb = focus_surface_cb.clone();
             let rename_cb = rename_surface_cb.clone();
@@ -1238,6 +1245,13 @@ impl PaneTree {
                     .on_double_click(move |_, window, cx| {
                         rename_cb(sid, window, cx);
                     })
+                    .child(
+                        svg()
+                            .path("phosphor/terminal.svg")
+                            .size(px(10.0))
+                            .flex_shrink_0()
+                            .text_color(icon_color),
+                    )
                     .child(
                         div()
                             .truncate()
