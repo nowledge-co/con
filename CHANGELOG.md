@@ -16,6 +16,12 @@ con is still pre-release, so entries may group related beta work while the produ
 - Clarified the human surface model in menus and docs: surfaces are tab-like sessions inside one pane, while surface split commands create a new visible pane first. The terminal context menu now also includes Settings for direct access.
 - Refined the in-pane surface rail from a full-width header into compact local chrome, so a pane with multiple surfaces no longer looks like another nested pane split.
 
+### Changed
+
+**Command Palette**
+
+- Normalized the command palette to Con's current design language: system UI typography, quieter selected-row treatment, a softer search well, and cleaner shortcut alignment.
+
 ### Fixed
 
 **Control Plane**
