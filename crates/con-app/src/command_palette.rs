@@ -96,6 +96,18 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Pane",
     },
     PaletteAction {
+        id: "split-left",
+        label: "Split Left",
+        shortcut: "",
+        category: "Pane",
+    },
+    PaletteAction {
+        id: "split-up",
+        label: "Split Up",
+        shortcut: "",
+        category: "Pane",
+    },
+    PaletteAction {
         id: "toggle-pane-zoom",
         label: "Toggle Pane Zoom",
         shortcut: TOGGLE_PANE_ZOOM_SHORTCUT,

@@ -46,6 +46,7 @@ use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::menu::ContextMenuExt;
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
@@ -1347,6 +1348,8 @@ impl Render for GhosttyView {
 
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
+        let context_focus = focus.clone();
+        let menu_focus = focus.clone();
 
         div()
             .flex()
@@ -1419,6 +1422,18 @@ impl Render for GhosttyView {
                     cx.notify();
                 }
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&context_focus, cx);
+                    this.last_mouse_position = Some(event.position);
+                    this.mouse_down_link = None;
+                    this.suppress_link_mouse_up = false;
+                    let _ = this.update_hovered_link(&event.modifiers);
+                    cx.emit(GhosttyFocusChanged);
+                    cx.notify();
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -1567,6 +1582,13 @@ impl Render for GhosttyView {
                             ),
                     ),
             )
+            .context_menu(move |menu, window, cx| {
+                crate::terminal_context_menu::terminal_context_menu(
+                    menu.action_context(menu_focus.clone()),
+                    window,
+                    cx,
+                )
+            })
     }
 }
 

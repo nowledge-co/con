@@ -24,6 +24,7 @@ use futures::StreamExt;
 use futures::channel::mpsc::unbounded;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::menu::ContextMenuExt;
 
 use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
@@ -812,6 +813,8 @@ impl Render for GhosttyView {
         let theme = cx.theme();
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
+        let context_focus = focus.clone();
+        let menu_focus = focus.clone();
         let entity = cx.entity().downgrade();
         let input_entity = entity.clone();
         let font_size_px = effective_font_size(self.initial_font_size);
@@ -998,6 +1001,19 @@ impl Render for GhosttyView {
                 }
             }))
             .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&context_focus, cx);
+                    let _ = this.ensure_session(cx);
+                    this.last_mouse_position = Some(event.position);
+                    this.mouse_down_link = None;
+                    this.suppress_link_mouse_up = false;
+                    let _ = this.update_hovered_link(&event.modifiers);
+                    cx.emit(GhosttyFocusChanged);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
@@ -1102,6 +1118,13 @@ impl Render for GhosttyView {
                         .size_full(),
                     ),
             )
+            .context_menu(move |menu, window, cx| {
+                crate::terminal_context_menu::terminal_context_menu(
+                    menu.action_context(menu_focus.clone()),
+                    window,
+                    cx,
+                )
+            })
     }
 }
 

@@ -246,10 +246,11 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit,
-    SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
-    SelectTab9, SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom,
-    ToggleVerticalTabs,
+    ClearTerminal, ClosePane, CloseSurface, CloseTab, CycleInputMode, FocusInput, NewSurface,
+    NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab, PreviousSurface,
+    PreviousTab, Quit, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
+    SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
+    ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -4684,6 +4685,17 @@ impl ConWorkspace {
             "split-down" => {
                 self.split_pane(SplitDirection::Vertical, SplitPlacement::After, window, cx);
             }
+            "split-left" => {
+                self.split_pane(
+                    SplitDirection::Horizontal,
+                    SplitPlacement::Before,
+                    window,
+                    cx,
+                );
+            }
+            "split-up" => {
+                self.split_pane(SplitDirection::Vertical, SplitPlacement::Before, window, cx);
+            }
             "toggle-pane-zoom" => {
                 self.toggle_pane_zoom(&TogglePaneZoom, window, cx);
             }
@@ -8228,6 +8240,78 @@ impl ConWorkspace {
         }
     }
 
+    fn split_left(&mut self, _: &SplitLeft, window: &mut Window, cx: &mut Context<Self>) {
+        if self.has_active_tab() {
+            self.split_pane(
+                SplitDirection::Horizontal,
+                SplitPlacement::Before,
+                window,
+                cx,
+            );
+        }
+    }
+
+    fn split_up(&mut self, _: &SplitUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.has_active_tab() {
+            self.split_pane(SplitDirection::Vertical, SplitPlacement::Before, window, cx);
+        }
+    }
+
+    fn clear_terminal(&mut self, _: &ClearTerminal, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.has_active_tab() {
+            self.active_terminal().clear_scrollback(cx);
+        }
+    }
+
+    fn new_surface(&mut self, _: &NewSurface, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_surface_in_focused_pane(window, cx);
+    }
+
+    fn new_surface_split_right(
+        &mut self,
+        _: &NewSurfaceSplitRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_surface_split_from_focused_pane(
+            SplitDirection::Horizontal,
+            SplitPlacement::After,
+            window,
+            cx,
+        );
+    }
+
+    fn new_surface_split_down(
+        &mut self,
+        _: &NewSurfaceSplitDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_surface_split_from_focused_pane(
+            SplitDirection::Vertical,
+            SplitPlacement::After,
+            window,
+            cx,
+        );
+    }
+
+    fn next_surface(&mut self, _: &NextSurface, window: &mut Window, cx: &mut Context<Self>) {
+        self.cycle_surface_in_focused_pane(1, window, cx);
+    }
+
+    fn previous_surface(
+        &mut self,
+        _: &PreviousSurface,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cycle_surface_in_focused_pane(-1, window, cx);
+    }
+
+    fn close_surface(&mut self, _: &CloseSurface, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_current_surface_in_focused_pane(window, cx);
+    }
+
     fn close_pane(&mut self, _: &ClosePane, window: &mut Window, cx: &mut Context<Self>) {
         if !self.has_active_tab() {
             return;
@@ -9801,6 +9885,15 @@ impl Render for ConWorkspace {
                 .on_action(cx.listener(Self::toggle_pane_zoom))
                 .on_action(cx.listener(Self::split_right))
                 .on_action(cx.listener(Self::split_down))
+                .on_action(cx.listener(Self::split_left))
+                .on_action(cx.listener(Self::split_up))
+                .on_action(cx.listener(Self::clear_terminal))
+                .on_action(cx.listener(Self::new_surface))
+                .on_action(cx.listener(Self::new_surface_split_right))
+                .on_action(cx.listener(Self::new_surface_split_down))
+                .on_action(cx.listener(Self::next_surface))
+                .on_action(cx.listener(Self::previous_surface))
+                .on_action(cx.listener(Self::close_surface))
                 .on_action(cx.listener(Self::focus_input))
                 .on_action(cx.listener(Self::cycle_input_mode))
                 .on_action(cx.listener(Self::toggle_pane_scope_picker))

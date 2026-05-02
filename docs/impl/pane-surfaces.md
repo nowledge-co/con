@@ -74,10 +74,11 @@ Surface targeting accepts:
 
 Prefer `surface_id` for follow-up automation.
 
-## Command Palette
+## Human Entry Points
 
-Surface control is also available from Command Palette so humans can discover
-and exercise the same pane-local model without using `con-cli`.
+Surface control is also available from Command Palette and the terminal
+right-click menu so humans can discover and exercise the same pane-local model
+without using `con-cli`.
 
 - `New Surface in Pane`: creates a new terminal session inside the focused
   pane and focuses it.
@@ -98,6 +99,12 @@ and exercise the same pane-local model without using `con-cli`.
 These palette actions are deliberately pane-local. They do not change the
 existing `panes.*` control-plane contract, the built-in agent harness target
 model, or terminal-agent benchmark assumptions.
+
+The terminal context menu uses the same GPUI actions as the Command Palette and
+app menu instead of custom callbacks. That keeps right-click behavior aligned
+with keyboard and automation entry points: the menu first restores focus to the
+clicked terminal, then dispatches the selected action through the normal window
+action path.
 
 This mirrors the interactive-subagent flow: create the first worker as a
 visible split, then add later workers as surfaces inside that worker pane so
