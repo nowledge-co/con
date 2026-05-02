@@ -18,16 +18,39 @@ require_cmd shasum
 
 sign_identity_value="$(signing_identity)"
 
+run_codesign() {
+  local max_attempts=4
+  local delay=10
+  local attempt
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    local status=0
+    if codesign "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+
+    if [[ "$attempt" -ge "$max_attempts" ]]; then
+      return "$status"
+    fi
+
+    log "codesign failed with exit status $status; retrying in ${delay}s (${attempt}/${max_attempts})"
+    sleep "$delay"
+    delay=$((delay * 2))
+  done
+}
+
 sign_code() {
   local path="$1"
   log "Signing $path"
-  codesign --force --sign "$sign_identity_value" --timestamp --options runtime "$path"
+  run_codesign --force --sign "$sign_identity_value" --timestamp --options runtime "$path"
 }
 
 sign_container() {
   local path="$1"
   log "Signing $path"
-  codesign --force --sign "$sign_identity_value" --timestamp "$path"
+  run_codesign --force --sign "$sign_identity_value" --timestamp "$path"
 }
 
 sign_app_bundle() {
