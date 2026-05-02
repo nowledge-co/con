@@ -1230,20 +1230,19 @@ impl PaneTree {
             return div().size_full().child(terminal).into_any_element();
         }
 
-        let rail_label = if surfaces.len() == 1 {
-            "surface".to_string()
-        } else {
-            format!("{} tabs", surfaces.len())
-        };
+        let rail_label = format!(
+            "{} tab{}",
+            surfaces.len(),
+            if surfaces.len() == 1 { "" } else { "s" }
+        );
         let rail_bg = if pane_id == focused_id {
-            theme.tab_bar_segmented.opacity(0.88)
+            theme.tab_bar_segmented
         } else {
-            theme.tab_bar_segmented.opacity(0.68)
+            theme.tab_bar_segmented.opacity(0.78)
         };
-        let rail_text =
-            theme
-                .tab_foreground
-                .opacity(if pane_id == focused_id { 0.64 } else { 0.50 });
+        let rail_text = theme
+            .foreground
+            .opacity(if pane_id == focused_id { 0.68 } else { 0.56 });
 
         let mut surface_rail = div()
             .id(("surface-tab-strip", pane_id))
@@ -1268,8 +1267,8 @@ impl PaneTree {
                 .flex_shrink_0()
                 .pl(px(2.0))
                 .pr(px(4.0))
-                .text_size(px(10.0))
-                .line_height(px(12.0))
+                .text_size(px(11.0))
+                .line_height(px(13.0))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(rail_text)
                 .child(
@@ -1285,7 +1284,7 @@ impl PaneTree {
                 .w(px(1.0))
                 .h(px(12.0))
                 .flex_shrink_0()
-                .bg(theme.tab_foreground.opacity(0.10)),
+                .bg(theme.foreground.opacity(0.14)),
         );
 
         for (index, surface) in surfaces.iter().enumerate() {
@@ -1295,24 +1294,24 @@ impl PaneTree {
                 .clone()
                 .unwrap_or_else(|| format!("Surface {}", index + 1));
             let color = if is_active {
-                theme.tab_active_foreground.opacity(0.92)
+                theme.foreground.opacity(0.92)
             } else {
-                theme.tab_foreground.opacity(0.58)
+                theme.foreground.opacity(0.60)
             };
             let bg = if is_active {
-                theme.tab_active.opacity(0.88)
+                theme.tab_active
             } else {
                 theme.transparent
             };
             let icon_color = if is_active {
-                theme.tab_active_foreground.opacity(0.70)
+                theme.foreground.opacity(0.70)
             } else {
-                theme.tab_foreground.opacity(0.42)
+                theme.foreground.opacity(0.42)
             };
             let hover_bg = if is_active {
-                theme.tab_active.opacity(0.96)
+                theme.tab_active
             } else {
-                theme.tab_active.opacity(0.42)
+                theme.foreground.opacity(0.08)
             };
             let sid = surface.id;
             let focus_cb = focus_surface_cb.clone();
@@ -1398,11 +1397,11 @@ impl PaneTree {
                         .flex_shrink_0()
                         .rounded(px(4.0))
                         .text_color(if is_active {
-                            theme.tab_active_foreground.opacity(0.56)
+                            theme.foreground.opacity(0.56)
                         } else {
-                            theme.tab_foreground.opacity(0.46)
+                            theme.foreground.opacity(0.46)
                         })
-                        .hover(|s| s.bg(theme.tab_active.opacity(0.62)))
+                        .hover(|s| s.bg(theme.foreground.opacity(0.10)))
                         .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                             close_cb_for_button(sid, window, cx);
                             window.prevent_default();
@@ -1410,9 +1409,9 @@ impl PaneTree {
                         })
                         .child(svg().path("phosphor/x.svg").size(px(8.0)).text_color(
                             if is_active {
-                                theme.tab_active_foreground.opacity(0.62)
+                                theme.foreground.opacity(0.62)
                             } else {
-                                theme.tab_foreground.opacity(0.52)
+                                theme.foreground.opacity(0.52)
                             },
                         )),
                 );
