@@ -11,7 +11,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Restorable Workspaces**
 
 - Added the first restorable-workspace implementation slice. Private session layout now round-trips every pane-local surface, including surface id, title, owner, cwd, active surface, and close-pane-when-last policy, instead of restoring only the active surface in each pane.
-- Added a typed, validated `.con/workspace.toml` schema for future git-compatible project layouts, with tabs, panes, surfaces, split geometry, relative cwd values, startup command policy, and agent defaults kept separate from private app runtime state.
+- Documented the production restore model: local continuity and project-local memory come first, while git-shared workspace files remain a deferred feature until the workflow is validated.
 
 ### Changed
 

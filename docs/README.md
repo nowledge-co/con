@@ -8,6 +8,7 @@ This folder collects research notes, implementation notes, and design handoff do
 - `../CHANGELOG.md` — release notes and product changes
 - `../DESIGN.md` — vision and architecture
 - `../HACKING.md` — contributor quickstart
+- `restorable-workspaces-guide.md` — user-facing guide to workspace restore
 
 ## Design
 
@@ -23,6 +24,7 @@ This folder collects research notes, implementation notes, and design handoff do
 - `impl/terminal-agent-benchmark.md` — benchmark architecture and evaluation policy
 - `impl/terminal-rendering.md` — rendering pipeline
 - `impl/pane-surfaces.md` — pane-local terminal surface design and control API
+- `impl/restorable-workspaces.md` — workspace restore product and implementation plan
 - `impl/socket-api.md` — automation and control API
 - `impl/build-system.md` — build and dependency notes
 

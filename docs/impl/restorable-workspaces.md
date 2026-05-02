@@ -2,715 +2,394 @@
 
 Issue: [#111](https://github.com/nowledge-co/con-terminal/issues/111)
 
-## Product Goal
+## Product Position
 
-Con should restore the user's working shape without pretending a terminal
-process can be snapshotted. A restored workspace should feel like an IDE or
-browser session:
+Restorable workspaces are a continuity feature, not a process snapshot feature.
+Con should bring the user back to the same working shape: windows, tabs, panes,
+pane-local surfaces, cwd, history, focus, and agent context. It must not pretend
+that a shell process, a TUI process, or arbitrary terminal scrollback can be
+faithfully resumed.
 
-- window/tab/pane/surface layout returns predictably
-- each terminal starts in the right directory
-- command/input history is available immediately
-- per-tab agent conversations and routing stay attached to the tab that owns
-  them
-- project layouts can live in git as a normal dotfile
-- opening a new window does not blindly clone the last window's agent/session
+The production design has one priority order:
 
-The important distinction is between **intent** and **runtime**:
+1. **Local continuity first.** Restore the user's own windows and project memory
+   from private app data.
+2. **Project memory second.** Opening a repo should feel like returning to a
+   familiar workspace without writing anything to the repo.
+3. **Git-shared workspace intent later.** A committed layout file can be useful
+   for teams and orchestrators, but it needs validation from real usage before
+   it becomes a user-facing format.
 
-- **Intent** is durable: project root, named tabs, split shape, pane cwd,
-  surface names, optional startup commands, agent defaults.
-- **Runtime** is ephemeral: process IDs, PTY handles, terminal scrollback,
-  TUI internal state, shell integration readiness.
+This ordering mirrors browser and IDE tacit behavior: New Window is fresh,
+Open Folder can restore local project memory, and app launch can continue where
+the user left off. Repo files describe explicit tasks and project conventions;
+private runtime state stays private.
 
-Con should restore intent automatically and expose runtime recovery as explicit
-policy, not as a misleading "resume process" promise.
+## Current Production Slice
 
-## Current State
+Implemented in the first issue #111 PR:
 
-Existing persistence already covers more than the issue title suggests:
+- private session restore now round-trips every pane-local surface in a pane
+- each surface stores id, title, owner, cwd, and close-pane-when-last policy
+- each pane stores its active surface id
+- old session files that only stored a leaf cwd still load correctly
+- New Window uses a fresh session seeded with global history, not a clone of
+  the restored layout
+- a second process that detects a live control endpoint opens a fresh
+  history-backed session instead of restoring the same saved layout again
 
-- `con-core::session::Session` persists a single window's tabs, active tab,
-  agent panel state, input bar state, global shell history, global input
-  history, vertical-tabs state, and per-tab conversation IDs.
-- `TabState` persists tab title, cwd, split layout, focused pane id,
-  per-pane command history, per-tab agent routing, and user label.
-- `PaneTree::to_state` / `from_state` persist split ratios, leaf cwd, and
-  every pane-local surface in each leaf.
-- `GlobalHistoryState` stores command/input history outside layout so a fresh
-  window can still get history.
-- `con-core::workspace_layout` defines a validated `.con/workspace.toml`
-  schema for git-compatible project layout files.
-
-Gaps:
-
-- The session file is a private app-runtime JSON shape, not a project-owned
-  portable layout format.
-- The root session is a single-window model. It cannot represent multiple
-  independent windows cleanly.
-- Project workspace files are typed and validated, but not yet wired to
-  Command Palette, Settings, or `con-cli` import/export flows.
-- New-window and startup semantics are partially separated: first launch
-  restores `Session::load()`, New Window creates a fresh session with global
-  history, and a second process that sees an already-live control endpoint now
-  opens a fresh-history session instead of cloning the same saved
-  layout/agent conversation.
-- Multiple app instances can still contend for runtime-state writes until the
-  AppState window model and single-instance forwarding are implemented.
-- Terminal scrollback/process state is not recoverable and should not be
-  silently promised.
+This slice is production-safe because it improves private restore fidelity and
+does not introduce public file formats, hidden command replay, or repo trust
+prompts.
 
 ## First Principles
 
 1. **A terminal session is not a document.**
-   We can restore shell placement and intent, but not a running TUI process.
-   If a user wants `vim`, `claude`, `htop`, or `tmux` to reopen, that must be
-   an explicit startup command or an external multiplexer state.
+   Con can restore placement and intent. It cannot honestly restore arbitrary
+   process state. True process continuity belongs to tools such as tmux,
+   zellij, shells, or the underlying application.
 
-2. **Project layout and app recovery are different products.**
-   Project layout belongs to the repo and should be reviewable in git.
-   App recovery belongs to the user profile and can store private, noisy state.
+2. **Private state and shared intent are different products.**
+   Conversations, command history, trust decisions, window geometry, scrollback,
+   active focus, and credentials are private. Team-shared files must be
+   reviewable, deterministic, and safe to clone.
 
-3. **Stable IDs are for machines; names are for humans.**
-   Pane/surface IDs should be stable within a restored workspace file where
-   possible. UI can show names. CLI/agents should target IDs.
+3. **New Window means fresh.**
+   Cmd+N, Dock reopen after all windows are closed, and summon-from-hotkey
+   should create a clean shell unless the user explicitly opens a project or
+   chooses to restore.
 
-4. **Relative paths make layouts portable.**
-   A committed workspace file should use paths relative to its root. Absolute
-   paths are allowed only in private local state.
+4. **Open Project can remember.**
+   If the user opens the same folder again, Con may restore local project
+   memory keyed by the canonical project root. This is the IDE-shaped behavior
+   users already understand.
 
 5. **No hidden replay.**
-   Commands with side effects are never replayed implicitly. Startup commands
-   require explicit `run = "..."` or `profile = "..."` in the layout.
+   Con must never run commands from a restored workspace without explicit user
+   action. Future task/workspace files are picker inputs, not boot scripts.
 
-6. **One authority owns live state.**
-   The GPUI workspace remains the live authority. Persistence snapshots must
-   be derived from workspace state, not maintained as a second mutable model.
+6. **Stable IDs are for APIs; names are for humans.**
+   `pane_id` and `surface_id` are the control-plane targets. The UI should show
+   stable names such as "Server", "Tests", "Codex", or "Surface 2".
 
-7. **Restore should optimize for "back to flow", not "exact pixels".**
-   A user cares that the repo, panes, roles, cwd, and agent context are back.
-   Exact process state is only valuable when it is truthful. False precision is
-   worse than a clean restore prompt.
+7. **Restore should optimize for flow, not exact pixels.**
+   Rows, columns, pane ratios, cwd, active tab, and named surfaces matter.
+   Pixel-perfect historical window bounds are secondary and platform-specific.
 
-8. **A committed layout is a contract for a team.**
-   Anything in `.con/workspace.toml` should be understandable in code review,
-   stable across machines, and safe to clone. Private state must stay in local
-   overlays.
+## User-Facing Flows
 
-9. **A new window is a new workspace, not a clone.**
-   Browser/IDE muscle memory says Cmd+N starts fresh. Restore is for app launch
-   and explicit project open, not every new surface.
+### Flow 1: Quit Tonight, Continue Tomorrow
 
-## Product Use Cases
+The user has one Con window with three tabs:
 
-### Daily Continuity
+- `Dev`: editor shell, server pane, tests pane
+- `Agents`: two pane-local surfaces, `Planner` and `Worker`
+- `Release`: one shell in `~/release`
 
-The user quits Con at night and reopens it in the morning.
+When Con launches cold tomorrow:
 
-Required behavior:
+- the same windows/tabs/panes/surfaces return
+- each terminal opens at its remembered cwd
+- the active tab/pane/surface is restored
+- per-tab agent conversation resumes from private state
+- commands are not automatically rerun
+- global and project history are available for suggestions
 
-- restore last windows only once on true app startup
-- restore tabs, panes, surfaces, cwd, active focus, input bar, agent panel, and
-  per-tab agent routing/conversation
-- do not rerun commands unless explicit restore policy asks/approves
-- global and project-scoped history should be available immediately
+Example UI copy for restored panes:
 
-Design implication:
+```text
+Restored workspace from May 2, 22:41. Processes were not resumed.
+```
 
-- private `AppState` owns this; project layout is only an input.
+The line should be quiet and optional. It exists to set correct expectations,
+not to add noise to every shell forever.
 
-### Crash Recovery
+### Flow 2: Cmd+N Scratch Window
 
-The app crashes or the OS restarts.
+The user presses Cmd+N while a large project workspace is open.
 
-Required behavior:
+Expected result:
 
-- recover the last known UI shape
-- clearly label any commands that did not restart
-- never silently replay dangerous commands
-- preserve enough history for suggestions and agent continuity
+- one clean shell
+- default cwd from config or launch context
+- shared command/input history
+- no copied agent conversation
+- no copied tabs, panes, or surfaces
 
-Design implication:
+This is already the behavior direction of `fresh_window_session_with_history()`.
 
-- private runtime snapshots should be frequent and cheap, but restore actions
-  must remain user-controlled.
+### Flow 3: Second Process Invocation
 
-### Scratch Window
+The user runs `con` while Con is already open.
 
-The user presses Cmd+N or summons Con from anywhere.
+Production target:
 
-Required behavior:
+- the new process sends a control-plane request to the running app
+- the running app opens the requested window/project
+- the new process exits
+- only the running app writes runtime state
 
-- open one clean shell with shared history/defaults
-- do not clone the last project layout, agent conversation, or surfaces
+Current mitigation:
 
-Design implication:
+- the second process detects the live endpoint and opens a fresh-history
+  session instead of cloning the last restored session
 
-- New Window uses `fresh_window_session_with_history()`, not app restore state.
+The mitigation is safe, but not final. Single-instance forwarding is the
+production target.
 
-### Project Dotfile
+### Flow 4: Open Folder
 
-A repo contains `.con/workspace.toml`.
+The user runs:
 
-Required behavior:
+```sh
+con ~/dev/con
+```
 
-- opening the repo creates the expected tabs/panes/surfaces with relative cwd
-- team members can review the layout like any other dotfile
-- local active focus, window size, and history remain private
-- missing paths degrade gracefully
+Production target:
 
-Design implication:
+- Con canonicalizes `~/dev/con`
+- if local project memory exists, it restores that folder's last Con shape
+- otherwise, it opens one fresh shell rooted at `~/dev/con`
+- project memory remains in app data, not in the repo
 
-- `.con/workspace.toml` stores intent; local overlay stores user/runtime state.
+Suggested private storage:
 
-### Team Onboarding
+```text
+<app-data>/
+  launch.json
+  windows/<window-uuid>.json
+  projects/<hash-of-canonical-root>.json
+  history.json
+```
 
-A new contributor clones a repo and opens its Con workspace.
+### Flow 5: Agent Orchestrator Surfaces
 
-Required behavior:
+An external orchestrator creates a pane with multiple surfaces:
 
-- understand the workspace before it runs anything
-- see "Install", "Server", "Tests", "Agent" roles immediately
-- choose which startup commands to run
-- avoid leaking maintainer-specific absolute paths or conversations
+- surface `planner`: cwd `~/dev/app`
+- surface `worker-1`: cwd `~/dev/app/crates/server`
+- surface `worker-2`: cwd `~/dev/app/crates/ui`
 
-Design implication:
+After restart:
 
-- default `restore = "manual"`; `restore = "ask"` opens a restore sheet.
+- all three surfaces still exist in the same pane
+- titles and owners survive
+- inactive surfaces are sized to their pane before focus
+- the orchestrator can continue targeting stable surface IDs where possible
+- humans can distinguish the surfaces by names
 
-### Agent Orchestrator / Subagents
+This is the most important shipped value of the current PR.
 
-An external orchestrator creates pane-local surfaces for worker agents.
+### Flow 6: tmux / SSH Continuity
 
-Required behavior:
+If the user wants true process continuity, Con should make tmux or an explicit
+SSH attach command easy, not fake process restore.
 
-- owned surfaces survive app restart as named surfaces with correct cwd
-- human can see which surface belongs to what role
-- `surface_id` remains stable within restored local state where possible
-- orchestrator-owned ephemeral panes can still close when their last surface
-  closes
+Recommended user pattern:
 
-Design implication:
+```sh
+tmux attach -t con || tmux new -s con
+```
 
-- private session restore must be lossless for surfaces before project import
-  matters.
+Con's job is to restore the terminal shape around that command. Running the
+command remains a user action unless a future trusted task system explicitly
+supports it.
 
-### Remote / SSH Workspace
+## State Model
 
-The user works inside SSH panes.
+### 1. Window Runtime State
 
-Required behavior:
-
-- restore local shell panes at the correct local cwd
-- represent remote intent explicitly if Con started the SSH command
-- do not pretend an arbitrary SSH session can be resumed
-- support startup command such as `ssh prod` only with user approval
-
-Design implication:
-
-- remote continuity is runtime/private evidence; project files may define an
-  approved startup command but should not store live SSH state.
-
-### tmux Workspace
-
-The user relies on tmux for live process/session recovery.
-
-Required behavior:
-
-- Con can restore panes that attach to named tmux sessions/windows
-- Con should not duplicate tmux's responsibilities
-- startup command examples like `tmux attach -t project || tmux new -s project`
-  must be explicit and reviewable
-
-Design implication:
-
-- tmux is the recommended path for true process continuity; Con restores the
-  terminal shell shape around it.
-
-### Multi-Root / Monorepo
-
-The user wants one workspace for a monorepo or several related repos.
-
-Required behavior:
-
-- support per-pane relative cwd
-- allow root-relative and absolute paths
-- avoid assuming every pane belongs to one Rust/Node/etc. project type
-
-Design implication:
-
-- workspace `root` is only path resolution base; panes define their own cwd.
-
-### Privacy / Sensitive Work
-
-The user runs production commands or chats with private agents.
-
-Required behavior:
-
-- do not commit command history, scrollback, conversations, tokens, SSH hosts
-  unless explicitly exported
-- make trust decisions local and revocable
-- allow project layouts to omit agent model/provider choices
-
-Design implication:
-
-- committed layout cannot be the source of secrets or private histories.
-
-### Cross-Platform Team
-
-The same repo layout is used on macOS, Windows, and Linux.
-
-Required behavior:
-
-- path handling is relative when possible
-- platform-specific startup commands are possible without forking the file
-- unsupported panes/surfaces degrade with a clear message
-
-Design implication:
-
-- future schema should support per-platform command variants before `auto`
-  restore can be trusted broadly.
-
-## Proposed State Model
-
-Use three layers.
-
-### 1. User Profile Runtime State
-
-Private app data. Replaces the current single `session.json` over time.
+Private app data, one file per window.
 
 Purpose:
 
-- crash/restart recovery
-- last open windows
-- active window/tab/pane/surface
-- private local cwd values
-- local command/input history
-- per-tab conversation IDs
-- UI chrome state
+- tabs
+- split layout
+- focused pane
+- active tab
+- pane-local surfaces
+- agent panel state
+- input bar state
+- vertical tabs state
 
-Path:
-
-- existing `con_paths::app_data_dir()`
-- migrate `session.json` to `app-state.v1.json`
-- keep `history.json` separate or embed under the app state with a migration
-
-Shape:
+Sketch:
 
 ```json
 {
   "version": 1,
-  "last_active_window_id": "win-main",
-  "windows": [
-    {
-      "id": "win-main",
-      "workspace_ref": {
-        "kind": "project",
-        "root": "/Users/me/dev/con",
-        "layout_file": ".con/workspace.toml"
-      },
-      "runtime": {
-        "bounds": null,
-        "active_tab": "server",
-        "agent_panel_open": true,
-        "agent_panel_width": 420,
-        "input_bar_visible": true,
-        "vertical_tabs_pinned": true,
-        "vertical_tabs_width": 240
-      }
-    }
-  ]
+  "id": "win_01j...",
+  "project_root": "/Users/me/dev/con",
+  "active_tab": 0,
+  "tabs": [],
+  "chrome": {
+    "agent_panel_open": true,
+    "input_bar_visible": true,
+    "vertical_tabs_visible": false
+  }
 }
 ```
 
-### 2. Project Workspace Layout
+### 2. Launch Manifest
 
-Git-compatible, human-readable, deterministic TOML.
+Private app data that records which windows were open at last app quit.
 
-Default file:
+Sketch:
 
-```text
-.con/workspace.toml
+```json
+{
+  "version": 1,
+  "restore_windows_on_launch": true,
+  "last_active_window_id": "win_01j...",
+  "windows": ["win_01j...", "win_01k..."]
+}
 ```
 
-Why TOML:
+### 3. Project Memory
 
-- Con config is already TOML
-- good diff quality
-- friendly for hand edits
-- lower ceremony than JSON for a dotfile
-
-Example:
-
-```toml
-version = 1
-name = "con"
-root = "."
-
-[defaults]
-shell = "login"
-agent_provider = "openai"
-agent_model = "gpt-5.2"
-
-[[tabs]]
-id = "dev"
-title = "Dev"
-cwd = "."
-active_pane = "editor"
-
-[tabs.agent]
-provider = "openai"
-model = "gpt-5.2"
-
-[tabs.layout]
-kind = "split"
-direction = "horizontal"
-ratio = 0.58
-first = { kind = "pane", id = "editor" }
-
-[tabs.layout.second]
-kind = "split"
-direction = "vertical"
-ratio = 0.50
-first = { kind = "pane", id = "tests" }
-second = { kind = "pane", id = "server" }
-
-[[tabs.panes]]
-id = "editor"
-cwd = "."
-active_surface = "shell"
-
-[[tabs.panes.surfaces]]
-id = "shell"
-title = "Shell"
-cwd = "."
-
-[[tabs.panes.surfaces]]
-id = "agent"
-title = "Codex"
-cwd = "."
-run = "codex"
-restore = "manual"
-
-[[tabs.panes]]
-id = "tests"
-cwd = "."
-
-[[tabs.panes.surfaces]]
-id = "shell"
-title = "Tests"
-cwd = "."
-
-[[tabs.panes]]
-id = "server"
-cwd = "crates/con-app"
-
-[[tabs.panes.surfaces]]
-id = "server"
-title = "Server"
-cwd = "crates/con-app"
-run = "cargo run -p con"
-restore = "ask"
-```
-
-Design notes:
-
-- `tabs.layout` references pane IDs, so layout structure stays compact and
-  pane metadata is not duplicated inside the tree.
-- `cwd` is relative to `root` unless absolute.
-- Agent provider/model in the project layout are defaults only. Credentials
-  always come from user config. Conversation IDs stay private in local runtime
-  state unless a user deliberately exports a transcript.
-- `run` is never replayed silently unless `restore = "auto"` and the command
-  is marked safe by user policy. Initial implementation should support
-  `manual` and `ask`; `auto` can come later.
-- `surfaces` are pane-local terminal sessions. Persist all of them, not only
-  the active one.
-
-### 3. Local Project Overlay
-
-Private user data keyed by canonical project root plus layout-file path.
+Private app data keyed by canonical root hash.
 
 Purpose:
 
-- active tab/pane/surface for that project
-- window bounds
-- command/input history for that project
-- conversation IDs if user does not want them committed
-- last resolved absolute paths
-- trust decisions for startup commands, keyed by canonical root, layout path,
-  and layout content hash
-- last accepted restore choices, so the user can rerun only the panes they care
-  about
+- last local workspace shape for a project
+- project-scoped command/input history
+- per-tab conversation IDs
+- last active tab/pane/surface for that project
 
-Do not write noisy local state into `.con/workspace.toml`.
+Sketch:
 
-Suggested path:
-
-```text
-<app-data>/workspace-overlays/<hash-of-root-and-layout>.json
+```json
+{
+  "version": 1,
+  "root": "/Users/me/dev/con",
+  "last_window_id": "win_01j...",
+  "tabs": [],
+  "history": {
+    "commands": [],
+    "inputs": []
+  }
+}
 ```
 
-The overlay key must include the canonical root and layout file path so two
-repos with the same name do not collide.
+### 4. Future Shared Project Files
 
-## Restore Semantics
+Deferred until the local continuity model is complete and real users ask for a
+team-shared file.
 
-### Pane
+Preferred future shape:
 
-Restore:
+- `.con/tasks.toml`: explicit named commands users pick from a menu
+- `.con/layout.toml`: optional layout intent only, no command replay
 
-- pane ID
-- split geometry
-- cwd
-- human title
-- focused pane
-- command history used by Con suggestions
+Do not ship a combined "layout plus run policy" file in v1. It creates a trust
+model before we know users need it.
 
-Do not restore:
+## Startup Semantics
 
-- process PID
-- shell job table
-- arbitrary terminal scrollback by default
+| Gesture | Production Behavior |
+| --- | --- |
+| Cold app launch | Restore windows from `launch.json` if enabled. |
+| Cmd+N | Fresh scratch window with shared history only. |
+| Open Folder / `con <path>` | Restore private project memory if present; otherwise fresh root shell. |
+| Dock click after all windows closed | Reopen one clean/default window, or last window if the user chose that setting. |
+| Second process invocation | Forward to running app through the control socket, then exit. |
+| Crash recovery | Restore last private shape, but never pretend processes resumed. |
 
-### Surface
+## Control Plane Direction
 
-Restore:
+Existing pane and surface APIs remain stable.
 
-- surface ID
-- title
-- owner
-- cwd
-- active surface per pane
-- close-pane-when-last policy for orchestrator-owned surfaces
+Near-term additive APIs:
 
-Do not restore:
+- `windows.open`
+- `windows.list`
+- `windows.focus`
+- `workspaces.open_project`
+- `workspaces.current`
+- `workspaces.save_local`
+- `workspaces.clear_local`
 
-- live process unless explicit `run` policy exists
+Deferred APIs:
 
-### Agent
+- `workspaces.export_layout`
+- `workspaces.import_layout`
+- `workspaces.validate_layout`
 
-Restore:
+The deferred APIs should not be implemented until the product has a real import
+or export UI and a clear user story.
 
-- tab-owned conversation ID from private runtime state by default
-- tab routing provider/model
-- panel UI state
+## Implementation Roadmap
 
-Project layout may define provider/model defaults, but should not commit
-private conversation IDs unless explicitly exported as a transcript.
+### Phase 1: Lossless Surface Restore
 
-### History
+Status: implemented.
 
-Keep two history channels:
+- Extend private `PaneLayoutState::Leaf` with `surfaces`.
+- Persist every pane-local surface, not only the active cwd.
+- Restore active surface, owner, title, cwd, and close policy.
+- Keep old single-surface session files readable.
 
-- command suggestion history: persisted privately and optionally scoped by
-  project root
-- project layout commands: explicit `run` entries in `.con/workspace.toml`
+### Phase 2: AppState v1
 
-Do not write every command a user typed into the git layout file.
+Status: next production milestone.
 
-### Startup Commands
+- Split the current single `Session` into window runtime files.
+- Add a launch manifest that lists windows open at last app quit.
+- Migrate old `session.json` into one window state on first launch.
+- Keep global history independent.
+- Add "Restore windows on launch" in Settings.
+- Ensure Cmd+N always creates a scratch window.
+- Treat Dock reopen after all windows close as a fresh-window gesture unless
+  the user explicitly chose last-window restore.
 
-Startup commands are product-critical and dangerous.
+### Phase 3: Single-Instance Forwarding
 
-Policies:
+Status: required before this feature is complete.
 
-- `manual`: show the command as a suggestion; user starts it.
-- `ask`: show the command in a restore sheet with a Run checkbox.
-- `auto`: only after the user locally trusts this workspace layout hash.
+- When a second process starts, connect to the live control endpoint.
+- Send a `windows.open` or `workspaces.open_project` request.
+- Exit the second process.
+- Add a write lock or generation stamp so stale processes cannot overwrite
+  runtime state.
 
-The restore sheet should show:
+### Phase 4: Project Memory
 
-- workspace name/root
-- each command
-- target tab/pane/surface
-- cwd
-- whether the command came from project layout or local overlay
-- a "trust this workspace layout" control scoped to root + file + hash
+Status: after AppState.
 
-The restore sheet is mandatory before any command from git is run.
+- Detect project roots from explicit paths and cwd.
+- Store private memory under `projects/<hash(root)>.json`.
+- Restore local project shape when opening that folder again.
+- Add "Forget Local Workspace State" in Command Palette and Settings.
 
-## Startup / Multi-Window Design
+### Phase 5: Shared Tasks and Layouts
 
-### Current Problem
+Status: deferred.
 
-`Session::load()` is single-window. Starting another process or opening a
-window from a cold state can duplicate the same restored shape. That feels
-wrong once agent sessions, surfaces, and long histories are involved.
+- Validate demand before shipping repo files.
+- Start with `.con/tasks.toml` for named commands.
+- Only later add `.con/layout.toml` for team-shared split intent.
+- Never store secrets, conversations, command history, scrollback, active focus,
+  or trust decisions in repo files.
 
-### Target Behavior
-
-1. **First process launch**
-   Restore the last app state once: windows, tabs, panes, active tab, agent
-   panel, input bar, and conversations.
-
-2. **Dock click after closing all windows**
-   Open a fresh window with global/project history, not a duplicate stale
-   crashed workspace, unless the user enabled "Restore windows when reopening".
-
-3. **Cmd+N / New Window**
-   Open a fresh window. Inherit global history and defaults only.
-
-4. **Open Project Workspace**
-   Load `.con/workspace.toml` for that project, apply local overlay, and create
-   a separate window bound to that workspace.
-
-5. **Second app process**
-   Current mitigation: if the live control endpoint is reachable, open a fresh
-   history-backed session instead of restoring the saved layout again. Target
-   behavior: prefer single-instance forwarding to the running app. If
-   unsupported on a platform, use a per-process session lock so only one process
-   writes runtime state. A second process can open a fresh window but must not
-   overwrite the first process's window state on exit.
-
-## Compatibility With Existing Control Plane
-
-No existing `panes.*` behavior should change.
-
-Additive API surface:
-
-- `workspaces.get`
-- `workspaces.save`
-- `workspaces.open`
-- `workspaces.export`
-- `workspaces.import`
-- `workspaces.list`
-- `workspaces.validate`
-- `workspaces.trust`
-
-Existing `tree.get` can become the base snapshot for export. The export layer
-should convert live `PaneTree` into project layout TOML with stable pane/surface
-IDs and relative paths.
-
-Agents and external orchestrators should continue to prefer:
-
-- `pane_id` for visible split panes
-- `surface_id` for pane-local terminal sessions
-
-## Implementation Plan
-
-### Phase 1 — Lossless Internal Snapshot
-
-Goal: make current private restore complete before adding a public file format.
-
-- Status: implemented in the first issue #111 slice.
-- Extended `PaneLayoutState::Leaf` to store surfaces:
-  - `surfaces: Vec<SurfaceState>`
-  - `active_surface_id: Option<usize>`
-- Added `SurfaceState`:
-  - `surface_id`
-  - `title`
-  - `owner`
-  - `cwd`
-  - `close_pane_when_last`
-- Updated `PaneTree::to_state` and `PaneTree::from_state` to round-trip all
-  surfaces.
-- Preserved backward compatibility with old leaves that only have `cwd`.
-- Added con-core serialization tests for legacy leaf restore and multi-surface
-  leaf state.
-
-### Phase 1.5 — Project Layout Schema
-
-Goal: make the git-compatible format concrete before wiring UI.
-
-- Status: implemented as `con-core::workspace_layout`.
-- Added typed TOML structs for workspace defaults, tabs, layout nodes, panes,
-  surfaces, and restore policy.
-- Added validation for duplicate IDs, dangling active pane/surface refs,
-  dangling layout refs, and unsafe split ratios.
-- Added TOML round-trip tests and validation-failure tests.
-
-### Phase 2 — App-State v1
-
-Goal: fix the single-window session model.
-
-- Introduce `AppState` with `windows: Vec<WindowState>`.
-- Migrate old `Session` into one `WindowState`.
-- Save each window independently with a window UUID.
-- Only restore saved windows on true app startup, not on New Window.
-- Keep `GlobalHistoryState` independent.
-- Add a writer lock or generation stamp so multiple processes cannot
-  overwrite each other's runtime state.
-- Add a user setting: "Restore windows on launch".
-- Treat Dock click after all windows close as reopen semantics, not crash
-  recovery.
-
-### Phase 3 — Project Workspace TOML
-
-Goal: make `.con/workspace.toml` useful and git-friendly.
-
-- Status: schema implemented; import/export wiring pending.
-- Implement import/export between `WorkspaceLayout` and live `Session`/`PaneTree`.
-- Add command palette actions:
-  - Save Workspace Layout
-  - Open Workspace Layout
-  - Export Current Layout
-  - Reload Workspace Layout
-- Add a validation surface before save, including warnings for absolute paths,
-  commands, and provider/model defaults.
-- Add `con-cli workspaces export/import/open`.
-- Start with manual file operations; later add UI.
-
-### Phase 4 — Restore Policy
-
-Goal: make startup commands safe and intentional.
-
-- `restore = "manual" | "ask" | "auto"` exists in schema.
-- Default to `manual`.
-- On workspace open, show a compact restore sheet listing commands to run.
-- Never auto-run commands from a git file without user approval unless a
-  user-local trust record exists for that file hash/root.
-- Add per-platform command variants before encouraging `auto` in shared repos.
-
-### Phase 5 — UX Polish
-
-Goal: make the feature discoverable without becoming IDE-heavy.
-
-- Surface workspace name in the title/tab sidebar.
-- In settings, add "Restore windows on launch" and "Trust workspace startup
-  commands".
-- In command palette, include workspace actions and show their shortcuts.
-- Right-click tab/sidebar menu can include "Save Layout to Project".
-- Empty state: when a repo has no workspace file, offer "Save current layout
-  to this project" only after a user is clearly inside a repo.
-- Failure state: if a workspace file is invalid, open a normal shell and show a
-  non-blocking repair action.
-
-## Migration Rules
-
-- Old `session.json` remains readable.
-- Missing `layout` falls back to one pane using `tab.cwd`.
-- Missing surfaces means create one surface from leaf cwd.
-- Missing local overlay means use `.con/workspace.toml` defaults.
-- Corrupt project workspace file should not block app startup; show a recoverable
-  error and open a fresh shell.
-
-## Non-Goals For First Implementation
+## Non-Goals
 
 - No full PTY/process snapshot.
 - No hidden command replay.
 - No terminal scrollback persistence by default.
 - No shell-history file rewriting.
-- No cross-machine agent conversation sync.
-- No secrets in project workspace files.
-- No automatic trust for files pulled from git.
+- No cross-machine conversation sync.
+- No repo-stored credentials, tokens, or private histories.
+- No public workspace dotfile in the first production slice.
 
-## Open Questions
+## Review Checklist
 
-- Should project workspace files live at `.con/workspace.toml` or
-  `.config/con/workspace.toml` inside the repo? Recommendation:
-  `.con/workspace.toml`, because the directory can later contain local README,
-  scripts, or templates while app-private overlays stay outside the repo.
-- Should committed layouts include agent model defaults? Recommendation:
-  allow it, but never credentials; local user settings remain the source of
-  provider auth.
-- Should scrollback be exportable manually for debugging? Recommendation:
-  separate "Export Terminal Transcript" action, not workspace restore.
-- Do we need platform-specific startup commands in v1? Recommendation:
-  yes before `restore = "auto"` is promoted. A cross-platform team needs this.
-- Should `run` be one shell string or argv? Recommendation:
-  keep one shell string for human dotfile ergonomics, but store the shell/profile
-  that interprets it. CLI can later support argv export for generated layouts.
-- Should local overlays be human-editable? Recommendation:
-  no. They are app-private runtime state; project layout is the human-editable
-  artifact.
+Before a restorable-workspace PR is merge-ready, verify:
+
+- Cmd+N opens a fresh scratch window.
+- Reopening Con after quit restores the previous private shape.
+- Pane-local surfaces survive restore with correct title/cwd/owner.
+- No project file is written unless the user explicitly requests export.
+- No command runs because of restore.
+- A second process does not clone the restored layout and agent conversation.
+- Old session files still load.
+- Windows, Linux, and macOS keep the same semantics even if their storage paths
+  differ.
