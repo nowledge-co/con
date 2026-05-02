@@ -612,6 +612,7 @@ impl GhosttyView {
             nsview as *mut c_void,
             scale,
             self.initial_cwd.as_deref(),
+            self.restored_screen_text.as_deref(),
             Some(self.initial_font_size),
         ) {
             Ok(terminal) => {
@@ -621,6 +622,7 @@ impl GhosttyView {
                 terminal.set_content_scale(scale);
                 terminal.set_focus(self.surface_focused.get());
                 self.terminal = Some(Arc::new(terminal));
+                self.restored_screen_text = None;
                 self.host_view = Some(host_view);
                 self.document_view = Some(document_view);
                 self.nsview = Some(nsview);
@@ -1584,11 +1586,8 @@ impl Render for GhosttyView {
         let context_focus = focus.clone();
         let menu_focus = focus.clone();
         let ui_font = cx.theme().font_family.clone();
-        let mono_font = cx.theme().mono_font_family.clone();
-        let restored_text_color = cx.theme().foreground.opacity(0.88);
         let entity = cx.entity().downgrade();
         let show_layout_fallback = self.show_layout_fallback();
-        let restored_screen_text = self.restored_screen_text.clone();
         let layout_fallback_bg = self
             .app
             .background_rgb()
@@ -1795,39 +1794,6 @@ impl Render for GhosttyView {
                 )
                 .size_full(),
             )
-            .when_some(restored_screen_text, |element, lines| {
-                let mut overlay = div()
-                    .absolute()
-                    .inset_0()
-                    .overflow_hidden()
-                    .bg(layout_fallback_bg)
-                    .px_3()
-                    .py_2()
-                    .font_family(mono_font)
-                    .text_size(px(self.initial_font_size))
-                    .line_height(px((self.initial_font_size * 1.22).max(12.0)))
-                    .text_color(restored_text_color);
-
-                let line_count = lines.len();
-                let visible_lines = lines.into_iter().rev().take(240).collect::<Vec<_>>();
-                for line in visible_lines.into_iter().rev() {
-                    overlay = overlay.child(div().whitespace_nowrap().child(line));
-                }
-                if line_count > 240 {
-                    overlay = overlay.child(
-                        div()
-                            .pt_1()
-                            .text_size(px(11.0))
-                            .text_color(restored_text_color.opacity(0.55))
-                            .child(format!(
-                                "{} earlier restored lines hidden",
-                                line_count - 240
-                            )),
-                    );
-                }
-
-                element.child(overlay)
-            })
             .context_menu(move |menu, window, cx| {
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),

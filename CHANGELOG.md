@@ -11,7 +11,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Restorable Workspaces**
 
 - Added the first restorable-workspace implementation slice. Private session layout now round-trips every pane-local surface, including surface id, title, owner, cwd, active surface, and close-pane-when-last policy, instead of restoring only the active surface in each pane.
-- Added the first private screen-text continuity slice. Con now snapshots bounded recent terminal text per pane-local surface and shows it again after restart as restored terminal context, without replaying commands or exporting that text into workspace layouts.
+- Added the first private screen-text continuity slice. Con now snapshots bounded recent terminal text per pane-local surface and seeds it back through Ghostty's terminal parser before the shell starts, so restored text lives in terminal scrollback instead of a UI overlay. This does not replay commands or export terminal text into workspace layouts.
 - Added a typed, validated, layout-only `.con/workspace.toml` schema for future Con-generated export/import flows. The schema covers tabs, panes, surfaces, split geometry, cwd, and optional agent defaults, but deliberately excludes commands, conversations, history, scrollback, credentials, and trust decisions.
 - Documented the production restore model: local continuity and project-local memory come first, exported layouts are generated from user-tuned workspaces, and command/task files remain a separate future workflow.
 

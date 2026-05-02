@@ -582,6 +582,7 @@ impl GhosttyApp {
         nsview: *mut c_void,
         scale_factor: f64,
         cwd: Option<&str>,
+        restored_screen_text: Option<&[String]>,
         font_size: Option<f32>,
     ) -> Result<GhosttyTerminal, String> {
         // Per-surface state — stored as surface userdata so callbacks can
@@ -605,6 +606,12 @@ impl GhosttyApp {
             config.working_directory = s.as_ptr();
         }
 
+        let restored_output = restored_screen_text.and_then(restored_terminal_output);
+        #[cfg(con_ghostty_embedded_initial_output)]
+        if let Some(ref output) = restored_output {
+            config.initial_output = output.as_ptr();
+        }
+
         let surface = unsafe { ffi::ghostty_surface_new(self.app, &config as *const _) };
         if surface.is_null() {
             // Clean up the userdata we allocated
@@ -626,6 +633,28 @@ impl GhosttyApp {
     pub fn raw(&self) -> ffi::ghostty_app_t {
         self.app
     }
+}
+
+fn restored_terminal_output(lines: &[String]) -> Option<CString> {
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut output = String::new();
+    for line in lines {
+        for ch in line.chars() {
+            if ch == '\t' || !ch.is_control() {
+                output.push(ch);
+            }
+        }
+        output.push_str("\r\n");
+    }
+
+    if output.trim().is_empty() {
+        return None;
+    }
+
+    CString::new(output).ok()
 }
 
 impl Drop for GhosttyApp {
