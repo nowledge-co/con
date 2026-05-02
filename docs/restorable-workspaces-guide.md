@@ -23,6 +23,9 @@ Con does not automatically restore:
 
 If you need real process continuity, use tmux or zellij inside Con.
 
+Terminal scrollback restore is a planned continuity feature. It will be private
+app data, not part of exported workspace layouts.
+
 ## Continue Where You Left Off
 
 Use Con normally, then quit the app. On the next launch, Con restores your
@@ -65,6 +68,36 @@ last time. If not, it opens one shell at the project root.
 
 This memory stays in your app data. Con does not write workspace files into the
 repo unless you explicitly export something in a future workflow.
+
+## Export a Layout
+
+Production target:
+
+1. Tune a workspace visually in Con.
+2. Rename the tabs, panes, and surfaces so the layout is understandable.
+3. Choose Export Current Layout.
+4. Review the generated `.con/workspace.toml`.
+5. Commit it only if the layout is useful for the project.
+
+The exported file is a Con-generated DSL. It is safe layout intent, not a boot
+script.
+
+It can include:
+
+- tab names
+- pane split structure
+- pane and surface names
+- relative working directories
+- optional agent provider/model defaults
+
+It cannot include:
+
+- commands to run
+- conversations
+- command history
+- terminal scrollback
+- credentials
+- trust decisions
 
 ## Use Surfaces for Agents
 

@@ -16,14 +16,14 @@ The production design has one priority order:
    from private app data.
 2. **Project memory second.** Opening a repo should feel like returning to a
    familiar workspace without writing anything to the repo.
-3. **Git-shared workspace intent later.** A committed layout file can be useful
-   for teams and orchestrators, but it needs validation from real usage before
-   it becomes a user-facing format.
+3. **Exported layout DSL third.** A versioned schema is useful as Con's own
+   export/import format. It should be generated from a user-tuned workspace
+   first, not treated as a hand-written boot script.
 
 This ordering mirrors browser and IDE tacit behavior: New Window is fresh,
 Open Folder can restore local project memory, and app launch can continue where
-the user left off. Repo files describe explicit tasks and project conventions;
-private runtime state stays private.
+the user left off. Exported files describe layout intent; private runtime state
+stays private.
 
 ## Current Production Slice
 
@@ -39,8 +39,8 @@ Implemented in the first issue #111 PR:
   history-backed session instead of restoring the same saved layout again
 
 This slice is production-safe because it improves private restore fidelity and
-does not introduce public file formats, hidden command replay, or repo trust
-prompts.
+introduces only a layout-only schema. It does not introduce command replay or a
+repo trust model.
 
 ## First Principles
 
@@ -66,7 +66,8 @@ prompts.
 
 5. **No hidden replay.**
    Con must never run commands from a restored workspace without explicit user
-   action. Future task/workspace files are picker inputs, not boot scripts.
+   action. Future task files are picker inputs, not boot scripts. The layout
+   schema deliberately has no `run` field.
 
 6. **Stable IDs are for APIs; names are for humans.**
    `pane_id` and `surface_id` are the control-plane targets. The UI should show
@@ -75,6 +76,12 @@ prompts.
 7. **Restore should optimize for flow, not exact pixels.**
    Rows, columns, pane ratios, cwd, active tab, and named surfaces matter.
    Pixel-perfect historical window bounds are secondary and platform-specific.
+
+8. **Screen text history is a first-class continuity feature.**
+   Users expect meaningful scrollback to survive restart, especially if they
+   come from iTerm2. libghostty does not provide this as a product feature, so
+   Con needs an app-owned scrollback/transcript snapshot later. It must be
+   private by default and separate from exported layouts.
 
 ## User-Facing Flows
 
@@ -270,18 +277,68 @@ Sketch:
 }
 ```
 
-### 4. Future Shared Project Files
+### 4. Exported Layout DSL
 
-Deferred until the local continuity model is complete and real users ask for a
-team-shared file.
+Implemented as `con-core::workspace_layout` for validation and future
+import/export wiring.
 
-Preferred future shape:
+Purpose:
+
+- deterministic output from "Export Current Layout"
+- stable schema for import/export tests
+- reviewable layout intent if a user chooses to commit it
+- future bridge for orchestrators that want to generate Con layouts
+
+Non-purpose:
+
+- not a shell history file
+- not a process restore file
+- not a credential store
+- not a hand-written startup script
+
+Default path for future export:
+
+```text
+.con/workspace.toml
+```
+
+Current schema constraints:
+
+- `format = "con.workspace.layout"`
+- `version = 1`
+- tabs, panes, surfaces, split geometry, cwd, and optional agent defaults
+- no `run`
+- no `restore`
+- no conversations
+- no command history
+- no scrollback
+- no trust decisions
+
+Future task files should be separate:
 
 - `.con/tasks.toml`: explicit named commands users pick from a menu
-- `.con/layout.toml`: optional layout intent only, no command replay
 
-Do not ship a combined "layout plus run policy" file in v1. It creates a trust
-model before we know users need it.
+Do not combine layout and command replay. It creates a trust model before the
+product needs one.
+
+### 5. Screen Text History
+
+Terminal scrollback in Con is currently runtime-only. That is a meaningful gap:
+screen text history is a practical continuity feature, and iTerm2 users expect
+it.
+
+Production direction:
+
+- maintain an app-owned bounded transcript per pane/surface
+- snapshot the visible scrollback privately with the window/project state
+- restore it as text history before the new shell prompt is ready
+- never write transcript history to exported workspace layouts
+- cap disk and memory use aggressively
+- avoid recording alternate-screen TUIs by default unless the user explicitly
+  enables it
+
+This should be implemented separately from layout restore. Layout tells Con
+where terminals belong. Transcript history tells the user what happened there.
 
 ## Startup Semantics
 
@@ -314,8 +371,8 @@ Deferred APIs:
 - `workspaces.import_layout`
 - `workspaces.validate_layout`
 
-The deferred APIs should not be implemented until the product has a real import
-or export UI and a clear user story.
+The schema exists now, but these APIs should wait until the product has a real
+import/export UI and manual review flow.
 
 ## Implementation Roadmap
 
@@ -362,23 +419,35 @@ Status: after AppState.
 
 ### Phase 5: Shared Tasks and Layouts
 
-Status: deferred.
+Status: schema foundation exists; UI and task files are deferred.
 
-- Validate demand before shipping repo files.
+- Wire "Export Current Layout" only after AppState and project memory are solid.
+- Export from the live workspace instead of asking users to hand-write the file.
 - Start with `.con/tasks.toml` for named commands.
-- Only later add `.con/layout.toml` for team-shared split intent.
+- Keep `.con/workspace.toml` layout-only.
 - Never store secrets, conversations, command history, scrollback, active focus,
   or trust decisions in repo files.
+
+### Phase 6: Screen Text History
+
+Status: required for iTerm2-grade continuity, not part of this PR.
+
+- Add bounded transcript capture per pane/surface.
+- Persist private scrollback snapshots with AppState/project memory.
+- Restore transcript text separately from the live PTY.
+- Provide a setting for transcript retention size.
+- Exclude alternate-screen content by default to avoid restoring stale TUI
+  frames.
 
 ## Non-Goals
 
 - No full PTY/process snapshot.
 - No hidden command replay.
-- No terminal scrollback persistence by default.
+- No terminal scrollback persistence in exported layouts.
 - No shell-history file rewriting.
 - No cross-machine conversation sync.
 - No repo-stored credentials, tokens, or private histories.
-- No public workspace dotfile in the first production slice.
+- No command-running workspace files in the first production slice.
 
 ## Review Checklist
 
@@ -389,6 +458,8 @@ Before a restorable-workspace PR is merge-ready, verify:
 - Pane-local surfaces survive restore with correct title/cwd/owner.
 - No project file is written unless the user explicitly requests export.
 - No command runs because of restore.
+- Exported layout TOML contains no commands, conversations, history, or
+  scrollback.
 - A second process does not clone the restored layout and agent conversation.
 - Old session files still load.
 - Windows, Linux, and macOS keep the same semantics even if their storage paths

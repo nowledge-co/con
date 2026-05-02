@@ -5,6 +5,7 @@ pub mod release_channel;
 pub mod session;
 pub mod suggestions;
 pub mod tab_summary;
+pub mod workspace_layout;
 
 pub use config::Config;
 pub use control::{
