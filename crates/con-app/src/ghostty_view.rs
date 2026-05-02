@@ -27,6 +27,7 @@ use con_ghostty::{
 };
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::ActiveTheme;
+use gpui_component::menu::ContextMenuExt;
 
 use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
@@ -1546,6 +1547,9 @@ impl Render for GhosttyView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
+        let context_focus = focus.clone();
+        let menu_focus = focus.clone();
+        let ui_font = cx.theme().font_family.clone();
         let entity = cx.entity().downgrade();
         let show_layout_fallback = self.show_layout_fallback();
         let layout_fallback_bg = self
@@ -1565,6 +1569,7 @@ impl Render for GhosttyView {
 
         div()
             .size_full()
+            .font_family(ui_font)
             .map(|div| {
                 if show_layout_fallback {
                     div.bg(layout_fallback_bg)
@@ -1639,6 +1644,15 @@ impl Render for GhosttyView {
                     cx.notify();
                 }
             }))
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&context_focus, cx);
+                    this.last_mouse_position = Some(event.position);
+                    cx.emit(GhosttyFocusChanged);
+                    cx.notify();
+                }),
+            )
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -1741,6 +1755,13 @@ impl Render for GhosttyView {
                 )
                 .size_full(),
             )
+            .context_menu(move |menu, window, cx| {
+                crate::terminal_context_menu::terminal_context_menu(
+                    menu.action_context(menu_focus.clone()),
+                    window,
+                    cx,
+                )
+            })
     }
 }
 

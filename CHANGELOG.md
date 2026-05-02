@@ -6,6 +6,17 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+- No unreleased changes.
+
+## `v0.1.0-beta.52` - 2026-05-02
+
+### Added
+
+**Control Plane**
+
+- Added Command Palette entries for pane-local terminal surfaces. Users can now create the first surface as a visible split, create additional surfaces inside the focused pane, cycle between surfaces in that pane, and close the current surface without reaching for `con-cli`.
+- Added a terminal right-click context menu across macOS, Windows, and Linux. It exposes paste/copy/clear, pane split and zoom controls, pane-local surface controls, Focus Input, and Command Palette through the same action system as keybindings and the app menu.
+
 ## `v0.1.0-beta.50` - 2026-05-01
 
 **Terminal, macOS**

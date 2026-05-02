@@ -246,10 +246,11 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    ClosePane, CloseTab, CycleInputMode, FocusInput, NewTab, NextTab, PreviousTab, Quit,
-    SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
-    SelectTab9, SplitDown, SplitRight, ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom,
-    ToggleVerticalTabs,
+    ClearTerminal, ClosePane, CloseSurface, CloseTab, CycleInputMode, FocusInput, NewSurface,
+    NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab, PreviousSurface,
+    PreviousTab, Quit, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
+    SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
+    ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -4684,8 +4685,47 @@ impl ConWorkspace {
             "split-down" => {
                 self.split_pane(SplitDirection::Vertical, SplitPlacement::After, window, cx);
             }
+            "split-left" => {
+                self.split_pane(
+                    SplitDirection::Horizontal,
+                    SplitPlacement::Before,
+                    window,
+                    cx,
+                );
+            }
+            "split-up" => {
+                self.split_pane(SplitDirection::Vertical, SplitPlacement::Before, window, cx);
+            }
             "toggle-pane-zoom" => {
                 self.toggle_pane_zoom(&TogglePaneZoom, window, cx);
+            }
+            "new-surface" => {
+                self.create_surface_in_focused_pane(window, cx);
+            }
+            "new-surface-split-right" => {
+                self.create_surface_split_from_focused_pane(
+                    SplitDirection::Horizontal,
+                    SplitPlacement::After,
+                    window,
+                    cx,
+                );
+            }
+            "new-surface-split-down" => {
+                self.create_surface_split_from_focused_pane(
+                    SplitDirection::Vertical,
+                    SplitPlacement::After,
+                    window,
+                    cx,
+                );
+            }
+            "next-surface" => {
+                self.cycle_surface_in_focused_pane(1, window, cx);
+            }
+            "previous-surface" => {
+                self.cycle_surface_in_focused_pane(-1, window, cx);
+            }
+            "close-surface" => {
+                self.close_current_surface_in_focused_pane(window, cx);
             }
             "clear-terminal" => {
                 if self.has_active_tab() {
@@ -7955,6 +7995,192 @@ impl ConWorkspace {
         self.save_session(cx);
     }
 
+    fn create_surface_in_focused_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let tab_idx = self.active_tab;
+        let pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
+        let cwd = self.tabs[tab_idx]
+            .pane_tree
+            .focused_terminal()
+            .current_dir(cx);
+        let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+        let options = SurfaceCreateOptions::plain(None);
+        let Some(_surface_id) =
+            self.tabs[tab_idx]
+                .pane_tree
+                .create_surface_in_pane(pane_id, terminal.clone(), options)
+        else {
+            return;
+        };
+
+        #[cfg(target_os = "macos")]
+        self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
+        self.notify_tab_terminal_views(tab_idx, cx);
+        terminal.ensure_surface(window, cx);
+        terminal.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(false, window, cx);
+        Self::schedule_terminal_bootstrap_reassert(
+            &terminal,
+            true,
+            self.window_handle,
+            self.workspace_handle.clone(),
+            cx,
+        );
+        self.record_runtime_event_for_terminal(
+            tab_idx,
+            &terminal,
+            con_agent::context::PaneRuntimeEvent::PaneCreated {
+                startup_command: None,
+            },
+        );
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    fn create_surface_split_from_focused_pane(
+        &mut self,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let tab_idx = self.active_tab;
+        let source_pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
+        let cwd = self.tabs[tab_idx]
+            .pane_tree
+            .focused_terminal()
+            .current_dir(cx);
+        let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+        let was_zoomed = self.tabs[tab_idx].pane_tree.zoomed_pane_id().is_some();
+        let options = SurfaceCreateOptions {
+            title: None,
+            owner: Some("command-palette".to_string()),
+            close_pane_when_last: true,
+        };
+        let Some((_pane_id, _surface_id)) = self.tabs[tab_idx]
+            .pane_tree
+            .split_pane_with_surface_options(
+                source_pane_id,
+                direction,
+                placement,
+                terminal.clone(),
+                options,
+            )
+        else {
+            return;
+        };
+
+        #[cfg(target_os = "macos")]
+        self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
+        self.notify_tab_terminal_views(tab_idx, cx);
+        terminal.ensure_surface(window, cx);
+        terminal.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
+        Self::schedule_terminal_bootstrap_reassert(
+            &terminal,
+            true,
+            self.window_handle,
+            self.workspace_handle.clone(),
+            cx,
+        );
+        self.record_runtime_event_for_terminal(
+            tab_idx,
+            &terminal,
+            con_agent::context::PaneRuntimeEvent::PaneCreated {
+                startup_command: None,
+            },
+        );
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    fn cycle_surface_in_focused_pane(
+        &mut self,
+        offset: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let pane_id = pane_tree.focused_pane_id();
+        let surfaces = pane_tree.surface_infos(Some(pane_id));
+        if surfaces.len() <= 1 {
+            return;
+        }
+
+        let active_index = surfaces
+            .iter()
+            .position(|surface| surface.is_active)
+            .unwrap_or(0);
+        let len = surfaces.len() as isize;
+        let next_index = (active_index as isize + offset).rem_euclid(len) as usize;
+        let next_surface_id = surfaces[next_index].surface_id;
+        self.focus_surface_in_active_tab(next_surface_id, window, cx);
+    }
+
+    fn close_current_surface_in_focused_pane(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let tab_idx = self.active_tab;
+        let pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
+        let surfaces = self.tabs[tab_idx].pane_tree.surface_infos(Some(pane_id));
+        if surfaces.len() <= 1
+            && !surfaces
+                .first()
+                .is_some_and(|surface| surface.close_pane_when_last && surface.owner.is_some())
+        {
+            return;
+        }
+        let Some(surface_id) = surfaces
+            .iter()
+            .find(|surface| surface.is_active)
+            .map(|surface| surface.surface_id)
+        else {
+            return;
+        };
+
+        let Some(close_outcome) = self.tabs[tab_idx].pane_tree.close_surface(surface_id, true)
+        else {
+            return;
+        };
+        let closing = close_outcome.terminal.clone();
+        closing.set_focus_state(false, cx);
+        closing.set_native_view_visible(false, cx);
+        closing.shutdown_surface(cx);
+
+        #[cfg(target_os = "macos")]
+        self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
+        self.notify_tab_terminal_views(tab_idx, cx);
+        self.sync_active_tab_native_view_visibility(cx);
+        let replacement = self.tabs[tab_idx].pane_tree.focused_terminal().clone();
+        replacement.ensure_surface(window, cx);
+        replacement.focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
     fn split_pane(
         &mut self,
         direction: SplitDirection,
@@ -8015,6 +8241,78 @@ impl ConWorkspace {
         if self.has_active_tab() {
             self.split_pane(SplitDirection::Vertical, SplitPlacement::After, window, cx);
         }
+    }
+
+    fn split_left(&mut self, _: &SplitLeft, window: &mut Window, cx: &mut Context<Self>) {
+        if self.has_active_tab() {
+            self.split_pane(
+                SplitDirection::Horizontal,
+                SplitPlacement::Before,
+                window,
+                cx,
+            );
+        }
+    }
+
+    fn split_up(&mut self, _: &SplitUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.has_active_tab() {
+            self.split_pane(SplitDirection::Vertical, SplitPlacement::Before, window, cx);
+        }
+    }
+
+    fn clear_terminal(&mut self, _: &ClearTerminal, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.has_active_tab() {
+            self.active_terminal().clear_scrollback(cx);
+        }
+    }
+
+    fn new_surface(&mut self, _: &NewSurface, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_surface_in_focused_pane(window, cx);
+    }
+
+    fn new_surface_split_right(
+        &mut self,
+        _: &NewSurfaceSplitRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_surface_split_from_focused_pane(
+            SplitDirection::Horizontal,
+            SplitPlacement::After,
+            window,
+            cx,
+        );
+    }
+
+    fn new_surface_split_down(
+        &mut self,
+        _: &NewSurfaceSplitDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_surface_split_from_focused_pane(
+            SplitDirection::Vertical,
+            SplitPlacement::After,
+            window,
+            cx,
+        );
+    }
+
+    fn next_surface(&mut self, _: &NextSurface, window: &mut Window, cx: &mut Context<Self>) {
+        self.cycle_surface_in_focused_pane(1, window, cx);
+    }
+
+    fn previous_surface(
+        &mut self,
+        _: &PreviousSurface,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cycle_surface_in_focused_pane(-1, window, cx);
+    }
+
+    fn close_surface(&mut self, _: &CloseSurface, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_current_surface_in_focused_pane(window, cx);
     }
 
     fn close_pane(&mut self, _: &ClosePane, window: &mut Window, cx: &mut Context<Self>) {
@@ -9590,6 +9888,15 @@ impl Render for ConWorkspace {
                 .on_action(cx.listener(Self::toggle_pane_zoom))
                 .on_action(cx.listener(Self::split_right))
                 .on_action(cx.listener(Self::split_down))
+                .on_action(cx.listener(Self::split_left))
+                .on_action(cx.listener(Self::split_up))
+                .on_action(cx.listener(Self::clear_terminal))
+                .on_action(cx.listener(Self::new_surface))
+                .on_action(cx.listener(Self::new_surface_split_right))
+                .on_action(cx.listener(Self::new_surface_split_down))
+                .on_action(cx.listener(Self::next_surface))
+                .on_action(cx.listener(Self::previous_surface))
+                .on_action(cx.listener(Self::close_surface))
                 .on_action(cx.listener(Self::focus_input))
                 .on_action(cx.listener(Self::cycle_input_mode))
                 .on_action(cx.listener(Self::toggle_pane_scope_picker))

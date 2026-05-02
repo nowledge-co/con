@@ -96,10 +96,58 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Pane",
     },
     PaletteAction {
+        id: "split-left",
+        label: "Split Left",
+        shortcut: "",
+        category: "Pane",
+    },
+    PaletteAction {
+        id: "split-up",
+        label: "Split Up",
+        shortcut: "",
+        category: "Pane",
+    },
+    PaletteAction {
         id: "toggle-pane-zoom",
         label: "Toggle Pane Zoom",
         shortcut: TOGGLE_PANE_ZOOM_SHORTCUT,
         category: "Pane",
+    },
+    PaletteAction {
+        id: "new-surface",
+        label: "New Surface in Pane",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "new-surface-split-right",
+        label: "New Surface Split Right",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "new-surface-split-down",
+        label: "New Surface Split Down",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "next-surface",
+        label: "Next Surface in Pane",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "previous-surface",
+        label: "Previous Surface in Pane",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "close-surface",
+        label: "Close Current Surface",
+        shortcut: "",
+        category: "Surface",
     },
     PaletteAction {
         id: "toggle-input-bar",

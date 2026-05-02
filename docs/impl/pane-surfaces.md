@@ -74,6 +74,42 @@ Surface targeting accepts:
 
 Prefer `surface_id` for follow-up automation.
 
+## Human Entry Points
+
+Surface control is also available from Command Palette and the terminal
+right-click menu so humans can discover and exercise the same pane-local model
+without using `con-cli`.
+
+- `New Surface in Pane`: creates a new terminal session inside the focused
+  pane and focuses it.
+- `New Surface Split Right`: creates a new right split from the focused pane,
+  with its first terminal session represented as a surface.
+- `New Surface Split Down`: creates a new down split from the focused pane,
+  with its first terminal session represented as a surface.
+- `Next Surface in Pane`: cycles forward through surfaces hosted by the
+  focused pane.
+- `Previous Surface in Pane`: cycles backward through surfaces hosted by the
+  focused pane.
+- `Close Current Surface`: closes the active surface when the focused pane has
+  more than one surface. If the surface was created as an owned palette split,
+  closing that last surface also closes the worker pane. It intentionally does
+  nothing for the last non-owned surface in a pane; ordinary pane closing
+  remains the pane-level command.
+
+These palette actions are deliberately pane-local. They do not change the
+existing `panes.*` control-plane contract, the built-in agent harness target
+model, or terminal-agent benchmark assumptions.
+
+The terminal context menu uses the same GPUI actions as the Command Palette and
+app menu instead of custom callbacks. That keeps right-click behavior aligned
+with keyboard and automation entry points: the menu first restores focus to the
+clicked terminal, then dispatches the selected action through the normal window
+action path.
+
+This mirrors the interactive-subagent flow: create the first worker as a
+visible split, then add later workers as surfaces inside that worker pane so
+parallel agents do not keep shrinking the main terminal layout.
+
 ## CLI Examples
 
 First create a visible worker pane:

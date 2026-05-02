@@ -55,6 +55,7 @@ mod motion;
 mod pane_tree;
 mod settings_panel;
 mod sidebar;
+mod terminal_context_menu;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod terminal_ime;
 mod terminal_links;
@@ -102,6 +103,15 @@ actions!(
         TogglePaneZoom,
         SplitRight,
         SplitDown,
+        SplitLeft,
+        SplitUp,
+        ClearTerminal,
+        NewSurface,
+        NewSurfaceSplitRight,
+        NewSurfaceSplitDown,
+        NextSurface,
+        PreviousSurface,
+        CloseSurface,
         FocusInput,
         CycleInputMode,
         TogglePaneScopePicker,
@@ -1199,6 +1209,17 @@ fn main() {
                     MenuItem::separator(),
                     MenuItem::action("Split Right", SplitRight),
                     MenuItem::action("Split Down", SplitDown),
+                    MenuItem::action("Split Left", SplitLeft),
+                    MenuItem::action("Split Up", SplitUp),
+                    MenuItem::separator(),
+                    MenuItem::action("Clear Terminal", ClearTerminal),
+                    MenuItem::separator(),
+                    MenuItem::action("New Surface in Pane", NewSurface),
+                    MenuItem::action("New Surface Split Right", NewSurfaceSplitRight),
+                    MenuItem::action("New Surface Split Down", NewSurfaceSplitDown),
+                    MenuItem::action("Next Surface in Pane", NextSurface),
+                    MenuItem::action("Previous Surface in Pane", PreviousSurface),
+                    MenuItem::action("Close Current Surface", CloseSurface),
                 ],
                 disabled: false,
             },
