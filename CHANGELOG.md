@@ -6,6 +6,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
+### Added
+
+**Control Plane**
+
+- Added Command Palette entries for pane-local terminal surfaces. Users can now create the first surface as a visible split, create additional surfaces inside the focused pane, cycle between surfaces in that pane, and close the current surface without reaching for `con-cli`.
+
 ## `v0.1.0-beta.50` - 2026-05-01
 
 **Terminal, macOS**

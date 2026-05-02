@@ -102,6 +102,42 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Pane",
     },
     PaletteAction {
+        id: "new-surface",
+        label: "New Surface in Pane",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "new-surface-split-right",
+        label: "New Surface Split Right",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "new-surface-split-down",
+        label: "New Surface Split Down",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "next-surface",
+        label: "Next Surface in Pane",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "previous-surface",
+        label: "Previous Surface in Pane",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
+        id: "close-surface",
+        label: "Close Current Surface",
+        shortcut: "",
+        category: "Surface",
+    },
+    PaletteAction {
         id: "toggle-input-bar",
         label: "Toggle Input Bar",
         shortcut: "ctrl-`",
