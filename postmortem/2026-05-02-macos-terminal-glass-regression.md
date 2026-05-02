@@ -22,7 +22,7 @@ Pane-divider overdraw was explicitly rejected: it made split edges visibly ugly 
 
 The deeper fix is to make the top-level macOS backing glass-compatible. On modern macOS, Con now uses GPUI's native blurred window backdrop when terminal blur is enabled, so any clear timing gap between GPUI chrome and embedded Ghostty NSViews reveals the same glass material instead of raw desktop pixels.
 
-Even with a blurred top-level backing, rapid bottom-bar and right-panel toggles can still show a seam because GPUI layout and embedded AppKit view placement do not commit atomically. On macOS those terminal-adjacent geometry changes now snap instead of animate. This preserves glass and avoids a visible one-frame backing seam without changing Windows or Linux animations.
+Even with a blurred top-level backing, rapid bottom-bar and right-panel toggles can still show a seam because GPUI layout and embedded AppKit view placement do not commit atomically. On macOS those terminal-adjacent geometry changes now snap instead of animate. A short terminal-colored catch-up guard covers only the area just vacated by chrome while AppKit expands Ghostty's native view into the new bounds. This preserves glass, avoids hard borders, and avoids changing Windows or Linux animations.
 
 ## What We Learned
 

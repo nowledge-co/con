@@ -22,6 +22,8 @@ const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
 #[cfg(target_os = "macos")]
 const CHROME_MOTION_SEAM_OVERDRAW: f32 = 6.0;
+#[cfg(target_os = "macos")]
+const CHROME_SNAP_GUARD_MS: u64 = 80;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
@@ -399,6 +401,10 @@ pub struct ConWorkspace {
     last_ghostty_wake_generation: u64,
     #[cfg(target_os = "macos")]
     chrome_transition_underlay_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    agent_panel_snap_guard_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    input_bar_snap_guard_until: Option<Instant>,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -700,6 +706,45 @@ impl ConWorkspace {
             self.chrome_transition_underlay_until
                 .map_or(until, |prev| prev.max(until)),
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn extend_guard(until: &mut Option<Instant>, duration: Duration) {
+        let next = Instant::now() + duration;
+        *until = Some(until.map_or(next, |prev| prev.max(next)));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn arm_agent_panel_snap_guard(&mut self, cx: &mut App) {
+        Self::extend_guard(
+            &mut self.agent_panel_snap_guard_until,
+            Duration::from_millis(CHROME_SNAP_GUARD_MS),
+        );
+        self.mark_active_tab_terminal_native_layout_pending(cx);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn arm_input_bar_snap_guard(&mut self, cx: &mut App) {
+        Self::extend_guard(
+            &mut self.input_bar_snap_guard_until,
+            Duration::from_millis(CHROME_SNAP_GUARD_MS),
+        );
+        self.mark_active_tab_terminal_native_layout_pending(cx);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn snap_guard_active(until: &mut Option<Instant>, window: &mut Window) -> bool {
+        let Some(deadline) = *until else {
+            return false;
+        };
+
+        if Instant::now() >= deadline {
+            *until = None;
+            false
+        } else {
+            window.request_animation_frame();
+            true
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -1369,6 +1414,10 @@ impl ConWorkspace {
             last_ghostty_wake_generation,
             #[cfg(target_os = "macos")]
             chrome_transition_underlay_until: None,
+            #[cfg(target_os = "macos")]
+            agent_panel_snap_guard_until: None,
+            #[cfg(target_os = "macos")]
+            input_bar_snap_guard_until: None,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             pending_surface_control_requests: Vec::new(),
@@ -6378,6 +6427,10 @@ impl ConWorkspace {
         if !duration.is_zero() {
             self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
         }
+        #[cfg(target_os = "macos")]
+        if duration.is_zero() {
+            self.arm_agent_panel_snap_guard(cx);
+        }
         self.agent_panel_motion
             .set_target(if self.agent_panel_open { 1.0 } else { 0.0 }, duration);
         if self.agent_panel_open {
@@ -6412,6 +6465,10 @@ impl ConWorkspace {
         #[cfg(target_os = "macos")]
         if !duration.is_zero() {
             self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
+        }
+        #[cfg(target_os = "macos")]
+        if duration.is_zero() {
+            self.arm_input_bar_snap_guard(cx);
         }
         self.input_bar_motion
             .set_target(if self.input_bar_visible { 1.0 } else { 0.0 }, duration);
@@ -6459,8 +6516,12 @@ impl ConWorkspace {
 
         if !self.input_bar_visible {
             self.input_bar_visible = true;
-            self.input_bar_motion
-                .set_target(1.0, Self::terminal_adjacent_chrome_duration(true, 180, 180));
+            let duration = Self::terminal_adjacent_chrome_duration(true, 180, 180);
+            #[cfg(target_os = "macos")]
+            if duration.is_zero() {
+                self.arm_input_bar_snap_guard(cx);
+            }
+            self.input_bar_motion.set_target(1.0, duration);
         }
 
         self.pane_scope_picker_open = !self.pane_scope_picker_open;
@@ -6836,8 +6897,12 @@ impl ConWorkspace {
             self.input_bar_visible = true;
             self.save_session(cx);
         }
-        self.input_bar_motion
-            .set_target(1.0, Self::terminal_adjacent_chrome_duration(true, 180, 180));
+        let duration = Self::terminal_adjacent_chrome_duration(true, 180, 180);
+        #[cfg(target_os = "macos")]
+        if duration.is_zero() {
+            self.arm_input_bar_snap_guard(cx);
+        }
+        self.input_bar_motion.set_target(1.0, duration);
         self.input_bar.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
@@ -8985,6 +9050,12 @@ impl Render for ConWorkspace {
         let input_bar_transitioning = self.input_bar_motion.is_animating();
         let tab_strip_transitioning = self.tab_strip_motion.is_animating();
         #[cfg(target_os = "macos")]
+        let agent_panel_snap_guard_active =
+            Self::snap_guard_active(&mut self.agent_panel_snap_guard_until, window);
+        #[cfg(target_os = "macos")]
+        let input_bar_snap_guard_active =
+            Self::snap_guard_active(&mut self.input_bar_snap_guard_until, window);
+        #[cfg(target_os = "macos")]
         {
             let allow_native_transition_underlay = self.terminal_opacity >= 0.999;
             let guard_active = if allow_native_transition_underlay {
@@ -10049,6 +10120,65 @@ impl Render for ConWorkspace {
                     .w(px(agent_panel_seam_width))
                     .bg(chrome_transition_seam_color),
             );
+        }
+
+        #[cfg(target_os = "macos")]
+        if input_bar_snap_guard_active {
+            if self.input_bar_visible {
+                root = root.child(
+                    div()
+                        .absolute()
+                        .left(px(terminal_content_left))
+                        .right(px(agent_panel_outer_width))
+                        .bottom(px(43.0))
+                        .h(px(CHROME_MOTION_SEAM_OVERDRAW))
+                        .bg(chrome_transition_seam_color),
+                );
+            } else {
+                // When the bar snaps closed, AppKit can take one transaction to
+                // grow the embedded Ghostty NSView into the vacated strip. Keep
+                // that short catch-up area terminal-colored instead of clear.
+                root = root.child(
+                    div()
+                        .absolute()
+                        .left(px(terminal_content_left))
+                        .right(px(agent_panel_outer_width))
+                        .bottom_0()
+                        .h(px(43.0))
+                        .bg(chrome_transition_seam_color),
+                );
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        if agent_panel_snap_guard_active {
+            if self.agent_panel_open {
+                let agent_panel_seam_right = (effective_agent_panel_width
+                    - (CHROME_MOTION_SEAM_OVERDRAW - CHROME_TRANSITION_SEAM_COVER))
+                    .max(0.0);
+                root = root.child(
+                    div()
+                        .absolute()
+                        .top(px(top_bar_height))
+                        .bottom_0()
+                        .right(px(agent_panel_seam_right))
+                        .w(px(CHROME_MOTION_SEAM_OVERDRAW))
+                        .bg(chrome_transition_seam_color),
+                );
+            } else {
+                // Same catch-up guard as the bottom bar: after a snap-close,
+                // GPUI has already removed the panel, but AppKit may not have
+                // expanded Ghostty's native view into the released width yet.
+                root = root.child(
+                    div()
+                        .absolute()
+                        .top(px(top_bar_height))
+                        .bottom_0()
+                        .right_0()
+                        .w(px(effective_agent_panel_width + 1.0))
+                        .bg(chrome_transition_seam_color),
+                );
+            }
         }
 
         #[cfg(not(target_os = "macos"))]
