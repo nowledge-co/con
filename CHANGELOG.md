@@ -13,6 +13,12 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added the first restorable-workspace implementation slice. Private session layout now round-trips every pane-local surface, including surface id, title, owner, cwd, active surface, and close-pane-when-last policy, instead of restoring only the active surface in each pane.
 - Added a typed, validated `.con/workspace.toml` schema for future git-compatible project layouts, with tabs, panes, surfaces, split geometry, relative cwd values, startup command policy, and agent defaults kept separate from private app runtime state.
 
+### Changed
+
+**Startup**
+
+- When a second Con process sees an already-live control endpoint, it now opens a fresh window session with shared history instead of cloning the last restored layout and agent conversation again. Full single-instance forwarding remains a follow-up under the app-state workspace model.
+
 ## `v0.1.0-beta.54` - 2026-05-02
 
 ### Added

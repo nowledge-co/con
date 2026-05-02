@@ -559,6 +559,36 @@ fn fresh_window_session_with_history() -> Session {
     session
 }
 
+fn startup_session() -> Session {
+    if live_control_endpoint_exists() {
+        log::info!(
+            "existing con control endpoint detected; opening a fresh window session with shared history"
+        );
+        fresh_window_session_with_history()
+    } else {
+        Session::load().unwrap_or_default()
+    }
+}
+
+#[cfg(unix)]
+fn live_control_endpoint_exists() -> bool {
+    std::os::unix::net::UnixStream::connect(con_core::control_socket_path()).is_ok()
+}
+
+#[cfg(windows)]
+fn live_control_endpoint_exists() -> bool {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(con_core::control_socket_path())
+        .is_ok()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn live_control_endpoint_exists() -> bool {
+    false
+}
+
 pub(crate) fn toggle_global_summon(cx: &mut App) {
     let frontmost_window = cx
         .window_stack()
@@ -1327,12 +1357,7 @@ fn main() {
             },
         ]);
 
-        open_con_window(
-            config.clone(),
-            Session::load().unwrap_or_default(),
-            true,
-            cx,
-        );
+        open_con_window(config.clone(), startup_session(), true, cx);
 
         // Initialize the auto-updater. On macOS this loads Sparkle
         // from the app bundle; on Windows it kicks off a notify-only

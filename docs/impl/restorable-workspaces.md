@@ -50,9 +50,13 @@ Gaps:
   independent windows cleanly.
 - Project workspace files are typed and validated, but not yet wired to
   Command Palette, Settings, or `con-cli` import/export flows.
-- New-window and startup semantics are mixed: first launch restores
-  `Session::load()`, while New Window creates a fresh session with global
-  history. Multiple app instances can still contend for the same session path.
+- New-window and startup semantics are partially separated: first launch
+  restores `Session::load()`, New Window creates a fresh session with global
+  history, and a second process that sees an already-live control endpoint now
+  opens a fresh-history session instead of cloning the same saved
+  layout/agent conversation.
+- Multiple app instances can still contend for runtime-state writes until the
+  AppState window model and single-instance forwarding are implemented.
 - Terminal scrollback/process state is not recoverable and should not be
   silently promised.
 
@@ -330,10 +334,12 @@ wrong once agent sessions, surfaces, and long histories are involved.
    a separate window bound to that workspace.
 
 5. **Second app process**
-   Prefer single-instance forwarding to the running app. If unsupported on a
-   platform, use a per-process session lock so only one process writes the
-   runtime state. A second process can open a fresh window but must not overwrite
-   the first process's window state on exit.
+   Current mitigation: if the live control endpoint is reachable, open a fresh
+   history-backed session instead of restoring the saved layout again. Target
+   behavior: prefer single-instance forwarding to the running app. If
+   unsupported on a platform, use a per-process session lock so only one process
+   writes runtime state. A second process can open a fresh window but must not
+   overwrite the first process's window state on exit.
 
 ## Compatibility With Existing Control Plane
 
