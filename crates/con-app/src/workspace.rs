@@ -681,6 +681,19 @@ impl ConWorkspace {
     }
 
     #[cfg(target_os = "macos")]
+    fn terminal_adjacent_chrome_duration(_open: bool, _open_ms: u64, _close_ms: u64) -> Duration {
+        // Embedded Ghostty panes are native AppKit views under GPUI. Animating
+        // layout next to them can expose a one-frame clear backing seam that no
+        // GPUI border can reliably hide while preserving terminal glass.
+        Duration::ZERO
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn terminal_adjacent_chrome_duration(open: bool, open_ms: u64, close_ms: u64) -> Duration {
+        Duration::from_millis(if open { open_ms } else { close_ms })
+    }
+
+    #[cfg(target_os = "macos")]
     fn arm_chrome_transition_underlay(&mut self, duration: Duration) {
         let until = Instant::now() + duration;
         self.chrome_transition_underlay_until = Some(
@@ -6360,9 +6373,11 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.agent_panel_open = !self.agent_panel_open;
-        let duration = Duration::from_millis(if self.agent_panel_open { 290 } else { 220 });
+        let duration = Self::terminal_adjacent_chrome_duration(self.agent_panel_open, 290, 220);
         #[cfg(target_os = "macos")]
-        self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
+        if !duration.is_zero() {
+            self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
+        }
         self.agent_panel_motion
             .set_target(if self.agent_panel_open { 1.0 } else { 0.0 }, duration);
         if self.agent_panel_open {
@@ -6393,9 +6408,11 @@ impl ConWorkspace {
         if !self.input_bar_visible {
             self.pane_scope_picker_open = false;
         }
-        let duration = Duration::from_millis(if self.input_bar_visible { 210 } else { 160 });
+        let duration = Self::terminal_adjacent_chrome_duration(self.input_bar_visible, 210, 160);
         #[cfg(target_os = "macos")]
-        self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
+        if !duration.is_zero() {
+            self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
+        }
         self.input_bar_motion
             .set_target(if self.input_bar_visible { 1.0 } else { 0.0 }, duration);
         if self.input_bar_visible {
@@ -6443,7 +6460,7 @@ impl ConWorkspace {
         if !self.input_bar_visible {
             self.input_bar_visible = true;
             self.input_bar_motion
-                .set_target(1.0, std::time::Duration::from_millis(180));
+                .set_target(1.0, Self::terminal_adjacent_chrome_duration(true, 180, 180));
         }
 
         self.pane_scope_picker_open = !self.pane_scope_picker_open;
@@ -6820,7 +6837,7 @@ impl ConWorkspace {
             self.save_session(cx);
         }
         self.input_bar_motion
-            .set_target(1.0, std::time::Duration::from_millis(180));
+            .set_target(1.0, Self::terminal_adjacent_chrome_duration(true, 180, 180));
         self.input_bar.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
