@@ -658,8 +658,19 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     fn native_backing_rgba(&self) -> Option<(u8, u8, u8, u8)> {
         let rgb = self.app.background_rgb()?;
-        let alpha = self.app.background_opacity().unwrap_or(1.0).clamp(0.0, 1.0);
-        Some((rgb[0], rgb[1], rgb[2], (alpha * 255.0).round() as u8))
+        let alpha = if Self::needs_legacy_native_layer_geometry_sync() {
+            // macOS 12 and older intentionally disable terminal glass. Keep
+            // the AppKit backing opaque there so a temporarily desynced
+            // layer never exposes the desktop behind the pane.
+            255
+        } else {
+            // Modern macOS gets opacity/blur from Ghostty's own renderer and
+            // NSWindow background blur. Painting the same translucent terminal
+            // background behind the Metal surface double-composites it and
+            // makes the configured glass effectively opaque.
+            0
+        };
+        Some((rgb[0], rgb[1], rgb[2], alpha))
     }
 
     #[cfg(target_os = "macos")]

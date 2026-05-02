@@ -251,6 +251,27 @@ pub fn set_linux_window_blur(window: &mut Window, blur: bool) {
     });
 }
 
+#[cfg(target_os = "macos")]
+fn should_use_macos_window_glass_backdrop(blur: bool, effective_opacity: f32) -> bool {
+    blur && effective_opacity < 0.999
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_macos_window_glass_backdrop(window: &mut Window, blur: bool, effective_opacity: f32) {
+    if !supports_transparent_main_window() {
+        window.set_background_appearance(WindowBackgroundAppearance::Opaque);
+        return;
+    }
+
+    window.set_background_appearance(
+        if should_use_macos_window_glass_backdrop(blur, effective_opacity) {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Transparent
+        },
+    );
+}
+
 #[cfg(target_os = "windows")]
 fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -316,19 +337,41 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
 // and any remaining targets still fall back to `stub_view.rs`. See the
 // platform docs under `docs/impl/`.
 
-fn default_window_options(cx: &mut App) -> WindowOptions {
+fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
     let transparent = supports_transparent_main_window();
     WindowOptions {
         window_bounds: Some(default_workspace_window_bounds(cx)),
         titlebar: default_titlebar_options(transparent),
         window_decorations: default_window_decorations(),
-        window_background: if transparent {
-            WindowBackgroundAppearance::Transparent
-        } else {
-            WindowBackgroundAppearance::Opaque
-        },
+        window_background: default_window_background(config, transparent),
         ..Default::default()
     }
+}
+
+fn default_window_background(
+    config: &con_core::Config,
+    transparent: bool,
+) -> WindowBackgroundAppearance {
+    #[cfg(not(target_os = "macos"))]
+    let _ = config;
+
+    if !transparent {
+        return WindowBackgroundAppearance::Opaque;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let effective_opacity =
+            ConWorkspace::effective_terminal_opacity(config.appearance.terminal_opacity);
+        if should_use_macos_window_glass_backdrop(
+            config.appearance.terminal_blur,
+            effective_opacity,
+        ) {
+            return WindowBackgroundAppearance::Blurred;
+        }
+    }
+
+    WindowBackgroundAppearance::Transparent
 }
 
 fn default_workspace_window_bounds(cx: &mut App) -> WindowBounds {
@@ -414,7 +457,7 @@ fn default_window_decorations() -> Option<WindowDecorations> {
 }
 
 fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bool, cx: &mut App) {
-    let window_options = default_window_options(cx);
+    let window_options = default_window_options(&config, cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
             let restored_session = session.clone();
