@@ -4,6 +4,15 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.57` - 2026-05-02
+
+### Added
+
+**Restorable Workspaces**
+
+- Added the first restorable-workspace implementation slice. Private session layout now round-trips every pane-local surface, including surface id, title, owner, cwd, active surface, and close-pane-when-last policy, instead of restoring only the active surface in each pane.
+- Added a typed, validated `.con/workspace.toml` schema for future git-compatible project layouts, with tabs, panes, surfaces, split geometry, relative cwd values, startup command policy, and agent defaults kept separate from private app runtime state.
+
 ## `v0.1.0-beta.54` - 2026-05-02
 
 ### Added

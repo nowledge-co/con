@@ -35,9 +35,12 @@ Existing persistence already covers more than the issue title suggests:
   history, vertical-tabs state, and per-tab conversation IDs.
 - `TabState` persists tab title, cwd, split layout, focused pane id,
   per-pane command history, per-tab agent routing, and user label.
-- `PaneTree::to_state` / `from_state` persist split ratios and leaf cwd.
+- `PaneTree::to_state` / `from_state` persist split ratios, leaf cwd, and
+  every pane-local surface in each leaf.
 - `GlobalHistoryState` stores command/input history outside layout so a fresh
   window can still get history.
+- `con-core::workspace_layout` defines a validated `.con/workspace.toml`
+  schema for git-compatible project layout files.
 
 Gaps:
 
@@ -45,9 +48,8 @@ Gaps:
   portable layout format.
 - The root session is a single-window model. It cannot represent multiple
   independent windows cleanly.
-- Pane-local surfaces are not persisted. `PaneLayoutState::Leaf` only stores
-  the active surface cwd.
-- Pane/surface names, owner, active surface, and surface cwd are runtime-only.
+- Project workspace files are typed and validated, but not yet wired to
+  Command Palette, Settings, or `con-cli` import/export flows.
 - New-window and startup semantics are mixed: first launch restores
   `Session::load()`, while New Window creates a fresh session with global
   history. Multiple app instances can still contend for the same session path.
@@ -172,15 +174,17 @@ active_pane = "editor"
 conversation = "project"
 
 [tabs.layout]
-split = "horizontal"
+kind = "split"
+direction = "horizontal"
 ratio = 0.58
-first = "editor"
+first = { kind = "pane", id = "editor" }
 
 [tabs.layout.second]
-split = "vertical"
+kind = "split"
+direction = "vertical"
 ratio = 0.50
-first = "tests"
-second = "server"
+first = { kind = "pane", id = "tests" }
+second = { kind = "pane", id = "server" }
 
 [[tabs.panes]]
 id = "editor"
@@ -359,23 +363,32 @@ Agents and external orchestrators should continue to prefer:
 
 Goal: make current private restore complete before adding a public file format.
 
-- Extend `PaneLayoutState::Leaf` to store surfaces:
+- Status: implemented in the first issue #111 slice.
+- Extended `PaneLayoutState::Leaf` to store surfaces:
   - `surfaces: Vec<SurfaceState>`
   - `active_surface_id: Option<usize>`
-  - `pane_title/user label if needed`
-- Add `SurfaceState`:
+- Added `SurfaceState`:
   - `surface_id`
   - `title`
   - `owner`
   - `cwd`
   - `close_pane_when_last`
-- Update `PaneTree::to_state` and `PaneTree::from_state` to round-trip all
+- Updated `PaneTree::to_state` and `PaneTree::from_state` to round-trip all
   surfaces.
-- Preserve backward compatibility with old leaves that only have `cwd`.
-- Add tests for:
-  - one pane with multiple surfaces round-trips
-  - active surface survives restore
-  - split ratios and focused pane survive restore
+- Preserved backward compatibility with old leaves that only have `cwd`.
+- Added con-core serialization tests for legacy leaf restore and multi-surface
+  leaf state.
+
+### Phase 1.5 — Project Layout Schema
+
+Goal: make the git-compatible format concrete before wiring UI.
+
+- Status: implemented as `con-core::workspace_layout`.
+- Added typed TOML structs for workspace defaults, tabs, layout nodes, panes,
+  surfaces, and restore policy.
+- Added validation for duplicate IDs, dangling active pane/surface refs,
+  dangling layout refs, and unsafe split ratios.
+- Added TOML round-trip tests and validation-failure tests.
 
 ### Phase 2 — App-State v1
 
@@ -449,4 +462,3 @@ Goal: make the feature discoverable without becoming IDE-heavy.
   provider auth.
 - Should scrollback be exportable manually for debugging? Recommendation:
   separate "Export Terminal Transcript" action, not workspace restore.
-

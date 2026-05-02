@@ -1,4 +1,4 @@
-use con_core::session::{PaneLayoutState, PaneSplitDirection};
+use con_core::session::{PaneLayoutState, PaneSplitDirection, SurfaceState};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
@@ -172,8 +172,14 @@ impl PaneTree {
         focused_pane_id: Option<PaneId>,
         make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
     ) -> Self {
-        let mut restored_surface_id = 0;
-        let mut root = Self::node_from_state(layout, make_terminal, &mut restored_surface_id);
+        let mut next_restored_surface_id = 0;
+        let mut used_surface_ids = std::collections::HashSet::new();
+        let mut root = Self::node_from_state(
+            layout,
+            make_terminal,
+            &mut next_restored_surface_id,
+            &mut used_surface_ids,
+        );
         let mut next_split_id = 0;
         Self::normalize_split_ids(&mut root, &mut next_split_id);
         let next_id = Self::max_pane_id(&root).saturating_add(1);
@@ -1653,11 +1659,27 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
-            } => PaneLayoutState::Leaf {
-                pane_id: *id,
-                cwd: Self::active_surface(surfaces, *active_surface_id)
-                    .and_then(|surface| surface.terminal.current_dir(cx)),
-            },
+            } => {
+                let cwd = Self::active_surface(surfaces, *active_surface_id)
+                    .and_then(|surface| surface.terminal.current_dir(cx));
+                let surface_states = surfaces
+                    .iter()
+                    .map(|surface| SurfaceState {
+                        surface_id: surface.id,
+                        title: surface.title.clone(),
+                        owner: surface.owner.clone(),
+                        cwd: surface.terminal.current_dir(cx),
+                        close_pane_when_last: surface.close_pane_when_last,
+                    })
+                    .collect();
+
+                PaneLayoutState::Leaf {
+                    pane_id: *id,
+                    cwd,
+                    active_surface_id: Some(*active_surface_id),
+                    surfaces: surface_states,
+                }
+            }
             PaneNode::Split {
                 direction,
                 ratio,
@@ -1680,15 +1702,52 @@ impl PaneTree {
         state: &PaneLayoutState,
         make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
         next_surface_id: &mut SurfaceId,
+        used_surface_ids: &mut std::collections::HashSet<SurfaceId>,
     ) -> PaneNode {
         match state {
-            PaneLayoutState::Leaf { pane_id, cwd } => {
-                let surface_id = *next_surface_id;
-                *next_surface_id = (*next_surface_id).saturating_add(1);
+            PaneLayoutState::Leaf {
+                pane_id,
+                cwd,
+                active_surface_id,
+                surfaces,
+            } => {
+                if surfaces.is_empty() {
+                    let surface_id =
+                        Self::allocate_restored_surface_id(None, next_surface_id, used_surface_ids);
+                    return PaneNode::Leaf {
+                        id: *pane_id,
+                        surfaces: vec![PaneSurface::new(surface_id, make_terminal(cwd.as_deref()))],
+                        active_surface_id: surface_id,
+                    };
+                }
+
+                let mut restored_surfaces = Vec::with_capacity(surfaces.len());
+                let mut restored_active_surface_id = None;
+                for state in surfaces {
+                    let surface_id = Self::allocate_restored_surface_id(
+                        Some(state.surface_id),
+                        next_surface_id,
+                        used_surface_ids,
+                    );
+                    let restore_cwd = state.cwd.as_deref().or(cwd.as_deref());
+                    let mut surface = PaneSurface::new(surface_id, make_terminal(restore_cwd));
+                    surface.title = state.title.clone();
+                    surface.owner = state.owner.clone();
+                    surface.close_pane_when_last = state.close_pane_when_last;
+
+                    if active_surface_id == &Some(state.surface_id) {
+                        restored_active_surface_id = Some(surface_id);
+                    }
+                    restored_surfaces.push(surface);
+                }
+
+                let active_surface_id = restored_active_surface_id.unwrap_or_else(|| {
+                    restored_surfaces.first().map(|surface| surface.id).unwrap()
+                });
                 PaneNode::Leaf {
                     id: *pane_id,
-                    surfaces: vec![PaneSurface::new(surface_id, make_terminal(cwd.as_deref()))],
-                    active_surface_id: surface_id,
+                    surfaces: restored_surfaces,
+                    active_surface_id,
                 }
             }
             PaneLayoutState::Split {
@@ -1702,14 +1761,41 @@ impl PaneTree {
                     PaneSplitDirection::Horizontal => SplitDirection::Horizontal,
                     PaneSplitDirection::Vertical => SplitDirection::Vertical,
                 },
-                first: Box::new(Self::node_from_state(first, make_terminal, next_surface_id)),
+                first: Box::new(Self::node_from_state(
+                    first,
+                    make_terminal,
+                    next_surface_id,
+                    used_surface_ids,
+                )),
                 second: Box::new(Self::node_from_state(
                     second,
                     make_terminal,
                     next_surface_id,
+                    used_surface_ids,
                 )),
                 ratio: ratio.clamp(0.05, 0.95),
             },
+        }
+    }
+
+    fn allocate_restored_surface_id(
+        requested: Option<SurfaceId>,
+        next_surface_id: &mut SurfaceId,
+        used_surface_ids: &mut std::collections::HashSet<SurfaceId>,
+    ) -> SurfaceId {
+        if let Some(requested) = requested
+            && used_surface_ids.insert(requested)
+        {
+            *next_surface_id = (*next_surface_id).max(requested.saturating_add(1));
+            return requested;
+        }
+
+        loop {
+            let candidate = *next_surface_id;
+            *next_surface_id = (*next_surface_id).saturating_add(1);
+            if used_surface_ids.insert(candidate) {
+                return candidate;
+            }
         }
     }
 }

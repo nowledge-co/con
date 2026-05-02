@@ -97,7 +97,14 @@ pub struct AgentModelOverrideState {
 pub enum PaneLayoutState {
     Leaf {
         pane_id: usize,
+        /// Backward-compatible active-surface cwd. Older session files only
+        /// stored this field; newer files store every pane-local surface below.
+        #[serde(default)]
         cwd: Option<String>,
+        #[serde(default)]
+        active_surface_id: Option<usize>,
+        #[serde(default)]
+        surfaces: Vec<SurfaceState>,
     },
     Split {
         direction: PaneSplitDirection,
@@ -112,6 +119,20 @@ pub enum PaneLayoutState {
 pub enum PaneSplitDirection {
     Horizontal,
     Vertical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurfaceState {
+    #[serde(default)]
+    pub surface_id: usize,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub close_pane_when_last: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +178,82 @@ impl Default for Session {
             conversation_id: None,
             vertical_tabs_pinned: false,
             vertical_tabs_width: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_leaf_layout_without_surfaces_still_loads() {
+        let value = json!({
+            "kind": "leaf",
+            "pane_id": 7,
+            "cwd": "/tmp/project"
+        });
+
+        let layout: PaneLayoutState = serde_json::from_value(value).unwrap();
+
+        match layout {
+            PaneLayoutState::Leaf {
+                pane_id,
+                cwd,
+                active_surface_id,
+                surfaces,
+            } => {
+                assert_eq!(pane_id, 7);
+                assert_eq!(cwd.as_deref(), Some("/tmp/project"));
+                assert_eq!(active_surface_id, None);
+                assert!(surfaces.is_empty());
+            }
+            PaneLayoutState::Split { .. } => panic!("expected leaf"),
+        }
+    }
+
+    #[test]
+    fn leaf_layout_can_store_multiple_surfaces() {
+        let layout = PaneLayoutState::Leaf {
+            pane_id: 3,
+            cwd: Some("/tmp/project".to_string()),
+            active_surface_id: Some(12),
+            surfaces: vec![
+                SurfaceState {
+                    surface_id: 11,
+                    title: Some("Shell".to_string()),
+                    owner: None,
+                    cwd: Some("/tmp/project".to_string()),
+                    close_pane_when_last: false,
+                },
+                SurfaceState {
+                    surface_id: 12,
+                    title: Some("Agent".to_string()),
+                    owner: Some("subagent".to_string()),
+                    cwd: Some("/tmp/project/crates".to_string()),
+                    close_pane_when_last: true,
+                },
+            ],
+        };
+
+        let encoded = serde_json::to_value(&layout).unwrap();
+        assert_eq!(encoded["active_surface_id"], 12);
+        assert_eq!(encoded["surfaces"].as_array().unwrap().len(), 2);
+
+        let decoded: PaneLayoutState = serde_json::from_value(encoded).unwrap();
+        match decoded {
+            PaneLayoutState::Leaf {
+                active_surface_id,
+                surfaces,
+                ..
+            } => {
+                assert_eq!(active_surface_id, Some(12));
+                assert_eq!(surfaces[1].title.as_deref(), Some("Agent"));
+                assert_eq!(surfaces[1].owner.as_deref(), Some("subagent"));
+                assert!(surfaces[1].close_pane_when_last);
+            }
+            PaneLayoutState::Split { .. } => panic!("expected leaf"),
         }
     }
 }
