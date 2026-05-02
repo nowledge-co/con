@@ -5143,6 +5143,8 @@ impl ConWorkspace {
         }
         #[cfg(target_os = "windows")]
         crate::set_windows_backdrop_blur(_window, self.terminal_blur);
+        #[cfg(target_os = "macos")]
+        crate::set_macos_window_glass_backdrop(_window, self.terminal_blur, self.terminal_opacity);
         #[cfg(target_os = "linux")]
         crate::set_linux_window_blur(_window, self.terminal_blur);
     }
@@ -9112,7 +9114,6 @@ impl Render for ConWorkspace {
             self.tabs[self.active_tab].pane_tree.render(
                 begin_drag_cb,
                 focus_surface_cb,
-                chrome_static_seam_color,
                 pane_divider_color,
                 cx,
             )

@@ -16,7 +16,11 @@ Modern macOS now keeps the native terminal backing transparent and lets Ghostty 
 
 Static chrome surfaces again use the configured UI opacity. Opaque terminal-colored coverage remains limited to tiny seam guards while terminal glass is active. The native full-window transition underlay is only allowed when the terminal is already opaque, because showing it behind transparent Ghostty cells visibly disables glass for the duration of the animation.
 
-The remaining right-panel, bottom-bar, and pane-divider seam leaks were addressed with macOS-only seam overdraw. This keeps the cover on the moving boundary without inserting extra flex height into the terminal layout and without affecting Windows or Linux. Pane dividers keep a subtle 1px visible line, with an opaque terminal-background strip underneath to cover native-view timing gaps.
+The remaining right-panel and bottom-bar seam leaks were first reduced with macOS-only absolute seam overdraw. This keeps the cover on the moving boundary without inserting extra flex height into the terminal layout and without affecting Windows or Linux.
+
+Pane-divider overdraw was explicitly rejected: it made split edges visibly ugly and still did not address the underlying native-view timing gap. Future work should avoid thickening visible dividers and instead solve the native backing problem directly.
+
+The deeper fix is to make the top-level macOS backing glass-compatible. On modern macOS, Con now uses GPUI's native blurred window backdrop when terminal blur is enabled, so any clear timing gap between GPUI chrome and embedded Ghostty NSViews reveals the same glass material instead of raw desktop pixels.
 
 ## What We Learned
 

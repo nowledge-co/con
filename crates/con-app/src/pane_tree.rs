@@ -1,13 +1,8 @@
 use con_core::session::{PaneLayoutState, PaneSplitDirection};
-#[cfg(target_os = "macos")]
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
 use crate::terminal_pane::TerminalPane;
-
-#[cfg(target_os = "macos")]
-const PANE_SEAM_OVERDRAW: f32 = 3.0;
 
 /// Split direction for pane layout
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -570,7 +565,6 @@ impl PaneTree {
         &self,
         begin_drag_cb: impl Fn(SplitId, f32) + 'static,
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
-        seam_color: Hsla,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
@@ -593,7 +587,6 @@ impl PaneTree {
             self.pane_count() > 1,
             std::sync::Arc::new(begin_drag_cb),
             focus_surface_cb,
-            seam_color,
             divider_color,
             cx,
         )
@@ -980,7 +973,6 @@ impl PaneTree {
         has_splits: bool,
         begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32) + 'static>,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        seam_color: Hsla,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
@@ -1020,7 +1012,6 @@ impl PaneTree {
                     has_splits,
                     cb_first,
                     focus_cb_first,
-                    seam_color,
                     divider_color,
                     cx,
                 );
@@ -1030,41 +1021,11 @@ impl PaneTree {
                     has_splits,
                     cb_second,
                     focus_cb_second,
-                    seam_color,
                     divider_color,
                     cx,
                 );
 
                 let divider_id = ElementId::Name(format!("divider-{}", sid).into());
-                #[cfg(target_os = "macos")]
-                let seam_overlay = |direction: SplitDirection| {
-                    let base = div().absolute().bg(seam_color).map(|div| match direction {
-                        SplitDirection::Horizontal => div
-                            .top_0()
-                            .bottom_0()
-                            .left(px(-PANE_SEAM_OVERDRAW))
-                            .w(px(1.0 + PANE_SEAM_OVERDRAW * 2.0)),
-                        SplitDirection::Vertical => div
-                            .left_0()
-                            .right_0()
-                            .top(px(-PANE_SEAM_OVERDRAW))
-                            .h(px(1.0 + PANE_SEAM_OVERDRAW * 2.0)),
-                    });
-                    base
-                };
-                #[cfg(target_os = "macos")]
-                let divider_line = |direction: SplitDirection| {
-                    div()
-                        .absolute()
-                        .bg(divider_color)
-                        .map(|div| match direction {
-                            SplitDirection::Horizontal => {
-                                div.top_0().bottom_0().left_0().w(px(1.0))
-                            }
-                            SplitDirection::Vertical => div.left_0().right_0().top_0().h(px(1.0)),
-                        })
-                };
-
                 let divider = match dir {
                     SplitDirection::Horizontal => {
                         let handle = div()
@@ -1087,17 +1048,6 @@ impl PaneTree {
                             .h_full()
                             .flex_shrink_0()
                             .bg(divider_color)
-                            .map(|div| {
-                                #[cfg(target_os = "macos")]
-                                {
-                                    return div
-                                        .bg(gpui::transparent_black())
-                                        .child(seam_overlay(SplitDirection::Horizontal))
-                                        .child(divider_line(SplitDirection::Horizontal));
-                                }
-                                #[allow(unreachable_code)]
-                                div
-                            })
                             .child(handle.on_mouse_down(
                                 MouseButton::Left,
                                 move |event: &MouseDownEvent, _window, _cx| {
@@ -1126,17 +1076,6 @@ impl PaneTree {
                             .w_full()
                             .flex_shrink_0()
                             .bg(divider_color)
-                            .map(|div| {
-                                #[cfg(target_os = "macos")]
-                                {
-                                    return div
-                                        .bg(gpui::transparent_black())
-                                        .child(seam_overlay(SplitDirection::Vertical))
-                                        .child(divider_line(SplitDirection::Vertical));
-                                }
-                                #[allow(unreachable_code)]
-                                div
-                            })
                             .child(handle.on_mouse_down(
                                 MouseButton::Left,
                                 move |event: &MouseDownEvent, _window, _cx| {
