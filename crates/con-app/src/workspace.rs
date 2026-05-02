@@ -20,6 +20,8 @@ const TERMINAL_MIN_CONTENT_WIDTH: f32 = 360.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
+#[cfg(target_os = "macos")]
+const CHROME_MOTION_SEAM_OVERDRAW: f32 = 6.0;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
@@ -9133,6 +9135,7 @@ impl Render for ConWorkspace {
                     .child(pane_tree_rendered),
             );
 
+        #[cfg(not(target_os = "macos"))]
         if input_bar_transitioning && input_bar_progress > 0.01 {
             terminal_area = terminal_area.child(
                 div()
@@ -9995,11 +9998,28 @@ impl Render for ConWorkspace {
             );
         }
 
-        if agent_panel_transitioning && render_agent_panel {
-            #[cfg(target_os = "macos")]
-            let agent_panel_seam_right = effective_agent_panel_width;
-            #[cfg(not(target_os = "macos"))]
-            let agent_panel_seam_right = animated_panel_width;
+        #[cfg(target_os = "macos")]
+        if input_bar_transitioning {
+            let input_bar_seam_bottom = (43.0 * input_bar_progress).max(0.0);
+            let input_bar_seam_height = CHROME_MOTION_SEAM_OVERDRAW;
+
+            root = root.child(
+                div()
+                    .absolute()
+                    .left(px(terminal_content_left))
+                    .right(px(agent_panel_outer_width))
+                    .bottom(px(input_bar_seam_bottom))
+                    .h(px(input_bar_seam_height))
+                    .bg(chrome_transition_seam_color),
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        if agent_panel_transitioning {
+            let agent_panel_seam_right = (effective_agent_panel_width
+                - (CHROME_MOTION_SEAM_OVERDRAW - CHROME_TRANSITION_SEAM_COVER))
+                .max(0.0);
+            let agent_panel_seam_width = CHROME_MOTION_SEAM_OVERDRAW;
 
             root = root.child(
                 div()
@@ -10007,6 +10027,19 @@ impl Render for ConWorkspace {
                     .top(px(top_bar_height))
                     .bottom_0()
                     .right(px(agent_panel_seam_right))
+                    .w(px(agent_panel_seam_width))
+                    .bg(chrome_transition_seam_color),
+            );
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        if agent_panel_transitioning && render_agent_panel {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(top_bar_height))
+                    .bottom_0()
+                    .right(px(animated_panel_width))
                     .w(px(CHROME_TRANSITION_SEAM_COVER))
                     .bg(chrome_transition_seam_color),
             );

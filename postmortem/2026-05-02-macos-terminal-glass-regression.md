@@ -16,6 +16,8 @@ Modern macOS now keeps the native terminal backing transparent and lets Ghostty 
 
 Static chrome surfaces again use the configured UI opacity. Opaque terminal-colored coverage remains limited to tiny seam guards while terminal glass is active. The native full-window transition underlay is only allowed when the terminal is already opaque, because showing it behind transparent Ghostty cells visibly disables glass for the duration of the animation.
 
+The remaining right-panel and bottom-bar seam leaks were addressed with macOS-only absolute seam overdraw. This keeps the cover on the moving boundary without inserting extra flex height into the terminal layout and without affecting Windows or Linux.
+
 ## What We Learned
 
 Leak-light fixes must separate three layers:
