@@ -80,12 +80,21 @@ Surface control is also available from Command Palette and the terminal
 right-click menu so humans can discover and exercise the same pane-local model
 without using `con-cli`.
 
+The visual rule is intentionally scoped:
+
+- A **pane** is the visible split region.
+- A **surface** is selected inside one pane.
+- Ordinary one-surface panes show no surface chrome.
+- Panes with multiple surfaces, an orchestrator owner, or an explicit surface
+  title show a compact in-pane surface rail. This rail is local to that pane;
+  it never switches surfaces in sibling panes.
+
 - `New Surface in Pane`: creates a new terminal session inside the focused
-  pane and focuses it.
+  pane, gives it the next stable `Surface N` label, and focuses it.
 - `New Surface Split Right`: creates a new right split from the focused pane,
-  with its first terminal session represented as a surface.
+  with its first terminal session represented as `Surface 1`.
 - `New Surface Split Down`: creates a new down split from the focused pane,
-  with its first terminal session represented as a surface.
+  with its first terminal session represented as `Surface 1`.
 - `Next Surface in Pane`: cycles forward through surfaces hosted by the
   focused pane.
 - `Previous Surface in Pane`: cycles backward through surfaces hosted by the
@@ -99,6 +108,14 @@ without using `con-cli`.
   closing that last surface also closes the worker pane. It intentionally does
   nothing for the last non-owned surface in a pane; ordinary pane closing
   remains the pane-level command.
+
+Surface tabs support direct manipulation:
+
+- Click a surface tab to focus that surface in its pane.
+- Double-click a surface tab to rename it.
+- Right-click a surface tab for Rename / Close.
+- Use the close glyph on a closable surface tab to remove that surface without
+  opening the full terminal context menu.
 
 These palette actions are deliberately pane-local. They do not change the
 existing `panes.*` control-plane contract, the built-in agent harness target

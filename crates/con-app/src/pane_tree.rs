@@ -1,6 +1,10 @@
 use con_core::session::{PaneLayoutState, PaneSplitDirection};
 use gpui::*;
-use gpui_component::{ActiveTheme, InteractiveElementExt};
+use gpui_component::{
+    ActiveTheme, InteractiveElementExt,
+    menu::{ContextMenuExt, PopupMenuItem},
+    tooltip::Tooltip,
+};
 
 use crate::terminal_pane::TerminalPane;
 
@@ -566,11 +570,13 @@ impl PaneTree {
         begin_drag_cb: impl Fn(SplitId, f32) + 'static,
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         rename_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
+        close_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
         let focus_surface_cb = std::sync::Arc::new(focus_surface_cb);
         let rename_surface_cb = std::sync::Arc::new(rename_surface_cb);
+        let close_surface_cb = std::sync::Arc::new(close_surface_cb);
         if let Some(zoomed_id) = self.zoomed_pane_id {
             if let Some(zoomed) = Self::render_zoomed_leaf(
                 &self.root,
@@ -578,6 +584,7 @@ impl PaneTree {
                 self.focused_pane_id,
                 focus_surface_cb.clone(),
                 rename_surface_cb.clone(),
+                close_surface_cb.clone(),
                 cx,
             ) {
                 return zoomed;
@@ -591,6 +598,7 @@ impl PaneTree {
             std::sync::Arc::new(begin_drag_cb),
             focus_surface_cb,
             rename_surface_cb,
+            close_surface_cb,
             divider_color,
             cx,
         )
@@ -978,6 +986,7 @@ impl PaneTree {
         begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32) + 'static>,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         divider_color: Hsla,
         cx: &App,
     ) -> AnyElement {
@@ -993,6 +1002,7 @@ impl PaneTree {
                 focused_id,
                 focus_surface_cb,
                 rename_surface_cb,
+                close_surface_cb,
                 cx,
             ),
             PaneNode::Split {
@@ -1013,6 +1023,8 @@ impl PaneTree {
                 let focus_cb_second = focus_surface_cb.clone();
                 let rename_cb_first = rename_surface_cb.clone();
                 let rename_cb_second = rename_surface_cb.clone();
+                let close_cb_first = close_surface_cb.clone();
+                let close_cb_second = close_surface_cb.clone();
 
                 let first_el = Self::render_node(
                     first,
@@ -1021,6 +1033,7 @@ impl PaneTree {
                     cb_first,
                     focus_cb_first,
                     rename_cb_first,
+                    close_cb_first,
                     divider_color,
                     cx,
                 );
@@ -1031,6 +1044,7 @@ impl PaneTree {
                     cb_second,
                     focus_cb_second,
                     rename_cb_second,
+                    close_cb_second,
                     divider_color,
                     cx,
                 );
@@ -1132,6 +1146,7 @@ impl PaneTree {
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         cx: &App,
     ) -> Option<AnyElement> {
         match node {
@@ -1146,6 +1161,7 @@ impl PaneTree {
                 focused_id,
                 focus_surface_cb,
                 rename_surface_cb,
+                close_surface_cb,
                 cx,
             )),
             PaneNode::Leaf { .. } => None,
@@ -1155,6 +1171,7 @@ impl PaneTree {
                 focused_id,
                 focus_surface_cb.clone(),
                 rename_surface_cb.clone(),
+                close_surface_cb.clone(),
                 cx,
             )
             .or_else(|| {
@@ -1164,6 +1181,7 @@ impl PaneTree {
                     focused_id,
                     focus_surface_cb,
                     rename_surface_cb,
+                    close_surface_cb,
                     cx,
                 )
             }),
@@ -1177,6 +1195,7 @@ impl PaneTree {
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -1193,74 +1212,149 @@ impl PaneTree {
             .id(("surface-tab-strip", pane_id))
             .flex()
             .items_center()
-            .gap(px(3.0))
-            .h(px(24.0))
+            .gap(px(5.0))
+            .h(px(28.0))
             .w_full()
-            .px(px(6.0))
+            .px(px(8.0))
             .bg(theme
-                .background
-                .opacity(if pane_id == focused_id { 0.20 } else { 0.12 }))
+                .title_bar
+                .opacity(if pane_id == focused_id { 0.88 } else { 0.76 }))
             .overflow_x_scroll();
+
+        strip = strip.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .flex_shrink_0()
+                .pr(px(2.0))
+                .text_size(px(10.0))
+                .line_height(px(12.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.muted_foreground.opacity(0.50))
+                .child(
+                    svg()
+                        .path("phosphor/stack.svg")
+                        .size(px(10.0))
+                        .text_color(theme.muted_foreground.opacity(0.46)),
+                )
+                .child("surfaces"),
+        );
 
         for (index, surface) in surfaces.iter().enumerate() {
             let is_active = surface.id == active_surface_id;
             let title = surface
                 .title
                 .clone()
-                .or_else(|| surface.terminal.title(cx))
                 .unwrap_or_else(|| format!("Surface {}", index + 1));
             let color = if is_active {
-                theme.foreground.opacity(0.86)
+                theme.foreground.opacity(0.84)
             } else {
-                theme.foreground.opacity(0.46)
+                theme.muted_foreground.opacity(0.58)
             };
             let bg = if is_active {
-                theme.foreground.opacity(0.075)
+                theme.foreground.opacity(0.08)
             } else {
                 theme.transparent
             };
             let icon_color = if is_active {
-                theme.foreground.opacity(0.52)
+                theme.foreground.opacity(0.54)
             } else {
-                theme.foreground.opacity(0.34)
+                theme.muted_foreground.opacity(0.42)
             };
             let sid = surface.id;
             let focus_cb = focus_surface_cb.clone();
             let rename_cb = rename_surface_cb.clone();
-            strip = strip.child(
-                div()
-                    .id(ElementId::Name(format!("surface-tab-{sid}").into()))
-                    .flex()
-                    .items_center()
-                    .h(px(18.0))
-                    .max_w(px(180.0))
-                    .flex_shrink_0()
-                    .px(px(6.0))
-                    .bg(bg)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.foreground.opacity(0.10)))
-                    .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                        focus_cb(sid, window, cx);
-                    })
-                    .on_double_click(move |_, window, cx| {
-                        rename_cb(sid, window, cx);
-                    })
-                    .child(
-                        svg()
-                            .path("phosphor/terminal.svg")
-                            .size(px(10.0))
-                            .flex_shrink_0()
-                            .text_color(icon_color),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_xs()
-                            .line_height(px(13.0))
-                            .text_color(color)
-                            .child(title),
-                    ),
-            );
+            let rename_cb_for_menu = rename_surface_cb.clone();
+            let close_cb_for_menu = close_surface_cb.clone();
+            let close_cb_for_button = close_surface_cb.clone();
+            let can_close =
+                surfaces.len() > 1 || surface.close_pane_when_last && surface.owner.is_some();
+
+            let mut tab = div()
+                .id(ElementId::Name(format!("surface-tab-{sid}").into()))
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .h(px(20.0))
+                .max_w(px(190.0))
+                .flex_shrink_0()
+                .pl(px(6.0))
+                .pr(if can_close { px(3.0) } else { px(7.0) })
+                .bg(bg)
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.foreground.opacity(0.11)))
+                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                    focus_cb(sid, window, cx);
+                })
+                .on_double_click(move |_, window, cx| {
+                    rename_cb(sid, window, cx);
+                })
+                .child(
+                    svg()
+                        .path("phosphor/terminal.svg")
+                        .size(px(10.0))
+                        .flex_shrink_0()
+                        .text_color(icon_color),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .line_height(px(13.0))
+                        .text_color(color)
+                        .child(title),
+                );
+
+            if can_close {
+                tab = tab.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(14.0))
+                        .flex_shrink_0()
+                        .text_color(theme.muted_foreground.opacity(0.48))
+                        .hover(|s| s.bg(theme.foreground.opacity(0.12)))
+                        .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                            close_cb_for_button(sid, window, cx);
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        })
+                        .child(
+                            svg()
+                                .path("phosphor/x.svg")
+                                .size(px(8.0))
+                                .text_color(theme.muted_foreground.opacity(0.58)),
+                        ),
+                );
+            }
+
+            let tab = tab
+                .tooltip(move |window, cx| {
+                    Tooltip::new("Surface in this pane. Double-click to rename.").build(window, cx)
+                })
+                .context_menu(move |menu, _window, _cx| {
+                    let rename_cb = rename_cb_for_menu.clone();
+                    let close_cb = close_cb_for_menu.clone();
+                    let mut menu = menu.item(PopupMenuItem::new("Rename Surface").on_click({
+                        let rename_cb = rename_cb.clone();
+                        move |_, window, cx| {
+                            rename_cb(sid, window, cx);
+                        }
+                    }));
+                    if can_close {
+                        menu = menu.item(PopupMenuItem::new("Close Surface").on_click({
+                            let close_cb = close_cb.clone();
+                            move |_, window, cx| {
+                                close_cb(sid, window, cx);
+                            }
+                        }));
+                    }
+                    menu
+                });
+
+            strip = strip.child(tab);
         }
 
         let inactive_terminals = surfaces

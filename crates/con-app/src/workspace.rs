@@ -8219,7 +8219,12 @@ impl ConWorkspace {
             .focused_terminal()
             .current_dir(cx);
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
-        let options = SurfaceCreateOptions::plain(None);
+        let next_surface_index = self.tabs[tab_idx]
+            .pane_tree
+            .surface_infos(Some(pane_id))
+            .len()
+            .saturating_add(1);
+        let options = SurfaceCreateOptions::plain(Some(format!("Surface {next_surface_index}")));
         let Some(_surface_id) =
             self.tabs[tab_idx]
                 .pane_tree
@@ -8274,7 +8279,7 @@ impl ConWorkspace {
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         let was_zoomed = self.tabs[tab_idx].pane_tree.zoomed_pane_id().is_some();
         let options = SurfaceCreateOptions {
-            title: None,
+            title: Some("Surface 1".to_string()),
             owner: Some("command-palette".to_string()),
             close_pane_when_last: true,
         };
@@ -8480,8 +8485,9 @@ impl ConWorkspace {
         input.update(cx, |state, cx| state.focus(window, cx));
     }
 
-    fn close_current_surface_in_focused_pane(
+    fn close_surface_by_id_in_active_tab(
         &mut self,
+        surface_id: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -8490,23 +8496,6 @@ impl ConWorkspace {
         }
 
         let tab_idx = self.active_tab;
-        let pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
-        let surfaces = self.tabs[tab_idx].pane_tree.surface_infos(Some(pane_id));
-        if surfaces.len() <= 1
-            && !surfaces
-                .first()
-                .is_some_and(|surface| surface.close_pane_when_last && surface.owner.is_some())
-        {
-            return;
-        }
-        let Some(surface_id) = surfaces
-            .iter()
-            .find(|surface| surface.is_active)
-            .map(|surface| surface.surface_id)
-        else {
-            return;
-        };
-
         let Some(close_outcome) = self.tabs[tab_idx].pane_tree.close_surface(surface_id, true)
         else {
             return;
@@ -8527,6 +8516,30 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    fn close_current_surface_in_focused_pane(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let tab_idx = self.active_tab;
+        let pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
+        let Some(surface_id) = self.tabs[tab_idx]
+            .pane_tree
+            .surface_infos(Some(pane_id))
+            .into_iter()
+            .find(|surface| surface.is_active)
+            .map(|surface| surface.surface_id)
+        else {
+            return;
+        };
+
+        self.close_surface_by_id_in_active_tab(surface_id, window, cx);
     }
 
     fn split_pane(
@@ -9534,10 +9547,19 @@ impl Render for ConWorkspace {
                     });
                 }
             };
+            let workspace = cx.weak_entity();
+            let close_surface_cb = move |surface_id: usize, window: &mut Window, cx: &mut App| {
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.close_surface_by_id_in_active_tab(surface_id, window, cx);
+                    });
+                }
+            };
             self.tabs[self.active_tab].pane_tree.render(
                 begin_drag_cb,
                 focus_surface_cb,
                 rename_surface_cb,
+                close_surface_cb,
                 pane_divider_color,
                 cx,
             )
