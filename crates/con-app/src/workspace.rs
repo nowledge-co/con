@@ -8976,9 +8976,14 @@ impl Render for ConWorkspace {
             } else {
                 false
             };
+            let pane_dragging =
+                self.has_active_tab() && self.tabs[self.active_tab].pane_tree.is_dragging();
             let underlay_active = agent_panel_transitioning
                 || input_bar_transitioning
                 || tab_strip_transitioning
+                || self.agent_panel_drag.is_some()
+                || self.sidebar_drag.is_some()
+                || pane_dragging
                 || guard_active;
             self.sync_chrome_transition_underlay(underlay_active, cx);
         }
@@ -9063,24 +9068,15 @@ impl Render for ConWorkspace {
         #[cfg(not(target_os = "macos"))]
         let pane_divider_color = theme.title_bar_border;
         #[cfg(target_os = "macos")]
-        let top_bar_surface_color = solid_over_terminal_backdrop(
-            terminal_surface_color,
-            theme.title_bar.opacity(ui_surface_opacity),
-        );
+        let top_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
         let top_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
         #[cfg(target_os = "macos")]
-        let input_bar_surface_color = solid_over_terminal_backdrop(
-            terminal_surface_color,
-            theme.title_bar.opacity(ui_surface_opacity),
-        );
+        let input_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
         let input_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
         #[cfg(target_os = "macos")]
-        let elevated_panel_surface_color = solid_over_terminal_backdrop(
-            terminal_surface_color,
-            theme.background.opacity(elevated_ui_surface_opacity),
-        );
+        let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
         let terminal_content_left = vertical_tabs_width;

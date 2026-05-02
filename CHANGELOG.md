@@ -6,7 +6,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `origin/main`
 
-- No unreleased changes.
+### Fixed
+
+**Terminal, macOS**
+
+- Restored terminal glass after the macOS seam-leak hardening work. Modern macOS now lets Ghostty own terminal opacity/blur again instead of drawing a second translucent AppKit backing behind the Metal surface, while legacy macOS keeps its opaque fallback.
+- Restored configured UI chrome opacity for the tab bar, input bar, side bar, and agent panel. Opaque terminal-colored mattes now stay limited to seam guards and active drag/transition underlays.
 
 ## `v0.1.0-beta.52` - 2026-05-02
 
