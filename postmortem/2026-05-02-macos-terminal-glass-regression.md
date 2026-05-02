@@ -14,7 +14,7 @@ The same seam hardening also precomposed static chrome surfaces to fully opaque 
 
 Modern macOS now keeps the native terminal backing transparent and lets Ghostty own terminal opacity/blur. macOS 12 and older keep the opaque fallback backing because terminal glass is intentionally disabled there.
 
-Static chrome surfaces again use the configured UI opacity. Opaque terminal-colored coverage remains limited to tiny seam guards and the native transition underlay, which is now also active during pane/sidebar/agent-panel resize drags.
+Static chrome surfaces again use the configured UI opacity. Opaque terminal-colored coverage remains limited to tiny seam guards while terminal glass is active. The native full-window transition underlay is only allowed when the terminal is already opaque, because showing it behind transparent Ghostty cells visibly disables glass for the duration of the animation.
 
 ## What We Learned
 
@@ -22,6 +22,6 @@ Leak-light fixes must separate three layers:
 
 - Terminal content opacity belongs to Ghostty only.
 - Static GPUI chrome should respect the user's UI opacity setting.
-- Opaque mattes are only acceptable for tiny seams or short-lived transition/drag underlays.
+- Opaque mattes are only acceptable for tiny seams. A full-window native underlay is acceptable only when the terminal is already opaque.
 
 Any future AppKit backing added under a Metal terminal surface must be checked for double-compositing before shipping.

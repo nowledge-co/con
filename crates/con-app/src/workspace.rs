@@ -8965,26 +8965,35 @@ impl Render for ConWorkspace {
         let tab_strip_transitioning = self.tab_strip_motion.is_animating();
         #[cfg(target_os = "macos")]
         {
-            let guard_active = if let Some(until) = self.chrome_transition_underlay_until {
-                if Instant::now() < until {
-                    window.request_animation_frame();
-                    true
+            let allow_native_transition_underlay = self.terminal_opacity >= 0.999;
+            let guard_active = if allow_native_transition_underlay {
+                if let Some(until) = self.chrome_transition_underlay_until {
+                    if Instant::now() < until {
+                        window.request_animation_frame();
+                        true
+                    } else {
+                        self.chrome_transition_underlay_until = None;
+                        false
+                    }
                 } else {
-                    self.chrome_transition_underlay_until = None;
                     false
                 }
             } else {
+                if self.chrome_transition_underlay_until.is_some() {
+                    self.chrome_transition_underlay_until = None;
+                }
                 false
             };
             let pane_dragging =
                 self.has_active_tab() && self.tabs[self.active_tab].pane_tree.is_dragging();
-            let underlay_active = agent_panel_transitioning
-                || input_bar_transitioning
-                || tab_strip_transitioning
-                || self.agent_panel_drag.is_some()
-                || self.sidebar_drag.is_some()
-                || pane_dragging
-                || guard_active;
+            let underlay_active = allow_native_transition_underlay
+                && (agent_panel_transitioning
+                    || input_bar_transitioning
+                    || tab_strip_transitioning
+                    || self.agent_panel_drag.is_some()
+                    || self.sidebar_drag.is_some()
+                    || pane_dragging
+                    || guard_active);
             self.sync_chrome_transition_underlay(underlay_active, cx);
         }
 
