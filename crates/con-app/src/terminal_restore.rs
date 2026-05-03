@@ -19,10 +19,6 @@ pub(crate) fn key_down_may_write_terminal(event: &KeyDownEvent, special_key_writ
     }
 
     special_key_writes
-        || (keystroke.modifiers.control
-            && !keystroke.modifiers.alt
-            && !keystroke.modifiers.shift
-            && keystroke.key.len() == 1)
         || (keystroke.modifiers.alt && !keystroke.modifiers.control)
         || (keystroke.key.len() == 1 && (keystroke.modifiers.control || keystroke.modifiers.alt))
 }

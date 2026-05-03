@@ -328,7 +328,9 @@ impl GhosttyView {
     /// Queue data to write to the PTY. If the terminal is already initialized,
     /// writes immediately. Otherwise, buffers until `ensure_initialized()` runs.
     pub fn write_or_queue(&mut self, data: &[u8]) {
-        self.restored_screen_text = None;
+        if !data.is_empty() {
+            self.restored_screen_text = None;
+        }
         if let Some(ref terminal) = self.terminal {
             terminal.write_to_pty(data);
         } else {
