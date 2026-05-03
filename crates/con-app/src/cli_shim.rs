@@ -94,8 +94,28 @@ fn is_app_bundle_macos_dir(path: &Path) -> bool {
 }
 
 fn is_con_app_cli_target(target: &Path) -> bool {
-    target.file_name().and_then(|name| name.to_str()) == Some("con-cli")
-        && target.parent().is_some_and(is_app_bundle_macos_dir)
+    if target.file_name().and_then(|name| name.to_str()) != Some("con-cli") {
+        return false;
+    }
+
+    let Some(macos_dir) = target.parent() else {
+        return false;
+    };
+    if !is_app_bundle_macos_dir(macos_dir) {
+        return false;
+    }
+
+    // Keep ownership intentionally narrow. Sparkle/manual installs should
+    // repair stale links to Con's own app bundles, but we must not replace a
+    // user-managed symlink to another app that happens to ship `con-cli`.
+    matches!(
+        macos_dir
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str()),
+        Some("con.app" | "con Beta.app")
+    )
 }
 
 #[cfg(target_family = "unix")]
@@ -125,6 +145,9 @@ mod tests {
         )));
         assert!(!is_con_app_cli_target(Path::new(
             "/Applications/Other.app/Contents/MacOS/other-cli"
+        )));
+        assert!(!is_con_app_cli_target(Path::new(
+            "/Applications/Other.app/Contents/MacOS/con-cli"
         )));
     }
 }
