@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
 use crate::stub::GhosttyScrollbar;
-use crate::transcript::TranscriptBuffer;
+use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 
 use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
@@ -785,44 +785,6 @@ fn extract_selection_text(snapshot: &ScreenSnapshot, sel: Selection) -> String {
         out.pop();
     }
     out
-}
-
-fn snapshot_to_lines(snapshot: &ScreenSnapshot, max_lines: usize) -> Vec<String> {
-    if max_lines == 0 || snapshot.cols == 0 || snapshot.rows == 0 {
-        return Vec::new();
-    }
-
-    let cols = usize::from(snapshot.cols);
-    let mut lines = Vec::with_capacity(usize::from(snapshot.rows));
-
-    for row in 0..usize::from(snapshot.rows) {
-        let row_start = row * cols;
-        let row_end = row_start + cols;
-        let Some(cells) = snapshot.cells.get(row_start..row_end) else {
-            break;
-        };
-
-        let mut line = String::with_capacity(cols);
-        for cell in cells {
-            let ch = match cell.codepoint {
-                0 => ' ',
-                codepoint => char::from_u32(codepoint).unwrap_or('\u{FFFD}'),
-            };
-            line.push(ch);
-        }
-
-        lines.push(line.trim_end_matches(' ').to_string());
-    }
-
-    while lines.last().is_some_and(String::is_empty) {
-        lines.pop();
-    }
-
-    if lines.len() > max_lines {
-        lines.drain(..lines.len() - max_lines);
-    }
-
-    lines
 }
 
 #[cfg(test)]

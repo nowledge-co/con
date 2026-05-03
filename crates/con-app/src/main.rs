@@ -69,7 +69,7 @@ mod updater;
 mod workspace;
 
 use con_core::config::KeybindingConfig;
-use con_core::session::{GlobalHistoryState, Session};
+use con_core::session::{GlobalHistoryState, PaneLayoutState, Session, SurfaceState};
 use con_core::workspace_layout::WorkspaceLayout;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -584,6 +584,52 @@ fn fresh_window_session_with_history_for_cwd(cwd: Option<std::path::PathBuf>) ->
     session
 }
 
+fn fallback_cwd_for_workspace_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if path.is_dir() {
+        return Some(path.to_path_buf());
+    }
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+}
+
+fn workspace_path_error_session(path: &std::path::Path, err: &anyhow::Error) -> Session {
+    let mut session =
+        fresh_window_session_with_history_for_cwd(fallback_cwd_for_workspace_path(path));
+    let screen_text = vec![
+        "Con could not open the requested workspace profile.".to_string(),
+        format!("Path: {}", path.display()),
+        format!("Reason: {err}"),
+        "Opened a fresh shell instead. Fix the profile and run con <path> again.".to_string(),
+        String::new(),
+    ];
+
+    if let Some(tab) = session.tabs.first_mut() {
+        tab.title = "Workspace Error".to_string();
+        tab.user_label = Some("Workspace Error".to_string());
+        tab.focused_pane_id = Some(0);
+        let cwd = tab
+            .cwd
+            .clone()
+            .or_else(|| tab.panes.first().and_then(|pane| pane.cwd.clone()));
+        tab.layout = Some(PaneLayoutState::Leaf {
+            pane_id: 0,
+            cwd: cwd.clone(),
+            active_surface_id: Some(0),
+            surfaces: vec![SurfaceState {
+                surface_id: 0,
+                title: Some("Shell".to_string()),
+                owner: Some("con".to_string()),
+                cwd,
+                close_pane_when_last: false,
+                screen_text,
+            }],
+        });
+    }
+
+    session
+}
+
 fn startup_path_argument() -> Option<std::path::PathBuf> {
     std::env::args_os().skip(1).find_map(|arg| {
         let text = arg.to_string_lossy();
@@ -625,6 +671,7 @@ fn startup_session() -> Session {
             }
             Err(err) => {
                 log::warn!("failed to open workspace path {}: {err}", path.display());
+                return workspace_path_error_session(&path, &err);
             }
         }
     }

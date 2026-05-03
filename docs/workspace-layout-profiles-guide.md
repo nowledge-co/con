@@ -97,6 +97,10 @@ Open a profile file directly:
 con ~/dev/app/.con/workspace.toml
 ```
 
+If the requested profile is malformed, Con opens a fresh shell and shows the
+profile error in the terminal. It does not silently restore an unrelated
+workspace.
+
 Inside the app, use:
 
 - **Add Layout Profile Tabs** to choose a project folder or profile file and add

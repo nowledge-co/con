@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
-use crate::transcript::TranscriptBuffer;
+use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::vt::{ScreenSnapshot, ThemeColors, VtScreen};
 
 const DEFAULT_COLUMNS: u16 = 80;
@@ -470,51 +470,9 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
     }
 }
 
-fn snapshot_to_lines(snapshot: &ScreenSnapshot, max_lines: usize) -> Vec<String> {
-    if max_lines == 0 || snapshot.cols == 0 || snapshot.rows == 0 {
-        return Vec::new();
-    }
-
-    let cols = usize::from(snapshot.cols);
-    let mut lines = Vec::with_capacity(usize::from(snapshot.rows));
-
-    for row in 0..usize::from(snapshot.rows) {
-        let row_start = row * cols;
-        let row_end = row_start + cols;
-        let Some(cells) = snapshot.cells.get(row_start..row_end) else {
-            break;
-        };
-
-        let mut line = String::with_capacity(cols);
-        for cell in cells {
-            let ch = match cell.codepoint {
-                0 => ' ',
-                codepoint => char::from_u32(codepoint).unwrap_or('\u{FFFD}'),
-            };
-            line.push(ch);
-        }
-
-        let trimmed = line.trim_end_matches(' ');
-        lines.push(trimmed.to_string());
-    }
-
-    while lines.last().is_some_and(String::is_empty) {
-        lines.pop();
-    }
-
-    if lines.len() > max_lines {
-        lines.drain(..lines.len() - max_lines);
-    }
-
-    lines
-}
-
 #[cfg(test)]
 mod tests {
     use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
-    use crate::vt::{Cell, Cursor, ScreenSnapshot};
-
-    use super::snapshot_to_lines;
 
     #[test]
     fn transcript_buffer_returns_recent_lines_in_order() {
@@ -549,25 +507,5 @@ mod tests {
     #[test]
     fn sanitize_terminal_output_honors_carriage_return_rewrites() {
         assert_eq!(sanitize_terminal_output("loading\rready"), "ready");
-    }
-
-    #[test]
-    fn snapshot_to_lines_trims_trailing_blank_rows() {
-        let mut cells = vec![Cell::default(); 6];
-        cells[0].codepoint = 'p' as u32;
-        cells[1].codepoint = 's' as u32;
-        cells[2].codepoint = '1' as u32;
-
-        let snapshot = ScreenSnapshot {
-            cols: 3,
-            rows: 2,
-            cells,
-            dirty_rows: vec![0, 1],
-            cursor: Cursor::default(),
-            title: None,
-            generation: 1,
-        };
-
-        assert_eq!(snapshot_to_lines(&snapshot, 10), vec!["ps1".to_string()]);
     }
 }

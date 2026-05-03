@@ -30,6 +30,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Startup**
 
 - Bounded the Unix control-endpoint probe used during second-process startup so a stale or wedged socket cannot hang Con while deciding whether to restore the saved workspace or open a fresh window.
+- When `con <path>` cannot open the requested workspace profile, Con now opens a fresh shell with a visible terminal-layer error message instead of silently falling back to unrelated private restore state.
 
 **Workspace Layout Profiles**
 
