@@ -71,7 +71,7 @@ Required qualities:
   is default-on, but Settings exposes an opt-out and Command Palette exposes a
   clear-and-disable action.
 - **One mental model.** The same path resolver powers `con <project-folder>`,
-  `con <workspace.toml>`, Add Layout Profile Tabs, and Open Layout Profile in
+  `con <workspace.toml>`, Add Tabs from Layout Profile, and Open Layout Profile in
   New Window.
 - **Scratch remains scratch.** New Tab and New Window do not silently explode
   into project layouts; profile import is a named action until project memory
@@ -331,7 +331,7 @@ import/export wiring.
 
 Purpose:
 
-- deterministic output from "Export Current Layout"
+- deterministic output from "Save Layout Profile"
 - stable schema for import/export tests
 - reviewable layout intent if a user chooses to commit it
 - future bridge for orchestrators that want to generate Con layouts
@@ -467,9 +467,9 @@ Status: after AppState.
 
 Status: layout import/export is implemented; task files remain deferred.
 
-- Export Current Layout writes a generated `.con/workspace.toml` from the live
+- Save Layout Profile writes a generated `.con/workspace.toml` from the live
   window.
-- Add Layout Profile Tabs imports a profile into the current window.
+- Add Tabs from Layout Profile imports a profile into the current window.
 - Open Layout Profile in New Window imports a profile into a separate window.
 - `con <project-folder>` opens the project profile when present; plain `con`
   remains private restore.

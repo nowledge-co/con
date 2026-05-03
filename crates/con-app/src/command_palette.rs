@@ -70,13 +70,13 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     },
     PaletteAction {
         id: "export-workspace-layout",
-        label: "Export Current Layout",
+        label: "Save Layout Profile",
         shortcut: "",
         category: "Workspace",
     },
     PaletteAction {
         id: "add-workspace-layout-tabs",
-        label: "Add Layout Profile Tabs",
+        label: "Add Tabs from Layout Profile",
         shortcut: "",
         category: "Workspace",
     },

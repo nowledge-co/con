@@ -1481,13 +1481,6 @@ fn main() {
                     MenuItem::action("New Window", NewWindow),
                     MenuItem::action("New Tab", NewTab),
                     MenuItem::separator(),
-                    MenuItem::action("Export Current Layout…", ExportWorkspaceLayout),
-                    MenuItem::action("Add Layout Profile Tabs…", AddWorkspaceLayoutTabs),
-                    MenuItem::action(
-                        "Open Layout Profile in New Window…",
-                        OpenWorkspaceLayoutWindow,
-                    ),
-                    MenuItem::separator(),
                     MenuItem::action("Close Tab", CloseTab),
                     MenuItem::action("Close Pane", ClosePane),
                     MenuItem::action("Toggle Pane Zoom", TogglePaneZoom),
@@ -1510,6 +1503,19 @@ fn main() {
                     MenuItem::action("Previous Surface Tab", PreviousSurface),
                     MenuItem::action("Rename Current Surface", RenameSurface),
                     MenuItem::action("Close Current Surface", CloseSurface),
+                ],
+                disabled: false,
+            },
+            Menu {
+                name: "Workspace".into(),
+                items: vec![
+                    MenuItem::action("Save Layout Profile…", ExportWorkspaceLayout),
+                    MenuItem::separator(),
+                    MenuItem::action("Add Tabs from Layout Profile…", AddWorkspaceLayoutTabs),
+                    MenuItem::action(
+                        "Open Layout Profile in New Window…",
+                        OpenWorkspaceLayoutWindow,
+                    ),
                 ],
                 disabled: false,
             },

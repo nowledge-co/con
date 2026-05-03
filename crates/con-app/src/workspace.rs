@@ -6838,7 +6838,7 @@ impl ConWorkspace {
         let layout = WorkspaceLayout::from_session(&session, &root);
 
         if let Err(err) = layout.save(&path) {
-            Self::show_layout_profile_error(window, cx, "Could not export layout profile", err);
+            Self::show_layout_profile_error(window, cx, "Could not save layout profile", err);
             return;
         }
 
@@ -6846,7 +6846,7 @@ impl ConWorkspace {
             "{}\n\nThe file contains layout intent only: tabs, panes, surfaces, cwd, and agent defaults. It does not include terminal text, command history, conversations, credentials, or commands to run.",
             path.display()
         );
-        Self::show_layout_profile_info(window, cx, "Layout profile exported", detail);
+        Self::show_layout_profile_info(window, cx, "Layout profile saved", detail);
         cx.reveal_path(&path);
     }
 
