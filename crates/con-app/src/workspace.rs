@@ -6775,8 +6775,9 @@ impl ConWorkspace {
     }
 
     fn clear_restored_terminal_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.config.appearance.restore_terminal_text = false;
-        if let Err(err) = self.config.save() {
+        let mut next_config = self.config.clone();
+        next_config.appearance.restore_terminal_text = false;
+        if let Err(err) = next_config.save() {
             Self::show_layout_profile_error(
                 window,
                 cx,
@@ -6785,6 +6786,7 @@ impl ConWorkspace {
             );
             return;
         }
+        self.config = next_config;
 
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_persisted_restore_terminal_text(false, cx);
