@@ -65,10 +65,10 @@ Quick controls:
 
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
-| Switch focus between terminal and input | <kbd>Cmd</kbd> <kbd>I</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>I</kbd> |
+| Switch focus between terminal and input | <kbd>⌘</kbd> <kbd>I</kbd> | <kbd>Ctrl</kbd> <kbd>⇧</kbd> <kbd>I</kbd> |
 | Show or hide the bottom input bar | <kbd>Ctrl</kbd> <kbd>\`</kbd> | <kbd>Ctrl</kbd> <kbd>\`</kbd> |
-| Show or hide the agent panel | <kbd>Cmd</kbd> <kbd>L</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>L</kbd> |
-| Cycle bottom-bar mode | <kbd>Cmd</kbd> <kbd>;</kbd> | <kbd>Ctrl</kbd> <kbd>;</kbd> |
+| Show or hide the agent panel | <kbd>⌘</kbd> <kbd>L</kbd> | <kbd>Ctrl</kbd> <kbd>⇧</kbd> <kbd>L</kbd> |
+| Cycle bottom-bar mode | <kbd>⌘</kbd> <kbd>;</kbd> | <kbd>Ctrl</kbd> <kbd>;</kbd> |
 
 - Smart mode decides whether your text is a shell command or an agent request.
 - Command mode runs shell commands. With multiple panes, the pane mini map lets you choose the focused pane, all panes, or a selected set.
